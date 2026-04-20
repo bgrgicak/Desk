@@ -3,3 +3,4 @@ dist/
 .nx/
 .adversarial-loop/
 .vagrant/
+.env
