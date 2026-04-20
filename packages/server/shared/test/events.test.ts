@@ -1,0 +1,63 @@
+import { describe, it, expect } from "vitest";
+import {
+  parseWsEvent,
+  serializeWsEvent,
+  type WsEvent,
+} from "../src/index.js";
+
+const now = new Date().toISOString();
+
+const fixtures: Record<string, WsEvent> = {
+  "chat.updated": {
+    type: "chat.updated",
+    payload: { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat", updatedAt: now, awaitingUser: false, unread: false },
+  },
+  "message.appended": {
+    type: "message.appended",
+    payload: { id: "msg_abc", chatId: "cht_abc", role: "user", content: { type: "text", text: "hi" }, createdAt: now },
+  },
+  "message.streaming": {
+    type: "message.streaming",
+    payload: { chatId: "cht_abc", messageId: "msg_abc", delta: "hello" },
+  },
+  "artifact.created": {
+    type: "artifact.created",
+    payload: { id: "fil_abc", workspaceId: "wks_abc", class: "artifact", path: "/a.txt", name: "a.txt", mime: "text/plain", size: 10, createdAt: now },
+  },
+  "run.state_changed": {
+    type: "run.state_changed",
+    payload: { id: "run_abc", state: "running" },
+  },
+  "run.log_appended": {
+    type: "run.log_appended",
+    payload: { runId: "run_abc", seq: 0, kind: "stdout", payload: "line1" },
+  },
+  "library.changed": {
+    type: "library.changed",
+    payload: { workspaceId: "wks_abc", fileId: "fil_abc", op: "added" },
+  },
+  "note.created": {
+    type: "note.created",
+    payload: { id: "note_abc", fileId: "fil_abc", chatId: "cht_abc", createdAt: now, summary: "A note" },
+  },
+};
+
+describe("WsEvent round-trip", () => {
+  for (const [eventType, fixture] of Object.entries(fixtures)) {
+    it(`${eventType}: serialize → parse round-trips`, () => {
+      const serialized = serializeWsEvent(fixture);
+      const parsed = parseWsEvent(serialized);
+      expect(parsed).toEqual(fixture);
+    });
+  }
+});
+
+describe("parseWsEvent error handling", () => {
+  it("throws on invalid JSON", () => {
+    expect(() => parseWsEvent("not json")).toThrow();
+  });
+
+  it("throws on unknown event type", () => {
+    expect(() => parseWsEvent(JSON.stringify({ type: "unknown.event", payload: {} }))).toThrow();
+  });
+});
