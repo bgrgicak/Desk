@@ -1,0 +1,31 @@
+{
+  "name": "desk",
+  "private": true,
+  "workspaces": [
+    "packages/server/*"
+  ],
+  "scripts": {
+    "vm:up": "packages/server/setup/scripts/vm.sh up",
+    "vm:halt": "packages/server/setup/scripts/vm.sh halt",
+    "vm:destroy": "packages/server/setup/scripts/vm.sh destroy",
+    "vm:reload": "packages/server/setup/scripts/vm.sh reload",
+    "vm:provision": "packages/server/setup/scripts/vm.sh provision",
+    "vm:ssh": "packages/server/setup/scripts/vm.sh ssh",
+    "vm:status": "packages/server/setup/scripts/vm.sh status",
+    "vm:snapshot": "packages/server/setup/scripts/vm.sh snapshot",
+    "vm:restore": "packages/server/setup/scripts/vm.sh restore",
+    "vm:reset": "packages/server/setup/scripts/vm.sh reset",
+    "dev": "packages/server/setup/scripts/dev-override.sh",
+    "dev:revert": "packages/server/setup/scripts/vm.sh exec \"sudo rm -f /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server\"",
+    "start": "packages/server/setup/scripts/vm.sh exec sudo systemctl start desk-server",
+    "stop": "packages/server/setup/scripts/vm.sh exec sudo systemctl stop desk-server",
+    "logs": "packages/server/setup/scripts/vm.sh exec journalctl -fu desk-server",
+    "build": "nx run-many -t build",
+    "typecheck": "nx run-many -t typecheck",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "vitest run --config packages/server/setup/vitest.e2e.config.ts"
+  },
+  "devDependencies": {
+    "nx": "22.6.5"
+  }
+}
