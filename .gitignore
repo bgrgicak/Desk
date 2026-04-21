@@ -3,3 +3,4 @@ dist/
 .nx/
 .adversarial-loop/
 .env
+packages/app/test-results/

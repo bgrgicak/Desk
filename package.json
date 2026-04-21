@@ -2,7 +2,8 @@
   "name": "desk",
   "private": true,
   "workspaces": [
-    "packages/server/*"
+    "packages/server/*",
+    "packages/app"
   ],
   "scripts": {
     "vm:up": "packages/server/setup/scripts/vm.sh up",
