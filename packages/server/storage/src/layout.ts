@@ -1,0 +1,80 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { ValidationError, ID_PREFIXES } from "@desk/shared";
+
+const WORKSPACE_SLUG = "desk";
+
+function workspaceRoot(home: string): string {
+  return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG);
+}
+
+/** Validates that an ID string matches the expected prefix pattern and contains no path separators. */
+function validateId(id: string, prefix: string): void {
+  if (!id.startsWith(prefix) || id.includes("/") || id.includes("\\") || id.includes("..")) {
+    throw new ValidationError(`Invalid ID: ${id}`);
+  }
+}
+
+/**
+ * Ensures the workspace directory tree exists.
+ * Idempotent — safe to call on every boot.
+ */
+export async function ensureLayout(home: string): Promise<void> {
+  const root = workspaceRoot(home);
+  await fs.mkdir(path.join(root, "files"), { recursive: true });
+  await fs.mkdir(path.join(root, "chats"), { recursive: true });
+  await fs.mkdir(path.join(root, "library"), { recursive: true });
+  await fs.mkdir(path.join(home, "Desk", ".tmp"), { recursive: true });
+}
+
+/** Returns the root directory for a workspace. */
+export function workspaceDir(_workspaceId: string): string {
+  // v1: single workspace, ID is ignored — always returns the "desk" workspace
+  return "";
+}
+
+/** Returns the absolute path to the workspace files directory. */
+export function filesDir(home: string): string {
+  return path.join(workspaceRoot(home), "files");
+}
+
+/**
+ * Returns the absolute path to the chats root directory. Contains one
+ * subdirectory per chat, each with its own `attachments/` inside. The
+ * sandbox bind-mounts this whole tree read-only so the agent can see every
+ * chat's attachments via `/mnt/desk/chats/<chatId>/attachments/`.
+ */
+export function chatsDir(home: string): string {
+  return path.join(workspaceRoot(home), "chats");
+}
+
+/** Returns the absolute path to a chat's attachments directory. Creates it lazily. */
+export async function chatAttachmentsDir(home: string, chatId: string): Promise<string> {
+  validateId(chatId, ID_PREFIXES.chat);
+  const dir = path.join(workspaceRoot(home), "chats", chatId, "attachments");
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+/** Returns the absolute path to the library directory. */
+export function libraryDir(home: string): string {
+  return path.join(workspaceRoot(home), "library");
+}
+
+/** Returns the temp directory for in-progress uploads. */
+export function tmpDir(home: string): string {
+  return path.join(home, "Desk", ".tmp");
+}
+
+/**
+ * Resolves a file's absolute host path from its stored relative path.
+ * Validates against path traversal.
+ */
+export function resolveHostPath(home: string, storedPath: string): string {
+  const root = workspaceRoot(home);
+  const resolved = path.resolve(root, storedPath);
+  if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+    throw new ValidationError(`Path traversal detected: ${storedPath}`);
+  }
+  return resolved;
+}
