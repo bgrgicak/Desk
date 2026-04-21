@@ -69,11 +69,26 @@ export const MessageContentArtifactRefSchema = z.object({
   fileId: z.string(),
 });
 
+/** A single event from the OpenCode JSON event stream. */
+export const OpenCodeEventSchema = z.object({
+  type: z.string(),
+  timestamp: z.number().optional(),
+  sessionID: z.string().optional(),
+  part: z.record(z.unknown()).optional(),
+}).passthrough();
+export type OpenCodeEvent = z.infer<typeof OpenCodeEventSchema>;
+
+export const MessageContentEventsSchema = z.object({
+  type: z.literal("events"),
+  events: z.array(OpenCodeEventSchema),
+});
+
 export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentTextSchema,
   MessageContentToolCallSchema,
   MessageContentToolResultSchema,
   MessageContentArtifactRefSchema,
+  MessageContentEventsSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 

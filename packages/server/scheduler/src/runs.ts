@@ -17,62 +17,6 @@ import { createAdapter, type ScheduleAdapter } from "./scheduleAdapter.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type JsonEvent = Record<string, any>;
 
-/**
- * Extract all top-level JSON objects from a string. Uses a brace-balanced
- * scanner that tracks JSON string quoting. Handles invalid JSON where
- * literal newlines appear inside string values (common when output fields
- * contain multi-line text that wasn't properly escaped).
- */
-function extractJsonObjects(raw: string): JsonEvent[] {
-  // Fast path: try fixing bare newlines and parsing as a single object
-  const fixed = raw.replace(/[\n\r]/g, "\\n");
-  if (fixed.trimStart().startsWith("{") && fixed.trimEnd().endsWith("}")) {
-    try {
-      const obj = JSON.parse(fixed);
-      if (obj && typeof obj === "object") return [obj];
-    } catch { /* fall through to scanner */ }
-  }
-
-  const results: JsonEvent[] = [];
-  let depth = 0, start = -1, inStr = false;
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    if (inStr) {
-      if (ch === "\\") { i++; continue; }
-      if (ch === '"' || ch === "\n" || ch === "\r") inStr = false;
-      continue;
-    }
-    if (ch === '"' && depth > 0) { inStr = true; continue; }
-    if (ch === "{") { if (depth === 0) start = i; depth++; }
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        const candidate = raw.slice(start, i + 1);
-        try { results.push(JSON.parse(candidate)); } catch {
-          try { results.push(JSON.parse(candidate.replace(/[\n\r]/g, "\\n"))); } catch { /* skip */ }
-        }
-        start = -1;
-      }
-    }
-  }
-  return results;
-}
-
-/**
- * Extract user-facing text from a single OpenCode JSON event.
- * Returns the text content or null if the event has no displayable text.
- */
-function textFromEvent(ev: JsonEvent): string | null {
-  if (ev.type === "text" && typeof ev.part?.text === "string") {
-    return ev.part.text;
-  }
-  // tool_use events carry output in part.state.output (agent task results)
-  if (ev.type === "tool_use" && typeof ev.part?.state?.output === "string") {
-    return ev.part.state.output;
-  }
-  return null;
-}
-
 export interface EnqueueRunInput {
   chatId?: string;
   prompt: string;
@@ -249,41 +193,83 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       emit({ type: "run.state_changed", payload: (await queries.runs.findById(pool, runId))! });
 
-      // Persist assistant message from concatenated run_events text.
-      // OpenCode emits JSON-stream lines when invoked with --format json; each
-      // line is one event. Extract only the "text" events' .part.text for the
-      // user-facing message. Fall back to the raw payload if parsing fails
-      // (e.g. the fake driver emits plain text lines).
+      // Persist assistant message from the run's event stream.
+      // OpenCode emits JSON-stream lines when invoked with --format json.
+      // Docker may split a single JSON event across multiple stdout chunks,
+      // so we concatenate all stdout, then parse with partial-line
+      // accumulation to reassemble split events before JSON.parse.
       const run = await queries.runs.findById(pool, runId);
       if (run?.chatId) {
-        const events = await queries.runEvents.listByRun(pool, runId, { limit: 10000 });
-        const parts: string[] = [];
-        for (const e of events.items) {
+        const logEvents = await queries.runEvents.listByRun(pool, runId, { limit: 10000 });
+
+        // Separate stdout (JSON events) from stderr (plain text like migration logs)
+        const stdoutChunks: string[] = [];
+        const stderrChunks: string[] = [];
+        for (const e of logEvents.items) {
           const p = e.payload as Record<string, unknown>;
           const raw = typeof p.text === "string" ? p.text : "";
           if (!raw) continue;
-          // Each raw chunk may contain several newline-delimited JSON events.
-          // Docker demux can also deliver multiple JSON objects in a single
-          // chunk without newlines, so we extract all top-level {...} objects.
-          let pushedFromJson = false;
-          for (const obj of extractJsonObjects(raw)) {
-            pushedFromJson = true;
-            const extracted = textFromEvent(obj);
-            if (extracted) parts.push(extracted);
-            // Non-text events (step_start, step_finish, etc.) —
-            // skip silently.
-          }
-          if (!pushedFromJson) parts.push(raw);
+          if (e.kind === "stderr") stderrChunks.push(raw);
+          else stdoutChunks.push(raw);
         }
-        const text = parts.join("\n").trim();
-        if (text) {
+
+        // Join chunks with newlines (Docker strips trailing newlines from
+        // chunks, causing adjacent events to merge). Parse each line as
+        // JSON, accumulating partial lines for split events.
+        const fullStdout = stdoutChunks.join("\n");
+        const parsedEvents: JsonEvent[] = [];
+        let anyJson = false;
+        let partial = "";
+        const plainLines: string[] = [];
+        for (const line of fullStdout.split(/\r?\n/)) {
+          const l = line.trim();
+          if (!l) continue;
+          const candidate = partial ? partial + l : l;
+          try {
+            const obj = JSON.parse(candidate);
+            anyJson = true;
+            partial = "";
+            parsedEvents.push(obj);
+          } catch {
+            if (candidate.startsWith("{")) {
+              partial = candidate;
+            } else {
+              partial = "";
+              if (!anyJson) plainLines.push(l);
+            }
+          }
+        }
+
+        // Prepend stderr as a synthetic text event
+        if (stderrChunks.length > 0) {
+          parsedEvents.unshift({
+            type: "text",
+            part: { text: stderrChunks.join("\n") },
+          });
+        }
+
+        if (parsedEvents.length > 0) {
+          // Store the full event array
           const assistantMsg = await queries.messages.insert(pool, {
             id: generateId("message"),
             chatId: run.chatId,
             role: "agent",
-            content: { type: "text", text },
+            content: { type: "events", events: parsedEvents },
           });
           emit({ type: "message.appended", payload: assistantMsg });
+        } else {
+          // Non-JSON run (e.g. fake driver) — store as plain text
+          const allPlain = [...stderrChunks, ...plainLines];
+          const text = allPlain.join("\n").trim() || fullStdout.trim();
+          if (text) {
+            const assistantMsg = await queries.messages.insert(pool, {
+              id: generateId("message"),
+              chatId: run.chatId,
+              role: "agent",
+              content: { type: "text", text },
+            });
+            emit({ type: "message.appended", payload: assistantMsg });
+          }
         }
       }
     } catch (err) {

@@ -15,7 +15,7 @@ import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
-import { createApp, clearConnections } from "@desk/api";
+import { createApp, clearConnections, broadcast } from "@desk/api";
 import { execSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -113,9 +113,14 @@ export default async function globalSetup() {
 
   const storage = { pool, home };
   const adapter = createMemoryAdapter();
+
+  const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
+  const broadcastUserId = userRows[0].id as string;
+
   const runManager = createRunManager({
     pool,
     adapter,
+    emit: (event) => broadcast(broadcastUserId, event),
     execRunFn: async (_runId, _agentId, _prompt, onLog) => {
       await onLog({
         runId: _runId,
@@ -126,9 +131,6 @@ export default async function globalSetup() {
       return { exitCode: 0 };
     },
   });
-
-  const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
-  const broadcastUserId = userRows[0].id as string;
 
   const apiServer = createApp({ pool, storage, runManager, broadcastUserId });
   await new Promise<void>((resolve) =>

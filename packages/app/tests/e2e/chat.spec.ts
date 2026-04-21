@@ -60,7 +60,7 @@ test.describe("Chat", () => {
     ).toBeVisible({ timeout: 5000 });
 
     // The fake run inserts an "agent" role message with "fake assistant response".
-    // The Chat component polls every 3 seconds as a WS fallback.
+    // The message arrives via WebSocket (message.appended event).
     await expect(
       page.getByRole("listitem").filter({ hasText: "fake assistant response" }),
     ).toBeVisible({ timeout: 15000 });
