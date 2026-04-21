@@ -25,3 +25,8 @@ provision:
       #!/usr/bin/env bash
       set -euo pipefail
       bash /desk/packages/server/setup/install.sh
+  - mode: system
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      bash /desk/packages/server/setup/dev-provision.sh

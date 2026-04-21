@@ -6,6 +6,7 @@ We are building a prototype, it's crucial for us to move fast and make the right
 
 - Implement integration tests before working on a feature.
 - Run relevant tests after implementing a feature to ensure it works as expected.
+- **Tests must be real**: real Postgres, real Docker, real Anthropic API. No fakes as the only coverage of any surface. Fakes may exist for dev ergonomics but every faked surface must also have a real-backend counterpart.
 
 ### Code review
 
