@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Thin wrapper around limactl that adds Desk's per-instance naming and
-# deterministic host-port mapping (mirrors the old Vagrantfile behavior).
+# deterministic host-port mapping.
 set -euo pipefail
 
 INSTANCE="${DESK_INSTANCE:-dev}"
@@ -8,8 +8,8 @@ NAME="desk-${INSTANCE}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 CONFIG="${REPO_ROOT}/lima.yaml"
 
-# Deterministic host port: 3000 + CRC32(instance) % 100. Same algorithm as
-# the old Vagrantfile so existing instance names keep their ports.
+# Deterministic host port: 3000 + CRC32(instance) % 100, so an instance
+# name always maps to the same host port across restarts.
 PORT="$(python3 -c 'import zlib,sys; print(3000 + zlib.crc32(sys.argv[1].encode()) % 100)' "$INSTANCE")"
 
 # Only `up` and `reset` actually spawn QEMU and need /dev/kvm access; the
@@ -56,7 +56,7 @@ case "$cmd" in
     [ "$(vm_status)" = "Running" ] && limactl stop "$NAME"
     with_kvm limactl start "$NAME"
     ;;
-  provision)  limactl shell "$NAME" sudo bash /vagrant/packages/server/setup/install.sh ;;
+  provision)  limactl shell "$NAME" sudo bash /desk/packages/server/setup/install.sh ;;
   ssh)        limactl shell "$NAME" ;;
   status)     limactl list "$NAME" ;;
   snapshot)   limactl snapshot create --tag clean-install "$NAME" ;;

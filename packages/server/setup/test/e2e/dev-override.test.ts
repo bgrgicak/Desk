@@ -6,9 +6,14 @@ import { getInstanceUrl, pollEndpoint, VM_SH } from "./helpers.js";
 
 const INSTANCE = "test-dev-override";
 const URL = getInstanceUrl(INSTANCE);
+// Path to the tiny scratch file that holds the health-check literal. The test
+// mutates this file to prove tsx-watch reload works; if the test crashes mid-run,
+// only this throwaway scratch is left in a bad state (not app.ts). Restoration
+// happens in afterAll.
+// Path is from packages/server/setup/test/e2e/ → ../../../api/src/health-message.ts.
 const INDEX_PATH = resolve(
   import.meta.dirname,
-  "../../../../api/src/index.ts",
+  "../../../api/src/health-message.ts",
 );
 
 const vm = (subcmd: string) =>
@@ -48,16 +53,13 @@ describe.skipIf(!RUN)("dev-override", () => {
   }, 120_000);
 
   it("switches to dev mode and picks up source changes", async () => {
+    // Install the checked-in override template (same file dev-override.sh uses)
+    // so test and helper never drift.
     vmExec(
-      `sudo mkdir -p /etc/systemd/system/desk-server.service.d && sudo tee /etc/systemd/system/desk-server.service.d/override.conf > /dev/null <<'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/npx tsx watch /vagrant/packages/server/api/src/index.ts
-WorkingDirectory=/vagrant/packages/server/api
-Environment=NODE_ENV=development
-Restart=no
-EOF
-sudo systemctl daemon-reload && sudo systemctl restart desk-server`,
+      "sudo mkdir -p /etc/systemd/system/desk-server.service.d && " +
+      "sudo install -m 644 /desk/packages/server/setup/dev-override.conf " +
+      "/etc/systemd/system/desk-server.service.d/override.conf && " +
+      "sudo systemctl daemon-reload && sudo systemctl restart desk-server",
     );
 
     await pollEndpoint(URL, "hello world", 60_000);

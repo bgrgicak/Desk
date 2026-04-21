@@ -1,4 +1,4 @@
-# Lima config for the Desk dev VM. Replaces the previous Vagrantfile.
+# Lima config for the Desk dev VM.
 # Driven by packages/server/setup/scripts/vm.sh, which injects the repo
 # mount path and per-instance host port via `limactl --set`.
 
@@ -11,7 +11,7 @@ disk: 20GiB
 
 mounts:
   - location: "PLACEHOLDER_REPO_ROOT"
-    mountPoint: "/vagrant"
+    mountPoint: "/desk"
     writable: true
 
 portForwards:
@@ -24,4 +24,4 @@ provision:
     script: |
       #!/usr/bin/env bash
       set -euo pipefail
-      bash /vagrant/packages/server/setup/install.sh
+      bash /desk/packages/server/setup/install.sh

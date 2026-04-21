@@ -16,33 +16,24 @@ if ! sg kvm -c "limactl list --quiet" | grep -qx "$NAME"; then
   exit 1
 fi
 
-# Stage the override.conf on the host side (it'll appear in the VM at
-# /vagrant/...), then copy it into /etc via a single-line sudo command.
-OVERRIDE_STAGE="${REPO_ROOT}/packages/server/setup/.dev-override.conf"
-cat > "$OVERRIDE_STAGE" <<'OVERRIDE'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/npx tsx watch /vagrant/packages/server/api/src/index.ts
-WorkingDirectory=/vagrant/packages/server/api
-Environment=NODE_ENV=development
-# 9p mount doesn't propagate inotify events; force chokidar to poll.
-Environment=CHOKIDAR_USEPOLLING=1
-Environment=CHOKIDAR_INTERVAL=500
-Restart=no
-OVERRIDE
+# Checked-in template. Both this helper and dev-override.test.ts consume it,
+# so the override definition has a single source of truth.
+OVERRIDE_SRC="${REPO_ROOT}/packages/server/setup/dev-override.conf"
 
 cleanup() {
   echo ""
   echo "==> Reverting dev override..."
   vm "sudo rm -f /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server" || true
-  rm -f "$OVERRIDE_STAGE"
   echo "==> Prod service restored."
 }
 
 trap cleanup EXIT INT TERM
 
+# /desk is the VM-side mount of $REPO_ROOT (see lima.yaml).
+VM_OVERRIDE_SRC="/desk/packages/server/setup/dev-override.conf"
+
 echo "==> Applying dev override on $NAME..."
-vm "sudo mkdir -p /etc/systemd/system/desk-server.service.d && sudo install -m 644 /vagrant/packages/server/setup/.dev-override.conf /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server"
+vm "sudo mkdir -p /etc/systemd/system/desk-server.service.d && sudo install -m 644 $VM_OVERRIDE_SRC /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server"
 
 echo "==> Dev override active. Streaming logs (Ctrl+C to revert)..."
 vm "journalctl -fu desk-server"
