@@ -1,0 +1,84 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import pg from "pg";
+import { generateId } from "@desk/shared";
+import { setupTestDb, teardownTestDb } from "../helpers/db.js";
+import * as users from "../../src/queries/users.js";
+import * as agents from "../../src/queries/agents.js";
+import * as workspaces from "../../src/queries/workspaces.js";
+import * as chats from "../../src/queries/chats.js";
+
+let pool: pg.Pool;
+let wsId: string;
+let agentId: string;
+
+beforeAll(async () => {
+  pool = await setupTestDb();
+  const userId = generateId("user");
+  await users.insert(pool, { id: userId, username: "chatowner", passwordHash: "h", email: "chat@example.com" });
+  agentId = generateId("agent");
+  await agents.insert(pool, { id: agentId, name: "ChatAgent" });
+  wsId = generateId("workspace");
+  await workspaces.insert(pool, { id: wsId, userId, name: "ChatWS" });
+});
+
+afterAll(async () => {
+  await teardownTestDb(pool);
+});
+
+describe("chats queries", () => {
+  const chatId = generateId("chat");
+
+  it("inserts a chat", async () => {
+    const chat = await chats.insert(pool, {
+      id: chatId,
+      workspaceId: wsId,
+      agentId,
+      title: "Hello",
+    });
+    expect(chat.id).toBe(chatId);
+    expect(chat.title).toBe("Hello");
+    expect(chat.awaitingUser).toBe(false);
+  });
+
+  it("finds by id", async () => {
+    const chat = await chats.findById(pool, chatId);
+    expect(chat).not.toBeNull();
+    expect(chat!.workspaceId).toBe(wsId);
+  });
+
+  it("lists with latest message", async () => {
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("updates meta", async () => {
+    const updated = await chats.updateMeta(pool, chatId, { title: "Renamed Chat" });
+    expect(updated).not.toBeNull();
+    expect(updated!.title).toBe("Renamed Chat");
+  });
+
+  it("marks as read", async () => {
+    await chats.markRead(pool, chatId);
+    const chat = await chats.findById(pool, chatId);
+    expect(chat!.unread).toBe(false);
+  });
+
+  it("sets awaiting user", async () => {
+    await chats.setAwaitingUser(pool, chatId, true);
+    const chat = await chats.findById(pool, chatId);
+    expect(chat!.awaitingUser).toBe(true);
+  });
+
+  it("cascades delete when workspace is deleted", async () => {
+    const userId2 = generateId("user");
+    await users.insert(pool, { id: userId2, username: "cascadeuser", passwordHash: "h", email: "cascade@example.com" });
+    const wsId2 = generateId("workspace");
+    await workspaces.insert(pool, { id: wsId2, userId: userId2, name: "CascadeWS" });
+    const chatId2 = generateId("chat");
+    await chats.insert(pool, { id: chatId2, workspaceId: wsId2, agentId, title: "Will be deleted" });
+
+    await pool.query("DELETE FROM workspaces WHERE id = $1", [wsId2]);
+    const chat = await chats.findById(pool, chatId2);
+    expect(chat).toBeNull();
+  });
+});
