@@ -1,0 +1,44 @@
+# ---- Build stage: compile sandbox-cli ----
+FROM node:22-slim AS builder
+WORKDIR /build
+COPY sandbox-cli/ ./sandbox-cli/
+WORKDIR /build/sandbox-cli
+RUN npm ci --ignore-scripts 2>/dev/null || true && \
+    npx tsc --outDir dist 2>/dev/null || true
+
+# ---- Runtime stage ----
+FROM ubuntu:24.04
+
+# Install basics + Node.js (needed for sandbox-cli and OpenCode)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenCode CLI (global). `opencode` becomes available on PATH.
+RUN npm install -g opencode-ai --omit=dev --loglevel=error \
+    && rm -rf /root/.npm
+
+# Install @desk/sandbox-cli binary from builder stage
+COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-cli/desk.js
+RUN printf '#!/usr/bin/env node\n' | cat - /usr/local/lib/desk-cli/desk.js > /usr/local/bin/desk && \
+    chmod +x /usr/local/bin/desk
+
+# Copy skill file
+COPY sandbox-cli/skill.md /opt/desk/skills/desk-cli.md
+
+# Create mount targets (populated at runtime via bind-mounts from host)
+RUN mkdir -p /mnt/desk/files /mnt/desk/attachments /mnt/desk/library /mnt/desk/desktop
+
+# Create non-root agent user.
+# AGENT_UID is a build-arg so the image can match the host user that owns the
+# bind-mount root. Default 1000 matches a typical dev VM; production install.sh
+# passes `--build-arg AGENT_UID=2000` to match the `desk` system user.
+ARG AGENT_UID=1000
+RUN (userdel -r ubuntu 2>/dev/null || true) && \
+    useradd -m -s /bin/bash -u ${AGENT_UID} agent
+USER agent
+WORKDIR /home/agent
+
+# Keep the container alive so `docker exec` has a target.
+# Runs (OpenCode invocations) are dispatched via `docker exec`.
+CMD ["sleep", "infinity"]
