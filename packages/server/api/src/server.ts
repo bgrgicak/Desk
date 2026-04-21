@@ -1,5 +1,9 @@
 import { createServer as httpCreateServer, type Server } from "node:http";
 
+/**
+ * Creates a minimal HTTP server (backward-compatible hello-world).
+ * For the full API, use createApp from ./app.ts instead.
+ */
 export function createServer(): Server {
   return httpCreateServer((req, res) => {
     if (req.method === "GET" && req.url === "/") {

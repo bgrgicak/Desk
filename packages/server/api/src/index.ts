@@ -1,8 +1,8 @@
-import { createServer } from "./server.js";
-
-const port = parseInt(process.env.PORT || "8080", 10);
-const server = createServer();
-
-server.listen(port, () => {
-  console.log(`desk-server listening on port ${port}`);
-});
+export { createServer } from "./server.js";
+export { createApp } from "./app.js";
+export type { AppOptions } from "./app.js";
+export { errorToStatus } from "./errors.js";
+export { issueSession, revokeSession, verifySession } from "./auth/sessions.js";
+export { requireAuth } from "./auth/middleware.js";
+export { addConnection, removeConnection, broadcast, clearConnections } from "./ws/registry.js";
+export { generateOpenApiSpec } from "./openapi.js";
