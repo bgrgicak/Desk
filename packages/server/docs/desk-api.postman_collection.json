@@ -1,0 +1,541 @@
+{
+  "info": {
+    "_postman_id": "e3a0d5b2-2f5a-4a4e-9b57-desk-api-v1",
+    "name": "Desk API",
+    "description": "HTTP + WS gateway for the Desk personal AI assistant. Covers every route exposed by packages/server/api/src/app.ts. Login response auto-stores {{token}}. Set {{baseUrl}} to the forwarded host port of your Lima VM (default dev instance: http://localhost:3013). WebSocket upgrades live at {{baseUrl}}/ws?token={{token}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3013", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "username", "value": "desk", "type": "string" },
+    { "key": "password", "value": "change-me-before-first-boot", "type": "string" },
+    { "key": "workspaceId", "value": "", "type": "string" },
+    { "key": "agentId", "value": "", "type": "string" },
+    { "key": "chatId", "value": "", "type": "string" },
+    { "key": "libraryFileId", "value": "", "type": "string" },
+    { "key": "runId", "value": "", "type": "string" },
+    { "key": "jobId", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.token) {",
+                  "  pm.collectionVariables.set('token', body.token);",
+                  "  console.log('token stored');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "POST /auth/logout",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account (/me)",
+      "item": [
+        {
+          "name": "GET /me",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "PATCH /me",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"desk\",\n  \"email\": \"me@example.com\",\n  \"avatarPath\": \"avatars/me.png\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "DELETE /me",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "POST /me/password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPassword\": \"new-password\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me/password", "host": ["{{baseUrl}}"], "path": ["me", "password"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workspaces",
+      "item": [
+        {
+          "name": "GET /workspaces",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/workspaces", "host": ["{{baseUrl}}"], "path": ["workspaces"] }
+          }
+        },
+        {
+          "name": "GET /workspaces/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /workspaces/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My workspace\",\n  \"description\": \"Updated\",\n  \"icon\": \"📒\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /workspaces/:id",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "item": [
+        {
+          "name": "GET /agents",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
+          }
+        },
+        {
+          "name": "GET /agents/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/agents/{{agentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "{{agentId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /agents/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My agent\",\n  \"instructions\": \"Be helpful\",\n  \"model\": \"claude-opus-4-7\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/{{agentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "{{agentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chats",
+      "item": [
+        {
+          "name": "GET /chats",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/chats", "host": ["{{baseUrl}}"], "path": ["chats"] }
+          }
+        },
+        {
+          "name": "POST /chats",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.id) pm.collectionVariables.set('chatId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspaceId\": \"{{workspaceId}}\",\n  \"agentId\": \"{{agentId}}\",\n  \"title\": \"My chat\",\n  \"goal\": \"Explore the API\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/chats", "host": ["{{baseUrl}}"], "path": ["chats"] }
+          }
+        },
+        {
+          "name": "GET /chats/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /chats/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Renamed chat\",\n  \"goal\": \"Revised goal\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages?cursor=",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages"],
+              "query": [{ "key": "cursor", "value": "", "description": "Opaque pagination cursor" }]
+            }
+          }
+        },
+        {
+          "name": "POST /chats/:id/messages",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Hello agent\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/artifacts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/artifacts",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "artifacts"]
+            }
+          }
+        },
+        {
+          "name": "POST /chats/:id/artifacts",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"note.txt\",\n  \"mime\": \"text/plain\",\n  \"contentBase64\": \"aGVsbG8gd29ybGQ=\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/artifacts",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "artifacts"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Library",
+      "item": [
+        {
+          "name": "GET /library",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/library?cursor=&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["library"],
+              "query": [
+                { "key": "cursor", "value": "" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /library",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.id) pm.collectionVariables.set('libraryFileId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"readme.txt\",\n  \"mime\": \"text/plain\",\n  \"contentBase64\": \"aGVsbG8gbGlicmFyeQ==\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/library", "host": ["{{baseUrl}}"], "path": ["library"] }
+          }
+        },
+        {
+          "name": "GET /library/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/library/{{libraryFileId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "{{libraryFileId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /library/:id/download",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/library/{{libraryFileId}}/download",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "{{libraryFileId}}", "download"]
+            }
+          }
+        },
+        {
+          "name": "POST /library/:id/note",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Manual note about this file\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/library/{{libraryFileId}}/note",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "{{libraryFileId}}", "note"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /library/:id",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/library/{{libraryFileId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "{{libraryFileId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Runs",
+      "item": [
+        {
+          "name": "GET /runs",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/runs", "host": ["{{baseUrl}}"], "path": ["runs"] }
+          }
+        },
+        {
+          "name": "GET /runs/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/runs/{{runId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["runs", "{{runId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /runs/:id/logs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/runs/{{runId}}/logs?cursor=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["runs", "{{runId}}", "logs"],
+              "query": [{ "key": "cursor", "value": "0", "description": "Integer log seq to start after" }]
+            }
+          }
+        },
+        {
+          "name": "POST /runs/:id/cancel",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/runs/{{runId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["runs", "{{runId}}", "cancel"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scheduled jobs",
+      "item": [
+        {
+          "name": "POST /scheduled-jobs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.id) pm.collectionVariables.set('jobId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"{{chatId}}\",\n  \"prompt\": \"Summarise today\",\n  \"mode\": \"recurring\",\n  \"spec\": \"0 9 * * *\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/scheduled-jobs", "host": ["{{baseUrl}}"], "path": ["scheduled-jobs"] }
+          }
+        },
+        {
+          "name": "DELETE /scheduled-jobs/:id",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/scheduled-jobs/{{jobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["scheduled-jobs", "{{jobId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "GET /search",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/search?q=hello&scope=all",
+              "host": ["{{baseUrl}}"],
+              "path": ["search"],
+              "query": [
+                { "key": "q", "value": "hello" },
+                { "key": "scope", "value": "all", "description": "all | artifacts | chats | library" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meta",
+      "item": [
+        {
+          "name": "GET /openapi.json",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/openapi.json", "host": ["{{baseUrl}}"], "path": ["openapi.json"] }
+          }
+        },
+        {
+          "name": "WS /ws (reference only)",
+          "request": {
+            "method": "GET",
+            "description": "WebSocket upgrade endpoint. Postman can connect via File → New → WebSocket Request with URL ws://localhost:3013/ws?token={{token}}. Not reachable via a regular HTTP send.",
+            "url": {
+              "raw": "{{baseUrl}}/ws?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["ws"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

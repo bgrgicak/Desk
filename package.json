@@ -22,8 +22,11 @@
     "stop": "packages/server/setup/scripts/vm.sh exec sudo systemctl stop desk-server",
     "logs": "packages/server/setup/scripts/vm.sh exec journalctl -fu desk-server",
     "build": "nx run-many -t build",
+    "openapi": "npm run openapi:dump --workspace=@desk/api",
     "typecheck": "nx run-many -t typecheck",
     "test": "vitest run --passWithNoTests",
+    "test:host": "vitest run packages/server/api/test/ && npm -w @desk/app test",
+    "test:vm": "packages/server/setup/scripts/vm.sh exec \"cd /desk && set -a && . ./.env && set +a && DATABASE_URL=postgresql://desk:desk@127.0.0.1:5432/desk sg docker -c 'env ANTHROPIC_API_KEY=\\$ANTHROPIC_API_KEY DATABASE_URL=\\$DATABASE_URL npx vitest run --passWithNoTests --exclude packages/server/api/test'\"",
     "test:e2e": "vitest run --config packages/server/setup/vitest.e2e.config.ts"
   },
   "devDependencies": {
