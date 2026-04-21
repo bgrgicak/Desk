@@ -4,3 +4,4 @@ dist/
 .adversarial-loop/
 .env
 packages/app/test-results/
+test-results/
