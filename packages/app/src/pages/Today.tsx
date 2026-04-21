@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
+import { useApi, cacheInvalidate } from "../store";
+import { useDispatch } from "react-redux";
 import type { Route } from "../app";
 
 interface ChatSummary {
@@ -12,39 +14,30 @@ interface ChatSummary {
 }
 
 export function Today({ nav }: { nav: (r: Route) => void }) {
-  const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [title, setTitle] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const { data: chats } = useApi<ChatSummary[]>("/chats");
+  const { data: workspaces } = useApi<{ id: string }[]>("/workspaces");
+  const { data: agents } = useApi<{ id: string }[]>("/agents");
+  const dispatch = useDispatch();
+  const [message, setMessage] = useState("");
 
-  useEffect(() => {
-    load();
-    loadDefaults();
-  }, []);
-
-  async function loadDefaults() {
-    const ws = await api<{ id: string }[]>("/workspaces");
-    if (ws.data.length) setWorkspaceId(ws.data[0].id);
-    const ag = await api<{ id: string }[]>("/agents");
-    if (ag.data.length) setAgentId(ag.data[0].id);
-  }
-
-  async function load() {
-    const { data } = await api<ChatSummary[]>("/chats");
-    setChats(data);
-    setLoaded(true);
-  }
+  const workspaceId = workspaces?.[0]?.id ?? "";
+  const agentId = agents?.[0]?.id ?? "";
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!workspaceId || !agentId) return;
+    if (!workspaceId || !agentId || !message.trim()) return;
+    const title = message.trim().slice(0, 80);
     const { status, data } = await api<{ id: string }>("/chats", {
       method: "POST",
-      body: { workspaceId, agentId, title: title || "Untitled" },
+      body: { workspaceId, agentId, title },
     });
     if (status === 201 || status === 200) {
-      setTitle("");
+      await api(`/chats/${data.id}/messages`, {
+        method: "POST",
+        body: { content: message.trim() },
+      });
+      setMessage("");
+      dispatch(cacheInvalidate("/chats"));
       nav({ page: "chat", id: data.id });
     }
   }
@@ -54,16 +47,16 @@ export function Today({ nav }: { nav: (r: Route) => void }) {
       <h2>Today</h2>
       <form onSubmit={handleCreate}>
         <label>
-          New chat title
+          Message
           <input
             type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
           />
         </label>
         <button type="submit">New chat</button>
       </form>
-      {loaded && chats.length === 0 && <p>No chats yet.</p>}
+      {chats && chats.length === 0 && <p>No chats yet.</p>}
       <table>
         <thead>
           <tr>
@@ -75,10 +68,10 @@ export function Today({ nav }: { nav: (r: Route) => void }) {
           </tr>
         </thead>
         <tbody>
-          {chats.map((c) => (
+          {(chats ?? []).map((c) => (
             <tr key={c.id}>
               <td>
-                <a href="#" onClick={(e) => { e.preventDefault(); nav({ page: "chat", id: c.id }); }}>
+                <a href={`/chat/${c.id}`} onClick={(e) => { e.preventDefault(); nav({ page: "chat", id: c.id }); }}>
                   {c.title}
                 </a>
               </td>
