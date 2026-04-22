@@ -20,7 +20,7 @@ test.describe("Search", () => {
   test("search finds a chat by title", async ({ login, page }) => {
     await login();
     // Create a chat with a distinctive title
-    await page.getByLabel("New chat title").fill("Searchable unique chat");
+    await page.getByLabel("Message").first().fill("Searchable unique chat");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Searchable/ })).toBeVisible();
 

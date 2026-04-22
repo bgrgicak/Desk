@@ -16,20 +16,15 @@ test.describe("Full user journey", () => {
     await expect(page.getByRole("heading", { name: "Desk" })).toBeVisible();
 
     // 2. Create a chat from Today
-    await page.getByLabel("New chat title").fill("Journey Demo Chat");
+    await page.getByLabel("Message").first().fill("Journey Demo Chat");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(
       page.getByRole("heading", { name: /Chat: Journey Demo Chat/ }),
     ).toBeVisible();
 
-    // 3. Send a message; user message appears, agent reply follows
-    await page.getByLabel("Message").fill("Hello journey!");
-    await page.getByRole("button", { name: "Send" }).click();
+    // 3. The initial message was sent on chat creation; agent reply follows via WS
     await expect(
-      page.getByRole("listitem").filter({ hasText: "Hello journey!" }),
-    ).toBeVisible({ timeout: 5000 });
-    await expect(
-      page.getByRole("listitem").filter({ hasText: /agent/i }),
+      page.getByText("fake assistant response").first(),
     ).toBeVisible({ timeout: 10000 });
 
     // 4. Upload an artifact to the chat
@@ -71,7 +66,7 @@ test.describe("Full user journey", () => {
     await expect(page.getByRole("heading", { name: "Scheduled Jobs" })).toBeVisible();
 
     await page.getByLabel("Mode").selectOption("scheduled");
-    await page.getByLabel("Spec").fill("2099-01-01T00:00:00Z");
+    await page.getByLabel("When").fill("in 5 minutes");
     await page.getByLabel("Prompt").fill("Journey scheduled prompt");
     await page.getByRole("button", { name: "Create job" }).click();
 

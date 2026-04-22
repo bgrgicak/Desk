@@ -9,20 +9,12 @@ test.describe("Runs", () => {
 
   test("shows runs created after sending a message", async ({ login, page }) => {
     await login();
-    // Create a chat and send a message to generate a run
-    await page.getByLabel("New chat title").fill("Run test chat");
+    // Create a chat (Today.tsx sends the initial message, which triggers a run)
+    await page.getByLabel("Message").first().fill("Run test chat");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Run test/ })).toBeVisible();
 
-    await page.getByLabel("Message").fill("Generate a run");
-    await page.getByRole("button", { name: "Send" }).click();
-
-    // Wait for the user message to appear (confirms send worked)
-    await expect(
-      page.getByRole("listitem").filter({ hasText: "Generate a run" }),
-    ).toBeVisible({ timeout: 5000 });
-
-    // Wait a bit for the run to complete
+    // Wait for the run to complete
     await page.waitForTimeout(2000);
 
     // Navigate to Runs via the nav header
@@ -35,15 +27,10 @@ test.describe("Runs", () => {
 
   test("view run detail and logs", async ({ login, page }) => {
     await login();
-    // Create a run
-    await page.getByLabel("New chat title").fill("Run detail chat");
+    // Create a chat (triggers a run automatically)
+    await page.getByLabel("Message").first().fill("Run detail chat");
     await page.getByRole("button", { name: "New chat" }).click();
-    await page.getByLabel("Message").fill("Generate logs");
-    await page.getByRole("button", { name: "Send" }).click();
-
-    await expect(
-      page.getByRole("listitem").filter({ hasText: "Generate logs" }),
-    ).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: /Chat:/ })).toBeVisible();
     await page.waitForTimeout(2000);
 
     // Go to runs via the nav

@@ -3,7 +3,7 @@ import { test, expect } from "../fixtures";
 test.describe("Chat", () => {
   test("send a message and see it in the list", async ({ login, page }) => {
     await login();
-    await page.getByLabel("New chat title").fill("Chat msg test");
+    await page.getByLabel("Message").first().fill("Chat msg test");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Chat msg test/ })).toBeVisible();
 
@@ -15,7 +15,7 @@ test.describe("Chat", () => {
 
   test("edit chat title and goal", async ({ login, page }) => {
     await login();
-    await page.getByLabel("New chat title").fill("Edit me");
+    await page.getByLabel("Message").first().fill("Edit me");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Edit me/ })).toBeVisible();
 
@@ -30,7 +30,7 @@ test.describe("Chat", () => {
 
   test("upload an artifact to a chat", async ({ login, page }) => {
     await login();
-    await page.getByLabel("New chat title").fill("Artifact chat");
+    await page.getByLabel("Message").first().fill("Artifact chat");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Artifact chat/ })).toBeVisible();
 
@@ -47,28 +47,20 @@ test.describe("Chat", () => {
 
   test("smoke: send message and see fake agent response", async ({ login, page }) => {
     await login();
-    await page.getByLabel("New chat title").fill("Smoke test chat");
+    await page.getByLabel("Message").first().fill("Smoke test chat");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Smoke test chat/ })).toBeVisible();
 
-    await page.getByLabel("Message").fill("Trigger agent");
-    await page.getByRole("button", { name: "Send" }).click();
-
-    // Wait for the user message first
-    await expect(
-      page.getByRole("listitem").filter({ hasText: "Trigger agent" }),
-    ).toBeVisible({ timeout: 5000 });
-
+    // Today.tsx sends the initial message on chat creation, which triggers a run.
     // The fake run inserts an "agent" role message with "fake assistant response".
-    // The message arrives via WebSocket (message.appended event).
     await expect(
-      page.getByRole("listitem").filter({ hasText: "fake assistant response" }),
+      page.getByText("fake assistant response").first(),
     ).toBeVisible({ timeout: 15000 });
   });
 
   test("navigate back to chats list", async ({ login, page }) => {
     await login();
-    await page.getByLabel("New chat title").fill("Nav test");
+    await page.getByLabel("Message").first().fill("Nav test");
     await page.getByRole("button", { name: "New chat" }).click();
     await expect(page.getByRole("heading", { name: /Chat: Nav test/ })).toBeVisible();
 
