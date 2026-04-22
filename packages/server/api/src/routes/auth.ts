@@ -7,14 +7,8 @@ export async function handleLogin(
   pool: pg.Pool,
   body: { username: string; password: string },
 ): Promise<{ token: string }> {
-  const user = await queries.users.findByUsername(pool, body.username);
+  const user = await queries.users.login(pool, body.username, body.password);
   if (!user) throw new UnauthorizedError("Invalid credentials");
-
-  const hash = await queries.users.getPasswordHash(pool, user.id);
-  // v1: plain-text password comparison (prefix "plain:")
-  if (!hash || hash !== `plain:${body.password}`) {
-    throw new UnauthorizedError("Invalid credentials");
-  }
 
   const token = issueSession(user.id);
   return { token };

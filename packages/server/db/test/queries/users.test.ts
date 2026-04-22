@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { generateId } from "@desk/shared";
+import { generateId, UnauthorizedError } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
+import { hashPassword } from "../../src/passwords.js";
 
 let pool: pg.Pool;
 
@@ -63,5 +64,68 @@ describe("users queries", () => {
     expect(ok).toBe(true);
     const hash = await users.getPasswordHash(pool, userId);
     expect(hash).toBe("newhash");
+  });
+
+  it("login() verifies argon2id hashes and rejects wrong passwords", async () => {
+    const loginId = generateId("user");
+    const hash = await hashPassword("correct-horse");
+    await users.insert(pool, {
+      id: loginId,
+      username: "loginer",
+      passwordHash: hash,
+      email: "loginer@example.com",
+    });
+
+    const ok = await users.login(pool, "loginer", "correct-horse");
+    expect(ok?.id).toBe(loginId);
+
+    const wrong = await users.login(pool, "loginer", "battery-staple");
+    expect(wrong).toBeNull();
+
+    const missing = await users.login(pool, "nobody", "whatever");
+    expect(missing).toBeNull();
+  });
+
+  it("login() opportunistically rehashes legacy plain: entries", async () => {
+    const legacyId = generateId("user");
+    await users.insert(pool, {
+      id: legacyId,
+      username: "legacy",
+      passwordHash: "plain:s3cret",
+      email: "legacy@example.com",
+    });
+
+    const ok = await users.login(pool, "legacy", "s3cret");
+    expect(ok?.id).toBe(legacyId);
+
+    const rehashed = await users.getPasswordHash(pool, legacyId);
+    expect(rehashed).not.toBeNull();
+    expect(rehashed!.startsWith("plain:")).toBe(false);
+    expect(rehashed!.startsWith("$argon2id$")).toBe(true);
+
+    const stillOk = await users.login(pool, "legacy", "s3cret");
+    expect(stillOk?.id).toBe(legacyId);
+  });
+
+  it("setPassword() verifies current password and writes argon2id hash", async () => {
+    const spId = generateId("user");
+    const hash = await hashPassword("old-pass");
+    await users.insert(pool, {
+      id: spId,
+      username: "pwchanger",
+      passwordHash: hash,
+      email: "pwchanger@example.com",
+    });
+
+    await users.setPassword(pool, spId, "old-pass", "new-pass");
+    const stored = await users.getPasswordHash(pool, spId);
+    expect(stored!.startsWith("$argon2id$")).toBe(true);
+
+    const ok = await users.login(pool, "pwchanger", "new-pass");
+    expect(ok?.id).toBe(spId);
+
+    await expect(
+      users.setPassword(pool, spId, "wrong-current", "whatever"),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
   });
 });

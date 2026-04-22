@@ -1,6 +1,6 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { NotFoundError, UnauthorizedError } from "@desk/shared";
+import { NotFoundError } from "@desk/shared";
 
 export async function getMe(pool: pg.Pool, userId: string) {
   const user = await queries.users.findById(pool, userId);
@@ -23,12 +23,7 @@ export async function changePassword(
   userId: string,
   data: { currentPassword: string; newPassword: string },
 ) {
-  const hash = await queries.users.getPasswordHash(pool, userId);
-  // v1: plain-text comparison (prefix "plain:"), matching handleLogin.
-  if (!hash || hash !== `plain:${data.currentPassword}`) {
-    throw new UnauthorizedError("Current password is incorrect");
-  }
-  await queries.users.updatePassword(pool, userId, `plain:${data.newPassword}`);
+  await queries.users.setPassword(pool, userId, data.currentPassword, data.newPassword);
   return { ok: true };
 }
 

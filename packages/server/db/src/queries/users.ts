@@ -1,5 +1,6 @@
 import pg from "pg";
-import { UserSchema, type User } from "@desk/shared";
+import { UnauthorizedError, UserSchema, type User } from "@desk/shared";
+import { hashPassword, verifyPassword, isLegacyHash } from "../passwords.js";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -93,4 +94,49 @@ export async function getPasswordHash(
     [id],
   );
   return rows.length ? (rows[0].password_hash as string) : null;
+}
+
+/**
+ * Authenticates by username + password. Returns the user on success, null on
+ * bad username or password. Opportunistically rehashes legacy `plain:` entries
+ * on successful login.
+ */
+export async function login(
+  db: Queryable,
+  username: string,
+  password: string,
+): Promise<User | null> {
+  const user = await findByUsername(db, username);
+  if (!user) return null;
+
+  const hash = await getPasswordHash(db, user.id);
+  if (!hash) return null;
+
+  if (!(await verifyPassword(hash, password))) return null;
+
+  if (isLegacyHash(hash)) {
+    const rehashed = await hashPassword(password);
+    await updatePassword(db, user.id, rehashed);
+  }
+
+  return user;
+}
+
+/**
+ * Changes a user's password. Verifies the current password before writing the
+ * new argon2id hash. Throws UnauthorizedError when the current password is
+ * wrong.
+ */
+export async function setPassword(
+  db: Queryable,
+  id: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const hash = await getPasswordHash(db, id);
+  if (!hash || !(await verifyPassword(hash, currentPassword))) {
+    throw new UnauthorizedError("Current password is incorrect");
+  }
+  const rehashed = await hashPassword(newPassword);
+  await updatePassword(db, id, rehashed);
 }

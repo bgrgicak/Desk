@@ -1,12 +1,6 @@
 import pg from "pg";
 import { generateId, TOOLS, type ToolName } from "@desk/shared";
-
-// TODO: Replace with proper password hashing (bcrypt/argon2) when adding the auth package.
-// For now, store a plaintext placeholder prefixed with "plain:" so the auth layer knows
-// to upgrade it on first login.
-function placeholderHash(password: string): string {
-  return `plain:${password}`;
-}
+import { hashPassword } from "./passwords.js";
 
 export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
   const { rows } = await pool.query("SELECT count(*)::int AS c FROM users");
@@ -20,6 +14,7 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
   const workspaceId = generateId("workspace");
 
   const toolNames = Object.keys(TOOLS) as ToolName[];
+  const passwordHash = await hashPassword(password);
 
   const client = await pool.connect();
   try {
@@ -28,7 +23,7 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
     await client.query(
       `INSERT INTO users (id, username, password_hash, email)
        VALUES ($1, $2, $3, $4)`,
-      [userId, username, placeholderHash(password), `${username}@desk.local`],
+      [userId, username, passwordHash, `${username}@desk.local`],
     );
 
     await client.query(
