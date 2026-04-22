@@ -11,6 +11,7 @@ import {
   cancelRun as runtimeCancelRun,
   createDriver,
   type LogEvent,
+  type AgentFileInput,
 } from "@desk/runtime";
 import { createAdapter, type ScheduleAdapter } from "./scheduleAdapter.js";
 
@@ -34,7 +35,7 @@ export interface RunManagerOptions {
     agentId: string,
     prompt: string,
     onLog: (evt: LogEvent) => void,
-    opts?: { systemPrompt?: string },
+    opts?: { agentFileInput: AgentFileInput },
   ) => Promise<{ exitCode: number }>;
 }
 
@@ -63,6 +64,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const run = await queries.runs.insert(pool, {
       id: runId,
       chatId: input.chatId,
+      kind: input.mode,
       state: "pending",
     });
 
@@ -152,36 +154,54 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
-      // Resolve agent via the run's chat, falling back to default
+      // Resolve agent and user via the run's chat chain:
+      // run → chat → agent, chat → workspace → user
       const runRow = await queries.runs.findById(pool, runId);
       let agentId: string;
+      let chatId: string | undefined;
+      let userName = "User";
       if (runRow?.chatId) {
+        chatId = runRow.chatId;
         const chat = await queries.chats.findById(pool, runRow.chatId);
         agentId = chat?.agentId ?? (await getDefaultAgentId());
+        if (chat?.workspaceId) {
+          const ws = await queries.workspaces.findById(pool, chat.workspaceId);
+          if (ws?.userId) {
+            const user = await queries.users.findById(pool, ws.userId);
+            if (user) userName = user.username;
+          }
+        }
       } else {
         agentId = await getDefaultAgentId();
       }
       const agent = await queries.agents.findById(pool, agentId);
-      const systemPrompt = agent?.instructions || undefined;
+
+      const agentFileInput = {
+        agentId,
+        agentName: agent?.name ?? "Desk Agent",
+        model: agent?.model ?? "anthropic/claude-sonnet-4-5",
+        instructions: agent?.instructions ?? "",
+        userName,
+      };
 
       let result: { exitCode: number };
       if (opts.execRunFn) {
-        result = await opts.execRunFn(runId, agentId, prompt, onLog, { systemPrompt });
+        result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput });
       } else if (process.env.DESK_SANDBOX_DRIVER === "fake") {
         // Use the fake driver directly — no Docker, no token, no mounts
         const driver = createDriver();
-        result = await driver.execRun(agentId, { runId, prompt, systemPrompt, onLog });
+        result = await driver.execRun(agentId, { runId, prompt, agentFileId: agentId, onLog });
       } else {
-        // Use the full opencode lifecycle: mint token → project mounts → exec → cleanup
+        // Use the full opencode lifecycle: write agent file → mint token → project mounts → exec → cleanup
         const home = process.env.DESK_HOME ?? "/opt/desk";
         const handle = await createOrReuse(agentId, home);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,
-          systemPrompt,
           home,
           workspaceId: "default",
-          chatId: runRow?.chatId ?? undefined,
+          chatId,
+          agent: agentFileInput,
           onLog,
         });
       }
@@ -273,6 +293,7 @@ export function createRunManager(opts: RunManagerOptions) {
         }
       }
     } catch (err) {
+      console.error(`Run ${runId} failed:`, err);
       await queries.runs.updateState(pool, runId, { state: "failed", exitCode: 1 });
       emit({ type: "run.state_changed", payload: (await queries.runs.findById(pool, runId))! });
     }

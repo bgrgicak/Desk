@@ -4,15 +4,16 @@ import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
 import { projectMounts, teardownMounts } from "./mounts.js";
+import { writeAgentFile, type AgentFileInput } from "./agentFile.js";
 
 export interface ExecRunOptions {
   runId: string;
   prompt: string;
-  systemPrompt?: string;
   chatContext?: string;
   home: string;
   workspaceId: string;
   chatId?: string;
+  agent: AgentFileInput;
   onLog: (event: LogEvent) => void;
 }
 
@@ -36,28 +37,24 @@ export async function execRun(
     runId: opts.runId,
   });
 
-  // Compose a filesystem hint that gets prepended to the caller's chatContext.
-  // The agent reads files directly from the bind-mounts at /mnt/desk/*.
-  const fsHint = [
-    "You can access files on the host filesystem under /mnt/desk:",
-    "- /mnt/desk/files      (read-only) workspace files",
-    "- /mnt/desk/library    (read-only) library items",
-    mounts.attachmentsInSandbox
-      ? `- ${mounts.attachmentsInSandbox}    (read-only) attachments from this chat`
-      : null,
-    "- /mnt/desk/desktop    (read-write) scratch space for your own output",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const chatContext = opts.chatContext ? `${fsHint}\n\n${opts.chatContext}` : fsHint;
+  // Write the OpenCode agent definition file into the sandbox.
+  await writeAgentFile(handle.containerId, opts.agent);
+
+  // Compose a per-run hint for chat attachments (only when present).
+  // The static file-access docs live in the agent .md file; this just adds
+  // the dynamic attachments path for the current chat.
+  const attachmentHint = mounts.attachmentsInSandbox
+    ? `Chat attachments are available at ${mounts.attachmentsInSandbox} (read-only).`
+    : null;
+  const chatContext = [attachmentHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
 
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.agentId, {
       runId: opts.runId,
       prompt: opts.prompt,
-      systemPrompt: opts.systemPrompt,
       chatContext,
+      agentFileId: opts.agent.agentId,
       onLog: opts.onLog,
     });
     return result;

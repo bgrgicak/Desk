@@ -638,15 +638,15 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
       pool: realPool,
       adapter,
       execRunFn: async (_runId, _agentId, prompt, onLog, execOpts) => {
-        // Call real Anthropic API, passing systemPrompt as the Anthropic system param
+        // Call real Anthropic API, using agent instructions as the Anthropic system param
         const apiKey = process.env.ANTHROPIC_API_KEY!;
         const body: Record<string, unknown> = {
           model: "claude-haiku-4-5-20251001",
           max_tokens: 256,
           messages: [{ role: "user", content: prompt }],
         };
-        if (execOpts?.systemPrompt) {
-          body.system = execOpts.systemPrompt;
+        if (execOpts?.agentFileInput?.instructions) {
+          body.system = execOpts.agentFileInput.instructions;
         }
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",

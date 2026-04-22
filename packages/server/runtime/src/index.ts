@@ -4,5 +4,7 @@ export { projectMounts, teardownMounts, activeRunCount, containerBinds, sandboxM
 export type { MountSet } from "./mounts.js";
 export { execRun, cancelRun } from "./opencode.js";
 export type { ExecRunOptions } from "./opencode.js";
+export { renderAgentFile, writeAgentFile } from "./agentFile.js";
+export type { AgentFileInput } from "./agentFile.js";
 export { createDriver } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";

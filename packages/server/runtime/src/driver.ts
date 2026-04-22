@@ -3,8 +3,8 @@ import { PassThrough } from "node:stream";
 export interface RunOptions {
   runId: string;
   prompt: string;
-  systemPrompt?: string;
   chatContext?: string;
+  agentFileId?: string;
   onLog: (event: LogEvent) => void;
 }
 
@@ -45,7 +45,6 @@ function createFakeDriver(): SandboxDriver {
 
       const lines = [
         "Starting fake sandbox run...",
-        ...(opts.systemPrompt ? [`System prompt: ${opts.systemPrompt}`] : []),
         `Processing prompt: ${opts.prompt.slice(0, 50)}...`,
         "Fake response generated.",
         "Run complete.",
@@ -83,16 +82,18 @@ function createRealDriver(): SandboxDriver {
       const handle = await createOrReuse(_agentId);
       const container = docker.getContainer(handle.containerId);
 
-      // Build the full prompt including system prompt and chat context if provided
-      const fullPrompt = [opts.systemPrompt, opts.chatContext, opts.prompt]
+      // Build the full prompt including chat context if provided.
+      // The system prompt is handled by the OpenCode agent file, not inlined here.
+      const fullPrompt = [opts.chatContext, opts.prompt]
         .filter(Boolean)
         .join("\n\n");
 
       // opencode run reads the prompt as a positional arg; pass it via env to
       // avoid arg-length limits, then `exec opencode run "$DESK_PROMPT" ...`.
+      const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
       const cmd = [
         "sh", "-c",
-        `exec opencode run "$DESK_PROMPT" --dangerously-skip-permissions --format json`,
+        `exec opencode run "$DESK_PROMPT"${agentFlag} --dangerously-skip-permissions --format json`,
       ];
 
       const exec = await container.exec({
