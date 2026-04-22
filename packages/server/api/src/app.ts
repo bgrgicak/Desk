@@ -234,6 +234,14 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, { ok: true, runId });
       return;
     }
+    if (path === "/internal/messages/fire" && method === "POST") {
+      requireInternal(req);
+      const body = await parseBody(req) as { messageId?: string };
+      if (!body.messageId) throw new ValidationError("Missing messageId");
+      const result = await runManager.fireMessage(body.messageId);
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
 
     // Auth routes
     if (path === "/auth/login" && method === "POST") {

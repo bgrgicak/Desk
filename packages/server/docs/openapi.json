@@ -1169,6 +1169,63 @@
         }
       }
     },
+    "/internal/messages/fire": {
+      "post": {
+        "summary": "Fire a scheduled message (server-internal)",
+        "description": "Fires a pending scheduled message by id. Invoked by at/cron via curl. Loopback + shared-secret required. Idempotent — concurrent fires on the same messageId converge on one execution via a pending→running state transition.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "messageId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fire result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "fired": {
+                      "type": "boolean"
+                    },
+                    "childIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing messageId"
+          },
+          "401": {
+            "description": "Missing/invalid token or non-loopback origin"
+          }
+        }
+      }
+    },
     "/internal/runs/fire": {
       "post": {
         "summary": "Fire a scheduled job (server-internal)",

@@ -40,6 +40,7 @@ describe("OpenAPI spec", () => {
       "/ws",
       "/openapi.json",
       "/internal/runs/fire",
+      "/internal/messages/fire",
     ];
 
     for (const p of expectedPaths) {
