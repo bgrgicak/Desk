@@ -5,6 +5,7 @@ import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
 import { requireAuth } from "./auth/middleware.js";
+import { requireInternal } from "./auth/internal.js";
 import { verifySession } from "./auth/sessions.js";
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
@@ -221,6 +222,16 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(HEALTH_MESSAGE);
+      return;
+    }
+
+    // Internal routes — loopback + shared-secret auth (not the user session).
+    if (path === "/internal/runs/fire" && method === "POST") {
+      requireInternal(req);
+      const body = await parseBody(req) as { jobId?: string };
+      if (!body.jobId) throw new ValidationError("Missing jobId");
+      const runId = await runManager.fireJob(body.jobId);
+      sendJson(res, 200, { ok: true, runId });
       return;
     }
 

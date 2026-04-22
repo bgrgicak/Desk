@@ -39,13 +39,28 @@ export interface RunManagerOptions {
   ) => Promise<{ exitCode: number }>;
 }
 
-/** Build the shell command that at/cron will execute for a scheduled job. */
+/**
+ * Build the shell command that at/cron will execute for a scheduled job.
+ *
+ * Instead of forking a `desk-run` CLI, we emit a curl that posts to the
+ * server's /internal/runs/fire endpoint. The shared-secret token is read
+ * from disk at fire time via $(cat ...) so token rotation doesn't
+ * invalidate scheduled commands (the reconcile path regenerates them).
+ */
 function buildScheduleCmd(jobId: string): string {
-  const envVars: string[] = [];
-  if (process.env.DATABASE_URL) envVars.push(`DATABASE_URL=${process.env.DATABASE_URL}`);
-  if (process.env.DESK_SANDBOX_DRIVER) envVars.push(`DESK_SANDBOX_DRIVER=${process.env.DESK_SANDBOX_DRIVER}`);
-  const bin = process.env.DESK_RUN_BIN ?? "desk-run";
-  return [...envVars, bin, jobId].join(" ");
+  const tokenPath = process.env.DESK_INTERNAL_TOKEN_PATH ?? "/etc/desk-server/internal-token";
+  const port = process.env.DESK_API_PORT ?? process.env.PORT ?? "8080";
+  const url = `http://127.0.0.1:${port}/internal/runs/fire`;
+  const body = JSON.stringify({ jobId });
+  const bodyEscaped = body.replace(/"/g, '\\"');
+  return (
+    `sh -c 'T=$(cat ${tokenPath}) && ` +
+    `curl -sf -X POST ` +
+    `-H "Authorization: Bearer $T" ` +
+    `-H "Content-Type: application/json" ` +
+    `-d "${bodyEscaped}" ` +
+    `${url}'`
+  );
 }
 
 export function createRunManager(opts: RunManagerOptions) {
@@ -128,6 +143,28 @@ export function createRunManager(opts: RunManagerOptions) {
     }
 
     return run;
+  }
+
+  /**
+   * Runs a scheduled job immediately, as if at/cron had fired it.
+   * Creates a new run, executes it in-process, returns the run id.
+   * This is what /internal/runs/fire invokes.
+   */
+  async function fireJob(jobId: string): Promise<string> {
+    const job = await queries.scheduledJobs.findById(pool, jobId);
+    if (!job) throw new Error(`Scheduled job not found: ${jobId}`);
+    if (!job.active) {
+      // Job was cancelled between at-firing and our lookup. No-op.
+      return "";
+    }
+
+    const run = await enqueueRun({
+      chatId: job.chatId,
+      prompt: `Execute scheduled job ${jobId}`,
+      mode: "immediate",
+    });
+    await pool.query(`UPDATE runs SET scheduled_job_id = $1 WHERE id = $2`, [jobId, run.id]);
+    return run.id;
   }
 
   async function executeRun(runId: string, prompt: string): Promise<void> {
@@ -368,6 +405,7 @@ export function createRunManager(opts: RunManagerOptions) {
   return {
     enqueueRun,
     executeRun,
+    fireJob,
     cancelRun,
     cancelJob,
     cancelAiNoteForChat,

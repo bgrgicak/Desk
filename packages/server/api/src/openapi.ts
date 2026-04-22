@@ -376,6 +376,26 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "200": { description: "OpenAPI 3.1.0 JSON document" } },
         },
       },
+      "/internal/runs/fire": {
+        post: {
+          summary: "Fire a scheduled job (server-internal)",
+          description: "Invoked by at/cron via curl. Requires loopback origin (127.0.0.1) and a bearer token that matches DESK_INTERNAL_TOKEN_PATH. Not intended for user clients.",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Run id of the fired job (empty string if the job was inactive)" },
+            "400": { description: "Missing jobId" },
+            "401": { description: "Missing/invalid token or non-loopback origin" },
+          },
+        },
+      },
     },
   };
 }

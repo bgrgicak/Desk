@@ -10,6 +10,11 @@ import { verifySession } from "./sessions.js";
 const PUBLIC_EXACT = new Set(["/"]);
 const PUBLIC_PREFIXES = ["/auth/login", "/openapi.json"];
 
+// Routes under /internal/* use their own loopback + shared-secret auth
+// (see auth/internal.ts). The user-session middleware skips them so the
+// dispatch handler can enforce the internal contract directly.
+const INTERNAL_PREFIX = "/internal/";
+
 /**
  * Extracts and validates auth from an Authorization header.
  * Returns userId on success, throws UnauthorizedError on failure.
@@ -20,6 +25,10 @@ export function requireAuth(url: string, authHeader: string | undefined): string
     if (url.startsWith(path)) {
       return ""; // No auth needed
     }
+  }
+  if (url.startsWith(INTERNAL_PREFIX)) {
+    // Defer to requireInternal() in the dispatcher.
+    return "";
   }
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
