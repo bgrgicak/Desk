@@ -10,6 +10,9 @@ interface MessageContent {
   text?: string;
   toolName?: string;
   events?: OpenCodeEvent[];
+  body?: string;
+  path?: string;
+  name?: string;
 }
 
 interface Message {
@@ -18,6 +21,8 @@ interface Message {
   role: string;
   content: MessageContent;
   createdAt: string;
+  state?: string;
+  parentId?: string;
 }
 
 interface ChatDetail {
@@ -148,22 +153,43 @@ export function Chat({ id, nav }: { id: string; nav: (r: Route) => void }) {
         </form>
       )}
 
+      {(() => {
+        // Pin the latest note-content message at the top of the chat.
+        const latestNote = [...messages]
+          .reverse()
+          .find((m) => m.content.type === "note");
+        if (!latestNote) return null;
+        return (
+          <section aria-label="Chat note">
+            <h3>Note</h3>
+            <NotePinned message={latestNote} chatId={id} onSaved={loadMessages} />
+          </section>
+        );
+      })()}
+
       <h3>Messages</h3>
       <ol>
-        {messages.map((m) => (
-          <li key={m.id}>
-            <strong>{m.role}:</strong>{" "}
-            {m.content.type === "text" ? (
-              <MessageText text={m.content.text ?? ""} />
-            ) : m.content.type === "events" ? (
-              <EventsRenderer events={m.content.events ?? []} />
-            ) : m.content.type === "toolCall" ? (
-              `[tool: ${m.content.toolName}]`
-            ) : (
-              `[${m.content.type}]`
-            )}
-          </li>
-        ))}
+        {messages
+          .filter((m) => m.content.type !== "ai_note_request")
+          .map((m) => (
+            <li key={m.id}>
+              <strong>{m.role}:</strong>{" "}
+              {m.content.type === "text" ? (
+                <MessageText text={m.content.text ?? ""} />
+              ) : m.content.type === "events" ? (
+                <EventsRenderer events={m.content.events ?? []} />
+              ) : m.content.type === "note" ? (
+                <em>[note — see pinned above]</em>
+              ) : m.content.type === "toolCall" ? (
+                `[tool: ${m.content.toolName}]`
+              ) : (
+                `[${m.content.type}]`
+              )}
+              {m.state && m.state !== "succeeded" && (
+                <span> ({m.state})</span>
+              )}
+            </li>
+          ))}
       </ol>
 
       <form onSubmit={sendMessage}>
@@ -196,6 +222,61 @@ export function Chat({ id, nav }: { id: string; nav: (r: Route) => void }) {
       <p>
         <button onClick={() => nav({ page: "today" })}>Back to chats</button>
       </p>
+    </div>
+  );
+}
+
+function NotePinned({
+  message,
+  chatId,
+  onSaved,
+}: {
+  message: Message;
+  chatId: string;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [body, setBody] = useState(message.content.body ?? "");
+
+  useEffect(() => {
+    setBody(message.content.body ?? "");
+  }, [message.id, message.content.body]);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    await api(`/chats/${chatId}/messages/${message.id}`, {
+      method: "PATCH",
+      body: { content: { type: "note", body } },
+    });
+    setEditing(false);
+    onSaved();
+  }
+
+  if (editing) {
+    return (
+      <form onSubmit={handleSave}>
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={8}
+          style={{ width: "100%" }}
+        />
+        <div>
+          <button type="submit">Save note</button>
+          <button type="button" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <div>
+      <pre style={{ whiteSpace: "pre-wrap" }}>{message.content.body}</pre>
+      <button type="button" onClick={() => setEditing(true)}>
+        Edit note
+      </button>
     </div>
   );
 }
