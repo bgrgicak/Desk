@@ -109,6 +109,7 @@ NODE_ENV=production
 # Seed credentials for the initial user. Change DESK_SEED_PASSWORD before first boot.
 DESK_SEED_USERNAME=desk
 DESK_SEED_PASSWORD=change-me-before-first-boot
+DESK_RUN_BIN=/opt/desk-server/node_modules/.bin/desk-run
 ENVFILE
 
 # ---------- 9. Systemd unit ----------

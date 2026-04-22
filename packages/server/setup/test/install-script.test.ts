@@ -31,4 +31,17 @@ describe("install.sh static checks", () => {
       expect(script).toContain(cmd);
     }
   });
+
+  it("sets DESK_RUN_BIN in the env file so at/cron jobs can find desk-run", () => {
+    expect(script).toContain("DESK_RUN_BIN=");
+  });
+});
+
+describe("dev-override.conf static checks", () => {
+  const confPath = resolve(import.meta.dirname, "../dev-override.conf");
+  const conf = readFileSync(confPath, "utf-8");
+
+  it("sets DESK_RUN_BIN so at/cron jobs find desk-run in dev mode", () => {
+    expect(conf).toContain("DESK_RUN_BIN=");
+  });
 });
