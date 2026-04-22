@@ -1,9 +1,21 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { NotFoundError } from "@desk/shared";
+import { generateId, NotFoundError } from "@desk/shared";
 
 export async function listWorkspaces(pool: pg.Pool) {
   return queries.workspaces.list(pool);
+}
+
+export async function createWorkspace(
+  pool: pg.Pool,
+  userId: string,
+  data: { name: string; description?: string; icon?: string },
+) {
+  return queries.workspaces.insert(pool, {
+    id: generateId("workspace"),
+    userId,
+    ...data,
+  });
 }
 
 export async function getWorkspace(pool: pg.Pool, id: string) {

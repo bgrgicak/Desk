@@ -244,6 +244,12 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/workspaces" && method === "POST") {
+      const body = await parseBody(req) as { name: string; description?: string; icon?: string };
+      const result = await workspaceRoutes.createWorkspace(pool, userId, body);
+      sendJson(res, 201, result);
+      return;
+    }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "GET") {
       const result = await workspaceRoutes.getWorkspace(pool, segments[1]);
       sendJson(res, 200, result);

@@ -274,6 +274,41 @@ describe("Routes coverage (real Postgres)", () => {
     });
   });
 
+  // ── 3b. POST /workspaces ──────────────────────────────────────────
+  it("POST /workspaces — creates a workspace with name, description, and icon", async () => {
+    const res = await request("POST", "/workspaces", token, {
+      name: "Test WS",
+      description: "A test workspace",
+      icon: "star",
+    });
+    expect(res.status).toBe(201);
+    const ws = res.body as { id: string; name: string; description: string; icon: string; userId: string };
+    expect(ws.id).toMatch(/^wks_/);
+    expect(ws.name).toBe("Test WS");
+    expect(ws.description).toBe("A test workspace");
+    expect(ws.icon).toBe("star");
+    expect(ws.userId).toBeTruthy();
+
+    // GET confirms it exists
+    const getRes = await request("GET", `/workspaces/${ws.id}`, token);
+    expect(getRes.status).toBe(200);
+    expect((getRes.body as { name: string }).name).toBe("Test WS");
+
+    // Clean up
+    await request("DELETE", `/workspaces/${ws.id}`, token);
+  });
+
+  it("POST /workspaces — name only, defaults for description and icon", async () => {
+    const res = await request("POST", "/workspaces", token, { name: "Minimal WS" });
+    expect(res.status).toBe(201);
+    const ws = res.body as { id: string; description: string; icon: string };
+    expect(ws.description).toBe("");
+    expect(ws.icon).toBe("");
+
+    // Clean up
+    await request("DELETE", `/workspaces/${ws.id}`, token);
+  });
+
   // ── 4. DELETE /workspaces/:id ─────────────────────────────────────
   it("DELETE /workspaces/:id — workspace disappears; row is hard-deleted", async () => {
     // Create a throwaway workspace directly via pool
@@ -609,6 +644,7 @@ describe("Routes coverage (real Postgres)", () => {
     const protectedRoutes: Array<[string, string]> = [
       ["POST", "/me/password"],
       ["GET", `/workspaces/${workspaceId}`],
+      ["POST", "/workspaces"],
       ["PATCH", `/workspaces/${workspaceId}`],
       ["DELETE", `/workspaces/${workspaceId}`],
       ["GET", "/chats/cht_any"],

@@ -103,6 +103,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/workspaces": {
         get: { summary: "List workspaces", responses: { "200": { description: "Workspace array" } } },
+        post: {
+          summary: "Create workspace",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, icon: { type: "string" } }, required: ["name"] } } } },
+          responses: { "201": { description: "Created workspace" } },
+        },
       },
       "/workspaces/{id}": {
         get: { summary: "Get workspace", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Workspace" } } },
