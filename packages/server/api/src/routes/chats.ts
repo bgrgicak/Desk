@@ -1,9 +1,10 @@
 import pg from "pg";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { queries } from "@desk/db";
-import { generateId, NotFoundError, type WsEvent } from "@desk/shared";
+import { generateId, NotFoundError, ValidationError, type Message, type WsEvent } from "@desk/shared";
 import {
   chatAttachmentsDir,
   uploadArtifact,
@@ -69,6 +70,110 @@ export async function sendMessage(
   emit({ type: "message.appended", payload: message });
 
   return message;
+}
+
+/**
+ * PATCH a message. Supports editing content (e.g. user edits a note) and
+ * cancelling state (setting state to 'cancelled'). Returns the updated
+ * row. Emits message.updated over WS.
+ */
+export async function patchMessage(
+  pool: pg.Pool,
+  chatId: string,
+  messageId: string,
+  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
+  emit: (event: WsEvent) => void,
+): Promise<Message> {
+  const current = await queries.messages.findById(pool, messageId);
+  if (!current || current.chatId !== chatId) {
+    throw new NotFoundError(`Message not found in chat: ${messageId}`);
+  }
+  if (data.state !== undefined && !["cancelled", "pending"].includes(data.state)) {
+    throw new ValidationError(
+      `state can only be patched to 'cancelled' or 'pending' via this endpoint`,
+    );
+  }
+  const updated = await queries.messages.updateMessage(pool, messageId, data);
+  if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
+  emit({ type: "message.updated", payload: updated });
+  return updated;
+}
+
+/**
+ * Deletes a message. Cancels any at/cron scheduler entry this message
+ * owned via scheduler_ref. Idempotent — deleting an already-gone
+ * message returns 404; deleting with no scheduler_ref just removes
+ * the row.
+ */
+export async function deleteMessage(
+  pool: pg.Pool,
+  storage: StorageContext,
+  chatId: string,
+  messageId: string,
+  adapter: {
+    removeAt: (id: string) => Promise<void>;
+    removeCron: (id: string) => Promise<void>;
+  } | null,
+): Promise<void> {
+  const msg = await queries.messages.findById(pool, messageId);
+  if (!msg || msg.chatId !== chatId) {
+    throw new NotFoundError(`Message not found in chat: ${messageId}`);
+  }
+
+  // Cancel any scheduled infra entry this message owned.
+  const ref = msg.schedulerRef;
+  if (ref && adapter) {
+    try {
+      if (ref.kind === "at") await adapter.removeAt(ref.id);
+      else if (ref.kind === "cron") await adapter.removeCron(ref.id);
+    } catch {
+      // Best-effort; stale refs are OK.
+    }
+  }
+
+  await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+
+  // Move log file to trash if present.
+  const logPath = path.join(
+    storage.home,
+    "Desk",
+    "workspaces",
+    "desk",
+    ".chats",
+    chatId,
+    "logs",
+    `${messageId}.log`,
+  );
+  await fs.access(logPath).then(async () => {
+    const trashDir = path.join(storage.home, "Desk", ".trash");
+    await fs.mkdir(trashDir, { recursive: true });
+    await fs.rename(logPath, path.join(trashDir, `${Date.now()}-${messageId}.log`));
+  }).catch(() => { /* no log file, fine */ });
+}
+
+/**
+ * Tails the log file for a running (or completed) message. Returns the
+ * body content stripped of kind prefixes, as a plain-text stream.
+ */
+export async function getMessageLogs(
+  storage: StorageContext,
+  chatId: string,
+  messageId: string,
+): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+  const logPath = path.join(
+    storage.home,
+    "Desk",
+    "workspaces",
+    "desk",
+    ".chats",
+    chatId,
+    "logs",
+    `${messageId}.log`,
+  );
+  await fs.access(logPath).catch(() => {
+    throw new NotFoundError(`No logs for message: ${messageId}`);
+  });
+  return { stream: createReadStream(logPath), contentType: "text/plain; charset=utf-8" };
 }
 
 /**

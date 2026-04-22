@@ -413,6 +413,23 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 201, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
+      const result = await chatRoutes.patchMessage(pool, segments[1], segments[3], body, emitEvent);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
+      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3], runManager.adapter);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "logs" && segments.length === 5 && method === "GET") {
+      const { stream, contentType } = await chatRoutes.getMessageLogs(storage, segments[1], segments[3]);
+      res.writeHead(200, { "Content-Type": contentType });
+      stream.pipe(res);
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "GET") {
       const result = await chatRoutes.listArtifacts(storage, segments[1]);
       sendJson(res, 200, result);

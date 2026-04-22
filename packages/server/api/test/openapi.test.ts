@@ -25,6 +25,8 @@ describe("OpenAPI spec", () => {
       "/chats",
       "/chats/{id}",
       "/chats/{id}/messages",
+      "/chats/{id}/messages/{messageId}",
+      "/chats/{id}/messages/{messageId}/logs",
       "/chats/{id}/artifacts",
       "/library",
       "/library/meta",

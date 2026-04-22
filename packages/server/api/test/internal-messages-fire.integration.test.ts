@@ -219,3 +219,79 @@ describe("POST /internal/messages/fire", () => {
     expect((res.body as { fired: boolean }).fired).toBe(false);
   });
 });
+
+describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
+  async function userRequest(
+    method: string,
+    urlPath: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    // Get a user session token.
+    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const userTok = (loginRes.body as { token: string }).token;
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
+      const payload = body !== undefined ? JSON.stringify(body) : undefined;
+      if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
+      const req = http.request({ hostname: "127.0.0.1", port, path: urlPath, method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      });
+      req.on("error", reject);
+      if (payload) req.write(payload);
+      req.end();
+    });
+  }
+
+  it("PATCH updates a note message's body", async () => {
+    // Fire an ai_note_request to produce a note message.
+    const requestId = await insertPendingMessage({ type: "ai_note_request" });
+    const fireRes = await postInternal("/internal/messages/fire", { messageId: requestId }, token);
+    const { childIds } = fireRes.body as { childIds: string[] };
+    const noteId = childIds[0];
+
+    const patched = await userRequest(
+      "PATCH",
+      `/chats/${chatId}/messages/${noteId}`,
+      { content: { type: "note", body: "User-edited summary." } },
+    );
+    expect(patched.status).toBe(200);
+    const updated = patched.body as { content: { type: string; body: string } };
+    expect(updated.content.body).toBe("User-edited summary.");
+  });
+
+  it("PATCH rejects arbitrary state values (only cancelled/pending allowed)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "x" });
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "running" });
+    expect(res.status).toBe(400);
+  });
+
+  it("DELETE removes the message", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "delete me" });
+    const res = await userRequest("DELETE", `/chats/${chatId}/messages/${mid}`);
+    expect(res.status).toBe(200);
+    expect(await queries.messages.findById(pool, mid)).toBeNull();
+  });
+
+  it("GET /chats/{id}/messages/{id}/logs returns the log body after a fire", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "log me" });
+    await postInternal("/internal/messages/fire", { messageId: mid }, token);
+
+    const res = await userRequest("GET", `/chats/${chatId}/messages/${mid}/logs`);
+    expect(res.status).toBe(200);
+    const text = typeof res.body === "string" ? res.body : JSON.stringify(res.body);
+    expect(text).toContain("vacation plans");
+  });
+
+  it("GET logs returns 404 for a message with no log file", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "no log yet" });
+    const res = await userRequest("GET", `/chats/${chatId}/messages/${mid}/logs`);
+    expect(res.status).toBe(404);
+  });
+});

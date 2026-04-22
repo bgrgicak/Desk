@@ -228,6 +228,61 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "201": { description: "Created message" } },
         },
       },
+      "/chats/{id}/messages/{messageId}": {
+        patch: {
+          summary: "Edit a message (content, cancel, reschedule)",
+          description: "Update content (e.g. user edits a note), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    content: { type: "object" },
+                    state: { type: "string", enum: ["cancelled", "pending"] },
+                    executeAt: { type: ["string", "null"] },
+                    cron: { type: ["string", "null"] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Updated message" },
+            "400": { description: "Invalid state or payload" },
+            "404": { description: "Message not found in chat" },
+          },
+        },
+        delete: {
+          summary: "Delete a message (cancels any scheduled firing)",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { description: "OK" },
+            "404": { description: "Message not found in chat" },
+          },
+        },
+      },
+      "/chats/{id}/messages/{messageId}/logs": {
+        get: {
+          summary: "Stream a message's execution log file",
+          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { description: "Log file contents (text/plain)" },
+            "404": { description: "No log for that message" },
+          },
+        },
+      },
       "/chats/{id}/artifacts": {
         get: { summary: "List chat artifacts", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File array" } } },
         post: {
