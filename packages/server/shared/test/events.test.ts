@@ -22,11 +22,11 @@ const fixtures: Record<string, WsEvent> = {
   },
   "artifact.created": {
     type: "artifact.created",
-    payload: { id: "fil_abc", workspaceId: "wks_abc", class: "artifact", path: "/a.txt", name: "a.txt", mime: "text/plain", size: 10, createdAt: now },
+    payload: { path: "library/a.txt", name: "a.txt", mime: "text/plain", size: 10, createdAt: now },
   },
   "run.state_changed": {
     type: "run.state_changed",
-    payload: { id: "run_abc", state: "running" },
+    payload: { id: "run_abc", kind: "immediate", state: "running" },
   },
   "run.log_appended": {
     type: "run.log_appended",
@@ -34,7 +34,7 @@ const fixtures: Record<string, WsEvent> = {
   },
   "library.changed": {
     type: "library.changed",
-    payload: { workspaceId: "wks_abc", fileId: "fil_abc", op: "added" },
+    payload: { workspaceId: "wks_abc", path: "library/a.txt", op: "added" },
   },
   "note.created": {
     type: "note.created",

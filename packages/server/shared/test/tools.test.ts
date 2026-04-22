@@ -34,7 +34,7 @@ describe("TOOLS registry", () => {
 
 describe("tool request/response parsing", () => {
   it("file.read request", () => {
-    expect(TOOLS["file.read"].request.parse({ fileId: "fil_abc" })).toEqual({ fileId: "fil_abc" });
+    expect(TOOLS["file.read"].request.parse({ path: "library/a.txt" })).toEqual({ path: "library/a.txt" });
   });
 
   it("file.read response", () => {
@@ -52,7 +52,7 @@ describe("tool request/response parsing", () => {
   });
 
   it("file.write response", () => {
-    const res = { id: "fil_abc", workspaceId: "wks_abc", class: "artifact", path: "/f.txt", name: "f.txt", mime: "text/plain", size: 5, createdAt: now };
+    const res = { path: "library/f.txt", name: "f.txt", mime: "text/plain", size: 5, createdAt: now };
     expect(TOOLS["file.write"].response.parse(res)).toEqual(res);
   });
 
@@ -70,11 +70,11 @@ describe("tool request/response parsing", () => {
   });
 
   it("library.get request", () => {
-    expect(TOOLS["library.get"].request.parse({ fileId: "fil_abc" })).toEqual({ fileId: "fil_abc" });
+    expect(TOOLS["library.get"].request.parse({ path: "library/f.txt" })).toEqual({ path: "library/f.txt" });
   });
 
   it("library.get response", () => {
-    const res = { id: "fil_abc", workspaceId: "wks_abc", class: "artifact", path: "/f.txt", name: "f.txt", mime: "text/plain", size: 5, createdAt: now, previewUrl: "http://x" };
+    const res = { path: "library/f.txt", name: "f.txt", mime: "text/plain", size: 5, createdAt: now, previewUrl: "http://x" };
     expect(TOOLS["library.get"].response.parse(res)).toEqual(res);
   });
 
@@ -88,11 +88,11 @@ describe("tool request/response parsing", () => {
   });
 
   it("chat.attach_artifact request", () => {
-    expect(TOOLS["chat.attach_artifact"].request.parse({ chatId: "cht_abc", fileId: "fil_abc" })).toEqual({ chatId: "cht_abc", fileId: "fil_abc" });
+    expect(TOOLS["chat.attach_artifact"].request.parse({ chatId: "cht_abc", path: "library/a.txt" })).toEqual({ chatId: "cht_abc", path: "library/a.txt" });
   });
 
   it("chat.attach_artifact response", () => {
-    const res = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "artifactRef", fileId: "fil_abc" }, createdAt: now };
+    const res = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "artifactRef", path: "library/a.txt" }, createdAt: now };
     expect(TOOLS["chat.attach_artifact"].response.parse(res)).toEqual(res);
   });
 

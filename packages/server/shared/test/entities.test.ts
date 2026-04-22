@@ -38,14 +38,25 @@ describe("UserSchema", () => {
 });
 
 describe("AgentSchema", () => {
-  const valid = { id: "agt_abc", name: "Helper", instructions: "Be helpful", model: "gpt-4", toolAllowlist: ["file.read"] };
+  const valid = {
+    id: "agt_abc",
+    userId: "usr_abc",
+    name: "Helper",
+    instructions: "Be helpful",
+    model: "gpt-4",
+    toolAllowlist: ["file.read"],
+  };
 
   it("parses a valid agent", () => {
     expect(AgentSchema.parse(valid)).toEqual(valid);
   });
 
   it("rejects missing name", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", instructions: "x", model: "m", toolAllowlist: [] })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", instructions: "x", model: "m", toolAllowlist: [] })).toThrow();
+  });
+
+  it("rejects missing userId (M3 invariant)", () => {
+    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", instructions: "x", model: "m", toolAllowlist: [] })).toThrow();
   });
 
   it("round-trips through JSON", () => {
@@ -108,7 +119,7 @@ describe("MessageSchema", () => {
   });
 
   it("parses artifactRef content", () => {
-    const msg = { ...base, role: "system", content: { type: "artifactRef", fileId: "fil_abc" } };
+    const msg = { ...base, role: "system", content: { type: "artifactRef", path: "library/report.md", name: "report.md" } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
@@ -126,19 +137,15 @@ describe("MessageSchema", () => {
   });
 });
 
-describe("FileSchema", () => {
-  const valid = { id: "fil_abc", workspaceId: "wks_abc", class: "artifact", path: "/a.txt", name: "a.txt", mime: "text/plain", size: 100, createdAt: now };
+describe("FileSchema (FS-backed FileRef)", () => {
+  const valid = { path: "library/a.txt", name: "a.txt", mime: "text/plain", size: 100, createdAt: now };
 
-  it("parses a valid file", () => {
+  it("parses a valid file ref", () => {
     expect(FileSchema.parse(valid)).toEqual(valid);
   });
 
-  it("accepts optional chatId", () => {
-    expect(FileSchema.parse({ ...valid, chatId: "cht_abc" })).toMatchObject({ chatId: "cht_abc" });
-  });
-
-  it("rejects invalid class", () => {
-    expect(() => FileSchema.parse({ ...valid, class: "unknown" })).toThrow();
+  it("rejects negative size", () => {
+    expect(() => FileSchema.parse({ ...valid, size: -1 })).toThrow();
   });
 
   it("round-trips through JSON", () => {
@@ -147,7 +154,7 @@ describe("FileSchema", () => {
 });
 
 describe("RunSchema", () => {
-  const valid = { id: "run_abc", state: "pending" };
+  const valid = { id: "run_abc", kind: "immediate", state: "pending" };
 
   it("parses a minimal run", () => {
     expect(RunSchema.parse(valid)).toEqual(valid);
@@ -159,7 +166,7 @@ describe("RunSchema", () => {
   });
 
   it("rejects invalid state", () => {
-    expect(() => RunSchema.parse({ id: "run_abc", state: "paused" })).toThrow();
+    expect(() => RunSchema.parse({ id: "run_abc", kind: "immediate", state: "paused" })).toThrow();
   });
 
   it("round-trips through JSON", () => {
