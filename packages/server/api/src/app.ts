@@ -404,6 +404,11 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/scheduled-jobs" && method === "GET") {
+      const result = await runRoutes.listScheduledJobs(pool);
+      sendJson(res, 200, result);
+      return;
+    }
     if (path === "/scheduled-jobs" && method === "POST") {
       const body = await parseBody(req) as { chatId?: string; prompt: string; mode: "scheduled" | "recurring"; spec: string };
       const result = await runRoutes.createScheduledJob(runManager, body);

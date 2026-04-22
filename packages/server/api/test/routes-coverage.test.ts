@@ -468,7 +468,7 @@ describe("Routes coverage (real Postgres)", () => {
     const { generateId } = await import("@desk/shared");
     const runId = generateId("run");
     await pool.query(
-      `INSERT INTO runs (id, state) VALUES ($1, 'pending')`,
+      `INSERT INTO runs (id, kind, state) VALUES ($1, 'immediate', 'pending')`,
       [runId],
     );
 
@@ -479,6 +479,13 @@ describe("Routes coverage (real Postgres)", () => {
     // Verify state in DB
     const { rows } = await pool.query("SELECT state FROM runs WHERE id = $1", [runId]);
     expect(rows[0].state).toBe("cancelled");
+  });
+
+  // ── 10b. GET /scheduled-jobs ──────────────────────────────────────
+  it("GET /scheduled-jobs — lists active scheduled jobs", async () => {
+    const res = await request("GET", "/scheduled-jobs", token);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
 
   // ── 11. POST /scheduled-jobs ──────────────────────────────────────
@@ -610,6 +617,7 @@ describe("Routes coverage (real Postgres)", () => {
       ["DELETE", "/library/fil_any"],
       ["GET", "/runs/run_any"],
       ["POST", "/runs/run_any/cancel"],
+      ["GET", "/scheduled-jobs"],
       ["POST", "/scheduled-jobs"],
       ["DELETE", "/scheduled-jobs/sj_any"],
     ];

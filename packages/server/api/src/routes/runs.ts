@@ -24,6 +24,10 @@ export async function cancelRun(runManager: RunManager, runId: string) {
   return { ok: true };
 }
 
+export async function listScheduledJobs(pool: pg.Pool) {
+  return queries.scheduledJobs.listActive(pool);
+}
+
 export async function createScheduledJob(
   runManager: RunManager,
   data: { chatId?: string; prompt: string; mode: "scheduled" | "recurring"; spec: string },

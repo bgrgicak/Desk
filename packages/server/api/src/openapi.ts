@@ -182,6 +182,10 @@ export function generateOpenApiSpec(): OpenApiSpec {
         post: { summary: "Cancel run", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "OK" } } },
       },
       "/scheduled-jobs": {
+        get: {
+          summary: "List active scheduled jobs",
+          responses: { "200": { description: "Array of active scheduled jobs" } },
+        },
         post: {
           summary: "Create scheduled job",
           requestBody: { content: { "application/json": { schema: { type: "object", properties: { chatId: { type: "string" }, prompt: { type: "string" }, mode: { type: "string", enum: ["scheduled", "recurring"] }, spec: { type: "string" } }, required: ["prompt", "mode", "spec"] } } } },
