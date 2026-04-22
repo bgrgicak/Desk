@@ -25,7 +25,8 @@ export async function cancelRun(runManager: RunManager, runId: string) {
 }
 
 export async function listScheduledJobs(pool: pg.Pool) {
-  return queries.scheduledJobs.listActive(pool);
+  const all = await queries.scheduledJobs.listActive(pool);
+  return all.filter((j) => j.kind !== "ai_note");
 }
 
 export async function createScheduledJob(
