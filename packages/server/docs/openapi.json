@@ -787,6 +787,7 @@
     "/library": {
       "get": {
         "summary": "List library files",
+        "description": "Reads the workspace library directory; returns FileRef entries (path, name, mime, size, createdAt). Files with a leading dot are hidden.",
         "parameters": [
           {
             "name": "cursor",
@@ -810,27 +811,22 @@
         }
       },
       "post": {
-        "summary": "Upload to library",
+        "summary": "Upload a file to the workspace library",
+        "description": "Accepts multipart/form-data with a single 'file' part. Filename becomes the library entry's name; collisions get suffixed with -1, -2, ...",
         "requestBody": {
+          "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "mime": {
-                    "type": "string"
-                  },
-                  "contentBase64": {
-                    "type": "string"
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
                   }
                 },
                 "required": [
-                  "name",
-                  "mime",
-                  "contentBase64"
+                  "file"
                 ]
               }
             }
@@ -838,36 +834,16 @@
         },
         "responses": {
           "201": {
-            "description": "Created file"
-          }
-        }
-      }
-    },
-    "/library/{id}": {
-      "get": {
-        "summary": "Get library file metadata",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "File"
+            "description": "Created file ref"
           }
         }
       },
       "delete": {
-        "summary": "Delete library file",
+        "summary": "Delete a library file (moves it to ~/Desk/.trash/)",
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
+            "name": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -877,17 +853,43 @@
         "responses": {
           "200": {
             "description": "OK"
+          },
+          "404": {
+            "description": "No such path"
           }
         }
       }
     },
-    "/library/{id}/download": {
+    "/library/meta": {
       "get": {
-        "summary": "Download library file",
+        "summary": "Stat a library file by workspace-relative path",
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileRef"
+          },
+          "404": {
+            "description": "No such path"
+          }
+        }
+      }
+    },
+    "/library/download": {
+      "get": {
+        "summary": "Stream a library file's bytes",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -897,6 +899,9 @@
         "responses": {
           "200": {
             "description": "File content"
+          },
+          "404": {
+            "description": "No such path"
           }
         }
       }

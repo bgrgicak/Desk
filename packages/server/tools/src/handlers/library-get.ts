@@ -1,14 +1,16 @@
 import type { HandlerContext } from "../server.js";
-import { queries } from "@desk/db";
 import { NotFoundError, type File } from "@desk/shared";
+import { statFile } from "@desk/storage";
 
 export async function handleLibraryGet(
   ctx: HandlerContext,
-  req: { fileId: string },
+  req: { path: string },
 ): Promise<File & { previewUrl?: string }> {
-  const file = await queries.files.findById(ctx.pool, req.fileId);
-  if (!file) {
-    throw new NotFoundError(`File not found: ${req.fileId}`);
+  try {
+    const ref = await statFile(ctx.storage, req.path);
+    return { ...ref, previewUrl: undefined };
+  } catch (err) {
+    if (err instanceof NotFoundError) throw err;
+    throw new NotFoundError(`File not found: ${req.path}`);
   }
-  return { ...file, previewUrl: undefined };
 }

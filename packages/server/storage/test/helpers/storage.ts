@@ -74,6 +74,14 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
 
+  // Ensure the seeded agent is enrolled in the workspace (M3 invariant)
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+     VALUES ($1, $2, true)
+     ON CONFLICT (workspace_id, agent_id) DO NOTHING`,
+    [workspaceId, agentId],
+  );
+
   const chatId = generateId("chat");
   await pool.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,

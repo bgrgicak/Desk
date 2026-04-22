@@ -1,61 +1,73 @@
-import pg from "pg";
 import { Readable } from "node:stream";
-import { queries } from "@desk/db";
-import { NotFoundError, type WsEvent } from "@desk/shared";
-import { listLibrary, uploadArtifact, downloadFile, deleteFile, type StorageContext } from "@desk/storage";
+import pg from "pg";
+import { type WsEvent } from "@desk/shared";
+import {
+  listLibrary,
+  uploadArtifact,
+  readFile,
+  downloadFile,
+  statFile,
+  deleteFile,
+  type StorageContext,
+  type FileRef,
+} from "@desk/storage";
 
-export async function list(ctx: StorageContext, workspaceId: string, opts?: { cursor?: string; limit?: number }) {
+export async function list(
+  ctx: StorageContext,
+  workspaceId: string,
+  opts?: { cursor?: string; limit?: number },
+) {
   return listLibrary(ctx, workspaceId, opts);
 }
 
+/**
+ * Uploads a file to the workspace library. Takes a Readable directly so
+ * the transport layer can pass through a multipart stream without
+ * buffering.
+ */
 export async function upload(
   ctx: StorageContext,
   workspaceId: string,
-  data: { name: string; mime: string; contentBase64: string },
+  data: { name: string; mime: string; stream: Readable },
   emit: (event: WsEvent) => void,
-) {
-  const buf = Buffer.from(data.contentBase64, "base64");
-  const stream = Readable.from(buf);
-
+): Promise<FileRef> {
   const file = await uploadArtifact(ctx, {
     workspaceId,
-    class: "library",
     name: data.name,
     mime: data.mime,
-    stream,
+    stream: data.stream,
   });
 
   emit({
     type: "library.changed",
-    payload: { workspaceId, fileId: file.id, op: "added" },
+    payload: { workspaceId, path: file.path, op: "added" },
   });
 
   return file;
 }
 
-export async function get(pool: pg.Pool, fileId: string) {
-  const file = await queries.files.findById(pool, fileId);
-  if (!file) throw new NotFoundError(`File not found: ${fileId}`);
-  return file;
+/** Stat metadata lookup. */
+export async function get(ctx: StorageContext, relPath: string): Promise<FileRef> {
+  return statFile(ctx, relPath);
 }
 
-export async function download(ctx: StorageContext, fileId: string) {
-  return downloadFile(ctx, fileId);
+export async function download(ctx: StorageContext, relPath: string) {
+  return downloadFile(ctx, relPath);
 }
 
 export async function remove(
   ctx: StorageContext,
-  fileId: string,
+  workspaceId: string,
+  relPath: string,
   emit: (event: WsEvent) => void,
-) {
-  const file = await queries.files.findById(ctx.pool, fileId);
-  if (!file) throw new NotFoundError(`File not found: ${fileId}`);
-
-  await deleteFile(ctx, fileId);
-
+): Promise<void> {
+  await deleteFile(ctx, relPath);
   emit({
     type: "library.changed",
-    payload: { workspaceId: file.workspaceId, fileId, op: "removed" },
+    payload: { workspaceId, path: relPath, op: "removed" },
   });
 }
 
+// Keep a no-op alias for legacy imports while @desk/db.pool is plumbed via ctx.
+export const _unusedPool = (_pool: pg.Pool) => undefined;
+export { readFile };

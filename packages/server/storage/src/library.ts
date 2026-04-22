@@ -1,67 +1,68 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
-import { NotFoundError, type File } from "@desk/shared";
-import { withTx, queries } from "@desk/db";
-import { libraryDir, resolveHostPath } from "./layout.js";
+import { libraryDir, workspaceRootPath } from "./layout.js";
+import type { FileRef } from "./files.js";
 
 export interface LibraryContext {
   pool: pg.Pool;
   home: string;
 }
 
-/**
- * Lists library files for a workspace.
- */
-export async function listLibrary(
-  ctx: LibraryContext,
-  workspaceId: string,
-  opts?: { cursor?: string; limit?: number },
-): Promise<{ items: File[]; nextCursor?: string }> {
-  return queries.files.listByWorkspace(ctx.pool, workspaceId, {
-    class: "library",
-    cursor: opts?.cursor,
-    limit: opts?.limit,
-  });
+function guessMime(name: string): string {
+  const ext = path.extname(name).toLowerCase();
+  switch (ext) {
+    case ".txt": return "text/plain";
+    case ".md": return "text/markdown";
+    case ".json": return "application/json";
+    case ".html": return "text/html";
+    case ".pdf": return "application/pdf";
+    case ".png": return "image/png";
+    case ".jpg": case ".jpeg": return "image/jpeg";
+    default: return "application/octet-stream";
+  }
 }
 
 /**
- * Promotes a file (e.g. a chat attachment) to the library.
- * Moves the physical file to the library directory and updates the DB row.
+ * Lists the workspace's library files by reading the library directory.
+ * Filters out dotfiles and directories; returns workspace-relative paths.
+ *
+ * Sort is by mtime DESC. Cursor is the serialized mtime of the last
+ * returned item; only items with mtime strictly less than the cursor
+ * appear in the next page.
  */
-export async function promoteToLibrary(
+export async function listLibrary(
   ctx: LibraryContext,
-  fileId: string,
-): Promise<File> {
-  const file = await queries.files.findById(ctx.pool, fileId);
-  if (!file) {
-    throw new NotFoundError(`File not found: ${fileId}`);
+  _workspaceId: string,
+  opts?: { cursor?: string; limit?: number },
+): Promise<{ items: FileRef[]; nextCursor?: string }> {
+  const dir = libraryDir(ctx.home);
+  await fs.mkdir(dir, { recursive: true });
+  const names = await fs.readdir(dir);
+
+  const entries: FileRef[] = [];
+  for (const name of names) {
+    if (name.startsWith(".")) continue;
+    const abs = path.join(dir, name);
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || !stat.isFile()) continue;
+    const relPath = path.relative(workspaceRootPath(ctx.home), abs).split(path.sep).join("/");
+    entries.push({
+      path: relPath,
+      name,
+      mime: guessMime(name),
+      size: stat.size,
+      createdAt: stat.mtime.toISOString(),
+    });
   }
+  entries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
-  if (file.class === "library") {
-    return file; // Already in library
-  }
-
-  const currentPath = resolveHostPath(ctx.home, file.path);
-  const libDir = libraryDir(ctx.home);
-  const destPath = path.join(libDir, `${file.id}-${file.name}`);
-
-  const workspaceRoot = path.join(ctx.home, "Desk", "workspaces", "desk");
-  const newStoredPath = path.relative(workspaceRoot, destPath);
-
-  const updated = await withTx(ctx.pool, async (client) => {
-    // Update DB row
-    await client.query(
-      `UPDATE files SET class = 'library', path = $1 WHERE id = $2`,
-      [newStoredPath, fileId],
-    );
-
-    // Move the physical file
-    await fs.rename(currentPath, destPath);
-
-    const result = await queries.files.findById(client, fileId);
-    return result!;
-  });
-
-  return updated;
+  const cursor = opts?.cursor;
+  const filtered = cursor
+    ? entries.filter((e) => e.createdAt < cursor)
+    : entries;
+  const limit = opts?.limit ?? 50;
+  const items = filtered.slice(0, limit);
+  const nextCursor = items.length === limit ? items[items.length - 1].createdAt : undefined;
+  return { items, nextCursor };
 }

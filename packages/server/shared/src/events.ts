@@ -50,8 +50,9 @@ export const LibraryChangedEventSchema = z.object({
   type: z.literal("library.changed"),
   payload: z.object({
     workspaceId: z.string(),
-    fileId: z.string(),
-    op: z.enum(["added", "removed", "updated"]),
+    /** Workspace-relative path of the file that changed. */
+    path: z.string(),
+    op: z.enum(["added", "removed", "updated", "moved"]),
   }),
 });
 

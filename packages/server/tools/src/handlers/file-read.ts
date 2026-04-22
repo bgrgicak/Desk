@@ -3,9 +3,9 @@ import { readFile } from "@desk/storage";
 
 export async function handleFileRead(
   ctx: HandlerContext,
-  req: { fileId: string },
+  req: { path: string },
 ): Promise<{ content: string; mime: string }> {
-  const { stream, file } = await readFile(ctx.storage, req.fileId);
+  const { stream, file } = await readFile(ctx.storage, req.path);
 
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {

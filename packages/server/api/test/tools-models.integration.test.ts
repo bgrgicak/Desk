@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import pg from "pg";
-import { runMigrations, seedIfEmpty } from "@desk/db";
+import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
 import { createApp } from "../src/app.js";
@@ -89,6 +89,12 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
+  // Provider keys are user-scoped now (M2). Enable the dev-only env seed
+  // so opencode inside the sandbox can see ANTHROPIC_API_KEY.
+  process.env.DESK_DEV = "1";
+  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
+  await seedProviderKeysFromEnv(pool);
+
   const runManager = createRunManager({
     pool,
     adapter: createMemoryAdapter(),
@@ -116,6 +122,7 @@ afterAll(async () => {
   server?.close();
 
   // Best-effort cleanup of any sandbox container we caused the API to spawn.
+  // Sandboxes are keyed per-workspace now (M3), not per-agent.
   try {
     const { default: Docker } = await import("dockerode");
     const { dockerSocketPath } = await import("@desk/runtime");
@@ -123,13 +130,10 @@ afterAll(async () => {
     const all = await docker.listContainers({ all: true });
     for (const c of all) {
       const name = (c.Names[0] ?? "").replace(/^\//, "");
-      if (name.startsWith("desk-sandbox-agt_")) {
-        // Only stop ones created for agents we seeded in this test DB.
-        if (createdAgentId && name === `desk-sandbox-${createdAgentId}`) {
-          const container = docker.getContainer(c.Id);
-          await container.stop({ t: 2 }).catch(() => {});
-          await container.remove({ force: true }).catch(() => {});
-        }
+      if (name.startsWith("desk-sandbox-wks_")) {
+        const container = docker.getContainer(c.Id);
+        await container.stop({ t: 2 }).catch(() => {});
+        await container.remove({ force: true }).catch(() => {});
       }
     }
   } catch { /* ok */ }

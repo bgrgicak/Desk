@@ -417,36 +417,43 @@ describe("API e2e (real Postgres)", () => {
     );
     expect(uploadRes.status).toBe(201);
     const chatFile = uploadRes.body as { id: string; name: string; class: string; mime: string };
-    expect(chatFile.id).toMatch(/^fil_/);
+    expect(chatFile.path).toMatch(/^chats\//);
     expect(chatFile.name).toBe("round-trip.txt");
     expect(chatFile.mime).toBe("text/plain");
 
     // Chat artifact appears in chat artifacts list
     const chatArtRes = await request("GET", `/chats/${chat.id}/artifacts`, token);
     expect(chatArtRes.status).toBe(200);
-    const chatArts = chatArtRes.body as Array<{ id: string }>;
-    expect(chatArts.some((a) => a.id === chatFile.id)).toBe(true);
+    const chatArts = chatArtRes.body as Array<{ path: string }>;
+    expect(chatArts.some((a) => a.path === chatFile.path)).toBe(true);
 
-    // Upload directly to library (still JSON + base64 for now)
-    const libUploadRes = await request("POST", "/library", token, {
-      name: "lib-round-trip.txt",
-      mime: "text/plain",
-      contentBase64: Buffer.from(content).toString("base64"),
-    });
+    // Upload directly to library (multipart)
+    const libUploadRes = await requestMultipart(
+      "POST",
+      "/library",
+      token,
+      [{ name: "file", filename: "lib-round-trip.txt", contentType: "text/plain", body: Buffer.from(content) }],
+    );
     expect(libUploadRes.status).toBe(201);
-    const libFile = libUploadRes.body as { id: string; name: string };
-    expect(libFile.id).toMatch(/^fil_/);
+    const libFile = libUploadRes.body as { path: string; name: string };
+    expect(libFile.path).toMatch(/^library\//);
 
     // GET /library returns the library file
     const libRes = await request("GET", "/library", token);
     expect(libRes.status).toBe(200);
-    const lib = libRes.body as { items: Array<{ id: string }> };
-    expect(lib.items.some((i) => i.id === libFile.id)).toBe(true);
+    const lib = libRes.body as { items: Array<{ path: string }> };
+    expect(lib.items.some((i) => i.path === libFile.path)).toBe(true);
 
-    // GET /library/:id/download returns identical bytes
+    // GET /library/download?path= returns identical bytes
     const dlBytes = await new Promise<Buffer>((resolve, reject) => {
       const req = http.request(
-        { hostname: "127.0.0.1", port, path: `/library/${libFile.id}/download`, method: "GET", headers: { Authorization: `Bearer ${token}` } },
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: `/library/download?path=${encodeURIComponent(libFile.path)}`,
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        },
         (res) => {
           const chunks: Buffer[] = [];
           res.on("data", (c: Buffer) => chunks.push(c));
@@ -458,11 +465,15 @@ describe("API e2e (real Postgres)", () => {
     });
     expect(dlBytes.toString()).toBe(content);
 
-    // Verify DB file row
-    const metaRes = await request("GET", `/library/${libFile.id}`, token);
+    // Verify stat metadata via /library/meta
+    const metaRes = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(libFile.path)}`,
+      token,
+    );
     expect(metaRes.status).toBe(200);
-    const meta = metaRes.body as { id: string; name: string };
-    expect(meta.id).toBe(libFile.id);
+    const meta = metaRes.body as { path: string; name: string };
+    expect(meta.path).toBe(libFile.path);
   });
 
   it("POST /chats/:id/artifacts rejects JSON body with 400", async () => {
@@ -535,13 +546,13 @@ describe("API e2e (real Postgres)", () => {
         },
       ],
     );
-    const file = (uploadRes.body as { id: string });
+    const file = (uploadRes.body as { path: string });
 
-    // Search artifacts
+    // Search artifacts — file id is now the workspace-relative path
     const artRes = await request("GET", "/search?q=SearchableArtifact&scope=artifacts", token);
     expect(artRes.status).toBe(200);
-    const artResults = artRes.body as Array<{ id: string }>;
-    expect(artResults.some((r) => r.id === file.id)).toBe(true);
+    const artResults = artRes.body as Array<{ type: string; id: string }>;
+    expect(artResults.some((r) => r.type === "file" && r.id === file.path)).toBe(true);
 
     // Search chats
     const chatSearchRes = await request("GET", "/search?q=SearchableUnique&scope=chats", token);
@@ -553,7 +564,7 @@ describe("API e2e (real Postgres)", () => {
     const allRes = await request("GET", "/search?q=Searchable&scope=all", token);
     expect(allRes.status).toBe(200);
     const allResults = allRes.body as Array<{ id: string }>;
-    expect(allResults.some((r) => r.id === file.id)).toBe(true);
+    expect(allResults.some((r) => r.id === file.path)).toBe(true);
     expect(allResults.some((r) => r.id === chat.id)).toBe(true);
   });
 

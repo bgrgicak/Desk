@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  FILE_CLASSES,
   MESSAGE_ROLES,
   RUN_EVENT_KINDS,
   RUN_KINDS,
@@ -76,7 +75,11 @@ export const MessageContentToolResultSchema = z.object({
 
 export const MessageContentArtifactRefSchema = z.object({
   type: z.literal("artifactRef"),
-  fileId: z.string(),
+  /** Workspace-relative path (forward-slash separated). */
+  path: z.string(),
+  /** Caller-facing display name, usually the basename. */
+  name: z.string().optional(),
+  mime: z.string().optional(),
 });
 
 /** A single event from the OpenCode JSON event stream. */
@@ -111,11 +114,12 @@ export const MessageSchema = z.object({
 });
 export type Message = z.infer<typeof MessageSchema>;
 
+/**
+ * Filesystem-backed reference to a file inside a workspace. Path is
+ * workspace-relative, forward-slash separated. Replaces the old DB-indexed
+ * File entity from v1.
+ */
 export const FileSchema = z.object({
-  id: z.string(),
-  workspaceId: z.string(),
-  chatId: z.string().optional(),
-  class: z.enum(FILE_CLASSES),
   path: z.string(),
   name: z.string(),
   mime: z.string(),

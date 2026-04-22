@@ -395,7 +395,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "GET") {
-      const result = await chatRoutes.listArtifacts(pool, segments[1]);
+      const result = await chatRoutes.listArtifacts(storage, segments[1]);
       sendJson(res, 200, result);
       return;
     }
@@ -418,7 +418,10 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Library routes
+    // Library routes. Because library files live at arbitrary nested paths
+    // on the filesystem, we pass the workspace-relative path via ?path=...
+    // query parameter rather than embedding it in the URL path — simpler to
+    // parse and no URL-encoding of slashes.
     if (path === "/library" && method === "GET") {
       const workspaces = await workspaceRoutes.listWorkspaces(pool);
       const wsId = workspaces[0]?.id;
@@ -429,20 +432,31 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/library" && method === "POST") {
-      const body = await parseBody(req) as { name: string; mime: string; contentBase64: string };
+      const form = await parseMultipart(req);
+      const part = form.get("file");
+      if (!(part instanceof Blob)) {
+        throw new ValidationError("Missing 'file' part in multipart body");
+      }
+      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
+      const mime = part.type || "application/octet-stream";
+      const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
       const workspaces = await workspaceRoutes.listWorkspaces(pool);
       const wsId = workspaces[0]?.id ?? "";
-      const result = await libraryRoutes.upload(storage, wsId, body, emitEvent);
+      const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream }, emitEvent);
       sendJson(res, 201, result);
       return;
     }
-    if (segments[0] === "library" && segments.length === 2 && method === "GET") {
-      const result = await libraryRoutes.get(pool, segments[1]);
+    if (path === "/library/meta" && method === "GET") {
+      const p = query.get("path");
+      if (!p) throw new ValidationError("Missing path query parameter");
+      const result = await libraryRoutes.get(storage, p);
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "library" && segments[2] === "download" && segments.length === 3 && method === "GET") {
-      const { stream, file } = await libraryRoutes.download(storage, segments[1]);
+    if (path === "/library/download" && method === "GET") {
+      const p = query.get("path");
+      if (!p) throw new ValidationError("Missing path query parameter");
+      const { stream, file } = await libraryRoutes.download(storage, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
         "Content-Disposition": `attachment; filename="${file.name}"`,
@@ -450,8 +464,12 @@ export function createApp(opts: AppOptions): Server {
       stream.pipe(res);
       return;
     }
-    if (segments[0] === "library" && segments.length === 2 && method === "DELETE") {
-      await libraryRoutes.remove(storage, segments[1], emitEvent);
+    if (path === "/library" && method === "DELETE") {
+      const p = query.get("path");
+      if (!p) throw new ValidationError("Missing path query parameter");
+      const workspaces = await workspaceRoutes.listWorkspaces(pool);
+      const wsId = workspaces[0]?.id ?? "";
+      await libraryRoutes.remove(storage, wsId, p, emitEvent);
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -508,7 +526,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
       const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
-      const result = await searchRoutes.search(pool, q, scope);
+      const result = await searchRoutes.search(pool, storage, q, scope);
       sendJson(res, 200, result);
       return;
     }

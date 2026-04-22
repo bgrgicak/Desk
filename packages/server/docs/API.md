@@ -111,13 +111,17 @@ in prod, the UI is the only way to populate them.
 
 ## Library
 
-| Method | Path                   | Description              |
-|--------|------------------------|--------------------------|
-| GET    | /library               | List library files       |
-| POST   | /library               | Upload to library        |
-| GET    | /library/{id}          | Get file metadata        |
-| DELETE | /library/{id}          | Delete file              |
-| GET    | /library/{id}/download | Download file content    |
+| Method | Path                           | Description                                     |
+|--------|--------------------------------|-------------------------------------------------|
+| GET    | /library                       | List library files                              |
+| POST   | /library                       | Upload to library (multipart/form-data)         |
+| DELETE | /library?path=...              | Move a library file to `~/Desk/.trash/`         |
+| GET    | /library/meta?path=...         | Stat a library file                             |
+| GET    | /library/download?path=...     | Stream a library file                           |
+
+Files live on the filesystem at `~/Desk/workspaces/desk/library/`; there
+is no DB index. File identifiers are workspace-relative paths
+(`library/report.md`). The `path` query parameter is url-encoded.
 
 ## Runs
 

@@ -1,8 +1,16 @@
 import pg from "pg";
 import { Readable } from "node:stream";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, type WsEvent } from "@desk/shared";
-import { uploadArtifact, type StorageContext } from "@desk/storage";
+import {
+  chatAttachmentsDir,
+  uploadArtifact,
+  workspaceRootPath,
+  type FileRef,
+  type StorageContext,
+} from "@desk/storage";
 
 export async function listChats(pool: pg.Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
@@ -63,20 +71,45 @@ export async function sendMessage(
   return message;
 }
 
-export async function listArtifacts(pool: pg.Pool, chatId: string) {
-  return queries.files.listByChat(pool, chatId);
+/**
+ * Lists chat attachments directly from the filesystem. Returns workspace-
+ * relative paths + stat metadata — no DB involvement.
+ */
+export async function listArtifacts(
+  storage: StorageContext,
+  chatId: string,
+): Promise<FileRef[]> {
+  const dir = await chatAttachmentsDir(storage.home, chatId);
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  const out: FileRef[] = [];
+  for (const name of names) {
+    if (name.startsWith(".")) continue;
+    const abs = path.join(dir, name);
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || !stat.isFile()) continue;
+    const rel = path.relative(workspaceRootPath(storage.home), abs).split(path.sep).join("/");
+    out.push({
+      path: rel,
+      name,
+      mime: "application/octet-stream",
+      size: stat.size,
+      createdAt: stat.birthtime.toISOString(),
+    });
+  }
+  out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return out;
 }
 
 /**
- * Upload an artifact to a chat from a raw byte buffer.
- * Streams through @desk/storage.uploadArtifact with chatId context.
+ * Uploads an artifact to a chat's attachments dir. Streams directly, no
+ * DB row. Returns a FileRef with the new path.
  */
 export async function uploadArtifactToChat(
   storage: StorageContext,
   chatId: string,
   data: { name: string; mime: string; content: Buffer },
   emit: (event: WsEvent) => void,
-) {
+): Promise<FileRef> {
   const chat = await queries.chats.findById(storage.pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 

@@ -3,7 +3,6 @@ export * as agents from "./agents.js";
 export * as workspaces from "./workspaces.js";
 export * as chats from "./chats.js";
 export * as messages from "./messages.js";
-export * as files from "./files.js";
 export * as runs from "./runs.js";
 export * as runEvents from "./runEvents.js";
 export * as scheduledJobs from "./scheduledJobs.js";

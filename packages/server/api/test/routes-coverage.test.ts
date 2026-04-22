@@ -185,6 +185,55 @@ function requestRaw(
   });
 }
 
+function requestMultipart(
+  method: string,
+  urlPath: string,
+  token: string,
+  parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const boundary = `----desk-rc-${Math.random().toString(16).slice(2)}`;
+    const chunks: Buffer[] = [];
+    for (const p of parts) {
+      const header = [`--${boundary}`];
+      const disposition = p.filename
+        ? `Content-Disposition: form-data; name="${p.name}"; filename="${p.filename}"`
+        : `Content-Disposition: form-data; name="${p.name}"`;
+      header.push(disposition);
+      if (p.contentType) header.push(`Content-Type: ${p.contentType}`);
+      header.push("", "");
+      chunks.push(Buffer.from(header.join("\r\n")));
+      chunks.push(p.body);
+      chunks.push(Buffer.from("\r\n"));
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    const payload = Buffer.concat(chunks);
+
+    const headers: Record<string, string> = {
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(payload.length),
+      Authorization: `Bearer ${token}`,
+    };
+
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: urlPath, method, headers },
+      (res) => {
+        const bufs: Buffer[] = [];
+        res.on("data", (c: Buffer) => bufs.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(bufs).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 describe("Routes coverage (real Postgres)", () => {
   let token: string;
   let workspaceId: string;
@@ -539,28 +588,34 @@ describe("Routes coverage (real Postgres)", () => {
     // NOTE: agentId is NOT patchable via PATCH /chats/:id (spec says it should be).
   });
 
-  // ── 7. DELETE /library/:id ────────────────────────────────────────
-  it("DELETE /library/:id — file gone from API and disk", async () => {
+  // ── 7. DELETE /library + multipart upload ────────────────────────
+  it("DELETE /library?path=... — file moves to trash and stops resolving", async () => {
     const content = "file to delete";
-    const uploadRes = await request("POST", "/library", token, {
-      name: "to-delete.txt",
-      mime: "text/plain",
-      contentBase64: Buffer.from(content).toString("base64"),
-    });
-    const file = uploadRes.body as { id: string; path: string };
+    const uploadRes = await requestMultipart(
+      "POST",
+      "/library",
+      token,
+      [{ name: "file", filename: "to-delete.txt", contentType: "text/plain", body: Buffer.from(content) }],
+    );
+    const file = uploadRes.body as { path: string; name: string };
+    expect(file.path).toMatch(/^library\//);
 
-    // Delete
-    const delRes = await request("DELETE", `/library/${file.id}`, token);
+    // Delete moves the file to the trash.
+    const delRes = await request(
+      "DELETE",
+      `/library?path=${encodeURIComponent(file.path)}`,
+      token,
+    );
     expect(delRes.status).toBe(200);
     expect((delRes.body as { ok: boolean }).ok).toBe(true);
 
-    // GET returns 404
-    const getRes = await request("GET", `/library/${file.id}`, token);
-    expect(getRes.status).toBe(404);
-
-    // DB row is gone
-    const { rows } = await pool.query("SELECT * FROM files WHERE id = $1", [file.id]);
-    expect(rows.length).toBe(0);
+    // Subsequent stat through the API fails (file was moved to .trash).
+    const statRes = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(file.path)}`,
+      token,
+    );
+    expect(statRes.status).toBe(404);
   });
 
   // ── 9. GET /runs/:id ──────────────────────────────────────────────
@@ -794,7 +849,7 @@ describe("Routes coverage (real Postgres)", () => {
       ["DELETE", `/workspaces/${workspaceId}`],
       ["GET", "/chats/cht_any"],
       ["PATCH", "/chats/cht_any"],
-      ["DELETE", "/library/fil_any"],
+      ["DELETE", "/library?path=whatever"],
       ["GET", "/runs/run_any"],
       ["POST", "/runs/run_any/cancel"],
       ["GET", "/scheduled-jobs"],
@@ -822,7 +877,7 @@ describe("Routes coverage (real Postgres)", () => {
     const notFoundRoutes: Array<[string, string]> = [
       ["GET", "/workspaces/ws_nonexistent"],
       ["GET", "/chats/cht_nonexistent"],
-      ["GET", "/library/fil_nonexistent"],
+      ["GET", "/library/meta?path=does-not-exist"],
       ["GET", "/runs/run_nonexistent"],
     ];
 

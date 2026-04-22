@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { Readable } from "node:stream";
 import { uploadArtifact } from "../src/files.js";
-import { listLibrary, promoteToLibrary } from "../src/library.js";
+import { listLibrary } from "../src/library.js";
 import {
   setupTestStorage,
   teardownTestStorage,
@@ -24,73 +22,52 @@ function makeStream(content: string): Readable {
   return Readable.from(Buffer.from(content));
 }
 
-describe("promoteToLibrary", () => {
-  it("moves a chat attachment to the library directory and updates class", async () => {
-    const uploaded = await uploadArtifact(ctx, {
-      workspaceId: ctx.workspaceId,
-      chatId: ctx.chatId,
-      name: "promote-me.txt",
-      mime: "text/plain",
-      stream: makeStream("library content"),
-    });
-
-    expect(uploaded.class).toBe("artifact");
-
-    const promoted = await promoteToLibrary(ctx, uploaded.id);
-    expect(promoted.class).toBe("library");
-    expect(promoted.path).toContain("library/");
-
-    // Verify file is in library dir on disk
-    const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", promoted.path);
-    const content = await fs.readFile(hostPath, "utf-8");
-    expect(content).toBe("library content");
-  });
-
-  it("is a no-op if file is already in library", async () => {
-    const uploaded = await uploadArtifact(ctx, {
-      workspaceId: ctx.workspaceId,
-      chatId: ctx.chatId,
-      name: "already-lib.txt",
-      mime: "text/plain",
-      stream: makeStream("already here"),
-    });
-
-    const promoted = await promoteToLibrary(ctx, uploaded.id);
-    expect(promoted.class).toBe("library");
-
-    // Promote again — should be no-op
-    const again = await promoteToLibrary(ctx, promoted.id);
-    expect(again.id).toBe(promoted.id);
-    expect(again.class).toBe("library");
-  });
-});
-
 describe("listLibrary", () => {
-  it("returns only library-class files", async () => {
-    // Upload a workspace file (not library)
+  it("returns files uploaded to the library root, excluding dotfiles", async () => {
     await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
-      name: "not-library.txt",
+      name: "first.txt",
       mime: "text/plain",
-      stream: makeStream("workspace file"),
+      stream: makeStream("one"),
     });
-
-    // Upload and promote to library
-    const toPromote = await uploadArtifact(ctx, {
+    await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
-      chatId: ctx.chatId,
-      name: "is-library.txt",
+      name: "second.txt",
       mime: "text/plain",
-      stream: makeStream("library file"),
+      stream: makeStream("two"),
     });
-    await promoteToLibrary(ctx, toPromote.id);
 
     const { items } = await listLibrary(ctx, ctx.workspaceId);
-    // All returned items should be library class
-    for (const item of items) {
-      expect(item.class).toBe("library");
+    const names = items.map((i) => i.name);
+    expect(names).toContain("first.txt");
+    expect(names).toContain("second.txt");
+  });
+
+  it("paginates by mtime cursor", async () => {
+    for (let i = 0; i < 4; i++) {
+      await uploadArtifact(ctx, {
+        workspaceId: ctx.workspaceId,
+        name: `page-${i}.txt`,
+        mime: "text/plain",
+        stream: makeStream(`content ${i}`),
+      });
+      // Ensure mtimes differ
+      await new Promise((r) => setTimeout(r, 10));
     }
-    // The promoted file should be in the list
-    expect(items.some((f) => f.id === toPromote.id)).toBe(true);
+
+    const page1 = await listLibrary(ctx, ctx.workspaceId, { limit: 2 });
+    expect(page1.items.length).toBe(2);
+    expect(page1.nextCursor).toBeDefined();
+
+    const page2 = await listLibrary(ctx, ctx.workspaceId, {
+      limit: 2,
+      cursor: page1.nextCursor,
+    });
+    expect(page2.items.length).toBeGreaterThanOrEqual(1);
+    // Pages should not overlap.
+    const ids1 = new Set(page1.items.map((i) => i.path));
+    for (const item of page2.items) {
+      expect(ids1.has(item.path)).toBe(false);
+    }
   });
 });

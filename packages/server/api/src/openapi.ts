@@ -252,19 +252,47 @@ export function generateOpenApiSpec(): OpenApiSpec {
         },
       },
       "/library": {
-        get: { summary: "List library files", parameters: [{ name: "cursor", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer" } }], responses: { "200": { description: "Library listing" } } },
+        get: {
+          summary: "List library files",
+          description: "Reads the workspace library directory; returns FileRef entries (path, name, mime, size, createdAt). Files with a leading dot are hidden.",
+          parameters: [
+            { name: "cursor", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer" } },
+          ],
+          responses: { "200": { description: "Library listing" } },
+        },
         post: {
-          summary: "Upload to library",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, mime: { type: "string" }, contentBase64: { type: "string" } }, required: ["name", "mime", "contentBase64"] } } } },
-          responses: { "201": { description: "Created file" } },
+          summary: "Upload a file to the workspace library",
+          description: "Accepts multipart/form-data with a single 'file' part. Filename becomes the library entry's name; collisions get suffixed with -1, -2, ...",
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: { type: "object", properties: { file: { type: "string", format: "binary" } }, required: ["file"] },
+              },
+            },
+          },
+          responses: { "201": { description: "Created file ref" } },
+        },
+        delete: {
+          summary: "Delete a library file (moves it to ~/Desk/.trash/)",
+          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "OK" }, "404": { description: "No such path" } },
         },
       },
-      "/library/{id}": {
-        get: { summary: "Get library file metadata", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File" } } },
-        delete: { summary: "Delete library file", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "OK" } } },
+      "/library/meta": {
+        get: {
+          summary: "Stat a library file by workspace-relative path",
+          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "FileRef" }, "404": { description: "No such path" } },
+        },
       },
-      "/library/{id}/download": {
-        get: { summary: "Download library file", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File content" } } },
+      "/library/download": {
+        get: {
+          summary: "Stream a library file's bytes",
+          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "File content" }, "404": { description: "No such path" } },
+        },
       },
       "/runs": {
         get: { summary: "List runs", responses: { "200": { description: "Run array" } } },

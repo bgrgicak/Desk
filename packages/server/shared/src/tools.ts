@@ -2,7 +2,8 @@ import { z } from "zod";
 import { FileSchema, MessageSchema } from "./entities.js";
 
 export const FileReadRequestSchema = z.object({
-  fileId: z.string(),
+  /** Workspace-relative path. */
+  path: z.string(),
 });
 export const FileReadResponseSchema = z.object({
   content: z.string(),
@@ -29,7 +30,8 @@ export const LibraryListResponseSchema = z.object({
 });
 
 export const LibraryGetRequestSchema = z.object({
-  fileId: z.string(),
+  /** Workspace-relative path. */
+  path: z.string(),
 });
 export const LibraryGetResponseSchema = FileSchema.extend({
   previewUrl: z.string().optional(),
@@ -43,7 +45,8 @@ export const ChatSendMessageResponseSchema = MessageSchema;
 
 export const ChatAttachArtifactRequestSchema = z.object({
   chatId: z.string(),
-  fileId: z.string(),
+  /** Workspace-relative path of the file to attach. */
+  path: z.string(),
 });
 export const ChatAttachArtifactResponseSchema = MessageSchema;
 

@@ -8,6 +8,11 @@ function workspaceRoot(home: string): string {
   return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG);
 }
 
+/** Absolute path to the global trash directory. Not mounted into sandboxes. */
+export function trashDir(home: string): string {
+  return path.join(home, "Desk", ".trash");
+}
+
 /** Validates that an ID string matches the expected prefix pattern and contains no path separators. */
 function validateId(id: string, prefix: string): void {
   if (!id.startsWith(prefix) || id.includes("/") || id.includes("\\") || id.includes("..")) {
@@ -16,7 +21,7 @@ function validateId(id: string, prefix: string): void {
 }
 
 /**
- * Ensures the workspace directory tree exists.
+ * Ensures the workspace directory tree + trash directory exist.
  * Idempotent — safe to call on every boot.
  */
 export async function ensureLayout(home: string): Promise<void> {
@@ -25,6 +30,7 @@ export async function ensureLayout(home: string): Promise<void> {
   await fs.mkdir(path.join(root, "chats"), { recursive: true });
   await fs.mkdir(path.join(root, "library"), { recursive: true });
   await fs.mkdir(path.join(home, "Desk", ".tmp"), { recursive: true });
+  await fs.mkdir(trashDir(home), { recursive: true });
 }
 
 /** Returns the root directory for a workspace. */
@@ -40,9 +46,7 @@ export function filesDir(home: string): string {
 
 /**
  * Returns the absolute path to the chats root directory. Contains one
- * subdirectory per chat, each with its own `attachments/` inside. The
- * sandbox bind-mounts this whole tree read-only so the agent can see every
- * chat's attachments via `/mnt/desk/chats/<chatId>/attachments/`.
+ * subdirectory per chat, each with its own `attachments/` inside.
  */
 export function chatsDir(home: string): string {
   return path.join(workspaceRoot(home), "chats");
@@ -64,6 +68,11 @@ export function libraryDir(home: string): string {
 /** Returns the temp directory for in-progress uploads. */
 export function tmpDir(home: string): string {
   return path.join(home, "Desk", ".tmp");
+}
+
+/** Absolute path to the workspace root (used by storage to resolve relative paths). */
+export function workspaceRootPath(home: string): string {
+  return workspaceRoot(home);
 }
 
 /**
