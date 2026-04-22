@@ -10,6 +10,14 @@ interface SearchResult {
   snippet?: string;
 }
 
+function routeToHref(route: Route): string {
+  switch (route.page) {
+    case "chat": return `/chat/${route.id}`;
+    case "library-item": return `/library/${route.id}`;
+    default: return "#";
+  }
+}
+
 export function Search({ nav }: { nav: (r: Route) => void }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState("all");
@@ -38,7 +46,7 @@ export function Search({ nav }: { nav: (r: Route) => void }) {
       <form onSubmit={handleSearch}>
         <label>
           Query
-          <input value={query} onChange={(e) => setQuery(e.target.value)} required />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={'e.g. "meeting notes", "budget spreadsheet"'} required />
         </label>
         <label>
           Scope
@@ -60,7 +68,7 @@ export function Search({ nav }: { nav: (r: Route) => void }) {
             <li key={i}>
               [{r.type}]{" "}
               {route ? (
-                <a href="#" onClick={(e) => { e.preventDefault(); nav(route); }}>
+                <a href={routeToHref(route)} onClick={(e) => { e.preventDefault(); nav(route); }}>
                   {r.title ?? r.name ?? r.id}
                 </a>
               ) : (

@@ -1,25 +1,24 @@
-import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useApi, cacheInvalidate } from "../store";
+import { useDispatch } from "react-redux";
 import type { Route } from "../app";
 
 interface Run {
   id: string;
+  kind: string;
   state: string;
-  chatId: string;
-  startedAt: string;
+  chatId?: string;
+  startedAt?: string;
   finishedAt?: string;
 }
 
 export function Runs({ nav }: { nav: (r: Route) => void }) {
-  const [runs, setRuns] = useState<Run[]>([]);
+  const { data: runs } = useApi<Run[]>("/runs");
+  const dispatch = useDispatch();
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
-    const { data } = await api<Run[]>("/runs");
-    setRuns(Array.isArray(data) ? data : []);
+  async function cancel(runId: string) {
+    await api(`/runs/${runId}/cancel`, { method: "POST" });
+    dispatch(cacheInvalidate("/runs"));
   }
 
   return (
@@ -29,6 +28,7 @@ export function Runs({ nav }: { nav: (r: Route) => void }) {
         <thead>
           <tr>
             <th>ID</th>
+            <th>Kind</th>
             <th>State</th>
             <th>Chat</th>
             <th>Started</th>
@@ -37,26 +37,27 @@ export function Runs({ nav }: { nav: (r: Route) => void }) {
           </tr>
         </thead>
         <tbody>
-          {runs.map((r) => (
+          {(Array.isArray(runs) ? runs : []).map((r) => (
             <tr key={r.id}>
               <td>
-                <a href="#" onClick={(e) => { e.preventDefault(); nav({ page: "run-detail", id: r.id }); }}>
+                <a href={`/runs/${r.id}`} onClick={(e) => { e.preventDefault(); nav({ page: "run-detail", id: r.id }); }}>
                   {r.id.slice(0, 8)}
                 </a>
               </td>
+              <td>{r.kind}</td>
               <td>{r.state}</td>
               <td>
-                <a href="#" onClick={(e) => { e.preventDefault(); nav({ page: "chat", id: r.chatId }); }}>
-                  {r.chatId.slice(0, 8)}
-                </a>
+                {r.chatId ? (
+                  <a href={`/chat/${r.chatId}`} onClick={(e) => { e.preventDefault(); nav({ page: "chat", id: r.chatId! }); }}>
+                    {r.chatId.slice(0, 8)}
+                  </a>
+                ) : "—"}
               </td>
-              <td>{r.startedAt}</td>
+              <td>{r.startedAt ?? "—"}</td>
               <td>{r.finishedAt ?? "—"}</td>
               <td>
                 {!["completed", "failed", "cancelled"].includes(r.state) && (
-                  <button onClick={async () => { await api(`/runs/${r.id}/cancel`, { method: "POST" }); load(); }}>
-                    Cancel
-                  </button>
+                  <button onClick={() => cancel(r.id)}>Cancel</button>
                 )}
               </td>
             </tr>

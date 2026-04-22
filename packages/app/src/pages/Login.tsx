@@ -36,6 +36,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
               name="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your username"
               required
             />
           </label>
@@ -48,6 +49,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
               name="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
               required
             />
           </label>

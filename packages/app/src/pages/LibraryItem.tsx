@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, getBaseUrl, getToken } from "../api";
+import { useApi, cacheInvalidate } from "../store";
+import { useDispatch } from "react-redux";
 import type { Route } from "../app";
 
 interface LibFileMeta {
@@ -10,15 +12,9 @@ interface LibFileMeta {
 }
 
 export function LibraryItem({ id, nav }: { id: string; nav: (r: Route) => void }) {
-  const [meta, setMeta] = useState<LibFileMeta | null>(null);
+  const { data: meta } = useApi<LibFileMeta>(`/library/${id}`);
   const [note, setNote] = useState("");
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await api<LibFileMeta>(`/library/${id}`);
-      setMeta(data);
-    })();
-  }, [id]);
+  const dispatch = useDispatch();
 
   async function handleDownload() {
     const token = getToken();
@@ -44,6 +40,8 @@ export function LibraryItem({ id, nav }: { id: string; nav: (r: Route) => void }
   async function handleDelete() {
     if (!confirm("Delete this file?")) return;
     await api(`/library/${id}`, { method: "DELETE" });
+    dispatch(cacheInvalidate("/library"));
+    dispatch(cacheInvalidate(`/library/${id}`));
     nav({ page: "library" });
   }
 

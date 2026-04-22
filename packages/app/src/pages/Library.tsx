@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
+import { useApi, cacheInvalidate } from "../store";
+import { useDispatch } from "react-redux";
 import type { Route } from "../app";
 
 interface LibFile {
@@ -10,17 +12,10 @@ interface LibFile {
 }
 
 export function Library({ nav }: { nav: (r: Route) => void }) {
-  const [files, setFiles] = useState<LibFile[]>([]);
+  const { data } = useApi<{ items: LibFile[] }>("/library");
+  const files = data?.items ?? [];
   const [view, setView] = useState<"list" | "grid">("list");
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
-    const { data } = await api<{ items: LibFile[] }>("/library");
-    setFiles(data.items ?? []);
-  }
+  const dispatch = useDispatch();
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
@@ -35,7 +30,7 @@ export function Library({ nav }: { nav: (r: Route) => void }) {
       body: { name: file.name, mime: file.type || "application/octet-stream", contentBase64 },
     });
     form.reset();
-    await load();
+    dispatch(cacheInvalidate("/library"));
   }
 
   return (
@@ -66,7 +61,7 @@ export function Library({ nav }: { nav: (r: Route) => void }) {
             {files.map((f) => (
               <tr key={f.id}>
                 <td>
-                  <a href="#" onClick={(e) => { e.preventDefault(); nav({ page: "library-item", id: f.id }); }}>
+                  <a href={`/library/${f.id}`} onClick={(e) => { e.preventDefault(); nav({ page: "library-item", id: f.id }); }}>
                     {f.name}
                   </a>
                 </td>
@@ -80,7 +75,7 @@ export function Library({ nav }: { nav: (r: Route) => void }) {
         <ul>
           {files.map((f) => (
             <li key={f.id}>
-              <a href="#" onClick={(e) => { e.preventDefault(); nav({ page: "library-item", id: f.id }); }}>
+              <a href={`/library/${f.id}`} onClick={(e) => { e.preventDefault(); nav({ page: "library-item", id: f.id }); }}>
                 {f.name}
               </a>{" "}
               — {f.mime}

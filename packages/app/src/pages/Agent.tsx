@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useApi } from "../store";
 
 interface Agent {
   id: string;
@@ -9,39 +10,38 @@ interface Agent {
 }
 
 export function AgentPage() {
-  const [agent, setAgent] = useState<Agent | null>(null);
+  const { data: agents } = useApi<Agent[]>("/agents");
+  const agent = agents?.[0] ?? null;
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [model, setModel] = useState("");
+  const [saved, setSaved] = useState<Agent | null>(null);
+
+  const displayAgent = saved ?? agent;
 
   useEffect(() => {
-    (async () => {
-      const { data } = await api<Agent[]>("/agents");
-      if (data.length) {
-        const a = data[0];
-        setAgent(a);
-        setName(a.name);
-        setInstructions(a.instructions ?? "");
-        setModel(a.model ?? "");
-      }
-    })();
-  }, []);
+    if (displayAgent) {
+      setName(displayAgent.name);
+      setInstructions(displayAgent.instructions ?? "");
+      setModel(displayAgent.model ?? "");
+    }
+  }, [displayAgent?.id]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!agent) return;
-    const { data } = await api<Agent>(`/agents/${agent.id}`, {
+    if (!displayAgent) return;
+    const { data } = await api<Agent>(`/agents/${displayAgent.id}`, {
       method: "PATCH",
       body: { name, instructions, model },
     });
-    setAgent(data);
+    setSaved(data);
   }
 
-  if (!agent) return <p>Loading...</p>;
+  if (!displayAgent) return <p>Loading...</p>;
 
   return (
     <div>
-      <h2>Agent: {agent.name}</h2>
+      <h2>Agent: {displayAgent.name}</h2>
       <form onSubmit={handleSave}>
         <div>
           <label>

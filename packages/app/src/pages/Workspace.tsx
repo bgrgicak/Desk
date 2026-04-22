@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useApi } from "../store";
 
 interface WorkspaceData {
   id: string;
@@ -9,46 +10,45 @@ interface WorkspaceData {
 }
 
 export function Workspace() {
-  const [ws, setWs] = useState<WorkspaceData | null>(null);
+  const { data: workspaces } = useApi<WorkspaceData[]>("/workspaces");
+  const ws = workspaces?.[0] ?? null;
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [icon, setIcon] = useState("");
+  const [saved, setSaved] = useState<WorkspaceData | null>(null);
+
+  const displayWs = saved ?? ws;
 
   useEffect(() => {
-    (async () => {
-      const { data } = await api<WorkspaceData[]>("/workspaces");
-      if (data.length) {
-        const w = data[0];
-        setWs(w);
-        setName(w.name);
-        setDescription(w.description ?? "");
-        setIcon(w.icon ?? "");
-      }
-    })();
-  }, []);
+    if (displayWs) {
+      setName(displayWs.name);
+      setDescription(displayWs.description ?? "");
+      setIcon(displayWs.icon ?? "");
+    }
+  }, [displayWs?.id]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!ws) return;
-    const { data } = await api<WorkspaceData>(`/workspaces/${ws.id}`, {
+    if (!displayWs) return;
+    const { data } = await api<WorkspaceData>(`/workspaces/${displayWs.id}`, {
       method: "PATCH",
       body: { name, description, icon },
     });
-    setWs(data);
+    setSaved(data);
   }
 
   async function handleDelete() {
-    if (!ws) return;
+    if (!displayWs) return;
     if (!confirm("Delete this workspace?")) return;
-    await api(`/workspaces/${ws.id}`, { method: "DELETE" });
-    setWs(null);
+    await api(`/workspaces/${displayWs.id}`, { method: "DELETE" });
+    setSaved(null);
   }
 
-  if (!ws) return <p>No workspace found.</p>;
+  if (!displayWs) return <p>No workspace found.</p>;
 
   return (
     <div>
-      <h2>Workspace: {ws.name}</h2>
+      <h2>Workspace: {displayWs.name}</h2>
       <form onSubmit={handleSave}>
         <div>
           <label>

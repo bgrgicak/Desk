@@ -1,65 +1,55 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
+import { useApi, cacheInvalidate } from "../store";
+import { useDispatch } from "react-redux";
+import { parseSchedule } from "../parseSchedule";
 
 interface ScheduledJob {
   id: string;
-  mode: string;
-  spec: string;
-  prompt: string;
+  kind: string;
+  spec: { type: "once"; onceAt: string } | { type: "recurring"; cronExpr: string };
   chatId?: string;
-  state?: string;
-}
-
-interface Run {
-  id: string;
-  state: string;
-  scheduledJobId?: string;
+  active: boolean;
 }
 
 export function Scheduled() {
-  const [jobs, setJobs] = useState<ScheduledJob[]>([]);
+  const { data: jobs } = useApi<ScheduledJob[]>("/scheduled-jobs");
+  const dispatch = useDispatch();
   const [mode, setMode] = useState<"scheduled" | "recurring">("scheduled");
-  const [spec, setSpec] = useState("");
+  const [when, setWhen] = useState("");
   const [prompt, setPrompt] = useState("");
   const [chatId, setChatId] = useState("");
+  const [parseError, setParseError] = useState("");
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
-    const { data } = await api<Run[]>("/runs");
-    const runs = Array.isArray(data) ? data : [];
-    const jobMap = new Map<string, ScheduledJob>();
-    for (const r of runs) {
-      if (r.scheduledJobId && !jobMap.has(r.scheduledJobId)) {
-        jobMap.set(r.scheduledJobId, {
-          id: r.scheduledJobId,
-          mode: "unknown",
-          spec: "",
-          prompt: "",
-          state: r.state,
-        });
-      }
-    }
-    setJobs(Array.from(jobMap.values()));
+  function formatSpec(job: ScheduledJob): string {
+    if (job.spec.type === "once") return job.spec.onceAt;
+    if (job.spec.type === "recurring") return job.spec.cronExpr;
+    return JSON.stringify(job.spec);
   }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    const body: Record<string, string> = { mode, spec, prompt };
+    const result = parseSchedule(mode, when);
+    if (result.error) {
+      setParseError(result.error);
+      return;
+    }
+    setParseError("");
+    const body: Record<string, string> = { mode, spec: result.spec, prompt };
     if (chatId) body.chatId = chatId;
     await api("/scheduled-jobs", { method: "POST", body });
-    setSpec("");
+    setWhen("");
     setPrompt("");
     setChatId("");
-    await load();
+    dispatch(cacheInvalidate("/scheduled-jobs"));
   }
 
   async function handleCancel(jobId: string) {
     await api(`/scheduled-jobs/${jobId}`, { method: "DELETE" });
-    await load();
+    dispatch(cacheInvalidate("/scheduled-jobs"));
   }
+
+  const jobList = Array.isArray(jobs) ? jobs : [];
 
   return (
     <div>
@@ -77,20 +67,26 @@ export function Scheduled() {
         </div>
         <div>
           <label>
-            Spec
-            <input value={spec} onChange={(e) => setSpec(e.target.value)} required />
+            When
+            <input
+              value={when}
+              onChange={(e) => { setWhen(e.target.value); setParseError(""); }}
+              placeholder={mode === "scheduled" ? 'e.g. "in 5 minutes", "tomorrow at 9am"' : 'e.g. "every monday at 9", "every 30 minutes"'}
+              required
+            />
           </label>
+          {parseError && <div style={{ color: "red" }}>{parseError}</div>}
         </div>
         <div>
           <label>
             Prompt
-            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} required />
+            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={'e.g. "Summarize today\'s emails"'} required />
           </label>
         </div>
         <div>
           <label>
             Chat ID (optional)
-            <input value={chatId} onChange={(e) => setChatId(e.target.value)} />
+            <input value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="Leave empty for a standalone run" />
           </label>
         </div>
         <button type="submit">Create job</button>
@@ -100,15 +96,17 @@ export function Scheduled() {
         <thead>
           <tr>
             <th>Job ID</th>
-            <th>State</th>
+            <th>Type</th>
+            <th>When</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {jobs.map((j) => (
+          {jobList.map((j) => (
             <tr key={j.id}>
               <td>{j.id.slice(0, 8)}</td>
-              <td>{j.state ?? "active"}</td>
+              <td>{j.kind}</td>
+              <td>{formatSpec(j)}</td>
               <td>
                 <button onClick={() => handleCancel(j.id)}>Cancel</button>
               </td>

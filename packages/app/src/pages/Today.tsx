@@ -52,6 +52,7 @@ export function Today({ nav }: { nav: (r: Route) => void }) {
             type="text"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            placeholder={'e.g. "Summarize my recent emails", "Draft a blog post about AI"'}
           />
         </label>
         <button type="submit">New chat</button>

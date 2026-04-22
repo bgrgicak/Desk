@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, setToken } from "../api";
+import { useApi } from "../store";
+import { cacheClearAll } from "../store";
+import { useDispatch } from "react-redux";
 import { disconnectWs } from "../ws";
 
 interface UserProfile {
@@ -10,22 +13,25 @@ interface UserProfile {
 }
 
 export function Account({ onLogout }: { onLogout: () => void }) {
-  const [user, setUser] = useState<UserProfile | null>(null);
+  const { data: user } = useApi<UserProfile>("/me");
+  const dispatch = useDispatch();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [avatarPath, setAvatarPath] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [msg, setMsg] = useState("");
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [initialized, setInitialized] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      const { data } = await api<UserProfile>("/me");
-      setUser(data);
-      setUsername(data.username);
-      setEmail(data.email ?? "");
-      setAvatarPath(data.avatarPath ?? "");
-    })();
-  }, []);
+  const displayUser = profile ?? user;
+
+  // Sync form fields once when cached data arrives
+  if (displayUser && !initialized) {
+    setUsername(displayUser.username);
+    setEmail(displayUser.email ?? "");
+    setAvatarPath(displayUser.avatarPath ?? "");
+    setInitialized(true);
+  }
 
   async function handleUpdate(e: React.FormEvent) {
     e.preventDefault();
@@ -33,7 +39,7 @@ export function Account({ onLogout }: { onLogout: () => void }) {
       method: "PATCH",
       body: { username, email, avatarPath },
     });
-    setUser(data);
+    setProfile(data);
     setMsg("Profile updated.");
   }
 
@@ -47,6 +53,7 @@ export function Account({ onLogout }: { onLogout: () => void }) {
   async function handleLogout() {
     await api("/auth/logout", { method: "POST" });
     setToken(null);
+    dispatch(cacheClearAll());
     disconnectWs();
     onLogout();
   }
@@ -55,11 +62,12 @@ export function Account({ onLogout }: { onLogout: () => void }) {
     if (!confirm("Delete your account? This cannot be undone.")) return;
     await api("/me", { method: "DELETE" });
     setToken(null);
+    dispatch(cacheClearAll());
     disconnectWs();
     onLogout();
   }
 
-  if (!user) return <p>Loading...</p>;
+  if (!displayUser) return <p>Loading...</p>;
 
   return (
     <div>
