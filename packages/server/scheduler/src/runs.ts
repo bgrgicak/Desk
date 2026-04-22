@@ -43,25 +43,32 @@ export interface RunManagerOptions {
 }
 
 /**
- * Build the shell command that at/cron will execute for a scheduled job.
- *
- * Instead of forking a `desk-run` CLI, we emit a curl that posts to the
- * server's /internal/runs/fire endpoint. The shared-secret token is read
- * from disk at fire time via $(cat ...) so token rotation doesn't
- * invalidate scheduled commands (the reconcile path regenerates them).
+ * Build the shell command that at/cron will execute for a legacy
+ * scheduled_jobs row: curl /internal/runs/fire with the jobId.
  */
 function buildScheduleCmd(jobId: string): string {
+  return buildFireCmd("/internal/runs/fire", { jobId });
+}
+
+/**
+ * Build the shell command that at/cron will execute for a message-based
+ * scheduled fire: curl /internal/messages/fire with the messageId.
+ */
+function buildMessageFireCmd(messageId: string): string {
+  return buildFireCmd("/internal/messages/fire", { messageId });
+}
+
+function buildFireCmd(endpoint: string, body: Record<string, string>): string {
   const tokenPath = process.env.DESK_INTERNAL_TOKEN_PATH ?? "/etc/desk-server/internal-token";
   const port = process.env.DESK_API_PORT ?? process.env.PORT ?? "8080";
-  const url = `http://127.0.0.1:${port}/internal/runs/fire`;
-  const body = JSON.stringify({ jobId });
-  const bodyEscaped = body.replace(/"/g, '\\"');
+  const url = `http://127.0.0.1:${port}${endpoint}`;
+  const bodyJson = JSON.stringify(body).replace(/"/g, '\\"');
   return (
     `sh -c 'T=$(cat ${tokenPath}) && ` +
     `curl -sf -X POST ` +
     `-H "Authorization: Bearer $T" ` +
     `-H "Content-Type: application/json" ` +
-    `-d "${bodyEscaped}" ` +
+    `-d "${bodyJson}" ` +
     `${url}'`
   );
 }
@@ -572,19 +579,63 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   async function cancelAiNoteForChat(chatId: string): Promise<void> {
+    // Legacy path — cancel scheduled_jobs rows of kind ai_note. Kept for
+    // backward-compat with anything still hitting enqueueRun({mode:ai_note}).
     const activeJobs = await queries.scheduledJobs.listActive(pool);
     for (const job of activeJobs) {
       if (job.chatId === chatId && job.kind === "ai_note") {
         await cancelJob(job.id);
       }
     }
+
+    // New path — cancel pending ai_note_request messages.
+    const { rows } = await pool.query(
+      `SELECT id, scheduler_ref FROM messages
+       WHERE chat_id = $1
+         AND state = 'pending'
+         AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+    for (const row of rows) {
+      const ref = row.scheduler_ref as { kind: string; id: string } | null;
+      if (ref?.kind === "at") {
+        try { await adapter.removeAt(ref.id); } catch { /* ok */ }
+      } else if (ref?.kind === "cron") {
+        try { await adapter.removeCron(ref.id); } catch { /* ok */ }
+      }
+      await pool.query("DELETE FROM messages WHERE id = $1", [row.id]);
+    }
   }
 
+  /**
+   * Schedules a new ai-note refresh for the chat. Under the messages-as-
+   * truth model this creates a pending `ai_note_request`-content message
+   * with execute_at = now+30min and a scheduler_ref pointing at the
+   * installed at-job. At fire time the at command curls
+   * /internal/messages/fire, which routes through fireMessage() and
+   * produces a `note`-content child message.
+   *
+   * Any existing pending ai_note_request for the chat is cancelled first
+   * (at-job removed + row deleted), matching the "one running note per
+   * chat" invariant.
+   */
   async function scheduleAiNote(chatId: string): Promise<void> {
-    await enqueueRun({
+    await cancelAiNoteForChat(chatId);
+
+    const messageId = generateId("message");
+    const atTime = `now + 30 minutes`;
+    const cmd = buildMessageFireCmd(messageId);
+    const atJobId = await adapter.scheduleAt(cmd, atTime);
+
+    // Insert the pending ai_note_request message carrying the at ref.
+    await queries.messages.insert(pool, {
+      id: messageId,
       chatId,
-      prompt: "Generate an AI note summarizing this chat conversation.",
-      mode: "ai_note",
+      role: "system",
+      content: { type: "ai_note_request" },
+      state: "pending",
+      executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      schedulerRef: { kind: "at", id: atJobId },
     });
   }
 

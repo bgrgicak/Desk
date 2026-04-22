@@ -216,6 +216,68 @@ describe("createRunManager", () => {
     expect(content.body).toContain("vacation plans");
   });
 
+  it("scheduleAiNote (message path): creates a pending ai_note_request message with an at ref", async () => {
+    const adapter = createMemoryAdapter();
+    const mgr = createRunManager({
+      pool,
+      adapter,
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+
+    // Clean slate: remove any pending ai_note_request messages from prior tests.
+    await pool.query(
+      `DELETE FROM messages
+       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+
+    await mgr.scheduleAiNote(chatId);
+
+    const { rows } = await pool.query(
+      `SELECT id, state, scheduler_ref, content FROM messages
+       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].state).toBe("pending");
+    expect(rows[0].scheduler_ref).toMatchObject({ kind: "at" });
+
+    // The adapter should show the at-job.
+    const ats = await adapter.listAt();
+    expect(ats.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("scheduleAiNote cancels previous pending ai_note_request before scheduling", async () => {
+    const adapter = createMemoryAdapter();
+    const mgr = createRunManager({
+      pool,
+      adapter,
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+
+    await pool.query(
+      `DELETE FROM messages
+       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+
+    await mgr.scheduleAiNote(chatId);
+    const firstRows = await pool.query(
+      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+    const firstId = firstRows.rows[0].id as string;
+
+    await mgr.scheduleAiNote(chatId);
+    const afterRows = await pool.query(
+      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+    // Still exactly one, and it's not the first one.
+    expect(afterRows.rows.length).toBe(1);
+    expect(afterRows.rows[0].id).not.toBe(firstId);
+  });
+
   it("enqueueRun ai_note: cancels previous and schedules new", async () => {
     const adapter = createMemoryAdapter();
 
