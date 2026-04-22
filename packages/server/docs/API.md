@@ -75,16 +75,72 @@ explicit `agentId` uses the workspace default.
 | POST   | /chats                    | Create chat               |
 | GET    | /chats/{id}               | Get chat                  |
 | PATCH  | /chats/{id}               | Update chat               |
-| GET    | /chats/{id}/messages      | List messages             |
-| POST   | /chats/{id}/messages      | Send message              |
-| GET    | /chats/{id}/artifacts     | List chat artifacts       |
-| POST   | /chats/{id}/artifacts     | Upload artifact to chat (multipart/form-data) |
+| GET    | /chats/{id}/messages                    | List messages             |
+| POST   | /chats/{id}/messages                    | Send message              |
+| PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
+| DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
+| GET    | /chats/{id}/messages/{messageId}/logs   | Stream execution log file |
+| GET    | /chats/{id}/artifacts                   | List chat artifacts       |
+| POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
 
 ### POST /chats/{id}/artifacts
 
 Accepts `multipart/form-data` with a single part named `file`. The part's
 filename and `Content-Type` become the artifact's name and MIME. Returns
 `201 Created` with the file record.
+
+### Message content types
+
+Messages carry one of:
+
+- `{ type: "text", text }` — plain conversation
+- `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
+- `{ type: "events", events: [...] }` — captured opencode event stream
+- `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
+- `{ type: "note", body }` — a running AI-generated summary of the chat; rendered specially in the UI, editable via PATCH
+- `{ type: "ai_note_request" }` — a scheduled system message that triggers a note refresh when fired
+
+### Message execution metadata
+
+Messages grow optional execution fields (added M6a):
+
+| Column | When present | Meaning |
+|---|---|---|
+| `executeAt` | scheduled messages | timestamp at which the at-daemon curls `/internal/messages/fire` |
+| `cron` | recurring messages | cron expression; the parent stays `pending` forever, each firing creates a child |
+| `state` | executing messages | `pending` / `running` / `succeeded` / `failed` / `cancelled` |
+| `parentId` | output/sub-messages | the message that produced this one (execution lineage) |
+| `agentId` | agent outputs | which agent produced it |
+| `schedulerRef` | scheduled messages | `{ kind: 'at'|'cron', id }` — the at/cron entry this message owns |
+| `startedAt` / `endedAt` | running/completed | execution timing |
+
+### PATCH /chats/{id}/messages/{messageId}
+
+Partial update. Body can include:
+
+- `content` — replace the message content (e.g. user edits a note)
+- `state` — only `cancelled` or `pending` allowed; arbitrary transitions are rejected
+- `executeAt` / `cron` — reschedule; pass `null` to clear
+
+Emits `message.updated` over WS.
+
+### DELETE /chats/{id}/messages/{messageId}
+
+Deletes the message and, if a `schedulerRef` is set, cancels the at/cron
+entry. Moves the execution log file to `~/Desk/.trash/` if present.
+
+### GET /chats/{id}/messages/{messageId}/logs
+
+Streams the execution log file (stdout/stderr) for a running or completed
+message. Served directly from
+`~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
+404 when no log has been produced.
+
+### Internal: POST /internal/messages/fire
+
+Loopback-only (127.0.0.1) + shared-secret. Fires a pending scheduled
+message by id. Called by `at`/`cron` via curl; not intended for user
+clients.
 
 ### POST /me/password
 
