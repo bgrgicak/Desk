@@ -9,6 +9,7 @@
  * sandbox-scoped read operations will flow.
  */
 
+import { PassThrough } from "node:stream";
 import { createOrReuse } from "./docker.js";
 
 export interface ExecInSandboxOptions {
@@ -20,6 +21,12 @@ export interface ExecInSandboxOptions {
   timeoutMs?: number;
   /** Extra environment variables. */
   env?: Record<string, string>;
+  /**
+   * AI-provider credentials to inject when the sandbox is created on demand.
+   * Only used if the container doesn't exist yet; existing containers keep
+   * their original env. Omit to fall back to reading from host process env.
+   */
+  providerKeys?: Record<string, string>;
 }
 
 export interface ExecInSandboxResult {
@@ -42,7 +49,7 @@ export async function execInSandbox(
     return fakeExecInSandbox(opts);
   }
 
-  const handle = await createOrReuse(agentId);
+  const handle = await createOrReuse(agentId, undefined, opts.providerKeys);
 
   const { dockerSocketPath } = await import("./docker.js");
   const Docker = (await import("dockerode")).default;
@@ -67,7 +74,6 @@ export async function execInSandbox(
     const stderrChunks: Buffer[] = [];
 
     // Demux the multiplexed exec stream via dockerode's modem.
-    const { PassThrough } = require("node:stream") as typeof import("node:stream");
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     docker.modem.demuxStream(stream, stdout, stderr);

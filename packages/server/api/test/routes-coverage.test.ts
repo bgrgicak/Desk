@@ -78,6 +78,9 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));
   await ensureLayout(home);
 
+  // Encryption key for user_settings.provider_keys_encrypted
+  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
+
   const storage = { pool, home };
   adapter = createMemoryAdapter();
   const runManager = createRunManager({
@@ -246,6 +249,61 @@ describe("Routes coverage (real Postgres)", () => {
       password: "testpass",
     });
     expect(okLogin.status).toBe(200);
+  });
+
+  // ── 1b. /me/providers ─────────────────────────────────────────────
+  it("GET /me/providers — returns every known key masked-or-null", async () => {
+    const res = await request("GET", "/me/providers", token);
+    expect(res.status).toBe(200);
+    const body = res.body as { providers: Record<string, string | null> };
+    expect(typeof body.providers).toBe("object");
+    // Every PROVIDER_KEY_VARS entry must appear; exact names checked below.
+    expect(body.providers).toHaveProperty("ANTHROPIC_API_KEY");
+    expect(body.providers).toHaveProperty("OPENAI_API_KEY");
+    expect(body.providers).toHaveProperty("AWS_REGION");
+  });
+
+  it("PUT /me/providers — sets, updates, masks, deletes a key", async () => {
+    // Set
+    const setRes = await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-abcdefghijklmnop" },
+    });
+    expect(setRes.status).toBe(200);
+    const setBody = setRes.body as { providers: Record<string, string | null> };
+    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    // Masking: full value must not appear verbatim
+    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBe("sk-ant-abcdefghijklmnop");
+    expect(setBody.providers.ANTHROPIC_API_KEY).toContain("...");
+
+    // Partial update leaves other keys alone
+    const updateRes = await request("PUT", "/me/providers", token, {
+      providers: { OPENAI_API_KEY: "sk-openai-0987654321" },
+    });
+    expect(updateRes.status).toBe(200);
+    const updateBody = updateRes.body as { providers: Record<string, string | null> };
+    expect(updateBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect(updateBody.providers.OPENAI_API_KEY).not.toBeNull();
+
+    // Delete via null
+    const delRes = await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: null },
+    });
+    expect(delRes.status).toBe(200);
+    const delBody = delRes.body as { providers: Record<string, string | null> };
+    expect(delBody.providers.ANTHROPIC_API_KEY).toBeNull();
+    expect(delBody.providers.OPENAI_API_KEY).not.toBeNull();
+
+    // Clean up
+    await request("PUT", "/me/providers", token, {
+      providers: { OPENAI_API_KEY: null },
+    });
+  });
+
+  it("PUT /me/providers — rejects unknown key names", async () => {
+    const res = await request("PUT", "/me/providers", token, {
+      providers: { BOGUS_KEY: "x" },
+    });
+    expect(res.status).toBe(400);
   });
 
   // ── 2. GET /workspaces/:id ────────────────────────────────────────
@@ -615,35 +673,30 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   // ── 13. GET /tools/models ─────────────────────────────────────────
-  it("GET /tools/models — returns models; no agentId leaks into response", async () => {
+  it("GET /tools/models — returns a bare array of { id, provider }", async () => {
     const res = await request("GET", "/tools/models", token);
     expect(res.status).toBe(200);
-    const body = res.body as {
-      provider: string | null;
-      models: Array<{ providerId: string; modelId: string; fullId: string }>;
-    };
-    // Models are server-wide config — the internal sandbox/agent used to
-    // query opencode must not leak into the response.
-    expect(body).not.toHaveProperty("agentId");
-    expect(body.provider).toBeNull();
-    expect(body.models.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body)).toBe(true);
+    const body = res.body as Array<{ id: string; provider: string }>;
+    expect(body.length).toBeGreaterThan(0);
     // Fake sandbox driver returns at least one anthropic model
-    expect(body.models.some((m) => m.providerId === "anthropic")).toBe(true);
-    for (const m of body.models) {
-      expect(m.fullId).toBe(`${m.providerId}/${m.modelId}`);
+    expect(body.some((m) => m.provider === "anthropic")).toBe(true);
+    for (const m of body) {
+      expect(m.id.startsWith(`${m.provider}/`)).toBe(true);
+      // No leftover fields from the old response shape.
+      expect(m).not.toHaveProperty("providerId");
+      expect(m).not.toHaveProperty("modelId");
+      expect(m).not.toHaveProperty("fullId");
     }
   });
 
   it("GET /tools/models?provider=anthropic — filters to provider", async () => {
     const res = await request("GET", "/tools/models?provider=anthropic", token);
     expect(res.status).toBe(200);
-    const body = res.body as {
-      provider: string;
-      models: Array<{ providerId: string }>;
-    };
-    expect(body.provider).toBe("anthropic");
-    expect(body.models.length).toBeGreaterThan(0);
-    expect(body.models.every((m) => m.providerId === "anthropic")).toBe(true);
+    expect(Array.isArray(res.body)).toBe(true);
+    const body = res.body as Array<{ id: string; provider: string }>;
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((m) => m.provider === "anthropic")).toBe(true);
   });
 
   it("GET /tools/models?provider=bad..id — rejects malformed provider", async () => {
@@ -655,6 +708,8 @@ describe("Routes coverage (real Postgres)", () => {
   it("unauthenticated calls to protected routes return 401", async () => {
     const protectedRoutes: Array<[string, string]> = [
       ["POST", "/me/password"],
+      ["GET", "/me/providers"],
+      ["PUT", "/me/providers"],
       ["GET", `/workspaces/${workspaceId}`],
       ["POST", "/workspaces"],
       ["PATCH", `/workspaces/${workspaceId}`],

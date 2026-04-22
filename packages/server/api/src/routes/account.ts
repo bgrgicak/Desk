@@ -1,6 +1,6 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { NotFoundError } from "@desk/shared";
+import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@desk/shared";
 
 export async function getMe(pool: pg.Pool, userId: string) {
   const user = await queries.users.findById(pool, userId);
@@ -36,4 +36,53 @@ export async function deleteMe(
   _userId: string,
 ): Promise<{ ok: true; message: string }> {
   return { ok: true, message: "Account marked for deletion" };
+}
+
+/** Reveal first 6 + last 4 characters of a key; mask the middle. */
+function maskKey(value: string): string {
+  if (value.length <= 10) return "****";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+/**
+ * Returns provider keys for the current user, masked. Every known
+ * PROVIDER_KEY_VARS name appears in the response (null when unset) so the UI
+ * can render a complete form.
+ */
+export async function getProviders(
+  pool: pg.Pool,
+  userId: string,
+): Promise<{ providers: Record<string, string | null> }> {
+  const stored = await queries.userSettings.getProviderKeys(pool, userId);
+  const providers: Record<string, string | null> = {};
+  for (const name of PROVIDER_KEY_VARS) {
+    providers[name] = name in stored ? maskKey(stored[name]) : null;
+  }
+  return { providers };
+}
+
+/**
+ * Partial-update provider keys. `null` deletes an entry; any string value
+ * replaces it. Names not present in the body are left alone.
+ */
+export async function setProviders(
+  pool: pg.Pool,
+  userId: string,
+  data: { providers: Record<string, string | null> },
+): Promise<{ providers: Record<string, string | null> }> {
+  if (!data || typeof data.providers !== "object" || data.providers === null) {
+    throw new ValidationError("Missing providers object");
+  }
+  const allowed = new Set<string>(PROVIDER_KEY_VARS);
+  for (const name of Object.keys(data.providers)) {
+    if (!allowed.has(name)) {
+      throw new ValidationError(`Unknown provider key: ${name}`);
+    }
+    const value = data.providers[name];
+    if (value !== null && typeof value !== "string") {
+      throw new ValidationError(`Provider key ${name} must be string or null`);
+    }
+  }
+  await queries.userSettings.mergeProviderKeys(pool, userId, data.providers);
+  return getProviders(pool, userId);
 }

@@ -159,6 +159,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const runRow = await queries.runs.findById(pool, runId);
       let agentId: string;
       let chatId: string | undefined;
+      let userId: string | undefined;
       let userName = "User";
       if (runRow?.chatId) {
         chatId = runRow.chatId;
@@ -167,6 +168,7 @@ export function createRunManager(opts: RunManagerOptions) {
         if (chat?.workspaceId) {
           const ws = await queries.workspaces.findById(pool, chat.workspaceId);
           if (ws?.userId) {
+            userId = ws.userId;
             const user = await queries.users.findById(pool, ws.userId);
             if (user) userName = user.username;
           }
@@ -174,6 +176,15 @@ export function createRunManager(opts: RunManagerOptions) {
       } else {
         agentId = await getDefaultAgentId();
       }
+      if (!userId) {
+        const { rows } = await pool.query(
+          "SELECT id FROM users ORDER BY created_at LIMIT 1",
+        );
+        userId = rows[0]?.id as string | undefined;
+      }
+      const providerKeys = userId
+        ? await queries.userSettings.getProviderKeys(pool, userId)
+        : {};
       const agent = await queries.agents.findById(pool, agentId);
 
       const agentFileInput = {
@@ -194,7 +205,7 @@ export function createRunManager(opts: RunManagerOptions) {
       } else {
         // Use the full opencode lifecycle: write agent file → mint token → project mounts → exec → cleanup
         const home = process.env.DESK_HOME ?? "/opt/desk";
-        const handle = await createOrReuse(agentId, home);
+        const handle = await createOrReuse(agentId, home, providerKeys);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,

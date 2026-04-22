@@ -5,7 +5,20 @@ export interface RunOptions {
   prompt: string;
   chatContext?: string;
   agentFileId?: string;
-  onLog: (event: LogEvent) => void;
+  /**
+   * Called once per stdout/stderr/event log line. May be sync or async — the
+   * driver tracks any returned promise and awaits all of them before
+   * resolving `execRun`, so callers that persist events asynchronously
+   * (e.g. into a DB) are safe from the race where `execRun` resolves before
+   * the last append commits.
+   */
+  onLog: (event: LogEvent) => void | Promise<void>;
+  /**
+   * Provider API keys to inject when the sandbox container is first created.
+   * Used only for the initial creation; existing containers keep their env.
+   * Omit to fall back to the host process env.
+   */
+  providerKeys?: Record<string, string>;
 }
 
 export interface LogEvent {
@@ -55,7 +68,10 @@ function createFakeDriver(): SandboxDriver {
         if (cancelled.has(runId)) {
           return { exitCode: 130 }; // SIGINT
         }
-        onLog({ runId, seq: seq++, kind: "stdout", payload: line });
+        // Await async onLog returns so the fake driver matches the real
+        // driver's contract: execRun must not resolve before every log
+        // has been persisted. See RunOptions.onLog for background.
+        await onLog({ runId, seq: seq++, kind: "stdout", payload: line });
         await new Promise((r) => setTimeout(r, 10));
       }
 
@@ -79,7 +95,7 @@ function createRealDriver(): SandboxDriver {
       const docker = new Docker({ socketPath: dockerSocketPath() });
 
       // Use createOrReuse which includes containerBinds (project mounts)
-      const handle = await createOrReuse(_agentId);
+      const handle = await createOrReuse(_agentId, undefined, opts.providerKeys);
       const container = docker.getContainer(handle.containerId);
 
       // Build the full prompt including chat context if provided.
@@ -131,11 +147,26 @@ function createRealDriver(): SandboxDriver {
         docker.modem.demuxStream(stream, stdout, stderr);
 
         // Accumulate lines — we emit one onLog per data chunk, but only after
-        // a full frame's payload has been reassembled by the demuxer.
+        // a full frame's payload has been reassembled by the demuxer. Track
+        // every onLog return so maybeResolve can await them: callers persist
+        // events asynchronously and a fast-exiting opencode (sub-second runs)
+        // would otherwise race — stream 'end' resolves execRun before the last
+        // INSERTs commit, the scheduler then reads back zero events and skips
+        // the assistant-message write. Surfaced in prod: ~5 successful runs
+        // with exit 0 and zero run_events for very short prompts.
+        const pendingLogs: Promise<unknown>[] = [];
         const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
           const text = chunk.toString("utf8").replace(/\r?\n$/, "");
           if (text) {
-            opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
+            const ret = opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
+            if (ret && typeof (ret as Promise<void>).then === "function") {
+              pendingLogs.push(
+                (ret as Promise<void>).catch(() => {
+                  // Per-log failures are intentionally swallowed — one bad
+                  // append shouldn't fail the whole run.
+                }),
+              );
+            }
           }
         };
         stdout.on("data", emit("stdout"));
@@ -149,6 +180,8 @@ function createRealDriver(): SandboxDriver {
 
         const maybeResolve = async () => {
           if (!(stdoutDone && stderrDone && rawDone)) return;
+          // Wait for all async onLog calls to commit before resolving.
+          await Promise.all(pendingLogs);
           activeExecs.delete(opts.runId);
           const inspectData = await exec.inspect();
           resolve({ exitCode: inspectData.ExitCode ?? 1 });

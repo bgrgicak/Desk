@@ -101,6 +101,56 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "200": { description: "OK" }, "401": { description: "Current password is incorrect" } },
         },
       },
+      "/me/providers": {
+        get: {
+          summary: "Get AI provider keys (masked)",
+          description: "Returns every known provider key name with its value masked to first 6 + last 4 chars, or null when unset. Keys are encrypted at rest in the DB.",
+          responses: {
+            "200": {
+              description: "Masked provider keys",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      providers: {
+                        type: "object",
+                        additionalProperties: { type: ["string", "null"] },
+                      },
+                    },
+                    required: ["providers"],
+                  },
+                },
+              },
+            },
+          },
+        },
+        put: {
+          summary: "Update AI provider keys",
+          description: "Partial update. Null value deletes a key; string value sets it. Unknown names return 400.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    providers: {
+                      type: "object",
+                      additionalProperties: { type: ["string", "null"] },
+                    },
+                  },
+                  required: ["providers"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Updated masked keys (same shape as GET)" },
+            "400": { description: "Unknown provider name" },
+          },
+        },
+      },
       "/workspaces": {
         get: { summary: "List workspaces", responses: { "200": { description: "Workspace array" } } },
         post: {
@@ -215,27 +265,19 @@ export function generateOpenApiSpec(): OpenApiSpec {
           ],
           responses: {
             "200": {
-              description: "Model listing",
+              description: "Array of ready-to-use models",
               content: {
                 "application/json": {
                   schema: {
-                    type: "object",
-                    properties: {
-                      provider: { type: ["string", "null"] },
-                      models: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            providerId: { type: "string" },
-                            modelId: { type: "string" },
-                            fullId: { type: "string" },
-                          },
-                          required: ["providerId", "modelId", "fullId"],
-                        },
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string", description: "Opencode canonical id, e.g. \"anthropic/claude-opus-4-7\"." },
+                        provider: { type: "string", description: "Provider portion of id, e.g. \"anthropic\"." },
                       },
+                      required: ["id", "provider"],
                     },
-                    required: ["provider", "models"],
                   },
                 },
               },

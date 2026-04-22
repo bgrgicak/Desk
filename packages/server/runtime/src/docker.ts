@@ -5,6 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { PROVIDER_KEY_VARS } from "@desk/shared";
 import { filesDir, libraryDir, chatsDir } from "@desk/storage";
 import { containerBinds, desktopDir } from "./mounts.js";
 
@@ -61,8 +62,16 @@ export async function ensureImage(): Promise<void> {
 /**
  * Creates or reuses a sandbox container for an agent.
  * The container gets /mnt/desk bind-mounted from the per-sandbox staging dir.
+ *
+ * `providerKeys` is an optional map of AI-provider credentials to inject as
+ * env vars. When omitted the function falls back to reading the host env —
+ * that legacy path is what tests without DB access use.
  */
-export async function createOrReuse(agentId: string, home?: string): Promise<SandboxHandle> {
+export async function createOrReuse(
+  agentId: string,
+  home?: string,
+  providerKeys?: Record<string, string>,
+): Promise<SandboxHandle> {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
     return { containerId: `fake-${agentId}`, agentId };
   }
@@ -102,9 +111,7 @@ export async function createOrReuse(agentId: string, home?: string): Promise<San
     const container = await docker.createContainer({
       name: containerName,
       Image: "desk/sandbox:v1",
-      Env: [
-        `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ?? ""}`,
-      ],
+      Env: providerKeyEnv(providerKeys),
       HostConfig: {
         CapDrop: ["ALL"],
         NetworkMode: "bridge",
@@ -118,6 +125,27 @@ export async function createOrReuse(agentId: string, home?: string): Promise<San
     const info = await container.inspect();
     return { containerId: info.Id, agentId };
   }
+}
+
+/**
+ * Formats AI-provider credentials as Docker Env entries.
+ *
+ * With `keys` provided, uses that map (intersected with PROVIDER_KEY_VARS to
+ * avoid leaking unrelated env into the container). Without, falls back to
+ * the host process env — a legacy path for tests and dev flows that haven't
+ * moved to DB-backed keys yet.
+ *
+ * Only keys with non-empty values are emitted, so opencode's auto-detection
+ * doesn't light up empty providers.
+ */
+function providerKeyEnv(keys?: Record<string, string>): string[] {
+  const out: string[] = [];
+  const source: Record<string, string | undefined> = keys ?? process.env;
+  for (const name of PROVIDER_KEY_VARS) {
+    const v = source[name];
+    if (v && v.length > 0) out.push(`${name}=${v}`);
+  }
+  return out;
 }
 
 /**

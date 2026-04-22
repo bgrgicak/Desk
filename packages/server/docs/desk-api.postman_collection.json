@@ -102,6 +102,25 @@
             },
             "url": { "raw": "{{baseUrl}}/me/password", "host": ["{{baseUrl}}"], "path": ["me", "password"] }
           }
+        },
+        {
+          "name": "GET /me/providers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
+          }
+        },
+        {
+          "name": "PUT /me/providers",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providers\": {\n    \"ANTHROPIC_API_KEY\": \"sk-ant-...\"\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
+          }
         }
       ]
     },

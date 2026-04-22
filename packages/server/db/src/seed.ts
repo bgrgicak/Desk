@@ -1,6 +1,7 @@
 import pg from "pg";
-import { generateId, TOOLS, type ToolName } from "@desk/shared";
+import { generateId, PROVIDER_KEY_VARS, TOOLS, type ToolName } from "@desk/shared";
 import { hashPassword } from "./passwords.js";
+import * as userSettings from "./queries/userSettings.js";
 
 export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
   const { rows } = await pool.query("SELECT count(*)::int AS c FROM users");
@@ -50,5 +51,30 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
     throw err;
   } finally {
     client.release();
+  }
+}
+
+/**
+ * Dev-only: for every user with no stored provider keys, scan the host env for
+ * known provider vars and populate user_settings with what's set.
+ *
+ * Gated by DESK_DEV=1 so prod can never leak host env into the DB.
+ */
+export async function seedProviderKeysFromEnv(pool: pg.Pool): Promise<void> {
+  if (process.env.DESK_DEV !== "1") return;
+
+  const envKeys: Record<string, string> = {};
+  for (const name of PROVIDER_KEY_VARS) {
+    const v = process.env[name];
+    if (v && v.length > 0) envKeys[name] = v;
+  }
+  if (Object.keys(envKeys).length === 0) return;
+
+  const { rows } = await pool.query("SELECT id FROM users");
+  for (const row of rows) {
+    const userId = row.id as string;
+    const existing = await userSettings.getProviderKeys(pool, userId);
+    if (Object.keys(existing).length > 0) continue;
+    await userSettings.setProviderKeys(pool, userId, envKeys);
   }
 }

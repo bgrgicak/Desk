@@ -1,32 +1,37 @@
 import pg from "pg";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
-import { listModels as runtimeListModels, SandboxExecError } from "@desk/runtime";
+import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@desk/runtime";
+import { resolveProviderKeys } from "../providerKeys.js";
 
 /**
- * Lists AI models available to an agent by querying its sandbox.
+ * Lists AI models that are ready to use — every entry is a provider opencode
+ * has authenticated inside the sandbox (via a host-forwarded API key). Models
+ * are server-wide config, not agent-scoped, so the response is a bare array
+ * matching the convention of `/workspaces`, `/agents`, etc. We still query
+ * through a warm sandbox internally because opencode is the source of truth
+ * for provider availability.
  *
- * Host control plane → sandbox exec → `opencode models` → parsed response.
- * This is the first host-initiated tool call; it underpins the broader
- * sandboxed tool-calling surface described in ARCHITECTURE.md §7.
+ * Foundation of host-initiated sandboxed tool calling per ARCHITECTURE.md §7.
  */
 export async function listModels(
   pool: pg.Pool,
-  opts: { agentId?: string; provider?: string },
-): Promise<{ agentId: string; provider: string | null; models: Array<{ providerId: string; modelId: string; fullId: string }> }> {
-  const agentId = opts.agentId ?? (await resolveDefaultAgentId(pool));
-  if (!agentId) throw new NotFoundError("No agent available to query models from");
-
-  const agent = await queries.agents.findById(pool, agentId);
-  if (!agent) throw new NotFoundError(`Agent not found: ${agentId}`);
-
+  opts: { provider?: string },
+): Promise<ModelRef[]> {
   if (opts.provider !== undefined && !/^[A-Za-z0-9_.-]+$/.test(opts.provider)) {
     throw new ValidationError("Invalid provider id");
   }
 
+  // Pick any available agent to reach a warm sandbox. Which one is an
+  // implementation detail — all sandboxes see the same user-scoped keys.
+  const agents = await queries.agents.list(pool);
+  const agentId = agents[0]?.id;
+  if (!agentId) throw new NotFoundError("No sandbox available to query models from");
+
+  const providerKeys = await resolveProviderKeys(pool);
+
   try {
-    const models = await runtimeListModels(agentId, { provider: opts.provider });
-    return { agentId, provider: opts.provider ?? null, models };
+    return await runtimeListModels(agentId, { provider: opts.provider, providerKeys });
   } catch (err) {
     if (err instanceof SandboxExecError) {
       throw new ValidationError(
@@ -35,9 +40,4 @@ export async function listModels(
     }
     throw err;
   }
-}
-
-async function resolveDefaultAgentId(pool: pg.Pool): Promise<string | undefined> {
-  const agents = await queries.agents.list(pool);
-  return agents[0]?.id;
 }

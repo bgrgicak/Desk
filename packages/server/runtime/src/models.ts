@@ -8,16 +8,18 @@
 import { execInSandbox } from "./sandboxExec.js";
 
 export interface ModelRef {
-  providerId: string;
-  modelId: string;
-  /** Provider-prefixed id, e.g. "anthropic/claude-opus-4-7". */
-  fullId: string;
+  /** Opencode's canonical model id, e.g. "anthropic/claude-opus-4-7". Pass this to `opencode run --model`. */
+  id: string;
+  /** Provider portion of `id`, denormalised so UIs can group/filter without parsing. */
+  provider: string;
 }
 
 export interface ListModelsOptions {
   /** Restrict to a single provider, e.g. "anthropic". */
   provider?: string;
   timeoutMs?: number;
+  /** Provider API keys to inject when the sandbox is first created. */
+  providerKeys?: Record<string, string>;
 }
 
 export class SandboxExecError extends Error {
@@ -41,6 +43,7 @@ export async function listModels(
   const result = await execInSandbox(agentId, {
     argv,
     timeoutMs: opts.timeoutMs ?? 15_000,
+    providerKeys: opts.providerKeys,
   });
 
   if (result.exitCode !== 0) {
@@ -62,10 +65,10 @@ export function parseModelsOutput(stdout: string): ModelRef[] {
     if (!line) continue;
     const slash = line.indexOf("/");
     if (slash <= 0) continue;
-    const providerId = line.slice(0, slash);
-    const modelId = line.slice(slash + 1);
-    if (!modelId) continue;
-    models.push({ providerId, modelId, fullId: line });
+    const provider = line.slice(0, slash);
+    const rest = line.slice(slash + 1);
+    if (!rest) continue;
+    models.push({ id: line, provider });
   }
   return models;
 }

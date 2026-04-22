@@ -14,6 +14,7 @@ describe("OpenAPI spec", () => {
       "/auth/logout",
       "/me",
       "/me/password",
+      "/me/providers",
       "/workspaces",
       "/workspaces/{id}",
       "/agents",

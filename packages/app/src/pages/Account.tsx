@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, setToken } from "../api";
 import { useApi } from "../store";
-import { cacheClearAll } from "../store";
+import { cacheClearAll, cacheInvalidate } from "../store";
 import { useDispatch } from "react-redux";
 import { disconnectWs } from "../ws";
 
@@ -128,8 +128,157 @@ export function Account({ onLogout }: { onLogout: () => void }) {
       </form>
 
       <hr />
+      <Providers />
+
+      <hr />
       <button onClick={handleLogout}>Log out</button>
       <button onClick={handleDeleteAccount}>Delete account</button>
     </div>
+  );
+}
+
+interface ProvidersResponse {
+  providers: Record<string, string | null>;
+}
+
+function Providers() {
+  const { data } = useApi<ProvidersResponse>("/me/providers");
+  const [draftName, setDraftName] = useState("");
+  const [draftValue, setDraftValue] = useState("");
+  const [msg, setMsg] = useState("");
+  const dispatch = useDispatch();
+
+  async function handleSet(name: string, value: string) {
+    if (!value.trim()) return;
+    const res = await api<ProvidersResponse>("/me/providers", {
+      method: "PUT",
+      body: { providers: { [name]: value } },
+    });
+    if (res.status >= 400) {
+      setMsg("Could not save key.");
+      return;
+    }
+    dispatch(cacheInvalidate("/me/providers"));
+    setMsg(`${name} saved.`);
+    setDraftName("");
+    setDraftValue("");
+  }
+
+  async function handleClear(name: string) {
+    if (!confirm(`Delete ${name}?`)) return;
+    await api("/me/providers", {
+      method: "PUT",
+      body: { providers: { [name]: null } },
+    });
+    dispatch(cacheInvalidate("/me/providers"));
+    setMsg(`${name} cleared.`);
+  }
+
+  const providers = data?.providers ?? {};
+  const names = Object.keys(providers).sort();
+
+  return (
+    <div>
+      <h3>AI provider keys</h3>
+      {msg && <p role="status">{msg}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Value</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {names.map((name) => (
+            <tr key={name}>
+              <td>{name}</td>
+              <td>{providers[name] ?? <em>not set</em>}</td>
+              <td>
+                <ProviderRowActions
+                  name={name}
+                  hasValue={providers[name] !== null}
+                  onSet={(v) => handleSet(name, v)}
+                  onClear={() => handleClear(name)}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h4>Set a different key</h4>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSet(draftName, draftValue);
+        }}
+      >
+        <label>
+          Name
+          <input value={draftName} onChange={(e) => setDraftName(e.target.value)} />
+        </label>
+        <label>
+          Value
+          <input
+            type="password"
+            value={draftValue}
+            onChange={(e) => setDraftValue(e.target.value)}
+          />
+        </label>
+        <button type="submit">Set key</button>
+      </form>
+    </div>
+  );
+}
+
+function ProviderRowActions({
+  hasValue,
+  onSet,
+  onClear,
+}: {
+  name: string;
+  hasValue: boolean;
+  onSet: (v: string) => void;
+  onClear: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  if (editing) {
+    return (
+      <span>
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            onSet(value);
+            setValue("");
+            setEditing(false);
+          }}
+        >
+          Save
+        </button>
+        <button type="button" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span>
+      <button type="button" onClick={() => setEditing(true)}>
+        {hasValue ? "Update" : "Set"}
+      </button>
+      {hasValue && (
+        <button type="button" onClick={onClear}>
+          Clear
+        </button>
+      )}
+    </span>
   );
 }

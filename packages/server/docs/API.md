@@ -18,6 +18,8 @@ The full OpenAPI 3.1.0 spec is served at `GET /openapi.json`.
 | PATCH  | /me           | Update current user      |
 | DELETE | /me           | Soft-delete account      |
 | POST   | /me/password  | Change password          |
+| GET    | /me/providers | Get AI provider keys (masked) |
+| PUT    | /me/providers | Set / update / delete AI provider keys |
 
 ## Workspaces
 
@@ -79,6 +81,24 @@ filename and `Content-Type` become the artifact's name and MIME. Returns
 Accepts `{ currentPassword, newPassword }`. Returns `401 Unauthorized`
 if `currentPassword` does not match.
 
+### GET /me/providers
+
+Returns every known AI provider key name with its value either masked
+(first 6 + last 4 characters) or `null` when unset. Keys are encrypted
+at rest in the `user_settings` table using AES-256-GCM; the encryption
+key lives on disk at `DESK_SECRET_KEY_PATH` (default
+`/var/lib/desk/secret.key`).
+
+### PUT /me/providers
+
+Partial update. Body is `{ providers: { NAME: VALUE | null, ... } }`. A
+`null` value deletes the named key; any string value sets it. Names not
+present in the body are left untouched. Unknown names return 400.
+
+The set of known names is `PROVIDER_KEY_VARS` in `@desk/shared`. In
+dev, values seed from `/desk/.env` once per user (gated by `DESK_DEV=1`);
+in prod, the UI is the only way to populate them.
+
 ## Library
 
 | Method | Path                   | Description              |
@@ -127,16 +147,16 @@ authenticated.
 
 - `provider` (optional) — restrict to a single provider, e.g. `anthropic`
 
-**Response:**
+**Response:** bare array, matching `/workspaces`, `/agents`, `/runs`.
 
 ```json
-{
-  "provider": "anthropic",
-  "models": [
-    { "providerId": "anthropic", "modelId": "claude-opus-4-7", "fullId": "anthropic/claude-opus-4-7" }
-  ]
-}
+[
+  { "id": "anthropic/claude-opus-4-7", "provider": "anthropic" }
+]
 ```
+
+`id` is opencode's canonical model id — pass it straight to `opencode run --model`.
+`provider` is denormalised so UIs can group or filter without splitting the id.
 
 ## Search
 

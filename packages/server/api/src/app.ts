@@ -260,6 +260,17 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/me/providers" && method === "GET") {
+      const result = await accountRoutes.getProviders(pool, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/me/providers" && method === "PUT") {
+      const body = await parseBody(req) as { providers: Record<string, string | null> };
+      const result = await accountRoutes.setProviders(pool, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
 
     // Workspace routes
     if (path === "/workspaces" && method === "GET") {

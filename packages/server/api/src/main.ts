@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
-import { runMigrations, seedIfEmpty, queries } from "@desk/db";
+import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager, createAdapter } from "@desk/scheduler";
 import { createApp } from "./app.js";
@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
   await seedIfEmpty(pool);
+  await seedProviderKeysFromEnv(pool);
 
   await fs.mkdir(DESK_HOME, { recursive: true });
   await ensureLayout(DESK_HOME);
