@@ -1,8 +1,8 @@
 import pg from "pg";
 import { Readable } from "node:stream";
 import { queries } from "@desk/db";
-import { NotFoundError, generateId, type WsEvent } from "@desk/shared";
-import { listLibrary, uploadArtifact, readFile, downloadFile, deleteFile, type StorageContext } from "@desk/storage";
+import { NotFoundError, type WsEvent } from "@desk/shared";
+import { listLibrary, uploadArtifact, downloadFile, deleteFile, type StorageContext } from "@desk/storage";
 
 export async function list(ctx: StorageContext, workspaceId: string, opts?: { cursor?: string; limit?: number }) {
   return listLibrary(ctx, workspaceId, opts);
@@ -59,34 +59,3 @@ export async function remove(
   });
 }
 
-/**
- * Create a manual library note for a given library file.
- * Stores the note text as a plain-text file linked to the parent file's
- * workspace with class 'note'.
- */
-export async function createNote(
-  ctx: StorageContext,
-  fileId: string,
-  data: { text: string },
-  emit: (event: WsEvent) => void,
-) {
-  const parentFile = await queries.files.findById(ctx.pool, fileId);
-  if (!parentFile) throw new NotFoundError(`File not found: ${fileId}`);
-
-  const buf = Buffer.from(data.text, "utf-8");
-  const stream = Readable.from(buf);
-
-  const noteFile = await uploadArtifact(ctx, {
-    workspaceId: parentFile.workspaceId,
-    name: `note-${fileId}.txt`,
-    mime: "text/plain",
-    stream,
-  });
-
-  emit({
-    type: "library.changed",
-    payload: { workspaceId: parentFile.workspaceId, fileId: noteFile.id, op: "added" },
-  });
-
-  return noteFile;
-}

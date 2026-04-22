@@ -180,14 +180,6 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/library/{id}/download": {
         get: { summary: "Download library file", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File content" } } },
       },
-      "/library/{id}/note": {
-        post: {
-          summary: "Create a manual library note",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } } },
-          responses: { "201": { description: "Created note file" } },
-        },
-      },
       "/runs": {
         get: { summary: "List runs", responses: { "200": { description: "Run array" } } },
       },

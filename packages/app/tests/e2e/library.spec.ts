@@ -66,27 +66,6 @@ test.describe("Library", () => {
     await expect(page.getByRole("heading", { name: /Library: detail.txt/ })).toBeVisible();
   });
 
-  test("add a note to a library item", async ({ login, page }) => {
-    await login();
-    await page.getByRole("button", { name: "Library" }).click();
-
-    const buffer = Buffer.from("note test");
-    await page.getByLabel("Choose file").setInputFiles({
-      name: "noted.txt",
-      mimeType: "text/plain",
-      buffer,
-    });
-    await page.getByRole("button", { name: "Upload to library" }).click();
-    await expect(page.getByText("noted.txt")).toBeVisible({ timeout: 5000 });
-
-    await page.getByRole("link", { name: "noted.txt" }).click();
-    await expect(page.getByRole("heading", { name: /Library: noted.txt/ })).toBeVisible();
-
-    await page.getByLabel("Note").fill("This is a note");
-    await page.getByRole("button", { name: "Add note" }).click();
-    await expect(page.getByRole("heading", { name: /Library: noted.txt/ })).toBeVisible();
-  });
-
   test("delete a library item", async ({ login, page }) => {
     await login();
     await page.getByRole("button", { name: "Library" }).click();

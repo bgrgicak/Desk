@@ -54,7 +54,7 @@ describe("files queries", () => {
     const result = await files.listByWorkspace(pool, wsId, { class: "artifact" });
     expect(result.items.length).toBeGreaterThanOrEqual(1);
 
-    const empty = await files.listByWorkspace(pool, wsId, { class: "note" });
+    const empty = await files.listByWorkspace(pool, wsId, { class: "cache" });
     expect(empty.items).toHaveLength(0);
   });
 

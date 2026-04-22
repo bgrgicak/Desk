@@ -25,7 +25,6 @@ describe("OpenAPI spec", () => {
       "/library",
       "/library/{id}",
       "/library/{id}/download",
-      "/library/{id}/note",
       "/runs",
       "/runs/{id}",
       "/runs/{id}/logs",

@@ -88,7 +88,6 @@ if `currentPassword` does not match.
 | GET    | /library/{id}          | Get file metadata        |
 | DELETE | /library/{id}          | Delete file              |
 | GET    | /library/{id}/download | Download file content    |
-| POST   | /library/{id}/note     | Create a manual note     |
 
 ## Runs
 

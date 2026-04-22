@@ -5,7 +5,6 @@
  * Discovered bugs / gaps (not fixed here — separate task):
  *  - PATCH /chats/:id does not accept agentId; spec says it should be patchable.
  *  - DELETE /workspaces/:id does a hard DELETE, not soft-delete. No deleted_at flag.
- *  - POST /library/:id/note stores the note with class "workspace" instead of "note".
  *  - Malformed request bodies (missing required fields) produce 500, not 400.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -404,50 +403,7 @@ describe("Routes coverage (real Postgres)", () => {
     // NOTE: agentId is NOT patchable via PATCH /chats/:id (spec says it should be).
   });
 
-  // ── 7. POST /library/:id/note ─────────────────────────────────────
-  it("POST /library/:id/note — creates a note; GET /library/:noteId returns it", async () => {
-    // Upload a library file first
-    const content = "library file for note test";
-    const uploadRes = await request("POST", "/library", token, {
-      name: "note-target.txt",
-      mime: "text/plain",
-      contentBase64: Buffer.from(content).toString("base64"),
-    });
-    expect(uploadRes.status).toBe(201);
-    const parentFile = uploadRes.body as { id: string };
-
-    // Create a note
-    const noteRes = await request("POST", `/library/${parentFile.id}/note`, token, {
-      text: "This is a manual note about the file.",
-    });
-    expect(noteRes.status).toBe(201);
-    const noteFile = noteRes.body as { id: string; name: string; mime: string };
-    expect(noteFile.id).toMatch(/^fil_/);
-    expect(noteFile.mime).toBe("text/plain");
-
-    // GET the note file by id
-    const getNoteRes = await request("GET", `/library/${noteFile.id}`, token);
-    expect(getNoteRes.status).toBe(200);
-    const meta = getNoteRes.body as { id: string; name: string };
-    expect(meta.id).toBe(noteFile.id);
-
-    // Download the note and verify text
-    const dlBytes = await new Promise<Buffer>((resolve, reject) => {
-      const req = http.request(
-        { hostname: "127.0.0.1", port, path: `/library/${noteFile.id}/download`, method: "GET", headers: { Authorization: `Bearer ${token}` } },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (c: Buffer) => chunks.push(c));
-          res.on("end", () => resolve(Buffer.concat(chunks)));
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
-    expect(dlBytes.toString()).toBe("This is a manual note about the file.");
-  });
-
-  // ── 8. DELETE /library/:id ────────────────────────────────────────
+  // ── 7. DELETE /library/:id ────────────────────────────────────────
   it("DELETE /library/:id — file gone from API and disk", async () => {
     const content = "file to delete";
     const uploadRes = await request("POST", "/library", token, {
@@ -705,7 +661,6 @@ describe("Routes coverage (real Postgres)", () => {
       ["DELETE", `/workspaces/${workspaceId}`],
       ["GET", "/chats/cht_any"],
       ["PATCH", "/chats/cht_any"],
-      ["POST", "/library/fil_any/note"],
       ["DELETE", "/library/fil_any"],
       ["GET", "/runs/run_any"],
       ["POST", "/runs/run_any/cancel"],

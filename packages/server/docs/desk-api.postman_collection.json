@@ -378,22 +378,6 @@
           }
         },
         {
-          "name": "POST /library/:id/note",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"text\": \"Manual note about this file\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/library/{{libraryFileId}}/note",
-              "host": ["{{baseUrl}}"],
-              "path": ["library", "{{libraryFileId}}", "note"]
-            }
-          }
-        },
-        {
           "name": "DELETE /library/:id",
           "request": {
             "method": "DELETE",

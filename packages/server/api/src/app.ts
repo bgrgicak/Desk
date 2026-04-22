@@ -411,12 +411,6 @@ export function createApp(opts: AppOptions): Server {
       stream.pipe(res);
       return;
     }
-    if (segments[0] === "library" && segments[2] === "note" && segments.length === 3 && method === "POST") {
-      const body = await parseBody(req) as { text: string };
-      const result = await libraryRoutes.createNote(storage, segments[1], body, emitEvent);
-      sendJson(res, 201, result);
-      return;
-    }
     if (segments[0] === "library" && segments.length === 2 && method === "DELETE") {
       await libraryRoutes.remove(storage, segments[1], emitEvent);
       sendJson(res, 200, { ok: true });
