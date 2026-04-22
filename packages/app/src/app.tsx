@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { getToken } from "./api";
+import { useState, useEffect, useCallback } from "react";
+import { getToken, restoreToken } from "./api";
+import { connectWs } from "./ws";
 import { Login } from "./pages/Login";
 import { Today } from "./pages/Today";
 import { Chat } from "./pages/Chat";
@@ -26,15 +27,63 @@ export type Route =
   | { page: "account" }
   | { page: "search" };
 
+function routeToPath(route: Route): string {
+  switch (route.page) {
+    case "today": return "/";
+    case "chat": return `/chat/${route.id}`;
+    case "library": return "/library";
+    case "library-item": return `/library/${route.id}`;
+    case "runs": return "/runs";
+    case "run-detail": return `/runs/${route.id}`;
+    case "scheduled": return "/scheduled";
+    case "agent": return "/agent";
+    case "workspace": return "/workspace";
+    case "account": return "/account";
+    case "search": return "/search";
+  }
+}
+
+function pathToRoute(path: string): Route {
+  const segments = path.split("/").filter(Boolean);
+  if (segments[0] === "chat" && segments[1]) return { page: "chat", id: segments[1] };
+  if (segments[0] === "library" && segments[1]) return { page: "library-item", id: segments[1] };
+  if (segments[0] === "library") return { page: "library" };
+  if (segments[0] === "runs" && segments[1]) return { page: "run-detail", id: segments[1] };
+  if (segments[0] === "runs") return { page: "runs" };
+  if (segments[0] === "scheduled") return { page: "scheduled" };
+  if (segments[0] === "agent") return { page: "agent" };
+  if (segments[0] === "workspace") return { page: "workspace" };
+  if (segments[0] === "account") return { page: "account" };
+  if (segments[0] === "search") return { page: "search" };
+  return { page: "today" };
+}
+
 export function App() {
-  const [route, setRoute] = useState<Route>({ page: "today" });
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [route, setRoute] = useState<Route>(() => pathToRoute(window.location.pathname));
+  const [loggedIn, setLoggedIn] = useState(() => {
+    if (restoreToken()) {
+      connectWs();
+      return true;
+    }
+    return false;
+  });
+
+  const nav = useCallback((r: Route) => {
+    setRoute(r);
+    window.history.pushState(null, "", routeToPath(r));
+  }, []);
+
+  useEffect(() => {
+    function onPopState() {
+      setRoute(pathToRoute(window.location.pathname));
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   if (!loggedIn || !getToken()) {
     return <Login onLogin={() => setLoggedIn(true)} />;
   }
-
-  const nav = (r: Route) => setRoute(r);
 
   return (
     <div>

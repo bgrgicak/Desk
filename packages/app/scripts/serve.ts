@@ -16,7 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(APP_ROOT, "dist");
 
-const API_PORT = parseInt(process.env.DESK_API_PORT ?? "18080", 10);
+const API_PORT = parseInt(process.env.DESK_API_PORT ?? "3013", 10);
 const APP_PORT = parseInt(process.env.DESK_APP_PORT ?? "14173", 10);
 
 const MIME: Record<string, string> = {
