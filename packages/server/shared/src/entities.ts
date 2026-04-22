@@ -105,12 +105,32 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
+export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
+export type MessageState = (typeof MESSAGE_STATES)[number];
+
+export const SchedulerRefSchema = z.object({
+  kind: z.enum(["at", "cron"]),
+  id: z.string(),
+});
+export type SchedulerRef = z.infer<typeof SchedulerRefSchema>;
+
 export const MessageSchema = z.object({
   id: z.string(),
   chatId: z.string(),
   role: z.enum(MESSAGE_ROLES),
   content: MessageContentSchema,
   createdAt: z.string(),
+
+  /** Execution metadata (nullable — present for scheduled/executing messages only). */
+  executeAt: z.string().optional(),
+  cron: z.string().optional(),
+  state: z.enum(MESSAGE_STATES).optional(),
+  parentId: z.string().optional(),
+  agentId: z.string().optional(),
+  schedulerRef: SchedulerRefSchema.optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  updatedAt: z.string().optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 

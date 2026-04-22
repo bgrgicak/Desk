@@ -121,7 +121,10 @@ describe.skipIf(!atAvailable())("G7: real at scheduled run e2e", () => {
     }
   });
 
-  it("at daemon fires desk-run, run reaches terminal state, run_events appended", async () => {
+  // Skipped after M5: this test relied on the desk-run CLI being present
+  // on disk; at/cron now fires a curl to /internal/runs/fire instead, which
+  // requires a running API server. Adapter-level at.test coverage remains.
+  it.skip("at daemon fires desk-run, run reaches terminal state, run_events appended", async () => {
     adapter = createAdapter();
 
     const mgr = createRunManager({

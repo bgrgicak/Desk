@@ -10,6 +10,15 @@ function rowToMessage(row: Record<string, unknown>): Message {
     role: row.role,
     content: row.content,
     createdAt: (row.created_at as Date).toISOString(),
+    executeAt: row.execute_at ? (row.execute_at as Date).toISOString() : undefined,
+    cron: row.cron ?? undefined,
+    state: row.state ?? undefined,
+    parentId: row.parent_id ?? undefined,
+    agentId: row.agent_id ?? undefined,
+    schedulerRef: row.scheduler_ref ?? undefined,
+    startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
+    endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : undefined,
+    updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : undefined,
   });
 }
 
