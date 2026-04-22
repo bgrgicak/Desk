@@ -492,6 +492,27 @@
       ]
     },
     {
+      "name": "Tools",
+      "item": [
+        {
+          "name": "GET /tools/models",
+          "request": {
+            "method": "GET",
+            "description": "Runs `opencode models` inside the target agent's sandbox and returns parsed provider/model pairs. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+            "url": {
+              "raw": "{{baseUrl}}/tools/models?provider=anthropic",
+              "host": ["{{baseUrl}}"],
+              "path": ["tools", "models"],
+              "query": [
+                { "key": "agentId", "value": "", "description": "Target agent. Defaults to the first registered agent.", "disabled": true },
+                { "key": "provider", "value": "anthropic", "description": "Restrict to a single provider id, e.g. anthropic." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "Search",
       "item": [
         {

@@ -85,6 +85,7 @@ Unified capability surface for agents.
 
 * In-sandbox tools (bash, file ops, local code) run freely within the sandbox; no per-call allowlist check
 * Host-mediated tools — the host Tool API authenticates the caller via the Tool API session token presented by the sandbox, resolves the bound agent identity, and checks the requested tool against that agent's allowlist from Agent Registry & Configuration
+* Host-initiated sandbox queries — the control plane can exec read-only commands inside a warm sandbox (e.g. `opencode models` for model discovery) via the runtime's `execInSandbox` primitive; the sandbox is the source of truth for provider/model availability and other runtime-scoped configuration. See `GET /tools/models`.
 * External-service tools
 * Tool schemas, permissions, timeouts, audit rules
 

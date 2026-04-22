@@ -96,6 +96,37 @@ Only `name` is required. `description` and `icon` default to empty strings.
 | POST   | /scheduled-jobs       | Create scheduled job     |
 | DELETE | /scheduled-jobs/{id}  | Delete scheduled job     |
 
+## Tools
+
+| Method | Path           | Description                                                |
+|--------|----------------|------------------------------------------------------------|
+| GET    | /tools/models  | List AI models available inside the agent's sandbox        |
+
+### GET /tools/models
+
+Runs `opencode models` inside the target agent's warm sandbox and returns the
+parsed `provider/model` pairs. This is the foundation of host-initiated
+sandboxed tool calling described in [ARCHITECTURE.md §7](./ARCHITECTURE.md).
+The sandbox is the source of truth for model availability because provider
+credentials and OpenCode configuration live inside it.
+
+**Query parameters:**
+
+- `agentId` (optional) — defaults to the first registered agent
+- `provider` (optional) — restrict to a single provider, e.g. `anthropic`
+
+**Response:**
+
+```json
+{
+  "agentId": "agt_abc",
+  "provider": "anthropic",
+  "models": [
+    { "providerId": "anthropic", "modelId": "claude-opus-4-7", "fullId": "anthropic/claude-opus-4-7" }
+  ]
+}
+```
+
 ## Search
 
 | Method | Path     | Description                                 |

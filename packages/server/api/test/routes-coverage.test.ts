@@ -639,6 +639,42 @@ describe("Routes coverage (real Postgres)", () => {
     expect(stillHas).toBe(false);
   });
 
+  // ── 13. GET /tools/models ─────────────────────────────────────────
+  it("GET /tools/models — returns models from the sandbox", async () => {
+    const res = await request("GET", "/tools/models", token);
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      agentId: string;
+      provider: string | null;
+      models: Array<{ providerId: string; modelId: string; fullId: string }>;
+    };
+    expect(body.agentId).toBe(agentId);
+    expect(body.provider).toBeNull();
+    expect(body.models.length).toBeGreaterThan(0);
+    // Fake sandbox driver returns at least one anthropic model
+    expect(body.models.some((m) => m.providerId === "anthropic")).toBe(true);
+    for (const m of body.models) {
+      expect(m.fullId).toBe(`${m.providerId}/${m.modelId}`);
+    }
+  });
+
+  it("GET /tools/models?provider=anthropic — filters to provider", async () => {
+    const res = await request("GET", "/tools/models?provider=anthropic", token);
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      provider: string;
+      models: Array<{ providerId: string }>;
+    };
+    expect(body.provider).toBe("anthropic");
+    expect(body.models.length).toBeGreaterThan(0);
+    expect(body.models.every((m) => m.providerId === "anthropic")).toBe(true);
+  });
+
+  it("GET /tools/models?provider=bad..id — rejects malformed provider", async () => {
+    const res = await request("GET", "/tools/models?provider=bad$id", token);
+    expect(res.status).toBe(400);
+  });
+
   // ── Cross-cutting: unauthenticated ────────────────────────────────
   it("unauthenticated calls to protected routes return 401", async () => {
     const protectedRoutes: Array<[string, string]> = [
@@ -656,6 +692,7 @@ describe("Routes coverage (real Postgres)", () => {
       ["GET", "/scheduled-jobs"],
       ["POST", "/scheduled-jobs"],
       ["DELETE", "/scheduled-jobs/sj_any"],
+      ["GET", "/tools/models"],
     ];
 
     for (const [method, urlPath] of protectedRoutes) {

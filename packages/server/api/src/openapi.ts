@@ -200,6 +200,47 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/scheduled-jobs/{id}": {
         delete: { summary: "Delete scheduled job", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "OK" } } },
       },
+      "/tools/models": {
+        get: {
+          summary: "List AI models available inside the agent's sandbox",
+          description: "Executes `opencode models` inside the sandbox and returns parsed provider/model pairs. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          parameters: [
+            { name: "agentId", in: "query", schema: { type: "string" }, description: "Target agent. Defaults to the first registered agent." },
+            { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"anthropic\"." },
+          ],
+          responses: {
+            "200": {
+              description: "Model listing",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      agentId: { type: "string" },
+                      provider: { type: ["string", "null"] },
+                      models: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            providerId: { type: "string" },
+                            modelId: { type: "string" },
+                            fullId: { type: "string" },
+                          },
+                          required: ["providerId", "modelId", "fullId"],
+                        },
+                      },
+                    },
+                    required: ["agentId", "provider", "models"],
+                  },
+                },
+              },
+            },
+            "400": { description: "Sandbox rejected the listing" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
       "/search": {
         get: {
           summary: "Search across artifacts, chats, and library",

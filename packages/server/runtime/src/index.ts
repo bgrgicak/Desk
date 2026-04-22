@@ -8,3 +8,7 @@ export { renderAgentFile, writeAgentFile } from "./agentFile.js";
 export type { AgentFileInput } from "./agentFile.js";
 export { createDriver } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";
+export { execInSandbox } from "./sandboxExec.js";
+export type { ExecInSandboxOptions, ExecInSandboxResult } from "./sandboxExec.js";
+export { listModels, parseModelsOutput, SandboxExecError } from "./models.js";
+export type { ModelRef, ListModelsOptions } from "./models.js";

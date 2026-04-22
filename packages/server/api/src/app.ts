@@ -18,6 +18,7 @@ import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
 import * as runRoutes from "./routes/runs.js";
 import * as searchRoutes from "./routes/search.js";
+import * as toolRoutes from "./routes/tools.js";
 
 type RunManager = ReturnType<typeof createRunManager>;
 
@@ -423,6 +424,16 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "scheduled-jobs" && segments.length === 2 && method === "DELETE") {
       const result = await runRoutes.deleteScheduledJob(runManager, segments[1]);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Tools (host-initiated sandbox queries)
+    if (path === "/tools/models" && method === "GET") {
+      const result = await toolRoutes.listModels(pool, {
+        agentId: query.get("agentId") ?? undefined,
+        provider: query.get("provider") ?? undefined,
+      });
       sendJson(res, 200, result);
       return;
     }

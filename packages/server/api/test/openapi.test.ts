@@ -32,6 +32,7 @@ describe("OpenAPI spec", () => {
       "/runs/{id}/cancel",
       "/scheduled-jobs",
       "/scheduled-jobs/{id}",
+      "/tools/models",
       "/search",
       "/ws",
       "/openapi.json",
