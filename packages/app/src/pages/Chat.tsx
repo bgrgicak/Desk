@@ -82,6 +82,15 @@ export function Chat({ id, nav }: { id: string; nav: (r: Route) => void }) {
             prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
           );
         }
+      } else if (ev.type === "message.updated") {
+        const msg = ev.payload as Message;
+        if (msg.chatId === id) {
+          setMessages((prev) => {
+            const found = prev.some((m) => m.id === msg.id);
+            if (!found) return [...prev, msg];
+            return prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m));
+          });
+        }
       } else if (ev.type === "artifact.created") {
         const art = ev.payload as Artifact & { chatId?: string };
         if (art.chatId === id) {
