@@ -128,12 +128,14 @@ describe("WebSocket upgrade", () => {
     const received: Buffer[] = [];
     socket.on("data", (chunk: Buffer) => received.push(chunk));
 
-    // Broadcast an event to the connected user
+    // Broadcast an event to the connected user. RunSchema requires kind
+    // (discriminator for RUN_KINDS) so include it.
     broadcast(userId, {
       type: "run.state_changed",
       payload: {
         id: "run_test1",
         chatId: "chat_1",
+        kind: "immediate",
         state: "running",
       },
     });

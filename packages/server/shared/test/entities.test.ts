@@ -8,7 +8,6 @@ import {
   FileSchema,
   RunSchema,
   ScheduledJobSchema,
-  NoteSchema,
 } from "../src/index.js";
 
 function roundTrip<T>(schema: { parse: (v: unknown) => T }, data: unknown): T {
@@ -207,18 +206,22 @@ describe("ScheduledJobSchema", () => {
   });
 });
 
-describe("NoteSchema", () => {
-  const valid = { id: "note_abc", fileId: "fil_abc", chatId: "cht_abc", createdAt: now, summary: "A note" };
+describe("MessageContent note / ai_note_request", () => {
+  const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now };
 
-  it("parses a valid note", () => {
-    expect(NoteSchema.parse(valid)).toEqual(valid);
+  it("parses note content", () => {
+    const msg = { ...base, role: "agent", content: { type: "note", body: "Running summary of the chat." } };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("rejects missing summary", () => {
-    expect(() => NoteSchema.parse({ id: "note_abc", fileId: "fil_abc", chatId: "cht_abc", createdAt: now })).toThrow();
+  it("parses ai_note_request content", () => {
+    const msg = { ...base, role: "system", content: { type: "ai_note_request" } };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("round-trips through JSON", () => {
-    expect(roundTrip(NoteSchema, valid)).toEqual(valid);
+  it("rejects a note with non-string body", () => {
+    expect(() =>
+      MessageSchema.parse({ ...base, role: "agent", content: { type: "note", body: 123 } }),
+    ).toThrow();
   });
 });

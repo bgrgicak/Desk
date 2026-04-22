@@ -325,7 +325,39 @@ export function createRunManager(opts: RunManagerOptions) {
           });
         }
 
-        if (parsedEvents.length > 0) {
+        // ai_note runs produce a single `note`-content message (a coherent
+        // summary). Regular runs produce an `events` or `text` message.
+        const isAiNote = run.kind === "ai_note";
+
+        if (isAiNote) {
+          // For ai_note, synthesize a plain-text body from either the
+          // parsed events' last text part, the fake driver's plain lines,
+          // or the raw stdout. The agent is expected to emit markdown.
+          let body = "";
+          if (parsedEvents.length > 0) {
+            const lastText = parsedEvents
+              .map((e) => {
+                const part = e.part as { text?: string } | undefined;
+                return typeof part?.text === "string" ? part.text : "";
+              })
+              .filter((t) => t.length > 0)
+              .join("\n\n");
+            body = lastText;
+          }
+          if (!body) {
+            const allPlain = [...stderrChunks, ...plainLines];
+            body = allPlain.join("\n").trim() || fullStdout.trim();
+          }
+          if (body) {
+            const noteMsg = await queries.messages.insert(pool, {
+              id: generateId("message"),
+              chatId: run.chatId,
+              role: "agent",
+              content: { type: "note", body },
+            });
+            emit({ type: "message.appended", payload: noteMsg });
+          }
+        } else if (parsedEvents.length > 0) {
           // Store the full event array
           const assistantMsg = await queries.messages.insert(pool, {
             id: generateId("message"),

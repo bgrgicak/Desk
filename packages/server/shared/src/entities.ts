@@ -96,12 +96,35 @@ export const MessageContentEventsSchema = z.object({
   events: z.array(OpenCodeEventSchema),
 });
 
+/**
+ * A coherent narrative summary of a chat. Produced by scheduled ai_note
+ * runs and stored as a regular message in the chat timeline (no separate
+ * notes table). The user can edit it via PATCH on the message; the agent
+ * reads the most recent note to incorporate edits on the next refresh.
+ */
+export const MessageContentNoteSchema = z.object({
+  type: z.literal("note"),
+  body: z.string(),
+});
+
+/**
+ * Scheduled request for the agent to (re)generate the chat's note. Emitted
+ * as a pending system message; on fire the agent replaces it with a
+ * `note`-content child. Kept as its own content type so scheduled requests
+ * stay distinguishable from ordinary system messages in the chat log.
+ */
+export const MessageContentAiNoteRequestSchema = z.object({
+  type: z.literal("ai_note_request"),
+});
+
 export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentTextSchema,
   MessageContentToolCallSchema,
   MessageContentToolResultSchema,
   MessageContentArtifactRefSchema,
   MessageContentEventsSchema,
+  MessageContentNoteSchema,
+  MessageContentAiNoteRequestSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
@@ -214,11 +237,3 @@ export const SandboxSessionSchema = z.object({
 });
 export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 
-export const NoteSchema = z.object({
-  id: z.string(),
-  fileId: z.string(),
-  chatId: z.string(),
-  createdAt: z.string(),
-  summary: z.string(),
-});
-export type Note = z.infer<typeof NoteSchema>;

@@ -36,9 +36,21 @@ const fixtures: Record<string, WsEvent> = {
     type: "library.changed",
     payload: { workspaceId: "wks_abc", path: "library/a.txt", op: "added" },
   },
-  "note.created": {
-    type: "note.created",
-    payload: { id: "note_abc", fileId: "fil_abc", chatId: "cht_abc", createdAt: now, summary: "A note" },
+  "message.updated": {
+    type: "message.updated",
+    payload: {
+      id: "msg_abc",
+      chatId: "cht_abc",
+      role: "agent",
+      content: { type: "text", text: "hi" },
+      createdAt: now,
+      state: "running",
+      startedAt: now,
+    },
+  },
+  "message.log_appended": {
+    type: "message.log_appended",
+    payload: { messageId: "msg_abc", kind: "stdout", line: "hello from opencode" },
   },
 };
 

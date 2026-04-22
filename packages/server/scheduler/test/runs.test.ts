@@ -68,6 +68,13 @@ beforeAll(async () => {
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;
 
+  // Ensure the workspace agent membership exists (M3 invariant)
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    [workspaceId, agentId],
+  );
+
   chatId = generateId("chat");
   await pool.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
@@ -171,6 +178,42 @@ describe("createRunManager", () => {
     const cronJobs = await adapter.listCron();
     expect(cronJobs.length).toBe(1);
     expect(cronJobs[0].cronExpr).toBe("*/10 * * * *");
+  });
+
+  it("executeRun ai_note: produces a note-content message on success", async () => {
+    const adapter = createMemoryAdapter();
+
+    const mgr = createRunManager({
+      pool,
+      adapter,
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThis chat covered vacation plans." });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Directly create a run row with kind=ai_note so executeRun sees it
+    // as an ai_note and emits note-content. Bypasses the 30-min delay
+    // of the scheduled path.
+    const runId = generateId("run");
+    await pool.query(
+      `INSERT INTO runs (id, chat_id, kind, state) VALUES ($1, $2, 'ai_note', 'pending')`,
+      [runId, chatId],
+    );
+
+    await mgr.executeRun(runId, "Generate an AI note summarizing this chat conversation.");
+
+    const r = await queries.runs.findById(pool, runId);
+    expect(r?.state).toBe("succeeded");
+
+    const { items } = await queries.messages.listByChat(pool, chatId, { limit: 100 });
+    const noteMsg = items.find((m) => {
+      const c = m.content as { type?: string };
+      return c.type === "note";
+    });
+    expect(noteMsg, "Expected a note-content message in the chat").toBeDefined();
+    const content = noteMsg!.content as { type: "note"; body: string };
+    expect(content.body).toContain("vacation plans");
   });
 
   it("enqueueRun ai_note: cancels previous and schedules new", async () => {
