@@ -206,6 +206,7 @@ describe("Routes coverage (real Postgres)", () => {
   // ── 1. POST /me/password ─────────────────────────────────────────
   it("POST /me/password — new password works for login, old fails", async () => {
     const changeRes = await request("POST", "/me/password", token, {
+      currentPassword: "testpass",
       newPassword: "newpass123",
     });
     expect(changeRes.status).toBe(200);
@@ -227,7 +228,25 @@ describe("Routes coverage (real Postgres)", () => {
     expect(failLogin.status).toBe(401);
 
     // Restore original password for other tests
-    await request("POST", "/me/password", token, { newPassword: "testpass" });
+    await request("POST", "/me/password", token, {
+      currentPassword: "newpass123",
+      newPassword: "testpass",
+    });
+  });
+
+  it("POST /me/password — wrong current password returns 401 and does not change", async () => {
+    const badRes = await request("POST", "/me/password", token, {
+      currentPassword: "not-the-right-password",
+      newPassword: "should-not-apply",
+    });
+    expect(badRes.status).toBe(401);
+
+    // Login with original password still works
+    const okLogin = await request("POST", "/auth/login", undefined, {
+      username: "testuser",
+      password: "testpass",
+    });
+    expect(okLogin.status).toBe(200);
   });
 
   // ── 2. GET /workspaces/:id ────────────────────────────────────────
@@ -640,15 +659,16 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   // ── 13. GET /tools/models ─────────────────────────────────────────
-  it("GET /tools/models — returns models from the sandbox", async () => {
+  it("GET /tools/models — returns models; no agentId leaks into response", async () => {
     const res = await request("GET", "/tools/models", token);
     expect(res.status).toBe(200);
     const body = res.body as {
-      agentId: string;
       provider: string | null;
       models: Array<{ providerId: string; modelId: string; fullId: string }>;
     };
-    expect(body.agentId).toBe(agentId);
+    // Models are server-wide config — the internal sandbox/agent used to
+    // query opencode must not leak into the response.
+    expect(body).not.toHaveProperty("agentId");
     expect(body.provider).toBeNull();
     expect(body.models.length).toBeGreaterThan(0);
     // Fake sandbox driver returns at least one anthropic model

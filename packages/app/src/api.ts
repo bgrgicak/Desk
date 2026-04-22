@@ -50,16 +50,19 @@ export async function api<T = unknown>(
   const headers: Record<string, string> = {};
   if (_token) headers["Authorization"] = `Bearer ${_token}`;
 
-  let bodyStr: string | undefined;
-  if (opts.body !== undefined) {
+  let body: BodyInit | undefined;
+  if (opts.body instanceof FormData) {
+    // Let the browser set Content-Type with the multipart boundary.
+    body = opts.body;
+  } else if (opts.body !== undefined) {
     headers["Content-Type"] = "application/json";
-    bodyStr = JSON.stringify(opts.body);
+    body = JSON.stringify(opts.body);
   }
 
   const res = await fetch(`${_baseUrl}${path}`, {
     method: opts.method ?? "GET",
     headers,
-    body: bodyStr,
+    body,
   });
 
   let data: T;

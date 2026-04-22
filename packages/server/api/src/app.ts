@@ -1,7 +1,7 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
 import pg from "pg";
-import { DeskError, type WsEvent } from "@desk/shared";
+import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
 import { requireAuth } from "./auth/middleware.js";
@@ -36,19 +36,41 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(json);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readRawBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }
 
 async function parseBody(req: IncomingMessage): Promise<unknown> {
-  const raw = await readBody(req);
-  if (!raw) return {};
-  return JSON.parse(raw);
+  const raw = await readRawBody(req);
+  if (raw.length === 0) return {};
+  return JSON.parse(raw.toString());
+}
+
+/**
+ * Parses a multipart/form-data body using Node's built-in Fetch API.
+ * Returns a FormData instance; callers pull out parts by field name.
+ */
+async function parseMultipart(req: IncomingMessage): Promise<FormData> {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    throw new ValidationError("Expected multipart/form-data body");
+  }
+  const body = await readRawBody(req);
+  const r = new Request("http://localhost/", {
+    method: "POST",
+    headers: { "content-type": contentType },
+    body: new Blob([new Uint8Array(body)]),
+  });
+  try {
+    return await r.formData();
+  } catch {
+    throw new ValidationError("Malformed multipart body");
+  }
 }
 
 type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: RouteParams) => Promise<void>;
@@ -233,7 +255,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/password" && method === "POST") {
-      const body = await parseBody(req) as { newPassword: string };
+      const body = await parseBody(req) as { currentPassword: string; newPassword: string };
       const result = await accountRoutes.changePassword(pool, userId, body);
       sendJson(res, 200, result);
       return;
@@ -339,8 +361,20 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "POST") {
-      const body = await parseBody(req) as { name: string; mime: string; contentBase64: string };
-      const result = await chatRoutes.uploadArtifactToChat(storage, segments[1], body, emitEvent);
+      const form = await parseMultipart(req);
+      const part = form.get("file");
+      if (!(part instanceof Blob)) {
+        throw new ValidationError("Missing 'file' part in multipart body");
+      }
+      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
+      const mime = part.type || "application/octet-stream";
+      const content = Buffer.from(await part.arrayBuffer());
+      const result = await chatRoutes.uploadArtifactToChat(
+        storage,
+        segments[1],
+        { name, mime, content },
+        emitEvent,
+      );
       sendJson(res, 201, result);
       return;
     }
@@ -431,7 +465,6 @@ export function createApp(opts: AppOptions): Server {
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {
       const result = await toolRoutes.listModels(pool, {
-        agentId: query.get("agentId") ?? undefined,
         provider: query.get("provider") ?? undefined,
       });
       sendJson(res, 200, result);

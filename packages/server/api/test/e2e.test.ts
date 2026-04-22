@@ -145,6 +145,55 @@ function request(
   });
 }
 
+function requestMultipart(
+  method: string,
+  urlPath: string,
+  token: string,
+  parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const boundary = `----desk-test-${crypto.randomBytes(8).toString("hex")}`;
+    const chunks: Buffer[] = [];
+    for (const p of parts) {
+      const header = [`--${boundary}`];
+      const disposition = p.filename
+        ? `Content-Disposition: form-data; name="${p.name}"; filename="${p.filename}"`
+        : `Content-Disposition: form-data; name="${p.name}"`;
+      header.push(disposition);
+      if (p.contentType) header.push(`Content-Type: ${p.contentType}`);
+      header.push("", "");
+      chunks.push(Buffer.from(header.join("\r\n")));
+      chunks.push(p.body);
+      chunks.push(Buffer.from("\r\n"));
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    const payload = Buffer.concat(chunks);
+
+    const headers: Record<string, string> = {
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(payload.length),
+      Authorization: `Bearer ${token}`,
+    };
+
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: urlPath, method, headers },
+      (res) => {
+        const bufs: Buffer[] = [];
+        res.on("data", (c: Buffer) => bufs.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(bufs).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 function rawUpgrade(
   urlPath: string,
 ): Promise<{ response: string; socket: net.Socket }> {
@@ -351,18 +400,26 @@ describe("API e2e (real Postgres)", () => {
     const chat = chatRes.body as { id: string };
 
     const content = "hello artifact world";
-    const contentBase64 = Buffer.from(content).toString("base64");
 
-    // Upload artifact to chat
-    const uploadRes = await request("POST", `/chats/${chat.id}/artifacts`, token, {
-      name: "round-trip.txt",
-      mime: "text/plain",
-      contentBase64,
-    });
+    // Upload artifact to chat via multipart/form-data
+    const uploadRes = await requestMultipart(
+      "POST",
+      `/chats/${chat.id}/artifacts`,
+      token,
+      [
+        {
+          name: "file",
+          filename: "round-trip.txt",
+          contentType: "text/plain",
+          body: Buffer.from(content),
+        },
+      ],
+    );
     expect(uploadRes.status).toBe(201);
-    const chatFile = uploadRes.body as { id: string; name: string; class: string };
+    const chatFile = uploadRes.body as { id: string; name: string; class: string; mime: string };
     expect(chatFile.id).toMatch(/^fil_/);
     expect(chatFile.name).toBe("round-trip.txt");
+    expect(chatFile.mime).toBe("text/plain");
 
     // Chat artifact appears in chat artifacts list
     const chatArtRes = await request("GET", `/chats/${chat.id}/artifacts`, token);
@@ -370,11 +427,11 @@ describe("API e2e (real Postgres)", () => {
     const chatArts = chatArtRes.body as Array<{ id: string }>;
     expect(chatArts.some((a) => a.id === chatFile.id)).toBe(true);
 
-    // Upload directly to library
+    // Upload directly to library (still JSON + base64 for now)
     const libUploadRes = await request("POST", "/library", token, {
       name: "lib-round-trip.txt",
       mime: "text/plain",
-      contentBase64,
+      contentBase64: Buffer.from(content).toString("base64"),
     });
     expect(libUploadRes.status).toBe(201);
     const libFile = libUploadRes.body as { id: string; name: string };
@@ -408,6 +465,49 @@ describe("API e2e (real Postgres)", () => {
     expect(meta.id).toBe(libFile.id);
   });
 
+  it("POST /chats/:id/artifacts rejects JSON body with 400", async () => {
+    const wsRes = await request("GET", "/workspaces", token);
+    const workspaces = wsRes.body as Array<{ id: string }>;
+    const agentsRes = await request("GET", "/agents", token);
+    const agents = agentsRes.body as Array<{ id: string }>;
+
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId: workspaces[0].id,
+      agentId: agents[0].id,
+      title: "Multipart Only Chat",
+    });
+    const chat = chatRes.body as { id: string };
+
+    const res = await request("POST", `/chats/${chat.id}/artifacts`, token, {
+      name: "x.txt",
+      mime: "text/plain",
+      contentBase64: Buffer.from("hi").toString("base64"),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /chats/:id/artifacts returns 400 when 'file' part is missing", async () => {
+    const wsRes = await request("GET", "/workspaces", token);
+    const workspaces = wsRes.body as Array<{ id: string }>;
+    const agentsRes = await request("GET", "/agents", token);
+    const agents = agentsRes.body as Array<{ id: string }>;
+
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId: workspaces[0].id,
+      agentId: agents[0].id,
+      title: "Missing File Chat",
+    });
+    const chat = chatRes.body as { id: string };
+
+    const res = await requestMultipart(
+      "POST",
+      `/chats/${chat.id}/artifacts`,
+      token,
+      [{ name: "notfile", body: Buffer.from("oops") }],
+    );
+    expect(res.status).toBe(400);
+  });
+
   // Gap 6: Fuzzy search returns uploaded artifact and chat
   it("fuzzy search returns known artifact and chat IDs", async () => {
     const wsRes = await request("GET", "/workspaces", token);
@@ -422,11 +522,19 @@ describe("API e2e (real Postgres)", () => {
     });
     const chat = chatRes.body as { id: string };
 
-    const uploadRes = await request("POST", `/chats/${chat.id}/artifacts`, token, {
-      name: "SearchableArtifactName.txt",
-      mime: "text/plain",
-      contentBase64: Buffer.from("data").toString("base64"),
-    });
+    const uploadRes = await requestMultipart(
+      "POST",
+      `/chats/${chat.id}/artifacts`,
+      token,
+      [
+        {
+          name: "file",
+          filename: "SearchableArtifactName.txt",
+          contentType: "text/plain",
+          body: Buffer.from("data"),
+        },
+      ],
+    );
     const file = (uploadRes.body as { id: string });
 
     // Search artifacts

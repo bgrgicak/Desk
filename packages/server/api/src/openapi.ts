@@ -97,8 +97,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/me/password": {
         post: {
           summary: "Change password",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { newPassword: { type: "string" } }, required: ["newPassword"] } } } },
-          responses: { "200": { description: "OK" } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { currentPassword: { type: "string" }, newPassword: { type: "string" } }, required: ["currentPassword", "newPassword"] } } } },
+          responses: { "200": { description: "OK" }, "401": { description: "Current password is incorrect" } },
         },
       },
       "/workspaces": {
@@ -146,9 +146,23 @@ export function generateOpenApiSpec(): OpenApiSpec {
         get: { summary: "List chat artifacts", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File array" } } },
         post: {
           summary: "Upload artifact to chat",
+          description: "Accepts multipart/form-data with a single 'file' part. The part's filename and Content-Type become the artifact's name and MIME.",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, mime: { type: "string" }, contentBase64: { type: "string" } }, required: ["name", "mime", "contentBase64"] } } } },
-          responses: { "201": { description: "Created file" } },
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    file: { type: "string", format: "binary" },
+                  },
+                  required: ["file"],
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "Created file" }, "400": { description: "Missing or malformed multipart body" } },
         },
       },
       "/library": {
@@ -202,10 +216,9 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/tools/models": {
         get: {
-          summary: "List AI models available inside the agent's sandbox",
-          description: "Executes `opencode models` inside the sandbox and returns parsed provider/model pairs. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          summary: "List AI models that are ready to use",
+          description: "Returns the set of models reachable with currently configured provider credentials (server-wide, not agent-scoped). Every returned model is ready — opencode only surfaces models for providers whose API key is present in the sandbox env. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
           parameters: [
-            { name: "agentId", in: "query", schema: { type: "string" }, description: "Target agent. Defaults to the first registered agent." },
             { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"anthropic\"." },
           ],
           responses: {
@@ -216,7 +229,6 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   schema: {
                     type: "object",
                     properties: {
-                      agentId: { type: "string" },
                       provider: { type: ["string", "null"] },
                       models: {
                         type: "array",
@@ -231,13 +243,13 @@ export function generateOpenApiSpec(): OpenApiSpec {
                         },
                       },
                     },
-                    required: ["agentId", "provider", "models"],
+                    required: ["provider", "models"],
                   },
                 },
               },
             },
             "400": { description: "Sandbox rejected the listing" },
-            "404": { description: "Agent not found" },
+            "404": { description: "No sandbox available" },
           },
         },
       },

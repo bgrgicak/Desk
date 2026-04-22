@@ -115,11 +115,11 @@ export function Chat({ id, nav }: { id: string; nav: (r: Route) => void }) {
     const fileInput = form.elements.namedItem("file") as HTMLInputElement;
     const file = fileInput?.files?.[0];
     if (!file) return;
-    const buf = await file.arrayBuffer();
-    const contentBase64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const fd = new FormData();
+    fd.append("file", file, file.name);
     await api(`/chats/${id}/artifacts`, {
       method: "POST",
-      body: { name: file.name, mime: file.type || "application/octet-stream", contentBase64 },
+      body: fd,
     });
     form.reset();
   }

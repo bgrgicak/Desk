@@ -68,20 +68,19 @@ export async function listArtifacts(pool: pg.Pool, chatId: string) {
 }
 
 /**
- * Upload an artifact to a chat via base64 body.
+ * Upload an artifact to a chat from a raw byte buffer.
  * Streams through @desk/storage.uploadArtifact with chatId context.
  */
 export async function uploadArtifactToChat(
   storage: StorageContext,
   chatId: string,
-  data: { name: string; mime: string; contentBase64: string },
+  data: { name: string; mime: string; content: Buffer },
   emit: (event: WsEvent) => void,
 ) {
   const chat = await queries.chats.findById(storage.pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
-  const buf = Buffer.from(data.contentBase64, "base64");
-  const stream = Readable.from(buf);
+  const stream = Readable.from(data.content);
 
   const file = await uploadArtifact(storage, {
     workspaceId: chat.workspaceId,

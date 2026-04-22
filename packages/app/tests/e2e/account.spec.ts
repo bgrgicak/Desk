@@ -24,14 +24,26 @@ test.describe("Account", () => {
     await page.getByRole("button", { name: "Account" }).click();
 
     // Change password
+    await page.getByLabel("Current password").fill("testpass");
     await page.getByLabel("New password").fill("newpass123");
     await page.getByRole("button", { name: "Change password" }).click();
     await expect(page.getByText("Password changed")).toBeVisible();
 
     // Change it back so other tests still work
+    await page.getByLabel("Current password").fill("newpass123");
     await page.getByLabel("New password").fill("testpass");
     await page.getByRole("button", { name: "Change password" }).click();
     await expect(page.getByText("Password changed")).toBeVisible();
+  });
+
+  test("change password rejects wrong current password", async ({ login, page }) => {
+    await login();
+    await page.getByRole("button", { name: "Account" }).click();
+
+    await page.getByLabel("Current password").fill("wrong-password");
+    await page.getByLabel("New password").fill("newpass123");
+    await page.getByRole("button", { name: "Change password" }).click();
+    await expect(page.getByText("Current password is incorrect")).toBeVisible();
   });
 
   test("logout returns to login form", async ({ login, page }) => {

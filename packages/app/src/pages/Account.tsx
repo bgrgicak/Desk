@@ -18,6 +18,7 @@ export function Account({ onLogout }: { onLogout: () => void }) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [avatarPath, setAvatarPath] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -45,7 +46,15 @@ export function Account({ onLogout }: { onLogout: () => void }) {
 
   async function handlePassword(e: React.FormEvent) {
     e.preventDefault();
-    await api("/me/password", { method: "POST", body: { newPassword } });
+    const res = await api("/me/password", {
+      method: "POST",
+      body: { currentPassword, newPassword },
+    });
+    if (res.status === 401) {
+      setMsg("Current password is incorrect.");
+      return;
+    }
+    setCurrentPassword("");
     setNewPassword("");
     setMsg("Password changed.");
   }
@@ -97,6 +106,15 @@ export function Account({ onLogout }: { onLogout: () => void }) {
 
       <h3>Change password</h3>
       <form onSubmit={handlePassword}>
+        <label>
+          Current password
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            required
+          />
+        </label>
         <label>
           New password
           <input

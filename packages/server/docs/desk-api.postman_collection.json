@@ -98,7 +98,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"newPassword\": \"new-password\"\n}"
+              "raw": "{\n  \"currentPassword\": \"testpass\",\n  \"newPassword\": \"new-password\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/me/password", "host": ["{{baseUrl}}"], "path": ["me", "password"] }
           }
@@ -298,10 +298,11 @@
           "name": "POST /chats/:id/artifacts",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"note.txt\",\n  \"mime\": \"text/plain\",\n  \"contentBase64\": \"aGVsbG8gd29ybGQ=\"\n}"
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] }
+              ]
             },
             "url": {
               "raw": "{{baseUrl}}/chats/{{chatId}}/artifacts",
@@ -498,13 +499,12 @@
           "name": "GET /tools/models",
           "request": {
             "method": "GET",
-            "description": "Runs `opencode models` inside the target agent's sandbox and returns parsed provider/model pairs. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+            "description": "Lists AI models that are ready to use — every entry is a provider opencode has authenticated inside the sandbox via a host-forwarded API key. Server-wide, not agent-scoped. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
             "url": {
               "raw": "{{baseUrl}}/tools/models?provider=anthropic",
               "host": ["{{baseUrl}}"],
               "path": ["tools", "models"],
               "query": [
-                { "key": "agentId", "value": "", "description": "Target agent. Defaults to the first registered agent.", "disabled": true },
                 { "key": "provider", "value": "anthropic", "description": "Restrict to a single provider id, e.g. anthropic." }
               ]
             }

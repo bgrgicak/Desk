@@ -66,7 +66,18 @@ Only `name` is required. `description` and `icon` default to empty strings.
 | GET    | /chats/{id}/messages      | List messages             |
 | POST   | /chats/{id}/messages      | Send message              |
 | GET    | /chats/{id}/artifacts     | List chat artifacts       |
-| POST   | /chats/{id}/artifacts     | Upload artifact to chat   |
+| POST   | /chats/{id}/artifacts     | Upload artifact to chat (multipart/form-data) |
+
+### POST /chats/{id}/artifacts
+
+Accepts `multipart/form-data` with a single part named `file`. The part's
+filename and `Content-Type` become the artifact's name and MIME. Returns
+`201 Created` with the file record.
+
+### POST /me/password
+
+Accepts `{ currentPassword, newPassword }`. Returns `401 Unauthorized`
+if `currentPassword` does not match.
 
 ## Library
 
@@ -100,26 +111,27 @@ Only `name` is required. `description` and `icon` default to empty strings.
 
 | Method | Path           | Description                                                |
 |--------|----------------|------------------------------------------------------------|
-| GET    | /tools/models  | List AI models available inside the agent's sandbox        |
+| GET    | /tools/models  | List AI models that are ready to use (authenticated providers) |
 
 ### GET /tools/models
 
-Runs `opencode models` inside the target agent's warm sandbox and returns the
-parsed `provider/model` pairs. This is the foundation of host-initiated
-sandboxed tool calling described in [ARCHITECTURE.md §7](./ARCHITECTURE.md).
-The sandbox is the source of truth for model availability because provider
-credentials and OpenCode configuration live inside it.
+Returns AI models that are ready to use — every entry is a provider opencode
+has authenticated inside the sandbox via a host-forwarded API key. Models are
+server-wide (governed by the keys in `/etc/desk-server/env`), not agent-scoped.
+
+Foundation of host-initiated sandboxed tool calling described in
+[ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `opencode models`
+in a warm sandbox because opencode is the source of truth for what's
+authenticated.
 
 **Query parameters:**
 
-- `agentId` (optional) — defaults to the first registered agent
 - `provider` (optional) — restrict to a single provider, e.g. `anthropic`
 
 **Response:**
 
 ```json
 {
-  "agentId": "agt_abc",
   "provider": "anthropic",
   "models": [
     { "providerId": "anthropic", "modelId": "claude-opus-4-7", "fullId": "anthropic/claude-opus-4-7" }
