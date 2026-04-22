@@ -4,12 +4,30 @@ import { useApi, cacheInvalidate } from "../store";
 import { useDispatch } from "react-redux";
 import { parseSchedule } from "../parseSchedule";
 
+interface JobSpec {
+  type: string;
+  onceAt?: string;
+  cronExpr?: string;
+}
+
 interface ScheduledJob {
   id: string;
   kind: string;
-  spec: { type: "once"; onceAt: string } | { type: "recurring"; cronExpr: string };
+  spec: JobSpec;
   chatId?: string;
   active: boolean;
+}
+
+function formatSpec(spec: JobSpec): string {
+  if (spec.type === "once" && spec.onceAt) return spec.onceAt;
+  if (spec.type === "recurring" && spec.cronExpr) return spec.cronExpr;
+  return spec.type;
+}
+
+function formatKind(kind: string): string {
+  if (kind === "once") return "One-time";
+  if (kind === "recurring") return "Recurring";
+  return kind;
 }
 
 export function Scheduled() {
@@ -20,12 +38,6 @@ export function Scheduled() {
   const [prompt, setPrompt] = useState("");
   const [chatId, setChatId] = useState("");
   const [parseError, setParseError] = useState("");
-
-  function formatSpec(job: ScheduledJob): string {
-    if (job.spec.type === "once") return job.spec.onceAt;
-    if (job.spec.type === "recurring") return job.spec.cronExpr;
-    return JSON.stringify(job.spec);
-  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -60,7 +72,7 @@ export function Scheduled() {
           <label>
             Mode
             <select value={mode} onChange={(e) => setMode(e.target.value as "scheduled" | "recurring")}>
-              <option value="scheduled">Scheduled</option>
+              <option value="scheduled">One-time</option>
               <option value="recurring">Recurring</option>
             </select>
           </label>
@@ -71,7 +83,8 @@ export function Scheduled() {
             <input
               value={when}
               onChange={(e) => { setWhen(e.target.value); setParseError(""); }}
-              placeholder={mode === "scheduled" ? 'e.g. "in 5 minutes", "tomorrow at 9am"' : 'e.g. "every monday at 9", "every 30 minutes"'}
+              placeholder={mode === "scheduled" ? "in 5 minutes, tomorrow at 9am" : "every monday at 9, every 30 minutes"}
+              style={{ minWidth: 300 }}
               required
             />
           </label>
@@ -80,40 +93,55 @@ export function Scheduled() {
         <div>
           <label>
             Prompt
-            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={'e.g. "Summarize today\'s emails"'} required />
+            <input
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Summarize today's emails"
+              style={{ minWidth: 300 }}
+              required
+            />
           </label>
         </div>
         <div>
           <label>
             Chat ID (optional)
-            <input value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="Leave empty for a standalone run" />
+            <input
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+              placeholder="Leave empty for a standalone run"
+              style={{ minWidth: 300 }}
+            />
           </label>
         </div>
         <button type="submit">Create job</button>
       </form>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Job ID</th>
-            <th>Type</th>
-            <th>When</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {jobList.map((j) => (
-            <tr key={j.id}>
-              <td>{j.id.slice(0, 8)}</td>
-              <td>{j.kind}</td>
-              <td>{formatSpec(j)}</td>
-              <td>
-                <button onClick={() => handleCancel(j.id)}>Cancel</button>
-              </td>
+      {jobList.length === 0 ? (
+        <p>No scheduled jobs.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Type</th>
+              <th>When</th>
+              <th>Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {jobList.map((j) => (
+              <tr key={j.id}>
+                <td>{j.id.slice(0, 12)}</td>
+                <td>{formatKind(j.kind)}</td>
+                <td>{formatSpec(j.spec)}</td>
+                <td>
+                  <button onClick={() => handleCancel(j.id)}>Cancel</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

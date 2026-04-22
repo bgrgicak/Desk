@@ -24,7 +24,7 @@ test.describe("Scheduled Jobs", () => {
     await expect(page.getByLabel("Prompt")).toHaveValue("");
 
     // The new job should appear in the table
-    await expect(page.getByRole("cell", { name: "once" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "One-time" })).toBeVisible();
     await expect(page.getByText("now + 5 minutes")).toBeVisible();
   });
 
