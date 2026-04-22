@@ -1,4 +1,4 @@
-export { createOrReuse, stopSandbox, ensureImage } from "./docker.js";
+export { createOrReuse, stopSandbox, ensureImage, dockerSocketPath } from "./docker.js";
 export type { SandboxHandle } from "./docker.js";
 export { projectMounts, teardownMounts, activeRunCount, containerBinds, sandboxMountRoot } from "./mounts.js";
 export type { MountSet } from "./mounts.js";

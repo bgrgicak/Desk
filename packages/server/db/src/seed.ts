@@ -28,10 +28,11 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
     );
 
     await client.query(
-      `INSERT INTO agents (id, name, instructions, model, tool_allowlist)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO agents (id, user_id, name, instructions, model, tool_allowlist)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
       [
         agentId,
+        userId,
         "Desk",
         "You are Desk, a helpful AI assistant.",
         "anthropic/claude-sonnet-4-20250514",
@@ -43,6 +44,12 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
       `INSERT INTO workspaces (id, user_id, name)
        VALUES ($1, $2, $3)`,
       [workspaceId, userId, "Desk"],
+    );
+
+    await client.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+       VALUES ($1, $2, true)`,
+      [workspaceId, agentId],
     );
 
     await client.query("COMMIT");

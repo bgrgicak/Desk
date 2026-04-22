@@ -14,7 +14,7 @@ import {
 import type { SandboxHandle } from "../src/docker.js";
 
 let home: string;
-const handle: SandboxHandle = { containerId: "fake-container", agentId: "agt_test123" };
+const handle: SandboxHandle = { containerId: "fake-container", workspaceId: "wks_test123" };
 
 beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-mount-test-"));
@@ -35,7 +35,7 @@ describe("mounts", () => {
 
     expect(mounts.files).toBe(filesDir(home));
     expect(mounts.library).toBe(libraryDir(home));
-    expect(mounts.desktop).toBe(desktopDir(home, handle.agentId));
+    expect(mounts.desktop).toBe(desktopDir(home, handle.workspaceId));
     expect(mounts.attachments).toBeUndefined();
     expect(mounts.attachmentsInSandbox).toBeUndefined();
   });
@@ -55,12 +55,12 @@ describe("mounts", () => {
   });
 
   it("projectMounts creates the desktop scratch dir on disk", async () => {
-    const stat = await fs.stat(desktopDir(home, handle.agentId));
+    const stat = await fs.stat(desktopDir(home, handle.workspaceId));
     expect(stat.isDirectory()).toBe(true);
   });
 
   it("projectMounts writes a manifest with host + in-sandbox paths", async () => {
-    const root = sandboxMountRoot(home, handle.agentId);
+    const root = sandboxMountRoot(home, handle.workspaceId);
     const raw = await fs.readFile(path.join(root, "manifest-run_mount1.json"), "utf-8");
     const manifest = JSON.parse(raw);
     expect(manifest.runId).toBe("run_mount1");
@@ -71,38 +71,38 @@ describe("mounts", () => {
   });
 
   it("containerBinds binds the real workspace dirs read-only + desktop read-write", () => {
-    const binds = containerBinds(home, "agt_test_binds");
+    const binds = containerBinds(home, "wks_test_binds");
     expect(binds).toEqual([
       `${filesDir(home)}:/mnt/desk/files:ro`,
       `${libraryDir(home)}:/mnt/desk/library:ro`,
       `${chatsDir(home)}:/mnt/desk/chats:ro`,
-      `${desktopDir(home, "agt_test_binds")}:/mnt/desk/desktop:rw`,
+      `${desktopDir(home, "wks_test_binds")}:/mnt/desk/desktop:rw`,
     ]);
   });
 
   it("activeRunCount tracks runs correctly", async () => {
-    const testHandle: SandboxHandle = { containerId: "fake-2", agentId: "agt_count_test" };
+    const testHandle: SandboxHandle = { containerId: "fake-2", workspaceId: "wks_count_test" };
 
-    expect(activeRunCount("agt_count_test")).toBe(0);
+    expect(activeRunCount("wks_count_test")).toBe(0);
 
     await projectMounts(testHandle, {
       home,
-      workspaceId: "wks_test",
+      workspaceId: "wks_count_test",
       runId: "run_count1",
     });
-    expect(activeRunCount("agt_count_test")).toBe(1);
+    expect(activeRunCount("wks_count_test")).toBe(1);
 
     await projectMounts(testHandle, {
       home,
-      workspaceId: "wks_test",
+      workspaceId: "wks_count_test",
       runId: "run_count2",
     });
-    expect(activeRunCount("agt_count_test")).toBe(2);
+    expect(activeRunCount("wks_count_test")).toBe(2);
 
     await teardownMounts(testHandle, "run_count1");
-    expect(activeRunCount("agt_count_test")).toBe(1);
+    expect(activeRunCount("wks_count_test")).toBe(1);
 
     await teardownMounts(testHandle, "run_count2");
-    expect(activeRunCount("agt_count_test")).toBe(0);
+    expect(activeRunCount("wks_count_test")).toBe(0);
   });
 });

@@ -39,7 +39,8 @@ export function dockerSocketPath(): string {
 
 export interface SandboxHandle {
   containerId: string;
-  agentId: string;
+  /** Workspace this sandbox belongs to. One sandbox per workspace; any of the workspace's agents can exec through it. */
+  workspaceId: string;
 }
 
 /**
@@ -60,25 +61,25 @@ export async function ensureImage(): Promise<void> {
 }
 
 /**
- * Creates or reuses a sandbox container for an agent.
- * The container gets /mnt/desk bind-mounted from the per-sandbox staging dir.
+ * Creates or reuses a sandbox container for a workspace. One container per
+ * workspace, any agent enrolled in the workspace execs through it.
  *
  * `providerKeys` is an optional map of AI-provider credentials to inject as
  * env vars. When omitted the function falls back to reading the host env —
  * that legacy path is what tests without DB access use.
  */
 export async function createOrReuse(
-  agentId: string,
+  workspaceId: string,
   home?: string,
   providerKeys?: Record<string, string>,
 ): Promise<SandboxHandle> {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
-    return { containerId: `fake-${agentId}`, agentId };
+    return { containerId: `fake-${workspaceId}`, workspaceId };
   }
 
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
-  const containerName = `desk-sandbox-${agentId}`;
+  const containerName = `desk-sandbox-${workspaceId}`;
 
   try {
     const container = docker.getContainer(containerName);
@@ -86,7 +87,7 @@ export async function createOrReuse(
     if (!info.State.Running) {
       await container.start();
     }
-    return { containerId: info.Id, agentId };
+    return { containerId: info.Id, workspaceId };
   } catch {
     const deskHome = home ?? process.env.DESK_HOME ?? "/opt/desk";
 
@@ -96,11 +97,11 @@ export async function createOrReuse(
     await fs.mkdir(filesDir(deskHome), { recursive: true });
     await fs.mkdir(libraryDir(deskHome), { recursive: true });
     await fs.mkdir(chatsDir(deskHome), { recursive: true });
-    await fs.mkdir(desktopDir(deskHome, agentId), { recursive: true });
+    await fs.mkdir(desktopDir(deskHome, workspaceId), { recursive: true });
 
     const toolSocket = process.env.DESK_TOOL_SOCKET;
     const binds = [
-      ...containerBinds(deskHome, agentId),
+      ...containerBinds(deskHome, workspaceId),
       // Only mount the tool socket when it actually exists on the host. Binding
       // a non-existent path makes Docker create an empty directory there,
       // which then confuses the sandbox CLI. With the socket absent, the
@@ -123,7 +124,7 @@ export async function createOrReuse(
     });
     await container.start();
     const info = await container.inspect();
-    return { containerId: info.Id, agentId };
+    return { containerId: info.Id, workspaceId };
   }
 }
 

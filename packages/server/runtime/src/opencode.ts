@@ -26,7 +26,9 @@ export async function execRun(
   handle: SandboxHandle,
   opts: ExecRunOptions,
 ): Promise<ExecResult> {
-  const { token, session } = await mintToken(pool, handle.agentId, { runId: opts.runId });
+  // Session identifies the agent (not the workspace) so tool auth knows
+  // which agent is asking.
+  const { session } = await mintToken(pool, opts.agent.agentId, { runId: opts.runId });
 
   // Project mounts and get the resolved MountSet so we can tell the agent
   // where to look for files inside the sandbox.
@@ -50,7 +52,7 @@ export async function execRun(
 
   try {
     const driver = createDriver();
-    const result = await driver.execRun(handle.agentId, {
+    const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
       chatContext,

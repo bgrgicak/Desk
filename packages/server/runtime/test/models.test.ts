@@ -11,16 +11,16 @@ describe("parseModelsOutput", () => {
       "anthropic/claude-opus-4-7\nopenai/gpt-5\n  \nopencode/big-pickle\n",
     );
     expect(out).toEqual([
-      { providerId: "anthropic", modelId: "claude-opus-4-7", fullId: "anthropic/claude-opus-4-7" },
-      { providerId: "openai", modelId: "gpt-5", fullId: "openai/gpt-5" },
-      { providerId: "opencode", modelId: "big-pickle", fullId: "opencode/big-pickle" },
+      { id: "anthropic/claude-opus-4-7", provider: "anthropic" },
+      { id: "openai/gpt-5", provider: "openai" },
+      { id: "opencode/big-pickle", provider: "opencode" },
     ]);
   });
 
   it("ignores blank lines and malformed entries", () => {
     const out = parseModelsOutput("\nnoslash\n/justmodel\nprovider/\nok/yes");
     expect(out).toEqual([
-      { providerId: "ok", modelId: "yes", fullId: "ok/yes" },
+      { id: "ok/yes", provider: "ok" },
     ]);
   });
 });
@@ -29,12 +29,13 @@ describe("listModels (fake sandbox)", () => {
   it("returns a non-empty model list", async () => {
     const models = await listModels("agt_test");
     expect(models.length).toBeGreaterThan(0);
-    expect(models[0].fullId.includes("/")).toBe(true);
+    expect(models[0].id.includes("/")).toBe(true);
+    expect(models[0].provider).toBe(models[0].id.split("/")[0]);
   });
 
   it("filters by provider", async () => {
     const models = await listModels("agt_test", { provider: "anthropic" });
     expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.providerId === "anthropic")).toBe(true);
+    expect(models.every((m) => m.provider === "anthropic")).toBe(true);
   });
 });

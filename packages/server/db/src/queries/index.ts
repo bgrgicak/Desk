@@ -9,3 +9,4 @@ export * as runEvents from "./runEvents.js";
 export * as scheduledJobs from "./scheduledJobs.js";
 export * as sandboxSessions from "./sandboxSessions.js";
 export * as userSettings from "./userSettings.js";
+export * as workspaceAgents from "./workspaceAgents.js";

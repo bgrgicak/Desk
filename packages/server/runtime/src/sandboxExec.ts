@@ -38,18 +38,18 @@ export interface ExecInSandboxResult {
 }
 
 /**
- * Runs a command inside the agent's sandbox and returns captured output.
+ * Runs a command inside the workspace's sandbox and returns captured output.
  * Creates or reuses the warm sandbox container on demand.
  */
 export async function execInSandbox(
-  agentId: string,
+  workspaceId: string,
   opts: ExecInSandboxOptions,
 ): Promise<ExecInSandboxResult> {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
     return fakeExecInSandbox(opts);
   }
 
-  const handle = await createOrReuse(agentId, undefined, opts.providerKeys);
+  const handle = await createOrReuse(workspaceId, undefined, opts.providerKeys);
 
   const { dockerSocketPath } = await import("./docker.js");
   const Docker = (await import("dockerode")).default;

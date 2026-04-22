@@ -43,14 +43,14 @@ export interface MountSet {
   attachmentsInSandbox?: string;
 }
 
-/** Host path of the per-sandbox mount root (currently only contains `desktop/`). */
-export function sandboxMountRoot(home: string, agentId: string): string {
-  return path.join(home, "sandbox-mounts", agentId);
+/** Host path of the per-sandbox mount root. Keyed by workspace. */
+export function sandboxMountRoot(home: string, workspaceId: string): string {
+  return path.join(home, "sandbox-mounts", workspaceId);
 }
 
 /** Host path of a sandbox's desktop scratch dir. */
-export function desktopDir(home: string, agentId: string): string {
-  return path.join(sandboxMountRoot(home, agentId), "desktop");
+export function desktopDir(home: string, workspaceId: string): string {
+  return path.join(sandboxMountRoot(home, workspaceId), "desktop");
 }
 
 /**
@@ -65,7 +65,7 @@ export async function projectMounts(
 ): Promise<MountSet> {
   const fHost = filesDir(opts.home);
   const lHost = libraryDir(opts.home);
-  const dHost = desktopDir(opts.home, handle.agentId);
+  const dHost = desktopDir(opts.home, handle.workspaceId);
 
   // Ensure every real source dir exists so the bind-mount has something to
   // show (an empty parent dir is fine; Docker is happy).
@@ -99,16 +99,16 @@ export async function projectMounts(
       attachments: mountSet.attachmentsInSandbox ?? null,
     },
   };
-  await fs.mkdir(sandboxMountRoot(opts.home, handle.agentId), { recursive: true });
+  await fs.mkdir(sandboxMountRoot(opts.home, handle.workspaceId), { recursive: true });
   await fs.writeFile(
-    path.join(sandboxMountRoot(opts.home, handle.agentId), `manifest-${opts.runId}.json`),
+    path.join(sandboxMountRoot(opts.home, handle.workspaceId), `manifest-${opts.runId}.json`),
     JSON.stringify(manifest, null, 2),
   );
 
-  if (!activeMounts.has(handle.agentId)) {
-    activeMounts.set(handle.agentId, new Map());
+  if (!activeMounts.has(handle.workspaceId)) {
+    activeMounts.set(handle.workspaceId, new Map());
   }
-  activeMounts.get(handle.agentId)!.set(opts.runId, mountSet);
+  activeMounts.get(handle.workspaceId)!.set(opts.runId, mountSet);
 
   return mountSet;
 }
@@ -118,18 +118,18 @@ export async function teardownMounts(
   handle: SandboxHandle,
   runId: string,
 ): Promise<void> {
-  const agentMounts = activeMounts.get(handle.agentId);
-  if (agentMounts) {
-    agentMounts.delete(runId);
-    if (agentMounts.size === 0) {
-      activeMounts.delete(handle.agentId);
+  const wsMounts = activeMounts.get(handle.workspaceId);
+  if (wsMounts) {
+    wsMounts.delete(runId);
+    if (wsMounts.size === 0) {
+      activeMounts.delete(handle.workspaceId);
     }
   }
 }
 
 /** Number of in-flight runs for the sandbox (used to gate teardown). */
-export function activeRunCount(agentId: string): number {
-  return activeMounts.get(agentId)?.size ?? 0;
+export function activeRunCount(workspaceId: string): number {
+  return activeMounts.get(workspaceId)?.size ?? 0;
 }
 
 /**
@@ -137,11 +137,11 @@ export function activeRunCount(agentId: string): number {
  *   files/library/chats are read-only so the agent cannot tamper with source.
  *   desktop is read-write so the agent has a scratch area.
  */
-export function containerBinds(home: string, agentId: string): string[] {
+export function containerBinds(home: string, workspaceId: string): string[] {
   return [
     `${filesDir(home)}:/mnt/desk/files:ro`,
     `${libraryDir(home)}:/mnt/desk/library:ro`,
     `${chatsDir(home)}:/mnt/desk/chats:ro`,
-    `${desktopDir(home, agentId)}:/mnt/desk/desktop:rw`,
+    `${desktopDir(home, workspaceId)}:/mnt/desk/desktop:rw`,
   ];
 }

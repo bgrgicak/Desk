@@ -1,9 +1,21 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { NotFoundError } from "@desk/shared";
+import { generateId, NotFoundError } from "@desk/shared";
 
-export async function listAgents(pool: pg.Pool) {
-  return queries.agents.list(pool);
+export async function listAgents(pool: pg.Pool, userId: string) {
+  return queries.agents.listByUser(pool, userId);
+}
+
+export async function createAgent(
+  pool: pg.Pool,
+  userId: string,
+  data: { name: string; instructions?: string; model?: string; toolAllowlist?: string[] },
+) {
+  return queries.agents.insert(pool, {
+    id: generateId("agent"),
+    userId,
+    ...data,
+  });
 }
 
 export async function getAgent(pool: pg.Pool, id: string) {

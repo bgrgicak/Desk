@@ -34,13 +34,13 @@ export class SandboxExecError extends Error {
 }
 
 export async function listModels(
-  agentId: string,
+  workspaceId: string,
   opts: ListModelsOptions = {},
 ): Promise<ModelRef[]> {
   const argv = ["opencode", "models"];
   if (opts.provider) argv.push(opts.provider);
 
-  const result = await execInSandbox(agentId, {
+  const result = await execInSandbox(workspaceId, {
     argv,
     timeoutMs: opts.timeoutMs ?? 15_000,
     providerKeys: opts.providerKeys,

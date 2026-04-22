@@ -16,9 +16,15 @@ beforeAll(async () => {
   const userId = generateId("user");
   await users.insert(pool, { id: userId, username: "chatowner", passwordHash: "h", email: "chat@example.com" });
   agentId = generateId("agent");
-  await agents.insert(pool, { id: agentId, name: "ChatAgent" });
+  await agents.insert(pool, { id: agentId, userId, name: "ChatAgent" });
   wsId = generateId("workspace");
   await workspaces.insert(pool, { id: wsId, userId, name: "ChatWS" });
+  // Enable the agent in the workspace so chats referencing it are valid under M3.
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    [wsId, agentId],
+  );
 });
 
 afterAll(async () => {
@@ -74,6 +80,12 @@ describe("chats queries", () => {
     await users.insert(pool, { id: userId2, username: "cascadeuser", passwordHash: "h", email: "cascade@example.com" });
     const wsId2 = generateId("workspace");
     await workspaces.insert(pool, { id: wsId2, userId: userId2, name: "CascadeWS" });
+    // Enable the agent in the new workspace so the chat insert validation passes.
+    await pool.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+       VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+      [wsId2, agentId],
+    );
     const chatId2 = generateId("chat");
     await chats.insert(pool, { id: chatId2, workspaceId: wsId2, agentId, title: "Will be deleted" });
 

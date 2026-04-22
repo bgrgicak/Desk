@@ -154,17 +154,19 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
-      // Resolve agent and user via the run's chat chain:
-      // run → chat → agent, chat → workspace → user
+      // Resolve agent, workspace, and user via the run's chat chain:
+      // run → chat → agent/workspace, workspace → user
       const runRow = await queries.runs.findById(pool, runId);
       let agentId: string;
       let chatId: string | undefined;
+      let workspaceId: string | undefined;
       let userId: string | undefined;
       let userName = "User";
       if (runRow?.chatId) {
         chatId = runRow.chatId;
         const chat = await queries.chats.findById(pool, runRow.chatId);
         agentId = chat?.agentId ?? (await getDefaultAgentId());
+        workspaceId = chat?.workspaceId;
         if (chat?.workspaceId) {
           const ws = await queries.workspaces.findById(pool, chat.workspaceId);
           if (ws?.userId) {
@@ -175,6 +177,12 @@ export function createRunManager(opts: RunManagerOptions) {
         }
       } else {
         agentId = await getDefaultAgentId();
+      }
+      if (!workspaceId) {
+        const { rows } = await pool.query(
+          "SELECT id FROM workspaces ORDER BY created_at LIMIT 1",
+        );
+        workspaceId = rows[0]?.id as string | undefined;
       }
       if (!userId) {
         const { rows } = await pool.query(
@@ -196,21 +204,22 @@ export function createRunManager(opts: RunManagerOptions) {
       };
 
       let result: { exitCode: number };
+      const effectiveWorkspaceId = workspaceId ?? "default";
       if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput });
       } else if (process.env.DESK_SANDBOX_DRIVER === "fake") {
         // Use the fake driver directly — no Docker, no token, no mounts
         const driver = createDriver();
-        result = await driver.execRun(agentId, { runId, prompt, agentFileId: agentId, onLog });
+        result = await driver.execRun(effectiveWorkspaceId, { runId, prompt, agentFileId: agentId, onLog });
       } else {
         // Use the full opencode lifecycle: write agent file → mint token → project mounts → exec → cleanup
         const home = process.env.DESK_HOME ?? "/opt/desk";
-        const handle = await createOrReuse(agentId, home, providerKeys);
+        const handle = await createOrReuse(effectiveWorkspaceId, home, providerKeys);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,
           home,
-          workspaceId: "default",
+          workspaceId: effectiveWorkspaceId,
           chatId,
           agent: agentFileInput,
           onLog,

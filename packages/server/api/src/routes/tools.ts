@@ -22,16 +22,16 @@ export async function listModels(
     throw new ValidationError("Invalid provider id");
   }
 
-  // Pick any available agent to reach a warm sandbox. Which one is an
+  // Pick any available workspace to reach a warm sandbox. Which one is an
   // implementation detail — all sandboxes see the same user-scoped keys.
-  const agents = await queries.agents.list(pool);
-  const agentId = agents[0]?.id;
-  if (!agentId) throw new NotFoundError("No sandbox available to query models from");
+  const workspaces = await queries.workspaces.list(pool);
+  const workspaceId = workspaces[0]?.id;
+  if (!workspaceId) throw new NotFoundError("No sandbox available to query models from");
 
   const providerKeys = await resolveProviderKeys(pool);
 
   try {
-    return await runtimeListModels(agentId, { provider: opts.provider, providerKeys });
+    return await runtimeListModels(workspaceId, { provider: opts.provider, providerKeys });
   } catch (err) {
     if (err instanceof SandboxExecError) {
       throw new ValidationError(

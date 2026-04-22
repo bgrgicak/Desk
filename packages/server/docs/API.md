@@ -23,13 +23,17 @@ The full OpenAPI 3.1.0 spec is served at `GET /openapi.json`.
 
 ## Workspaces
 
-| Method | Path              | Description         |
-|--------|-------------------|---------------------|
-| GET    | /workspaces       | List workspaces     |
-| POST   | /workspaces       | Create workspace    |
-| GET    | /workspaces/{id}  | Get workspace       |
-| PATCH  | /workspaces/{id}  | Update workspace    |
-| DELETE | /workspaces/{id}  | Delete workspace    |
+| Method | Path                                 | Description                          |
+|--------|--------------------------------------|--------------------------------------|
+| GET    | /workspaces                          | List workspaces                      |
+| POST   | /workspaces                          | Create workspace                     |
+| GET    | /workspaces/{id}                     | Get workspace                        |
+| PATCH  | /workspaces/{id}                     | Update workspace                     |
+| DELETE | /workspaces/{id}                     | Delete workspace                     |
+| GET    | /workspaces/{id}/agents              | List agents enrolled in workspace    |
+| POST   | /workspaces/{id}/agents              | Enroll an agent in the workspace     |
+| DELETE | /workspaces/{id}/agents/{agentId}    | Remove an agent from the workspace   |
+| POST   | /workspaces/{id}/default-agent       | Set the workspace default agent      |
 
 ### POST /workspaces
 
@@ -51,11 +55,17 @@ Only `name` is required. `description` and `icon` default to empty strings.
 
 ## Agents
 
-| Method | Path          | Description    |
-|--------|---------------|----------------|
-| GET    | /agents       | List agents    |
-| GET    | /agents/{id}  | Get agent      |
-| PATCH  | /agents/{id}  | Update agent   |
+| Method | Path          | Description                    |
+|--------|---------------|--------------------------------|
+| GET    | /agents       | List the current user's agents |
+| POST   | /agents       | Create a new agent             |
+| GET    | /agents/{id}  | Get agent                      |
+| PATCH  | /agents/{id}  | Update agent                   |
+
+Agents are user-owned. A chat can only reference an agent that has been
+enrolled in its workspace (via `POST /workspaces/{id}/agents`). Each
+workspace has exactly one default agent; creating a chat without an
+explicit `agentId` uses the workspace default.
 
 ## Chats
 

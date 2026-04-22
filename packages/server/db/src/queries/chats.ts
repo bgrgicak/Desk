@@ -1,5 +1,5 @@
 import pg from "pg";
-import { ChatSchema, type Chat } from "@desk/shared";
+import { ChatSchema, ValidationError, type Chat } from "@desk/shared";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -47,6 +47,19 @@ export async function insert(
   db: Queryable,
   data: { id: string; workspaceId: string; agentId: string; title?: string; goal?: string },
 ): Promise<Chat> {
+  // Ensure the chat's agent is enabled in the workspace. This is the M3
+  // invariant — chats can only use agents the user has explicitly added to
+  // the workspace (or the workspace default).
+  const { rows: checkRows } = await db.query(
+    "SELECT 1 FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+    [data.workspaceId, data.agentId],
+  );
+  if (checkRows.length === 0) {
+    throw new ValidationError(
+      `Agent ${data.agentId} is not enabled in workspace ${data.workspaceId}`,
+    );
+  }
+
   const { rows } = await db.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
      VALUES ($1, $2, $3, $4, $5)

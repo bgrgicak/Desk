@@ -29,7 +29,7 @@ const SKIP = !dockerAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
-const testAgentId = "agt_models_int_test";
+const testWorkspaceId = "wks_models_int_test";
 
 beforeAll(async () => {
   if (SKIP) return;
@@ -44,7 +44,7 @@ afterAll(async () => {
   try {
     const Docker = (await import("dockerode")).default;
     const docker = new Docker({ socketPath: dockerSocketPath() });
-    const container = docker.getContainer(`desk-sandbox-${testAgentId}`);
+    const container = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
     await container.stop({ t: 2 }).catch(() => {});
     await container.remove({ force: true }).catch(() => {});
   } catch { /* ok */ }
@@ -53,8 +53,8 @@ afterAll(async () => {
 
 describeIf("sandbox model listing (real Docker)", () => {
   it("execInSandbox captures stdout from a simple command", async () => {
-    const handle = await createOrReuse(testAgentId, home);
-    const result = await execInSandbox(testAgentId, { argv: ["echo", "hi"] });
+    const handle = await createOrReuse(testWorkspaceId, home);
+    const result = await execInSandbox(testWorkspaceId, { argv: ["echo", "hi"] });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hi");
     expect(result.timedOut).toBe(false);
@@ -62,22 +62,22 @@ describeIf("sandbox model listing (real Docker)", () => {
   }, 60_000);
 
   it("listModels returns real provider/model pairs from opencode", async () => {
-    const handle = await createOrReuse(testAgentId, home);
+    const handle = await createOrReuse(testWorkspaceId, home);
 
-    const all = await listModels(testAgentId);
+    const all = await listModels(testWorkspaceId);
     expect(all.length).toBeGreaterThan(0);
     for (const m of all) {
-      expect(m.providerId).toMatch(/^[A-Za-z0-9_.-]+$/);
-      expect(m.modelId.length).toBeGreaterThan(0);
-      expect(m.fullId).toBe(`${m.providerId}/${m.modelId}`);
+      expect(m.provider).toMatch(/^[A-Za-z0-9_.-]+$/);
+      expect(m.id.startsWith(`${m.provider}/`)).toBe(true);
+      expect(m.id.length).toBeGreaterThan(m.provider.length + 1);
     }
 
     // Anthropic must be present — it's the provider Desk ships with.
-    expect(all.some((m) => m.providerId === "anthropic")).toBe(true);
+    expect(all.some((m) => m.provider === "anthropic")).toBe(true);
 
-    const filtered = await listModels(testAgentId, { provider: "anthropic" });
+    const filtered = await listModels(testWorkspaceId, { provider: "anthropic" });
     expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.providerId === "anthropic")).toBe(true);
+    expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
 
     await stopSandbox(handle);
   }, 60_000);

@@ -366,12 +366,175 @@
         }
       }
     },
+    "/workspaces/{id}/agents": {
+      "get": {
+        "summary": "List agents enrolled in the workspace (with default flag)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enrolled agents"
+          }
+        }
+      },
+      "post": {
+        "summary": "Enroll an agent in the workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "agentId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agentId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Membership created"
+          },
+          "400": {
+            "description": "Owner mismatch"
+          }
+        }
+      }
+    },
+    "/workspaces/{id}/agents/{agentId}": {
+      "delete": {
+        "summary": "Remove an agent from the workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Cannot remove the default with other agents present"
+          }
+        }
+      }
+    },
+    "/workspaces/{id}/default-agent": {
+      "post": {
+        "summary": "Set the workspace default agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "agentId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agentId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Agent not enrolled in workspace"
+          }
+        }
+      }
+    },
     "/agents": {
       "get": {
-        "summary": "List agents",
+        "summary": "List the current user's agents",
         "responses": {
           "200": {
             "description": "Agent array"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an agent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created agent"
           }
         }
       }

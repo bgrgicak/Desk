@@ -4,14 +4,23 @@ import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
 import * as sandboxSessions from "../../src/queries/sandboxSessions.js";
+import * as users from "../../src/queries/users.js";
 
 let pool: pg.Pool;
 let agentId: string;
+let userId: string;
 
 beforeAll(async () => {
   pool = await setupTestDb();
+  userId = generateId("user");
+  await users.insert(pool, {
+    id: userId,
+    username: "sbx-owner",
+    passwordHash: "x",
+    email: "sbx-owner@example.com",
+  });
   agentId = generateId("agent");
-  await agents.insert(pool, { id: agentId, name: "SandboxAgent" });
+  await agents.insert(pool, { id: agentId, userId, name: "SandboxAgent" });
 });
 
 afterAll(async () => {
@@ -51,7 +60,7 @@ describe("sandboxSessions queries", () => {
 
   it("cascades delete when agent is deleted", async () => {
     const tempAgentId = generateId("agent");
-    await agents.insert(pool, { id: tempAgentId, name: "TempAgent" });
+    await agents.insert(pool, { id: tempAgentId, userId, name: "TempAgent" });
     const tempSessionId = generateId("sandboxSession");
     await sandboxSessions.issue(pool, {
       id: tempSessionId,

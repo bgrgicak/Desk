@@ -306,6 +306,84 @@ describe("Routes coverage (real Postgres)", () => {
     expect(res.status).toBe(400);
   });
 
+  // ── 1c. Workspace agents ──────────────────────────────────────────
+  it("GET /workspaces/:id/agents — returns seeded agent with default flag", async () => {
+    const res = await request("GET", `/workspaces/${workspaceId}/agents`, token);
+    expect(res.status).toBe(200);
+    const body = res.body as Array<{ id: string; isDefault: boolean }>;
+    expect(body.length).toBeGreaterThanOrEqual(1);
+    expect(body.some((a) => a.id === agentId && a.isDefault)).toBe(true);
+  });
+
+  it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
+    const createRes = await request("POST", "/agents", token, {
+      name: "Sidekick",
+      instructions: "Assist",
+      model: "anthropic/claude-opus-4-7",
+    });
+    expect(createRes.status).toBe(201);
+    const created = createRes.body as { id: string };
+    expect(created.id).toMatch(/^agt_/);
+
+    const addRes = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
+      agentId: created.id,
+    });
+    expect(addRes.status).toBe(201);
+
+    // Idempotent re-add is OK
+    const addAgain = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
+      agentId: created.id,
+    });
+    expect(addAgain.status).toBe(201);
+
+    const listRes = await request("GET", `/workspaces/${workspaceId}/agents`, token);
+    const list = listRes.body as Array<{ id: string; isDefault: boolean }>;
+    expect(list.some((a) => a.id === created.id && !a.isDefault)).toBe(true);
+
+    // Setting default
+    const setDef = await request(
+      "POST",
+      `/workspaces/${workspaceId}/default-agent`,
+      token,
+      { agentId: created.id },
+    );
+    expect(setDef.status).toBe(200);
+    const afterSet = (await request("GET", `/workspaces/${workspaceId}/agents`, token))
+      .body as Array<{ id: string; isDefault: boolean }>;
+    expect(afterSet.find((a) => a.id === created.id)?.isDefault).toBe(true);
+    expect(afterSet.find((a) => a.id === agentId)?.isDefault).toBe(false);
+
+    // Remove non-default agent (original seeded)
+    const delRes = await request(
+      "DELETE",
+      `/workspaces/${workspaceId}/agents/${agentId}`,
+      token,
+    );
+    expect(delRes.status).toBe(200);
+
+    // Restore state for downstream tests: put the seeded agent back as default
+    await request("POST", `/workspaces/${workspaceId}/agents`, token, { agentId });
+    await request("POST", `/workspaces/${workspaceId}/default-agent`, token, { agentId });
+    await request(
+      "DELETE",
+      `/workspaces/${workspaceId}/agents/${created.id}`,
+      token,
+    );
+  });
+
+  it("POST /chats rejects an agent not in the workspace", async () => {
+    // Create an agent but don't enroll it
+    const createRes = await request("POST", "/agents", token, { name: "Outsider" });
+    const outsider = (createRes.body as { id: string }).id;
+
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId: outsider,
+      title: "Bad chat",
+    });
+    expect(chatRes.status).toBe(400);
+  });
+
   // ── 2. GET /workspaces/:id ────────────────────────────────────────
   it("GET /workspaces/:id — returns seeded workspace fields", async () => {
     const res = await request("GET", `/workspaces/${workspaceId}`, token);

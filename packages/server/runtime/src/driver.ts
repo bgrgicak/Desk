@@ -33,7 +33,8 @@ export interface ExecResult {
 }
 
 export interface SandboxDriver {
-  execRun(agentId: string, opts: RunOptions): Promise<ExecResult>;
+  /** Kicks off an opencode run in the given workspace's sandbox. */
+  execRun(workspaceId: string, opts: RunOptions): Promise<ExecResult>;
   cancelRun(runId: string): Promise<void>;
 }
 
@@ -53,7 +54,7 @@ function createFakeDriver(): SandboxDriver {
   const cancelled = new Set<string>();
 
   return {
-    async execRun(_agentId, opts) {
+    async execRun(_workspaceId, opts) {
       const { runId, onLog } = opts;
 
       const lines = [
@@ -89,13 +90,13 @@ const activeExecs = new Map<string, { containerId: string; execId: string }>();
 
 function createRealDriver(): SandboxDriver {
   return {
-    async execRun(_agentId, opts) {
+    async execRun(workspaceId, opts) {
       const { createOrReuse, dockerSocketPath } = await import("./docker.js");
       const Docker = (await import("dockerode")).default;
       const docker = new Docker({ socketPath: dockerSocketPath() });
 
       // Use createOrReuse which includes containerBinds (project mounts)
-      const handle = await createOrReuse(_agentId, undefined, opts.providerKeys);
+      const handle = await createOrReuse(workspaceId, undefined, opts.providerKeys);
       const container = docker.getContainer(handle.containerId);
 
       // Build the full prompt including chat context if provided.

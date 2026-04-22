@@ -300,11 +300,39 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "GET") {
+      const result = await workspaceRoutes.listWorkspaceAgents(pool, segments[1]);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "POST") {
+      const body = await parseBody(req) as { agentId: string };
+      const result = await workspaceRoutes.addAgentToWorkspace(pool, segments[1], body.agentId);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 4 && method === "DELETE") {
+      const result = await workspaceRoutes.removeAgentFromWorkspace(pool, segments[1], segments[3]);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "default-agent" && segments.length === 3 && method === "POST") {
+      const body = await parseBody(req) as { agentId: string };
+      const result = await workspaceRoutes.setWorkspaceDefaultAgent(pool, segments[1], body.agentId);
+      sendJson(res, 200, result);
+      return;
+    }
 
     // Agent routes
     if (path === "/agents" && method === "GET") {
-      const result = await agentRoutes.listAgents(pool);
+      const result = await agentRoutes.listAgents(pool, userId);
       sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/agents" && method === "POST") {
+      const body = await parseBody(req) as { name: string; instructions?: string; model?: string; toolAllowlist?: string[] };
+      const result = await agentRoutes.createAgent(pool, userId, body);
+      sendJson(res, 201, result);
       return;
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "GET") {

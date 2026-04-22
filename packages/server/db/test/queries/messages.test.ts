@@ -16,9 +16,14 @@ beforeAll(async () => {
   const userId = generateId("user");
   await users.insert(pool, { id: userId, username: "msgowner", passwordHash: "h", email: "msg@example.com" });
   const agentId = generateId("agent");
-  await agents.insert(pool, { id: agentId, name: "MsgAgent" });
+  await agents.insert(pool, { id: agentId, userId, name: "MsgAgent" });
   const wsId = generateId("workspace");
   await workspaces.insert(pool, { id: wsId, userId, name: "MsgWS" });
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    [wsId, agentId],
+  );
   chatId = generateId("chat");
   await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "MsgChat" });
 });

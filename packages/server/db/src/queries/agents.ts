@@ -6,6 +6,7 @@ type Queryable = pg.Pool | pg.PoolClient;
 function rowToAgent(row: Record<string, unknown>): Agent {
   return AgentSchema.parse({
     id: row.id,
+    userId: row.user_id,
     name: row.name,
     instructions: row.instructions,
     model: row.model,
@@ -18,6 +19,14 @@ export async function list(db: Queryable): Promise<Agent[]> {
   return rows.map(rowToAgent);
 }
 
+export async function listByUser(db: Queryable, userId: string): Promise<Agent[]> {
+  const { rows } = await db.query(
+    "SELECT * FROM agents WHERE user_id = $1 ORDER BY name",
+    [userId],
+  );
+  return rows.map(rowToAgent);
+}
+
 export async function findById(db: Queryable, id: string): Promise<Agent | null> {
   const { rows } = await db.query("SELECT * FROM agents WHERE id = $1", [id]);
   return rows.length ? rowToAgent(rows[0]) : null;
@@ -25,14 +34,15 @@ export async function findById(db: Queryable, id: string): Promise<Agent | null>
 
 export async function insert(
   db: Queryable,
-  data: { id: string; name: string; instructions?: string; model?: string; toolAllowlist?: string[] },
+  data: { id: string; userId: string; name: string; instructions?: string; model?: string; toolAllowlist?: string[] },
 ): Promise<Agent> {
   const { rows } = await db.query(
-    `INSERT INTO agents (id, name, instructions, model, tool_allowlist)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO agents (id, user_id, name, instructions, model, tool_allowlist)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
     [
       data.id,
+      data.userId,
       data.name,
       data.instructions ?? "",
       data.model ?? "claude-sonnet-4-20250514",

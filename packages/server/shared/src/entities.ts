@@ -19,12 +19,21 @@ export type User = z.infer<typeof UserSchema>;
 
 export const AgentSchema = z.object({
   id: z.string(),
+  userId: z.string(),
   name: z.string(),
   instructions: z.string(),
   model: z.string(),
   toolAllowlist: z.array(z.string()),
 });
 export type Agent = z.infer<typeof AgentSchema>;
+
+export const WorkspaceAgentSchema = z.object({
+  workspaceId: z.string(),
+  agentId: z.string(),
+  isDefault: z.boolean(),
+  addedAt: z.string(),
+});
+export type WorkspaceAgent = z.infer<typeof WorkspaceAgentSchema>;
 
 export const WorkspaceSchema = z.object({
   id: z.string(),
