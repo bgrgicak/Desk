@@ -3,6 +3,7 @@ import {
   FILE_CLASSES,
   MESSAGE_ROLES,
   RUN_EVENT_KINDS,
+  RUN_KINDS,
   RUN_STATES,
   SCHEDULED_JOB_KINDS,
 } from "./constants.js";
@@ -118,6 +119,7 @@ export const RunSchema = z.object({
   id: z.string(),
   chatId: z.string().optional(),
   scheduledJobId: z.string().optional(),
+  kind: z.enum(RUN_KINDS),
   state: z.enum(RUN_STATES),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

@@ -61,6 +61,7 @@ CREATE TABLE runs (
   id               TEXT PRIMARY KEY,
   chat_id          TEXT REFERENCES chats(id) ON DELETE SET NULL,
   scheduled_job_id TEXT,
+  kind             TEXT NOT NULL DEFAULT 'immediate',
   state            TEXT NOT NULL DEFAULT 'pending',
   started_at       TIMESTAMPTZ,
   finished_at      TIMESTAMPTZ,

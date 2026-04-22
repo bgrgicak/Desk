@@ -38,7 +38,7 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
         agentId,
         "Desk",
         "You are Desk, a helpful AI assistant.",
-        "claude-sonnet-4-20250514",
+        "anthropic/claude-sonnet-4-20250514",
         JSON.stringify(toolNames),
       ],
     );

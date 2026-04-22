@@ -8,6 +8,7 @@ function rowToRun(row: Record<string, unknown>): Run {
     id: row.id,
     chatId: row.chat_id ?? undefined,
     scheduledJobId: row.scheduled_job_id ?? undefined,
+    kind: row.kind ?? "immediate",
     state: row.state,
     startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
     finishedAt: row.finished_at ? (row.finished_at as Date).toISOString() : undefined,
@@ -18,13 +19,13 @@ function rowToRun(row: Record<string, unknown>): Run {
 
 export async function insert(
   db: Queryable,
-  data: { id: string; chatId?: string; scheduledJobId?: string; state?: string; logPath?: string },
+  data: { id: string; chatId?: string; scheduledJobId?: string; kind?: string; state?: string; logPath?: string },
 ): Promise<Run> {
   const { rows } = await db.query(
-    `INSERT INTO runs (id, chat_id, scheduled_job_id, state, log_path)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO runs (id, chat_id, scheduled_job_id, kind, state, log_path)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [data.id, data.chatId ?? null, data.scheduledJobId ?? null, data.state ?? "pending", data.logPath ?? null],
+    [data.id, data.chatId ?? null, data.scheduledJobId ?? null, data.kind ?? "immediate", data.state ?? "pending", data.logPath ?? null],
   );
   return rowToRun(rows[0]);
 }
