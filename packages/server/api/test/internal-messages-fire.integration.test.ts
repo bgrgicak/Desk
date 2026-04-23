@@ -295,3 +295,61 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
+  async function userRequest(
+    method: string,
+    urlPath: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const userTok = (loginRes.body as { token: string }).token;
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
+      const payload = body !== undefined ? JSON.stringify(body) : undefined;
+      if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
+      const req = http.request({ hostname: "127.0.0.1", port, path: urlPath, method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      });
+      req.on("error", reject);
+      if (payload) req.write(payload);
+      req.end();
+    });
+  }
+
+  it("creates a user message with the text and a trigger with agent_turn referencing it", async () => {
+    const uniqueText = `unique-body-${Date.now()}`;
+
+    const sent = await userRequest(
+      "POST",
+      `/chats/${chatId}/messages`,
+      { content: uniqueText },
+    );
+    expect(sent.status).toBe(201);
+
+    const { rows } = await pool.query(
+      `SELECT id, role, content FROM messages WHERE chat_id = $1`,
+      [chatId],
+    );
+
+    const textRows = rows.filter((r: { content: { type?: string; text?: string } }) =>
+      r.content?.type === "text" && r.content?.text === uniqueText,
+    );
+    expect(textRows.length).toBe(1);
+    expect(textRows[0].role).toBe("user");
+
+    const triggerRows = rows.filter((r: { content: { type?: string } }) => r.content?.type === "agent_turn");
+    const ourTrigger = triggerRows.find((r: { content: { userMessageId?: string } }) =>
+      r.content.userMessageId === textRows[0].id,
+    );
+    expect(ourTrigger).toBeDefined();
+  });
+
+});

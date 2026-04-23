@@ -113,6 +113,17 @@ export const MessageContentAiNoteRequestSchema = z.object({
   type: z.literal("ai_note_request"),
 });
 
+/**
+ * A pending execution slot attached to a user message. Created alongside a
+ * user message so fireMessage has a row to claim; carries no textual copy
+ * of the user's prompt — the prompt is resolved from the referenced
+ * user message at fire time. Hidden from the visible chat timeline.
+ */
+export const MessageContentAgentTurnSchema = z.object({
+  type: z.literal("agent_turn"),
+  userMessageId: z.string(),
+});
+
 export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentTextSchema,
   MessageContentToolCallSchema,
@@ -121,6 +132,7 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentEventsSchema,
   MessageContentNoteSchema,
   MessageContentAiNoteRequestSchema,
+  MessageContentAgentTurnSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 

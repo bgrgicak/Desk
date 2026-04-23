@@ -201,6 +201,31 @@ describe("fireMessage", () => {
     const msg = await queries.messages.findById(pool, messageId);
     expect(msg?.state).toBe("failed");
   });
+
+  it("agent_turn resolves the referenced user message's text as the prompt (G2)", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const userId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content)
+       VALUES ($1, $2, 'user', $3)`,
+      [userId, chatId, JSON.stringify({ type: "text", text: "resolve me please" })],
+    );
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: userId });
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toBe("resolve me please");
+  });
 });
 
 describe("scheduleAiNote", () => {

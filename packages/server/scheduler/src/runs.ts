@@ -103,11 +103,17 @@ export function createRunManager(opts: RunManagerOptions) {
     }
   }
 
-  function derivePromptFromContent(content: unknown): string {
-    const c = content as { type?: string; text?: string; body?: string };
+  async function derivePromptFromContent(content: unknown): Promise<string> {
+    const c = content as { type?: string; text?: string; body?: string; userMessageId?: string };
     if (c?.type === "text" && typeof c.text === "string") return c.text;
     if (c?.type === "ai_note_request") {
       return "Produce a coherent running summary of this chat, in markdown.";
+    }
+    if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
+      const userMsg = await queries.messages.findById(pool, c.userMessageId);
+      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
+      if (inner?.type === "text" && typeof inner.text === "string") return inner.text;
+      return "";
     }
     return JSON.stringify(content);
   }
@@ -142,7 +148,7 @@ export function createRunManager(opts: RunManagerOptions) {
       payload: (await queries.messages.findById(pool, messageId))!,
     });
 
-    const prompt = derivePromptFromContent(msg.content);
+    const prompt = await derivePromptFromContent(msg.content);
     const outputKind = outputContentTypeFor(msg.content);
 
     const logDir = await ensureLogDir(msg.chatId);

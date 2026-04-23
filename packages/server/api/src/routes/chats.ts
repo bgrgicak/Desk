@@ -53,13 +53,13 @@ export async function listMessages(
 
 /**
  * User sends a chat message. Inserts two rows:
- *   1. The user's message (role=user, immutable)
- *   2. A pending system trigger message that fireMessage will execute,
- *      producing the agent reply as a child
+ *   1. The user's message (role=user, immutable) — carries the text.
+ *   2. A pending system trigger with `agent_turn` content that references
+ *      the user message id. fireMessage resolves the referenced user
+ *      message at fire time and uses its text as the prompt, so the
+ *      payload is never duplicated.
  *
- * The trigger's content copies the user's text so fireMessage can use
- * it verbatim as the prompt. Callers (app.ts) get the trigger's id
- * back so they can schedule the fire.
+ * Callers (app.ts) get the trigger's id back to schedule the fire.
  */
 export async function sendMessage(
   pool: pg.Pool,
@@ -84,7 +84,7 @@ export async function sendMessage(
     id: triggerId,
     chatId,
     role: "system",
-    content: { type: "text", text: data.content },
+    content: { type: "agent_turn", userMessageId: userMessage.id },
     state: "pending",
     parentId: userMessage.id,
     agentId: chat.agentId,

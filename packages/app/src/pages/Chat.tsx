@@ -179,7 +179,7 @@ export function Chat({ id, nav }: { id: string; nav: (r: Route) => void }) {
       <h3>Messages</h3>
       <ol>
         {messages
-          .filter((m) => m.content.type !== "ai_note_request")
+          .filter((m) => m.content.type !== "ai_note_request" && m.content.type !== "agent_turn")
           .map((m) => (
             <li key={m.id}>
               <strong>{m.role}:</strong>{" "}
