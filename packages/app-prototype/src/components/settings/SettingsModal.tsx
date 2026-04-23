@@ -6,6 +6,16 @@ import {
   Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -383,6 +393,9 @@ function AgentsList({
   agents, providers, hasAnyAgents, hasAnyProviders, query,
   onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled,
 }: AgentsListProps) {
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const pendingAgent = agents.find(a => a.id === pendingDeleteId)
+
   if (!hasAnyProviders) {
     return (
       <EmptyState
@@ -468,7 +481,7 @@ function AgentsList({
                     <Copy className="h-4 w-4" />Duplicate
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onSelect={() => onDelete(a.id)}
+                    onSelect={() => setPendingDeleteId(a.id)}
                     className="text-destructive focus:text-destructive"
                   >
                     <Trash2 className="h-4 w-4" />Delete
@@ -479,6 +492,26 @@ function AgentsList({
           </motion.div>
         )
       })}
+      <AlertDialog open={pendingDeleteId !== null} onOpenChange={open => !open && setPendingDeleteId(null)}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {pendingAgent?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Any chats assigned to this agent will lose it. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              size="sm"
+              onClick={() => { onDelete(pendingDeleteId!); setPendingDeleteId(null) }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -825,6 +858,9 @@ function ConnectionsList({
   connections, hasAnyConnections, query,
   onOpen, onPickNew, onDelete, onDuplicate, onToggleEnabled,
 }: ConnectionsListProps) {
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const pendingConnection = connections.find(c => c.id === pendingDeleteId)
+
   if (!hasAnyConnections) {
     return (
       <EmptyState
@@ -894,7 +930,7 @@ function ConnectionsList({
                     <Copy className="h-4 w-4" />Duplicate
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onSelect={() => onDelete(c.id)}
+                    onSelect={() => setPendingDeleteId(c.id)}
                     className="text-destructive focus:text-destructive"
                   >
                     <Trash2 className="h-4 w-4" />Delete
@@ -905,6 +941,26 @@ function ConnectionsList({
           </motion.div>
         )
       })}
+      <AlertDialog open={pendingDeleteId !== null} onOpenChange={open => !open && setPendingDeleteId(null)}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {pendingConnection?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Agents using this connection won't be able to run until a new one is configured. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              size="sm"
+              onClick={() => { onDelete(pendingDeleteId!); setPendingDeleteId(null) }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
