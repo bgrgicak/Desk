@@ -69,11 +69,10 @@ function buildMessagesQuery(f: MessagesFilter): string {
 }
 
 export interface SearchResult {
-  kind: "chat" | "artifact" | "library";
+  type: "file" | "chat" | "message";
   id: string;
-  title?: string;
+  title: string;
   snippet?: string;
-  path?: string;
 }
 
 export interface ModelRef {

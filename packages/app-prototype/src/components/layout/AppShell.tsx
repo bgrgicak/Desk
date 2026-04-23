@@ -55,6 +55,7 @@ import {
   useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
+  useSearchQuery,
 } from '@/store/api'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 
@@ -149,6 +150,12 @@ export function AppShell({
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
+  // Server-side search — live query when the palette has ≥2 chars.
+  const searchEnabled = chatSearchQuery.trim().length >= 2
+  const { data: searchResults } = useSearchQuery(
+    { q: chatSearchQuery.trim(), scope: 'all' },
+    { skip: !searchEnabled },
+  )
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -491,29 +498,45 @@ export function AppShell({
             </CommandGroup>
           )}
 
-          {/* Search state: all matching chats + artifacts */}
+          {/* Search state — results come from the server /search endpoint. */}
           {chatSearchQuery.trim() && (
             <>
               <CommandGroup heading="Chats">
-                {allChats.map(chat => {
-                  const ChatIcon = getChatIcon(chat, artifacts)
-                  return (
-                    <CommandItem
-                      key={chat.id}
-                      value={chat.title}
-                      onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery('') }}
-                    >
-                      <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                      <span className="truncate">{chat.title}</span>
-                    </CommandItem>
-                  )
-                })}
+                {(searchResults ?? [])
+                  .filter(r => r.type === 'chat')
+                  .map(r => {
+                    const chat = allChats.find(c => c.id === r.id)
+                    const ChatIcon = chat ? getChatIcon(chat, artifacts) : MessageSquare
+                    return (
+                      <CommandItem
+                        key={r.id}
+                        value={r.title}
+                        onSelect={() => {
+                          if (chat) onChatClick(chat)
+                          setChatSearchOpen(false)
+                          setChatSearchQuery('')
+                        }}
+                      >
+                        <ChatIcon className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">{r.title}</span>
+                      </CommandItem>
+                    )
+                  })}
               </CommandGroup>
               <CommandSeparator />
               <CommandGroup heading="Artifacts">
-                {artifacts.map(artifact => {
-                  const ArtifactIcon = getArtifactIcon(artifact.type)
-                  return (
+                {(searchResults ?? [])
+                  .filter(r => r.type === 'file')
+                  .map(r => {
+                    const artifact = artifacts.find(a => a.id === r.id)
+                    if (!artifact) return (
+                      <CommandItem key={r.id} value={r.title}>
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">{r.title}</span>
+                      </CommandItem>
+                    )
+                    const ArtifactIcon = getArtifactIcon(artifact.type)
+                    return (
                     <CommandItem
                       key={artifact.id}
                       value={artifact.name}
