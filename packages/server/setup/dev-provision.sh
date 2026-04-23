@@ -75,7 +75,39 @@ fi
 # can resolve cross-package imports.
 log "Running root npm install for workspaces"
 cd "$REPO_ROOT"
+# Ensure the bind-mount (if already set up) is temporarily detached so
+# `npm install` writes to the real 9p-backed tree, not the VM-local shadow.
+# The mount is re-established further down after we resync.
+if mountpoint -q "$REPO_ROOT/node_modules" 2>/dev/null; then
+  sudo umount "$REPO_ROOT/node_modules"
+fi
 npm install --no-audit --no-fund --silent
+
+# ---------- VM-local node_modules (shadow to avoid 9p churn) ----------
+# Host-side `npm install` rewrites /desk/node_modules via the 9p mount.
+# tsx watch inside the VM reacts to those unlinks by rebuilding into a
+# broken state. Materialize a VM-local copy and bind-mount it over the 9p
+# tree so the running server sees a stable snapshot regardless of host
+# churn. Re-run dev-provision to refresh the snapshot.
+VM_NM="/home/desk/vm-node_modules"
+REPO_NM="$REPO_ROOT/node_modules"
+if [ -d "$REPO_NM" ]; then
+  log "Syncing $REPO_NM → $VM_NM (VM-local shadow)"
+  sudo mkdir -p "$VM_NM"
+  sudo rsync -a --delete "$REPO_NM/" "$VM_NM/"
+  sudo chown -R desk:desk "$VM_NM"
+
+  # Install the systemd mount unit on first run.
+  sudo install -m 644 \
+    "$REPO_ROOT/packages/server/setup/systemd/desk-node_modules.mount" \
+    /etc/systemd/system/desk-node_modules.mount
+  sudo systemctl daemon-reload
+  sudo systemctl enable desk-node_modules.mount >/dev/null
+  sudo systemctl start desk-node_modules.mount
+
+  # Bounce desk-server so it picks up the shadowed tree.
+  sudo systemctl restart desk-server || true
+fi
 
 log "Building @desk/sandbox-cli"
 cd "$REPO_ROOT/packages/server/sandbox-cli"
