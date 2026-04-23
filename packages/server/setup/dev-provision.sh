@@ -14,6 +14,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 log() { echo "==> [dev-provision] $*"; }
 
+# ---------- 0. Swap file ----------
+# The VM ships without swap, so memory pressure becomes an instant OOM.
+# Give systemd cgroups (and runaway builds) a safety net.
+SWAPFILE="/swapfile"
+SWAP_SIZE_MB=4096
+if ! sudo swapon --show=NAME --noheadings | grep -qx "$SWAPFILE"; then
+  if [ ! -f "$SWAPFILE" ]; then
+    log "Creating ${SWAP_SIZE_MB}MiB swapfile at $SWAPFILE"
+    sudo fallocate -l "${SWAP_SIZE_MB}M" "$SWAPFILE" \
+      || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_SIZE_MB" status=none
+    sudo chmod 600 "$SWAPFILE"
+    sudo mkswap "$SWAPFILE" >/dev/null
+  fi
+  log "Enabling swap"
+  sudo swapon "$SWAPFILE"
+fi
+if ! grep -qE "^${SWAPFILE}\s" /etc/fstab; then
+  log "Persisting swap in /etc/fstab"
+  echo "${SWAPFILE} none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+fi
+
 # ---------- 1. Dev-friendly Postgres auth ----------
 # Give the `desk` role a known password so tests running as non-desk OS users
 # can connect over TCP via md5.
