@@ -7,21 +7,34 @@
 # reverts the systemd override on its own trap.
 set -uo pipefail
 
+# Enable job control so the backgrounded subshell becomes its own
+# process-group leader. Without this, kill -- -PGID can't reach the
+# vite/node children and they survive Ctrl+C, binding ports 5174+
+# on subsequent runs.
+set -m
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 # Run vite in the background so its stdout interleaves with journalctl.
 (
   cd "$REPO_ROOT"
-  npm -w app run dev
+  exec npm -w app run dev
 ) &
 VITE_PID=$!
 
 cleanup() {
-  # Best-effort: send SIGTERM to the vite process group so its children die too.
+  # Send SIGTERM to the vite process group so npm + node + esbuild all
+  # die. -$PGID targets every process whose pgid == VITE_PID (possible
+  # because of `set -m` above).
   if kill -0 "$VITE_PID" 2>/dev/null; then
-    kill -- "-$VITE_PID" 2>/dev/null || kill "$VITE_PID" 2>/dev/null || true
+    kill -TERM -- "-$VITE_PID" 2>/dev/null || kill -TERM "$VITE_PID" 2>/dev/null || true
+    # Give them a moment, then force-kill any stragglers.
+    sleep 1
+    kill -KILL -- "-$VITE_PID" 2>/dev/null || true
   fi
+  # Belt-and-braces: kill anything left from this repo's prototype vite.
+  pkill -f "packages/app-prototype/node_modules/.*/vite" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
