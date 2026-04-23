@@ -179,22 +179,20 @@ Files live on the filesystem at `~/Desk/workspaces/desk/library/`; there
 is no DB index. File identifiers are workspace-relative paths
 (`library/report.md`). The `path` query parameter is url-encoded.
 
-## Runs
+## Runs and scheduled jobs
 
-| Method | Path                | Description       |
-|--------|---------------------|-------------------|
-| GET    | /runs               | List runs         |
-| GET    | /runs/{id}          | Get run           |
-| GET    | /runs/{id}/logs     | Get run logs      |
-| POST   | /runs/{id}/cancel   | Cancel run        |
+Removed in M6. Execution state and scheduling both live on the
+`messages` table now:
 
-## Scheduled Jobs
-
-| Method | Path                  | Description              |
-|--------|-----------------------|--------------------------|
-| GET    | /scheduled-jobs       | List active jobs         |
-| POST   | /scheduled-jobs       | Create scheduled job     |
-| DELETE | /scheduled-jobs/{id}  | Delete scheduled job     |
+- A run is a `role=system`, `state=pending`-then-`running`-then-terminal
+  message carrying the prompt as its `content.text`. Its agent output
+  is a child message (`role=agent`, `parentId` set).
+- A scheduled job is the same shape with `executeAt` and/or `cron` set
+  and a `schedulerRef` pointing at the at/cron entry. See PATCH on
+  `/chats/{id}/messages/{messageId}` to reschedule or cancel.
+- Logs are a file at
+  `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`, served
+  by `GET /chats/{id}/messages/{messageId}/logs`.
 
 ## Tools
 
