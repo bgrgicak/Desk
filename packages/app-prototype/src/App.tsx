@@ -14,13 +14,19 @@ import {
   MOCK_INBOX,
   MOCK_CONTEXT,
   MOCK_RUNS,
-  MOCK_CHATS,
   MOCK_ARTIFACT_UPDATES,
   type Artifact,
   type Chat,
   type ContextItem,
 } from '@/data/mock-data'
-import { useGetWorkspacesQuery } from '@/store/api'
+import {
+  useGetWorkspacesQuery,
+  useGetChatsQuery,
+  useGetAgentsQuery,
+  useCreateChatMutation,
+  useDeleteChatMutation,
+} from '@/store/api'
+import { toUiChat } from '@/store/selectors/chats'
 
 const NEW_CHAT_STUB: Chat = {
   id: '__new__',
@@ -36,6 +42,7 @@ const NEW_CHAT_STUB: Chat = {
 
 function App() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  const { data: serverAgents }     = useGetAgentsQuery()
   const [activeView, setActiveView]               = useState<View>('desk')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('')
 
@@ -55,7 +62,17 @@ function App() {
   )
   const [selectedContextItem, setSelectedContextItem] = useState<ContextItem | null>(null)
   const [artifacts, setArtifacts]                 = useState<Artifact[]>(MOCK_ARTIFACTS)
-  const [chats, setChats]                         = useState(MOCK_CHATS)
+
+  // Server-backed chats for the active workspace. Sidebar + selectors
+  // consume the same Chat shape they did with MOCK_CHATS; the mapper
+  // preserves that so no downstream component changes are needed.
+  const { data: serverChats } = useGetChatsQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    { skip: !activeWorkspaceId },
+  )
+  const chats: Chat[] = (serverChats ?? []).map(toUiChat)
+  const [createChatMutation] = useCreateChatMutation()
+  const [deleteChatMutation] = useDeleteChatMutation()
   const [readUpdateIds, setReadUpdateIds]          = useState<Set<string>>(new Set())
   const [readChatIds, setReadChatIds]              = useState<Set<string>>(new Set())
   const [todaySheetOpen, setTodaySheetOpen]        = useState(false)
@@ -159,28 +176,25 @@ function App() {
     setSelectedContextItem(null)
   }, [])
 
-  // First message sent in a new chat → add a sidebar entry without remounting ChatView
+  // First message sent in a new chat → create it server-side. The
+  // chat list is cache-tagged so it re-renders as soon as the mutation
+  // resolves; no local append needed.
   const handleNewChatFirstMessage = useCallback((message: string) => {
+    if (!activeWorkspaceId || !serverAgents?.[0]) return
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
-    const newEntry: Chat = {
-      id: `chat-new-${Date.now()}`,
+    void createChatMutation({
+      workspaceId: activeWorkspaceId,
+      agentId: serverAgents[0].id,
       title,
-      lastMessage: message,
-      updatedAt: new Date(),
-      createdAt: new Date(),
-      artifactIds: [],
-      messages: [],
-      unread: false,
-      referenceIds: [],
-    }
-    setChats(prev => [newEntry, ...prev])
-  }, [])
+    })
+  }, [activeWorkspaceId, serverAgents, createChatMutation])
 
-  // Delete a chat — remove from list, deselect if it was open
+  // Delete a chat — delete server-side; cache invalidation removes it
+  // from the list. Deselect if it was open.
   const handleDeleteChat = useCallback((chatId: string) => {
-    setChats(prev => prev.filter(c => c.id !== chatId))
+    void deleteChatMutation(chatId)
     setSelectedChatId(prev => prev === chatId ? null : prev)
-  }, [])
+  }, [deleteChatMutation])
 
   const unreadCount      = MOCK_INBOX.filter(i => !i.read).length
   const deskUnreadCount  = MOCK_ARTIFACT_UPDATES.filter(u => !readUpdateIds.has(u.id)).length
