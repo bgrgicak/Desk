@@ -1,6 +1,12 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 
-export type AppView = "desk" | "runs" | "context" | "today";
+export type AppView =
+  | "desk"
+  | "runs"
+  | "context"
+  | "today"
+  | "chats"
+  | "compose";
 
 export interface UiState {
   activeView: AppView;

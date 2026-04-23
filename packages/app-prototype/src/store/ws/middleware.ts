@@ -1,6 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
+import { pushArtifactUpdate } from "../slices/derivedSlice";
 import { getSessionToken } from "@/auth/session";
 import type { ServerMessage, WsEvent } from "../types";
 
@@ -200,6 +201,15 @@ function applyEventToCache(
         api.util.invalidateTags([
           { type: "ChatArtifact", id: `CHAT_${event.payload.path.split("/")[2] ?? ""}` },
         ]),
+      );
+      // Feed the derivedSlice so Desk can render "1 update" pills.
+      dispatch(
+        pushArtifactUpdate({
+          id: `upd-${event.payload.path}-${event.payload.createdAt}`,
+          artifactId: event.payload.path,
+          message: `New artifact: ${event.payload.name}`,
+          timestamp: new Date(event.payload.createdAt),
+        }),
       );
       break;
     }
