@@ -321,6 +321,34 @@ export const MOCK_CONNECTIONS: Connection[] = [
     baseUrl: 'https://api.openai.com/v1',
     enabled: false,
   },
+  {
+    id: 'conn-notion',
+    kind: 'notion',
+    name: 'Notion',
+    apiKey: 'secret_••••••••••••••••••••••••9b2d',
+    enabled: true,
+  },
+  {
+    id: 'conn-github',
+    kind: 'github',
+    name: 'GitHub',
+    apiKey: 'ghp_••••••••••••••••••••••••••••7a1c',
+    enabled: true,
+  },
+  {
+    id: 'conn-slack',
+    kind: 'slack',
+    name: 'Slack',
+    apiKey: 'xoxb-••••••••••••••••••••••••ae3f',
+    enabled: false,
+  },
+  {
+    id: 'conn-figma',
+    kind: 'figma',
+    name: 'Figma',
+    apiKey: 'figd_••••••••••••••••••••••••62c8',
+    enabled: false,
+  },
 ]
 
 // ─── Mock Artifacts ───

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 import {
   Settings2, Bot, Plug, Sliders,
   Trash2, Plus, ChevronDown, X, Search,
@@ -122,80 +123,95 @@ function WorkspaceSection({
     color !== workspace.bg ||
     description !== workspace.description
 
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrolledUnder, setScrolledUnder] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => {
+      setScrolledUnder(el.scrollHeight > el.clientHeight + el.scrollTop + 1)
+    }
+    update()
+    el.addEventListener('scroll', update)
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', update); ro.disconnect() }
+  }, [])
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold mb-0.5">Workspace details</h3>
-        <p className="text-xs text-muted-foreground">Name, icon and description for this workspace.</p>
-      </div>
-
-      {/* Preview + Name */}
-      <div className="flex items-center gap-3">
-        <div
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
-          style={{ backgroundColor: color }}
-        >
-          {emoji}
+    <div className="flex-1 flex flex-col min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+        {/* Preview + Name */}
+        <div className="flex items-center gap-3">
+          <div
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
+            style={{ backgroundColor: color }}
+          >
+            {emoji}
+          </div>
+          <Input
+            placeholder="Workspace name"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="flex-1"
+          />
         </div>
-        <Input
-          placeholder="Workspace name"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          className="flex-1"
-        />
-      </div>
 
-      {/* Color */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
-        <div className="flex gap-2 flex-wrap">
-          {COLOR_OPTIONS.map(({ value, label }) => (
-            <button
-              key={value}
-              title={label}
-              onClick={() => setColor(value)}
-              className={`h-6 w-6 rounded-full transition-all ${
-                color === value ? 'ring-2 ring-offset-2 ring-foreground/40 scale-110' : 'hover:scale-110'
-              }`}
-              style={{ backgroundColor: value }}
-            />
-          ))}
+        {/* Color */}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
+          <div className="flex gap-2 flex-wrap">
+            {COLOR_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                title={label}
+                onClick={() => setColor(value)}
+                className={`h-6 w-6 rounded-full transition-all ${
+                  color === value ? 'ring-2 ring-offset-2 ring-foreground/40 scale-110' : 'hover:scale-110'
+                }`}
+                style={{ backgroundColor: value }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Emoji */}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
+          <div className="grid grid-cols-8 gap-1">
+            {EMOJI_OPTIONS.map(e => (
+              <button
+                key={e}
+                onClick={() => setEmoji(e)}
+                className={`flex items-center justify-center h-8 w-8 rounded-md text-lg transition-colors ${
+                  emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted'
+                }`}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Description */}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Description</p>
+          <Textarea
+            placeholder="What's this workspace for?"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            rows={2}
+            className="resize-none"
+          />
         </div>
       </div>
 
-      {/* Emoji */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
-        <div className="grid grid-cols-8 gap-1">
-          {EMOJI_OPTIONS.map(e => (
-            <button
-              key={e}
-              onClick={() => setEmoji(e)}
-              className={`flex items-center justify-center h-8 w-8 rounded-md text-lg transition-colors ${
-                emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted'
-              }`}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Description */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">Description</p>
-        <Textarea
-          placeholder="What's this workspace for?"
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          rows={2}
-          className="resize-none"
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center justify-between pt-2 border-t">
-        {/* Delete with popover confirm */}
+      <div
+        className={cn(
+          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          scrolledUnder && 'border-border',
+        )}
+      >
         <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
           <PopoverTrigger asChild>
             <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
@@ -398,12 +414,15 @@ function AgentsList({
   }
   return (
     <div className="flex flex-col">
-      {agents.map(a => {
+      {agents.map((a, i) => {
         const provider = providers.find(p => p.id === a.providerId)
         const providerLabel = provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'
         return (
-          <div
+          <motion.div
             key={a.id}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
             className="group flex items-center gap-3 py-4 border-b last:border-b-0"
           >
             <Switch
@@ -457,7 +476,7 @@ function AgentsList({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </div>
+          </motion.div>
         )
       })}
     </div>
@@ -793,11 +812,14 @@ function ConnectionsList({
   }
   return (
     <div className="flex flex-col">
-      {connections.map(c => {
+      {connections.map((c, i) => {
         const meta = CONNECTION_CATALOG[c.kind]
         return (
-          <div
+          <motion.div
             key={c.id}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
             className="group flex items-center gap-3 py-4 border-b last:border-b-0"
           >
             <Switch
@@ -844,7 +866,7 @@ function ConnectionsList({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </div>
+          </motion.div>
         )
       })}
     </div>
@@ -877,9 +899,12 @@ function ConnectionsPicker({ onPick }: ConnectionsPickerProps) {
         <EmptyState title="No matches" body={`No connections match “${q}”.`} />
       ) : (
         <div className="grid grid-cols-3 gap-3">
-          {entries.map(([kind, meta]) => (
-            <button
+          {entries.map(([kind, meta], i) => (
+            <motion.button
               key={kind}
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: i * 0.03, duration: 0.18, ease: 'easeOut' }}
               onClick={() => onPick(kind)}
               className="group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
             >
@@ -888,7 +913,7 @@ function ConnectionsPicker({ onPick }: ConnectionsPickerProps) {
                 <p className="text-sm font-medium truncate">{meta.name}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
               </div>
-            </button>
+            </motion.button>
           ))}
         </div>
       )}
@@ -1031,63 +1056,55 @@ function PreferencesSection() {
   ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold mb-0.5">Preferences</h3>
-        <p className="text-xs text-muted-foreground">Behaviour settings for this workspace.</p>
+    <div className="space-y-4">
+      {/* Auto-save */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Auto-save artifacts</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Automatically save artifacts created in chats to your Desk.
+          </p>
+        </div>
+        <Switch checked={autoSave} onCheckedChange={setAutoSave} />
       </div>
 
-      <div className="space-y-4">
+      <div className="border-t" />
 
-        {/* Auto-save */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium">Auto-save artifacts</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Automatically save artifacts created in chats to your Desk.
-            </p>
-          </div>
-          <Switch checked={autoSave} onCheckedChange={setAutoSave} />
+      {/* Unread badges */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Show unread badges</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Display unread counts on workspace tabs and nav items.
+          </p>
         </div>
+        <Switch checked={showBadges} onCheckedChange={setShowBadges} />
+      </div>
 
-        <div className="border-t" />
+      <div className="border-t" />
 
-        {/* Unread badges */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium">Show unread badges</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Display unread counts on workspace tabs and nav items.
-            </p>
-          </div>
-          <Switch checked={showBadges} onCheckedChange={setShowBadges} />
+      {/* Default view */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Default view</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            The view shown when you switch to this workspace.
+          </p>
         </div>
-
-        <div className="border-t" />
-
-        {/* Default view */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium">Default view</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              The view shown when you switch to this workspace.
-            </p>
-          </div>
-          <div className="flex rounded-md border overflow-hidden shrink-0">
-            {VIEW_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setDefaultView(opt.value)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  defaultView === opt.value
-                    ? 'bg-foreground text-background'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+        <div className="flex rounded-md border overflow-hidden shrink-0">
+          {VIEW_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setDefaultView(opt.value)}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                defaultView === opt.value
+                  ? 'bg-foreground text-background'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </div>
     </div>
@@ -1191,6 +1208,23 @@ export function SettingsModal({
   const handleToggleConnectionEnabled = (id: string) => {
     setConnections(prev => prev.map(c => c.id === id ? { ...c, enabled: !c.enabled } : c))
   }
+
+  // A stable per-page key so content transitions play when navigating
+  // between sections or drilling into / out of detail screens.
+  const routeKey = (() => {
+    if (activeSection === 'agents') {
+      if (agentsFocus === null) return 'agents:list'
+      if (agentsFocus.mode === 'new') return 'agents:new'
+      return `agents:edit:${agentsFocus.id}`
+    }
+    if (activeSection === 'connections') {
+      if (connectionsFocus === null) return 'connections:list'
+      if (connectionsFocus.mode === 'picker') return 'connections:picker'
+      if (connectionsFocus.mode === 'new') return `connections:new:${connectionsFocus.kind}`
+      return `connections:edit:${connectionsFocus.id}`
+    }
+    return activeSection
+  })()
 
   const renderHeaderBreadcrumb = () => {
     const pageClass = 'text-sm font-semibold text-foreground'
@@ -1366,69 +1400,76 @@ export function SettingsModal({
               </Button>
             </div>
 
-            {/* Content. Detail / picker screens take over the full content
-                area to support sticky footers and custom layouts. Lists and
-                other sections live inside the padded scroll body. */}
-            {activeSection === 'agents' && agentsFocus !== null ? (
-              <AgentDetail
-                key={agentsFocus.mode === 'edit' ? agentsFocus.id : '__new__'}
-                agents={agents}
-                providers={providers}
-                focus={agentsFocus}
-                onSave={handleSaveAgent}
-                onCancel={() => setAgentsFocus(null)}
-              />
-            ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
-              <ConnectionsPicker
-                onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
-              />
-            ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
-              <ConnectionDetail
-                key={connectionsFocus.mode === 'edit' ? connectionsFocus.id : `__new__${connectionsFocus.kind}`}
-                connections={connections}
-                focus={connectionsFocus}
-                onSave={handleSaveConnection}
-                onCancel={() => setConnectionsFocus(null)}
-              />
-            ) : (
-              <div className="flex-1 overflow-y-auto px-4 py-6">
-                {activeSection === 'workspace' && (
-                  <WorkspaceSection
-                    workspace={workspace}
-                    onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
-                    onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
-                  />
-                )}
-                {activeSection === 'agents' && (
-                  <AgentsSection
-                    providers={providers}
-                    agents={agents}
-                    search={agentsSearch}
-                    statusFilter={agentsStatusFilter}
-                    onSearchChange={setAgentsSearch}
-                    onStatusFilterChange={setAgentsStatusFilter}
-                    onFocus={setAgentsFocusAndReset}
-                    onDeleteAgent={handleDeleteAgent}
-                    onDuplicateAgent={handleDuplicateAgent}
-                    onToggleEnabled={handleToggleAgentEnabled}
-                  />
-                )}
-                {activeSection === 'connections' && (
-                  <ConnectionsSection
-                    connections={connections}
-                    search={connectionsSearch}
-                    statusFilter={connectionsStatusFilter}
-                    onSearchChange={setConnectionsSearch}
-                    onStatusFilterChange={setConnectionsStatusFilter}
-                    onFocus={setConnectionsFocusAndReset}
-                    onDeleteConnection={handleDeleteConnection}
-                    onDuplicateConnection={handleDuplicateConnection}
-                    onToggleEnabled={handleToggleConnectionEnabled}
-                  />
-                )}
-                {activeSection === 'preferences' && <PreferencesSection />}
-              </div>
-            )}
+            {/* Content. Detail / picker / workspace-edit screens take over
+                the full content area to support sticky footers and custom
+                layouts. Lists and preferences live inside the padded scroll
+                body. Each route gets a fresh motion.div so it fades in when
+                navigating between pages. */}
+            <motion.div
+              key={routeKey}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
+              className="flex-1 flex flex-col min-h-0"
+            >
+              {activeSection === 'workspace' ? (
+                <WorkspaceSection
+                  workspace={workspace}
+                  onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
+                  onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
+                />
+              ) : activeSection === 'agents' && agentsFocus !== null ? (
+                <AgentDetail
+                  agents={agents}
+                  providers={providers}
+                  focus={agentsFocus}
+                  onSave={handleSaveAgent}
+                  onCancel={() => setAgentsFocus(null)}
+                />
+              ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
+                <ConnectionsPicker
+                  onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
+                />
+              ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
+                <ConnectionDetail
+                  connections={connections}
+                  focus={connectionsFocus}
+                  onSave={handleSaveConnection}
+                  onCancel={() => setConnectionsFocus(null)}
+                />
+              ) : (
+                <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">
+                  {activeSection === 'agents' && (
+                    <AgentsSection
+                      providers={providers}
+                      agents={agents}
+                      search={agentsSearch}
+                      statusFilter={agentsStatusFilter}
+                      onSearchChange={setAgentsSearch}
+                      onStatusFilterChange={setAgentsStatusFilter}
+                      onFocus={setAgentsFocusAndReset}
+                      onDeleteAgent={handleDeleteAgent}
+                      onDuplicateAgent={handleDuplicateAgent}
+                      onToggleEnabled={handleToggleAgentEnabled}
+                    />
+                  )}
+                  {activeSection === 'connections' && (
+                    <ConnectionsSection
+                      connections={connections}
+                      search={connectionsSearch}
+                      statusFilter={connectionsStatusFilter}
+                      onSearchChange={setConnectionsSearch}
+                      onStatusFilterChange={setConnectionsStatusFilter}
+                      onFocus={setConnectionsFocusAndReset}
+                      onDeleteConnection={handleDeleteConnection}
+                      onDuplicateConnection={handleDuplicateConnection}
+                      onToggleEnabled={handleToggleConnectionEnabled}
+                    />
+                  )}
+                  {activeSection === 'preferences' && <PreferencesSection />}
+                </div>
+              )}
+            </motion.div>
           </div>
         </div>
       </DialogContent>
