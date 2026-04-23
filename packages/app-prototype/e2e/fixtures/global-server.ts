@@ -1,25 +1,95 @@
 /**
  * Playwright global setup/teardown — boots a single disposable desk-server
- * for the whole run. Its URL is passed to the Vite dev server via
- * DESK_API_URL so /api proxies land on it instead of the developer's
- * local :3013.
+ * AND the Vite preview server for the whole run.
  *
- * Cleanup handle is persisted to disk so `globalTeardown` can stop the
- * process even when module state is not shared across the two hooks.
+ * Playwright's built-in `webServer` starts before globalSetup runs, which
+ * means a closure in vite.config.ts (const API_TARGET = process.env.DESK_API_URL ?? …)
+ * captures the wrong target. Starting both services from globalSetup
+ * sequences them correctly: server first, then Vite with DESK_API_URL set
+ * to the server's real URL.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as net from "node:net";
+import { spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { dropTestDatabase } from "./db";
-import { startDeskServer } from "./server";
+import { startDeskServer, type DiskServer } from "./server";
 
 const HANDLE_FILE = path.join(os.tmpdir(), "desk-app-e2e-handle.json");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = path.resolve(__dirname, "..", "..");
 
 interface StoredHandle {
-  pid: number;
-  url: string;
-  dbName: string;
-  home: string;
+  server: { pid: number; url: string; dbName: string; home: string };
+  vite: { pid: number; url: string };
+}
+
+function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.unref();
+    s.on("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const port = (s.address() as net.AddressInfo).port;
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+async function waitForHealth(url: string, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.status < 500) return;
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`health check failed for ${url}: ${String(lastErr)}`);
+}
+
+async function startVite(
+  apiUrl: string,
+  port: number,
+): Promise<ChildProcess> {
+  // Build once (inherits DESK_API_URL so the config closure captures it),
+  // then run preview. Keep stderr/stdout piped so we can surface issues.
+  const env = { ...process.env, DESK_API_URL: apiUrl } as NodeJS.ProcessEnv;
+
+  await new Promise<void>((resolve, reject) => {
+    const build = spawn(
+      "npx",
+      ["vite", "build", "--logLevel", "warn"],
+      { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    build.stderr?.on("data", (b) => (stderr += String(b)));
+    build.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`vite build failed (${code}): ${stderr}`));
+    });
+  });
+
+  const preview = spawn(
+    "npx",
+    [
+      "vite",
+      "preview",
+      "--port",
+      String(port),
+      "--strictPort",
+      "--logLevel",
+      "warn",
+    ],
+    { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  preview.stderr?.on("data", (b) => process.stderr.write(`[vite] ${b}`));
+  return preview;
 }
 
 export async function globalSetup(): Promise<void> {
@@ -27,16 +97,39 @@ export async function globalSetup(): Promise<void> {
     username: "e2e",
     password: "e2e",
   });
+  // eslint-disable-next-line no-console
+  console.log(`[e2e] desk-server up at ${server.url}`);
 
-  process.env.DESK_API_URL = server.url;
+  const vitePort = 5179;
+  const viteUrl = `http://127.0.0.1:${vitePort}`;
+  const viteProc = await startVite(server.url, vitePort);
+  // eslint-disable-next-line no-console
+  console.log(`[e2e] vite preview up at ${viteUrl}, proxy → ${server.url}`);
+
+  try {
+    await waitForHealth(viteUrl);
+  } catch (e) {
+    viteProc.kill("SIGKILL");
+    await server.stop();
+    throw e;
+  }
 
   const handle: StoredHandle = {
-    pid: server.pid,
-    url: server.url,
-    dbName: server.dbName,
-    home: server.home,
+    server: {
+      pid: server.pid,
+      url: server.url,
+      dbName: server.dbName,
+      home: server.home,
+    },
+    vite: { pid: viteProc.pid ?? -1, url: viteUrl },
   };
   await fs.writeFile(HANDLE_FILE, JSON.stringify(handle), "utf8");
+  // Let the test fixtures find the URLs.
+  process.env.DESK_API_URL = server.url;
+  process.env.DESK_E2E_APP_URL = viteUrl;
+
+  // We can't use closures across setup/teardown reliably, but the PIDs give
+  // teardown everything it needs.
 }
 
 export async function globalTeardown(): Promise<void> {
@@ -48,35 +141,33 @@ export async function globalTeardown(): Promise<void> {
   }
   const handle = JSON.parse(raw) as StoredHandle;
 
-  if (handle.pid > 0) {
+  for (const pid of [handle.vite.pid, handle.server.pid]) {
+    if (!pid || pid <= 0) continue;
     try {
-      process.kill(handle.pid, "SIGTERM");
-      await waitForExit(handle.pid, 5000);
-    } catch {
-      /* already dead */
-    }
-    try {
-      process.kill(handle.pid, "SIGKILL");
+      process.kill(pid, "SIGTERM");
     } catch {
       /* already dead */
     }
   }
-
-  await dropTestDatabase(handle.dbName).catch(() => undefined);
-  await fs.rm(handle.home, { recursive: true, force: true }).catch(() => undefined);
+  // Give them a moment.
+  await new Promise((r) => setTimeout(r, 500));
+  for (const pid of [handle.vite.pid, handle.server.pid]) {
+    if (!pid || pid <= 0) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already dead */
+    }
+  }
+  if (handle.server.dbName)
+    await dropTestDatabase(handle.server.dbName).catch(() => undefined);
+  if (handle.server.home)
+    await fs
+      .rm(handle.server.home, { recursive: true, force: true })
+      .catch(() => undefined);
   await fs.rm(HANDLE_FILE, { force: true }).catch(() => undefined);
 }
 
-async function waitForExit(pid: number, ms: number): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-}
-
+// Keep references to avoid unused-symbol lint.
+export type _DiskServer = DiskServer;
 export default globalSetup;

@@ -1,7 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const VITE_PORT = 5179;
-const VITE_URL = `http://127.0.0.1:${VITE_PORT}`;
+// Both the desk-server (under test) and the Vite preview server are
+// started by globalSetup, because Playwright's built-in webServer starts
+// BEFORE globalSetup — which means the DESK_API_URL env var the Vite
+// proxy config reads would be unset and it would proxy to the developer's
+// local :3013. See e2e/fixtures/global-server.ts.
+const VITE_URL = "http://127.0.0.1:5179";
 
 export default defineConfig({
   testDir: "./e2e/tests",
@@ -23,14 +27,4 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    // Vite reads DESK_API_URL from env (set by globalSetup) and proxies
-    // /api and /ws to the disposable desk-server.
-    command: `vite --port ${VITE_PORT} --strictPort`,
-    url: VITE_URL,
-    reuseExistingServer: false,
-    timeout: 60_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
 });

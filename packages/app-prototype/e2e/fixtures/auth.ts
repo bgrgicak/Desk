@@ -27,21 +27,21 @@ export async function fetchToken(
  */
 export async function seedSessionToken(
   context: BrowserContext,
-  appOrigin: string,
+  _appOrigin: string,
   token: string,
 ): Promise<void> {
-  await context.addInitScript(
-    ({ appOrigin, token }) => {
-      // Only inject for the app origin.
-      if (window.location.origin !== appOrigin) return;
-      try {
-        sessionStorage.setItem("desk.session.token", token);
-      } catch {
-        /* some test harness pages block storage — ignore. */
-      }
-    },
-    { appOrigin, token },
-  );
+  // Playwright runs init scripts on every frame including about:blank. We
+  // only care about the app's origin — sessionStorage accesses from other
+  // origins are silently caught. The origin guard added earlier was buggy
+  // because window.location.origin is evaluated at init-script time (so it
+  // resolves to about:blank before the page navigates).
+  await context.addInitScript((token) => {
+    try {
+      sessionStorage.setItem("desk.session.token", token);
+    } catch {
+      /* ignore — about:blank or storage-denied context */
+    }
+  }, token);
 }
 
 export async function logInAndNavigate(

@@ -39,7 +39,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
+import { useGetMeQuery } from '@/store/api'
+import { logout } from '@/auth/login-prompt'
 import type { View } from './AppShell'
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
 
 // ── Logo ──────────────────────────────────────────────────────────────────────
 function DeskLogo({ className }: { className?: string }) {
@@ -56,11 +65,11 @@ function DeskLogo({ className }: { className?: string }) {
   )
 }
 
-// ── Account (static mock) ─────────────────────────────────────────────────────
-const ACCOUNT = {
-  name: 'Jaroslaw Morawski',
-  email: 'jaroslaw.morawski@a8c.com',
-  initials: 'JM',
+// ── Account fallback while /me is loading ────────────────────────────────────
+const ACCOUNT_PLACEHOLDER = {
+  name: '…',
+  email: '',
+  initials: '…',
 }
 
 // ── New workspace form options ────────────────────────────────────────────────
@@ -115,6 +124,13 @@ export function WorkspaceBar({
   onNavigate,
   onCompose,
 }: WorkspaceBarProps) {
+  // Current user — fetched once on mount via RTK Query. Falls back to a
+  // placeholder while in-flight so the initial render is stable.
+  const { data: me } = useGetMeQuery()
+  const account = me
+    ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
+    : ACCOUNT_PLACEHOLDER
+
   // Command palette
   const [commandOpen, setCommandOpen] = useState(false)
 
@@ -292,18 +308,21 @@ export function WorkspaceBar({
           {/* User avatar */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5">
-                {ACCOUNT.initials}
+              <button
+                data-testid="account-avatar"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5"
+              >
+                {account.initials}
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuLabel className="flex items-center gap-2.5 p-2.5">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-                  {ACCOUNT.initials}
+                  {account.initials}
                 </div>
                 <div className="flex min-w-0 flex-col">
-                  <span className="text-sm font-medium truncate">{ACCOUNT.name}</span>
-                  <span className="text-xs text-muted-foreground truncate">{ACCOUNT.email}</span>
+                  <span className="text-sm font-medium truncate">{account.name}</span>
+                  <span className="text-xs text-muted-foreground truncate">{account.email}</span>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
@@ -311,7 +330,7 @@ export function WorkspaceBar({
               <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
               <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-muted-foreground">
+              <DropdownMenuItem className="text-muted-foreground" onClick={() => void logout()}>
                 <LogOut className="h-4 w-4" />Sign out
               </DropdownMenuItem>
             </DropdownMenuContent>

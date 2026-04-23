@@ -10,6 +10,22 @@ import path from 'path'
 const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:3013'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
 
+// The dev and preview commands each have their own proxy section —
+// `vite preview` doesn't honour `server.proxy`, so the tests (which run
+// against the preview server) need their own copy.
+const proxy = {
+  '/api': {
+    target: API_TARGET,
+    changeOrigin: true,
+    rewrite: (p: string) => p.replace(/^\/api/, ''),
+  },
+  '/ws': {
+    target: WS_TARGET,
+    ws: true,
+    changeOrigin: true,
+  },
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -17,18 +33,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: {
-    proxy: {
-      '/api': {
-        target: API_TARGET,
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api/, ''),
-      },
-      '/ws': {
-        target: WS_TARGET,
-        ws: true,
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { proxy },
+  preview: { proxy },
 })

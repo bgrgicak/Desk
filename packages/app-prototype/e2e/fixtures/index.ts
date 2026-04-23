@@ -17,11 +17,15 @@ interface Fixtures {
   loggedInPage: import("@playwright/test").Page;
 }
 
-function readHandleUrl(): string {
+interface Handle {
+  server: { url: string };
+  vite: { url: string };
+}
+
+function readHandle(): Handle {
   const file = path.join(os.tmpdir(), "desk-app-e2e-handle.json");
   const raw = fs.readFileSync(file, "utf8");
-  const parsed = JSON.parse(raw) as { url: string };
-  return parsed.url;
+  return JSON.parse(raw) as Handle;
 }
 
 /**
@@ -33,7 +37,7 @@ function readHandleUrl(): string {
  */
 export const test = base.extend<Fixtures>({
   serverUrl: async ({}, use) => {
-    await use(readHandleUrl());
+    await use(readHandle().server.url);
   },
 
   token: async ({ serverUrl }, use) => {
