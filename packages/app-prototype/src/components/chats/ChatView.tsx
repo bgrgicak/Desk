@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Link2, StickyNote, Paperclip, Plus, X,
@@ -19,7 +19,7 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
-import type { Chat, Artifact, ChatMessage as ChatMessageType, ContextItem } from '@/data/mock-data'
+import type { Chat, Artifact, ChatMessage as ChatMessageType, ComposeScenario, ContextItem } from '@/data/mock-data'
 import { MOCK_CONTEXT, getArtifactIcon, getRelativeTime } from '@/data/mock-data'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 
@@ -46,6 +46,7 @@ interface ChatViewProps {
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
   onFirstMessage?: (message: string) => void
+  onArtifactAdded?: (artifact: Artifact) => void
 }
 
 // ── Icon helpers ───────────────────────────────────────────────────────────────
@@ -371,6 +372,7 @@ export function ChatView({
   savedArtifactIds = new Set(),
   onSaveArtifact,
   onFirstMessage,
+  onArtifactAdded,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [rightTab, setRightTab] = useState<RightTab>('artifacts')
@@ -378,6 +380,11 @@ export function ChatView({
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
   // Map from message index → uploaded files for that message
   const [uploadsByIndex, setUploadsByIndex] = useState<Map<number, UploadedFile[]>>(new Map())
+  // Artifacts created by the compose flow in this session, keyed by the assistant
+  // message id they were produced for. Rendered inline under that message.
+  const [composeArtifacts, setComposeArtifacts] = useState<Map<string, Artifact>>(new Map())
+
+  const isNewChat = chat.id === '__new__'
 
   // Prioritise the chat's own messages; fall back to the linked artifact's conversation
   const initialMessages: ChatMessageType[] = chat.messages ?? artifacts[0]?.conversation ?? []
@@ -389,10 +396,42 @@ export function ChatView({
     return null
   }, [initialMessages])
 
-  const { messages, isTyping, sendMessage } = useMockChat({
+  // Keep a ref to the live message list so the artifact-created callback (fired
+  // from a setTimeout inside useMockChat) can read the most recent assistant id.
+  const messagesRef = useRef<ChatMessageType[]>([])
+
+  const handleArtifactCreated = useCallback((scenario: ComposeScenario) => {
+    const artifact: Artifact = {
+      id: `art-new-${Date.now()}`,
+      ...scenario.resultArtifact,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      conversation: messagesRef.current.map(m => ({ ...m })),
+    }
+    const msgs = messagesRef.current
+    let anchorId: string | null = null
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') { anchorId = msgs[i].id; break }
+    }
+    if (anchorId) {
+      setComposeArtifacts(prev => {
+        const next = new Map(prev)
+        next.set(anchorId!, artifact)
+        return next
+      })
+    }
+    onArtifactAdded?.(artifact)
+  }, [onArtifactAdded])
+
+  const chatMode = isNewChat ? 'compose' : 'conversation'
+
+  const { messages, isTyping, statusText, sendMessage } = useMockChat({
     initialMessages,
-    mode: 'conversation',
+    mode: chatMode,
+    onArtifactCreated: isNewChat ? handleArtifactCreated : undefined,
   })
+
+  messagesRef.current = messages
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -472,39 +511,53 @@ export function ChatView({
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <div key={msg.id}>
-                {/* Uploaded file cards above this user message */}
-                {msg.role === 'user' && uploadsByIndex.has(i) && (
-                  <div className="mb-2 flex flex-col items-end">
-                    {uploadsByIndex.get(i)!.map(file => (
-                      <UploadedFileCard key={file.id} file={file} />
-                    ))}
-                  </div>
-                )}
-                <ChatMessage
-                  message={msg}
-                  agentModel={agentModel}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                  isNew={showNewBadge && msg.id === lastInitialAssistantId}
-                />
-                {/* Inline artifact cards after the last initial assistant message */}
-                {artifacts.length > 0 && msg.id === lastInitialAssistantId && (
-                  <div className="mt-4 flex flex-col gap-2">
-                    {artifacts.map(artifact => (
+            {messages.map((msg, i) => {
+              const composeArtifact = composeArtifacts.get(msg.id)
+              return (
+                <div key={msg.id}>
+                  {/* Uploaded file cards above this user message */}
+                  {msg.role === 'user' && uploadsByIndex.has(i) && (
+                    <div className="mb-2 flex flex-col items-end">
+                      {uploadsByIndex.get(i)!.map(file => (
+                        <UploadedFileCard key={file.id} file={file} />
+                      ))}
+                    </div>
+                  )}
+                  <ChatMessage
+                    message={msg}
+                    agentModel={agentModel}
+                    isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
+                    isNew={showNewBadge && msg.id === lastInitialAssistantId}
+                  />
+                  {/* Inline artifact card for a compose scenario produced after this assistant message */}
+                  {composeArtifact && (
+                    <div className="mt-4">
                       <ArtifactInlineCard
-                        key={artifact.id}
-                        artifact={artifact}
-                        isSaved={savedArtifactIds.has(artifact.id)}
-                        onOpen={() => onArtifactClick?.(artifact)}
-                        onSave={() => onSaveArtifact?.(artifact.id)}
+                        artifact={composeArtifact}
+                        isSaved={savedArtifactIds.has(composeArtifact.id)}
+                        onOpen={() => onArtifactClick?.(composeArtifact)}
+                        onSave={() => onSaveArtifact?.(composeArtifact.id)}
                       />
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-            <StatusIndicator text={null} isTyping={isTyping} />
+                    </div>
+                  )}
+                  {/* Inline artifact cards after the last initial assistant message */}
+                  {artifacts.length > 0 && msg.id === lastInitialAssistantId && (
+                    <div className="mt-4 flex flex-col gap-2">
+                      {artifacts.map(artifact => (
+                        <ArtifactInlineCard
+                          key={artifact.id}
+                          artifact={artifact}
+                          isSaved={savedArtifactIds.has(artifact.id)}
+                          onOpen={() => onArtifactClick?.(artifact)}
+                          onSave={() => onSaveArtifact?.(artifact.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            <StatusIndicator text={statusText} isTyping={isTyping && !statusText} />
           </div>
         </div>
 
