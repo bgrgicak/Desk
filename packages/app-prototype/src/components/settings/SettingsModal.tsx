@@ -27,6 +27,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import {
   MOCK_PROVIDERS,
@@ -251,50 +259,33 @@ function WorkspaceSection({
 
 // ── Agents section ───────────────────────────────────────────────────────────
 
-type AgentsView = 'agents' | 'providers'
-
 type AgentsFocus =
-  | { kind: 'agent'; mode: 'edit'; id: string }
-  | { kind: 'agent'; mode: 'new' }
-  | { kind: 'provider'; mode: 'edit'; id: string }
-  | { kind: 'provider'; mode: 'new'; providerKind: ProviderKind }
+  | { mode: 'edit'; id: string }
+  | { mode: 'new' }
   | null
 
 interface AgentsSectionProps {
-  view: AgentsView
   focus: AgentsFocus
   providers: Provider[]
   agents: SettingsAgent[]
   search: string
-  onSearchChange: (next: string) => void
-  onChangeView: (next: AgentsView) => void
   onFocus: (next: AgentsFocus) => void
   onSaveAgent: (agent: SettingsAgent) => void
   onDeleteAgent: (id: string) => void
-  onSaveProvider: (provider: Provider) => void
-  onDeleteProvider: (id: string) => void
 }
 
 function AgentsSection({
   view, focus, providers, agents, search,
-  onSearchChange, onChangeView, onFocus,
+  onFocus,
   onSaveAgent, onDeleteAgent,
-  onSaveProvider, onDeleteProvider,
 }: AgentsSectionProps) {
   if (focus !== null) {
-    return focus.kind === 'agent' ? (
+    return (
       <AgentDetail
         agents={agents}
         providers={providers}
         focus={focus}
         onSave={onSaveAgent}
-        onCancel={() => onFocus(null)}
-      />
-    ) : (
-      <ProviderDetail
-        providers={providers}
-        focus={focus}
-        onSave={onSaveProvider}
         onCancel={() => onFocus(null)}
       />
     )
@@ -309,72 +300,18 @@ function AgentsSection({
           || providerName.toLowerCase().includes(q)
       })
     : agents
-  const filteredProviders = q
-    ? providers.filter(p =>
-        p.name.toLowerCase().includes(q)
-        || PROVIDER_LABELS[p.kind].toLowerCase().includes(q),
-      )
-    : providers
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          {view === 'agents' && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => onChangeView('providers')}
-            >
-              <Plug className="h-3.5 w-3.5" />Manage providers
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <SearchInput
-            value={search}
-            onChange={onSearchChange}
-            placeholder={view === 'agents' ? 'Search agents…' : 'Search providers…'}
-          />
-          {view === 'agents' ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => onFocus({ kind: 'agent', mode: 'new' })}
-            >
-              <Plus className="h-3.5 w-3.5" />Add
-            </Button>
-          ) : (
-            <AddProviderButton
-              onPick={(k) => onFocus({ kind: 'provider', mode: 'new', providerKind: k })}
-            />
-          )}
-        </div>
-      </div>
-
-      {view === 'agents' ? (
-        <AgentsList
-          agents={filteredAgents}
-          providers={providers}
-          hasAnyAgents={agents.length > 0}
-          hasAnyProviders={providers.length > 0}
-          query={q}
-          onOpen={(id) => onFocus({ kind: 'agent', mode: 'edit', id })}
-          onAdd={() => onFocus({ kind: 'agent', mode: 'new' })}
-          onDelete={onDeleteAgent}
-        />
-      ) : (
-        <ProvidersList
-          providers={filteredProviders}
-          hasAnyProviders={providers.length > 0}
-          query={q}
-          onOpen={(id) => onFocus({ kind: 'provider', mode: 'edit', id })}
-          onDelete={onDeleteProvider}
-        />
-      )}
-    </div>
+    <AgentsList
+      agents={filteredAgents}
+      providers={providers}
+      hasAnyAgents={agents.length > 0}
+      hasAnyProviders={providers.length > 0}
+      query={q}
+      onOpen={(id) => onFocus({ mode: 'edit', id })}
+      onAdd={() => onFocus({ mode: 'new' })}
+      onDelete={onDeleteAgent}
+    />
   )
 }
 
@@ -414,7 +351,7 @@ function AgentsList({
     return (
       <EmptyState
         title="Add a provider first"
-        body="Agents run through a provider. Configure Claude or ChatGPT in Manage providers first."
+        body="Agents run through a provider. Configure Claude or ChatGPT under Connections first."
       />
     )
   }
@@ -440,38 +377,54 @@ function AgentsList({
     )
   }
   return (
-    <div className="space-y-1">
-      {agents.map(a => {
-        const provider = providers.find(p => p.id === a.providerId)
-        const providerLabel = provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'
-        return (
-          <RowItem
-            key={a.id}
-            onOpen={() => onOpen(a.id)}
-            onDelete={() => onDelete(a.id)}
-            leading={
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <Bot className="h-4 w-4 text-muted-foreground/70" />
-              </div>
-            }
-            primary={a.name}
-            secondary={
-              <span className="flex items-center gap-2 min-w-0">
-                <span className="shrink-0">{providerLabel}</span>
-                <span className="truncate">{a.model}</span>
-              </span>
-            }
-          />
-        )
-      })}
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead className="px-0">Name</TableHead>
+          <TableHead className="px-0">Provider</TableHead>
+          <TableHead className="px-0">Model</TableHead>
+          <TableHead className="px-0 w-0" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {agents.map(a => {
+          const provider = providers.find(p => p.id === a.providerId)
+          const providerLabel = provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'
+          return (
+            <TableRow key={a.id}>
+              <TableCell className="px-0 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {provider
+                    ? <ProviderGlyph kind={provider.kind} size="sm" />
+                    : <span className="h-5 w-5 shrink-0 rounded-md bg-muted" />
+                  }
+                  <span className="text-sm font-medium truncate">{a.name}</span>
+                </div>
+              </TableCell>
+              <TableCell className="px-0 py-2 text-muted-foreground">
+                {providerLabel}
+              </TableCell>
+              <TableCell className="px-0 py-2 text-muted-foreground">
+                {a.model}
+              </TableCell>
+              <TableCell className="px-0 py-2 w-0">
+                <div className="flex items-center justify-end gap-1.5">
+                  <Button variant="outline" size="xs" onClick={() => onOpen(a.id)}>Edit</Button>
+                  <Button variant="outline" size="xs" onClick={() => onDelete(a.id)}>Delete</Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
   )
 }
 
 interface AgentDetailProps {
   agents: SettingsAgent[]
   providers: Provider[]
-  focus: Extract<AgentsFocus, { kind: 'agent' }>
+  focus: Exclude<AgentsFocus, null>
   onSave: (agent: SettingsAgent) => void
   onCancel: () => void
 }
@@ -558,144 +511,6 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
   )
 }
 
-// ── Providers list + Add popover + detail ────────────────────────────────────
-
-interface ProvidersListProps {
-  providers: Provider[]
-  hasAnyProviders: boolean
-  query: string
-  onOpen: (id: string) => void
-  onDelete: (id: string) => void
-}
-
-function ProvidersList({ providers, hasAnyProviders, query, onOpen, onDelete }: ProvidersListProps) {
-  if (!hasAnyProviders) {
-    return (
-      <EmptyState
-        title="No providers yet"
-        body="Add an API key for Claude or ChatGPT to start creating agents."
-      />
-    )
-  }
-  if (providers.length === 0) {
-    return (
-      <EmptyState
-        title="No matches"
-        body={`No providers match “${query}”.`}
-      />
-    )
-  }
-  return (
-    <div className="space-y-1">
-      {providers.map(p => (
-        <RowItem
-          key={p.id}
-          onOpen={() => onOpen(p.id)}
-          onDelete={() => onDelete(p.id)}
-          leading={<ProviderGlyph kind={p.kind} />}
-          primary={p.name}
-          secondary={`${PROVIDER_LABELS[p.kind]} · ${p.apiKey ? 'API key set' : 'No API key'}`}
-        />
-      ))}
-    </div>
-  )
-}
-
-// Shared row with always-visible Edit / Delete actions.
-function RowItem({
-  leading, primary, secondary, onOpen, onDelete,
-}: {
-  leading: React.ReactNode
-  primary: string
-  secondary?: React.ReactNode
-  onOpen: () => void
-  onDelete: () => void
-}) {
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
-      className="flex w-full items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none transition-colors cursor-pointer"
-    >
-      {leading}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{primary}</p>
-        {secondary && (
-          <div className="text-xs text-muted-foreground truncate">
-            {secondary}
-          </div>
-        )}
-      </div>
-      <div
-        className="flex items-center gap-1.5 shrink-0"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Button variant="secondary" size="xs" onClick={onOpen}>Edit</Button>
-        <Button variant="secondary" size="xs" onClick={onDelete}>Delete</Button>
-      </div>
-    </div>
-  )
-}
-
-interface AddProviderButtonProps {
-  onPick: (kind: ProviderKind) => void
-}
-
-function AddProviderButton({ onPick }: AddProviderButtonProps) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
-          <Plus className="h-3.5 w-3.5" />Add
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-52 p-1">
-        <ProviderPickerItem
-          kind="chatgpt"
-          label="ChatGPT"
-          onClick={() => { onPick('chatgpt'); setOpen(false) }}
-        />
-        <ProviderPickerItem
-          kind="claude"
-          label="Claude"
-          onClick={() => { onPick('claude'); setOpen(false) }}
-        />
-        <ProviderPickerItem
-          kind="other"
-          label="Other"
-          disabled
-          onClick={() => { /* disabled */ }}
-        />
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function ProviderPickerItem({
-  kind, label, disabled, onClick,
-}: { kind: ProviderKind; label: string; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-md text-left transition-colors',
-        disabled
-          ? 'text-muted-foreground/60 cursor-not-allowed'
-          : 'hover:bg-muted/60',
-      )}
-    >
-      <ProviderGlyph kind={kind} size="sm" />
-      {label}
-      {disabled && <span className="ml-auto text-xs text-muted-foreground/70">Soon</span>}
-    </button>
-  )
-}
-
 function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' | 'md' }) {
   const box  = size === 'sm' ? 'h-5 w-5' : 'h-8 w-8'
   const mark = size === 'sm' ? 'h-3 w-3' : 'h-[18px] w-[18px]'
@@ -717,83 +532,6 @@ function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' 
     <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-muted text-muted-foreground font-semibold', box, size === 'sm' ? 'text-[11px]' : 'text-sm')}>
       ·
     </span>
-  )
-}
-
-interface ProviderDetailProps {
-  providers: Provider[]
-  focus: Extract<AgentsFocus, { kind: 'provider' }>
-  onSave: (provider: Provider) => void
-  onCancel: () => void
-}
-
-function ProviderDetail({ providers, focus, onSave, onCancel }: ProviderDetailProps) {
-  const existing = focus.mode === 'edit' ? providers.find(p => p.id === focus.id) : undefined
-  const kind: ProviderKind = existing?.kind ?? (focus.mode === 'new' ? focus.providerKind : 'other')
-
-  const [name, setName]            = useState(existing?.name ?? PROVIDER_LABELS[kind])
-  const [apiKey, setApiKey]        = useState(existing?.apiKey ?? '')
-  const [organizationId, setOrgId] = useState(existing?.organizationId ?? '')
-  const [baseUrl, setBaseUrl]      = useState(
-    existing?.baseUrl ?? (kind === 'claude' ? 'https://api.anthropic.com'
-      : kind === 'chatgpt' ? 'https://api.openai.com/v1' : ''),
-  )
-
-  const handleSave = () => {
-    onSave({
-      id: existing?.id ?? `prov-${kind}-${Date.now()}`,
-      kind,
-      name: name.trim() || PROVIDER_LABELS[kind],
-      apiKey: apiKey.trim(),
-      organizationId: kind === 'chatgpt' ? organizationId.trim() || undefined : undefined,
-      baseUrl: baseUrl.trim() || undefined,
-    })
-  }
-
-  return (
-    <div className="space-y-5 max-w-xl">
-      <div className="flex items-center gap-3">
-        <ProviderGlyph kind={kind} />
-        <div>
-          <p className="text-sm font-medium">{PROVIDER_LABELS[kind]} provider</p>
-          <p className="text-xs text-muted-foreground">
-            {kind === 'claude' && 'Connects Claude models (Sonnet, Opus, Haiku) via the Anthropic API.'}
-            {kind === 'chatgpt' && 'Connects OpenAI models (GPT-4o, GPT-4o mini) via the OpenAI API.'}
-            {kind === 'other' && 'Custom provider.'}
-          </p>
-        </div>
-      </div>
-
-      <Field label="Display name">
-        <Input value={name} onChange={e => setName(e.target.value)} placeholder={PROVIDER_LABELS[kind]} />
-      </Field>
-
-      <Field label="API key" help="Stored locally. Used to authenticate against the provider.">
-        <Input
-          type="password"
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : ''}
-        />
-      </Field>
-
-      {kind === 'chatgpt' && (
-        <Field label="Organization ID" help="Optional. Used for billing isolation on multi-org accounts.">
-          <Input value={organizationId} onChange={e => setOrgId(e.target.value)} placeholder="org-…" />
-        </Field>
-      )}
-
-      <Field label="Base URL" help="Override only if proxying through a gateway.">
-        <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
-      </Field>
-
-      <div className="flex items-center justify-end gap-2 pt-2 border-t">
-        <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-        <Button size="sm" onClick={handleSave}>
-          {focus.mode === 'new' ? 'Add provider' : 'Save'}
-        </Button>
-      </div>
-    </div>
   )
 }
 
@@ -1011,25 +749,15 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>('workspace')
 
-  // Agents section state (lifted so the modal header can render breadcrumbs)
-  const [agentsView, setAgentsView]     = useState<AgentsView>('agents')
+  // Agents section state
   const [agentsFocus, setAgentsFocus]   = useState<AgentsFocus>(null)
-  const [providers, setProviders]       = useState<Provider[]>(MOCK_PROVIDERS)
+  const [providers]                     = useState<Provider[]>(MOCK_PROVIDERS)
   const [agents, setAgents]             = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
   const [agentsSearch, setAgentsSearch] = useState('')
 
-  const changeAgentsView = (next: AgentsView) => {
-    setAgentsView(next)
-    setAgentsFocus(null)
-    setAgentsSearch('')
-  }
   const setAgentsFocusAndReset = (next: AgentsFocus) => {
     setAgentsFocus(next)
     setAgentsSearch('')
-  }
-  const backToAgentsList = () => {
-    if (agentsFocus) setAgentsView(agentsFocus.kind === 'agent' ? 'agents' : 'providers')
-    setAgentsFocus(null)
   }
 
   const handleSaveAgent = (agent: SettingsAgent) => {
@@ -1043,21 +771,8 @@ export function SettingsModal({
     setAgents(prev => prev.filter(a => a.id !== id))
     setAgentsFocus(null)
   }
-  const handleSaveProvider = (provider: Provider) => {
-    setProviders(prev => {
-      const exists = prev.some(p => p.id === provider.id)
-      return exists ? prev.map(p => p.id === provider.id ? provider : p) : [...prev, provider]
-    })
-    setAgentsFocus(null)
-  }
-  const handleDeleteProvider = (id: string) => {
-    setProviders(prev => prev.filter(p => p.id !== id))
-    // Agents bound to the removed provider lose their link; drop them.
-    setAgents(prev => prev.filter(a => a.providerId !== id))
-    setAgentsFocus(null)
-  }
 
-  const renderHeaderContent = () => {
+  const renderHeaderBreadcrumb = () => {
     const pageClass = 'text-sm font-semibold text-foreground'
 
     if (activeSection !== 'agents') {
@@ -1074,51 +789,29 @@ export function SettingsModal({
       )
     }
 
-    const atProvidersRoot = agentsView === 'providers' && agentsFocus === null
     const leafLabel = agentsFocus === null
       ? null
-      : agentsFocus.kind === 'agent'
-        ? (agentsFocus.mode === 'new'
-            ? 'New agent'
-            : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent')
-        : (agentsFocus.mode === 'new'
-            ? `New ${PROVIDER_LABELS[agentsFocus.providerKind]} provider`
-            : providers.find(p => p.id === agentsFocus.id)?.name ?? 'Provider')
-    const showProvidersCrumb = atProvidersRoot
-      || (agentsFocus !== null && agentsFocus.kind === 'provider')
-    const providersIsLeaf = atProvidersRoot && leafLabel === null
+      : agentsFocus.mode === 'new'
+        ? 'New agent'
+        : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent'
 
     return (
       <Breadcrumb className="min-w-0">
         <BreadcrumbList>
           <BreadcrumbItem>
-            {agentsFocus === null && agentsView === 'agents' ? (
+            {leafLabel === null ? (
               <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
             ) : (
               <BreadcrumbLink asChild>
                 <button
                   type="button"
-                  onClick={() => { setAgentsFocus(null); setAgentsView('agents'); setAgentsSearch('') }}
+                  onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}
                 >
                   Agents
                 </button>
               </BreadcrumbLink>
             )}
           </BreadcrumbItem>
-          {showProvidersCrumb && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                {providersIsLeaf ? (
-                  <BreadcrumbPage className={pageClass}>Providers</BreadcrumbPage>
-                ) : (
-                  <BreadcrumbLink asChild>
-                    <button type="button" onClick={backToAgentsList}>Providers</button>
-                  </BreadcrumbLink>
-                )}
-              </BreadcrumbItem>
-            </>
-          )}
           {leafLabel && (
             <>
               <BreadcrumbSeparator />
@@ -1131,6 +824,8 @@ export function SettingsModal({
       </Breadcrumb>
     )
   }
+
+  const showAgentsToolbar = activeSection === 'agents' && agentsFocus === null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1181,22 +876,41 @@ export function SettingsModal({
 
           {/* Right content */}
           <div className="flex-1 flex flex-col min-w-0">
-            {/* Header: breadcrumbs + close */}
+            {/* Header: breadcrumbs + inline actions + close */}
             <div className="h-[52px] flex items-center justify-between gap-3 border-b px-4 shrink-0">
-              {renderHeaderContent()}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground shrink-0"
-                onClick={() => onOpenChange(false)}
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              {renderHeaderBreadcrumb()}
+              <div className="flex items-center gap-2 shrink-0">
+                {showAgentsToolbar && (
+                  <>
+                    <SearchInput
+                      value={agentsSearch}
+                      onChange={setAgentsSearch}
+                      placeholder="Search agents…"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => setAgentsFocusAndReset({ mode: 'new' })}
+                    >
+                      <Plus className="h-3.5 w-3.5" />Add
+                    </Button>
+                  </>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground"
+                  onClick={() => onOpenChange(false)}
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
 
             {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto px-4 py-6">
               {activeSection === 'workspace' && (
                 <WorkspaceSection
                   workspace={workspace}
@@ -1206,18 +920,13 @@ export function SettingsModal({
               )}
               {activeSection === 'agents' && (
                 <AgentsSection
-                  view={agentsView}
                   focus={agentsFocus}
                   providers={providers}
                   agents={agents}
                   search={agentsSearch}
-                  onSearchChange={setAgentsSearch}
-                  onChangeView={changeAgentsView}
                   onFocus={setAgentsFocusAndReset}
                   onSaveAgent={handleSaveAgent}
                   onDeleteAgent={handleDeleteAgent}
-                  onSaveProvider={handleSaveProvider}
-                  onDeleteProvider={handleDeleteProvider}
                 />
               )}
               {activeSection === 'connections' && <ConnectionsSection />}
