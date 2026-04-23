@@ -11,7 +11,6 @@ import { RunsPage } from '@/components/runs/RunsPage'
 import { ChatView } from '@/components/chats/ChatView'
 import {
   MOCK_ARTIFACTS,
-  MOCK_CONTEXT,
   MOCK_ARTIFACT_UPDATES,
   type Artifact,
   type Chat,
@@ -22,11 +21,13 @@ import {
   useGetChatsQuery,
   useGetAgentsQuery,
   useGetMessagesQuery,
+  useGetLibraryQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
 } from '@/store/api'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiRun } from '@/store/selectors/runs'
+import { toContextItem } from '@/store/selectors/library'
 
 const NEW_CHAT_STUB: Chat = {
   id: '__new__',
@@ -208,6 +209,14 @@ function App() {
   // Don't filter by workspace — the inbox is global.
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
   const unreadCount = awaitingResp?.items.length ?? 0
+
+  // Library (aka Context) — files stored under the workspace's
+  // library/ tree. Folders/links/notes stay client-derived.
+  const { data: libraryResp } = useGetLibraryQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    { skip: !activeWorkspaceId },
+  )
+  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
   const deskUnreadCount  = MOCK_ARTIFACT_UPDATES.filter(u => !readUpdateIds.has(u.id)).length
 
   const handleDismissUpdate = useCallback((id: string) => {
@@ -310,7 +319,7 @@ function App() {
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList
-            items={MOCK_CONTEXT}
+            items={libraryItems}
             onItemClick={(item) => setSelectedContextItem(item)}
             onCompose={handleComposeWithContext}
           />
