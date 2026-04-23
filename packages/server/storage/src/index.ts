@@ -4,6 +4,7 @@ export {
   chatsDir,
   filesDir,
   libraryDir,
+  workspaceLibraryDir,
   resolveHostPath,
   trashDir,
   workspaceRootPath,

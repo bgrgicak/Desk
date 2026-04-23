@@ -208,7 +208,14 @@ export function generateOpenApiSpec(): OpenApiSpec {
         patch: { summary: "Update agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Updated agent" } } },
       },
       "/chats": {
-        get: { summary: "List chats", responses: { "200": { description: "Chat array with last-message snippet" } } },
+        get: {
+          summary: "List chats",
+          description: "Lists chats in the given workspace. When `workspaceId` is omitted, defaults to the caller's first workspace. Returns `[]` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
+          parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          responses: { "200": { description: "Chat array with last-message snippet" } },
+        },
         post: {
           summary: "Create chat",
           requestBody: { content: { "application/json": { schema: { type: "object", properties: { workspaceId: { type: "string" }, agentId: { type: "string" }, title: { type: "string" }, goal: { type: "string" } }, required: ["workspaceId", "agentId", "title"] } } } },
@@ -346,8 +353,9 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/library": {
         get: {
           summary: "List library files",
-          description: "Reads the workspace library directory; returns FileRef entries (path, name, mime, size, createdAt). Files with a leading dot are hidden.",
+          description: "Reads the workspace library directory; returns FileRef entries (path, name, mime, size, createdAt). Files with a leading dot are hidden. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
           parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
             { name: "cursor", in: "query", schema: { type: "string" } },
             { name: "limit", in: "query", schema: { type: "integer" } },
           ],
@@ -355,7 +363,10 @@ export function generateOpenApiSpec(): OpenApiSpec {
         },
         post: {
           summary: "Upload a file to the workspace library",
-          description: "Accepts multipart/form-data with a single 'file' part. Filename becomes the library entry's name; collisions get suffixed with -1, -2, ...",
+          description: "Accepts multipart/form-data with a single 'file' part. Filename becomes the library entry's name; collisions get suffixed with -1, -2, ... Destination workspace comes from `workspaceId` (falls back to the caller's first workspace).",
+          parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
           requestBody: {
             required: true,
             content: {
@@ -364,26 +375,35 @@ export function generateOpenApiSpec(): OpenApiSpec {
               },
             },
           },
-          responses: { "201": { description: "Created file ref" } },
+          responses: { "201": { description: "Created file ref" }, "400": { description: "Malformed workspaceId" }, "404": { description: "Workspace not found / no workspace available" } },
         },
         delete: {
           summary: "Delete a library file (moves it to ~/Desk/.trash/)",
-          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
-          responses: { "200": { description: "OK" }, "404": { description: "No such path" } },
+          parameters: [
+            { name: "path", in: "query", required: true, schema: { type: "string" } },
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          responses: { "200": { description: "OK" }, "404": { description: "No such path in the resolved workspace" } },
         },
       },
       "/library/meta": {
         get: {
           summary: "Stat a library file by workspace-relative path",
-          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
-          responses: { "200": { description: "FileRef" }, "404": { description: "No such path" } },
+          parameters: [
+            { name: "path", in: "query", required: true, schema: { type: "string" } },
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          responses: { "200": { description: "FileRef" }, "404": { description: "No such path in the resolved workspace" } },
         },
       },
       "/library/download": {
         get: {
           summary: "Stream a library file's bytes",
-          parameters: [{ name: "path", in: "query", required: true, schema: { type: "string" } }],
-          responses: { "200": { description: "File content" }, "404": { description: "No such path" } },
+          parameters: [
+            { name: "path", in: "query", required: true, schema: { type: "string" } },
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          responses: { "200": { description: "File content" }, "404": { description: "No such path in the resolved workspace" } },
         },
       },
       // Runs / scheduled-jobs endpoints are gone — execution state lives

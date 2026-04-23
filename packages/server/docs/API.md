@@ -80,7 +80,7 @@ explicit `agentId` uses the workspace default.
 
 | Method | Path                      | Description               |
 |--------|---------------------------|---------------------------|
-| GET    | /chats                    | List chats                |
+| GET    | /chats?workspaceId=       | List chats (filtered by workspace; defaults to caller's first workspace) |
 | POST   | /chats                    | Create chat               |
 | GET    | /chats/{id}               | Get chat                  |
 | PATCH  | /chats/{id}               | Update chat               |
@@ -92,6 +92,14 @@ explicit `agentId` uses the workspace default.
 | GET    | /chats/{id}/messages/{messageId}/note-history | List archived versions of a note-content message |
 | GET    | /chats/{id}/artifacts                   | List chat artifacts       |
 | POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
+
+### GET /chats
+
+Lists chats in one of the caller's workspaces.
+
+**Query parameters:**
+
+- `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
 
 ### POST /chats/{id}/artifacts
 
@@ -189,15 +197,25 @@ in prod, the UI is the only way to populate them.
 
 | Method | Path                           | Description                                     |
 |--------|--------------------------------|-------------------------------------------------|
-| GET    | /library                       | List library files                              |
-| POST   | /library                       | Upload to library (multipart/form-data)         |
-| DELETE | /library?path=...              | Move a library file to `~/Desk/.trash/`         |
-| GET    | /library/meta?path=...         | Stat a library file                             |
-| GET    | /library/download?path=...     | Stream a library file                           |
+| GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
+| POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
+| GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
+| GET    | /library/download?path=&workspaceId= | Stream a library file                     |
 
-Files live on the filesystem at `~/Desk/workspaces/desk/library/`; there
-is no DB index. File identifiers are workspace-relative paths
-(`library/report.md`). The `path` query parameter is url-encoded.
+Files are partitioned by workspace on disk at
+`~/Desk/workspaces/*/library/{workspaceId}/`. There is no DB index;
+listing walks the directory. File identifiers are workspace-relative
+paths inside that subtree (`foo.pdf`, `notes/bar.md`). The `path` query
+parameter is url-encoded.
+
+### Workspace scoping
+
+All five routes accept `workspaceId=<wks_*>`:
+
+- Present → restricts the operation to that workspace. Returns 404 on non-owned ids (existence-hiding, same as every other resource), 400 on malformed ids.
+- Absent → defaults to the caller's first workspace for backwards compatibility. Returns `[]` / 404 as appropriate if the caller has no workspaces.
+- `path` is interpreted relative to the resolved workspace subtree. Attempts to traverse outside that subtree (`..`, absolute paths, etc.) return 404.
 
 ## Runs and scheduled jobs
 

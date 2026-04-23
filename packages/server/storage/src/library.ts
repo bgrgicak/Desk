@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
-import { libraryDir, workspaceRootPath } from "./layout.js";
+import { workspaceLibraryDir, workspaceRootPath } from "./layout.js";
 import type { FileRef } from "./files.js";
 
 export interface LibraryContext {
@@ -33,10 +33,10 @@ function guessMime(name: string): string {
  */
 export async function listLibrary(
   ctx: LibraryContext,
-  _workspaceId: string,
+  workspaceId: string,
   opts?: { cursor?: string; limit?: number },
 ): Promise<{ items: FileRef[]; nextCursor?: string }> {
-  const dir = libraryDir(ctx.home);
+  const dir = workspaceLibraryDir(ctx.home, workspaceId);
   await fs.mkdir(dir, { recursive: true });
   const names = await fs.readdir(dir);
 

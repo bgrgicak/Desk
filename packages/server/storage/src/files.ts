@@ -12,10 +12,10 @@ import {
 } from "@desk/shared";
 import {
   chatAttachmentsDir,
-  libraryDir,
   resolveHostPath,
   tmpDir,
   trashDir,
+  workspaceLibraryDir,
   workspaceRootPath,
 } from "./layout.js";
 
@@ -94,7 +94,7 @@ export async function uploadArtifact(
   if (input.chatId) {
     destDir = await chatAttachmentsDir(ctx.home, input.chatId);
   } else {
-    destDir = libraryDir(ctx.home);
+    destDir = workspaceLibraryDir(ctx.home, input.workspaceId);
   }
   await fs.mkdir(destDir, { recursive: true });
 

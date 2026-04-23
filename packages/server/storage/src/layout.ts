@@ -60,9 +60,20 @@ export async function chatAttachmentsDir(home: string, chatId: string): Promise<
   return dir;
 }
 
-/** Returns the absolute path to the library directory. */
+/** Returns the absolute path to the shared library root (contains per-workspace subdirs). */
 export function libraryDir(home: string): string {
   return path.join(workspaceRoot(home), "library");
+}
+
+/**
+ * Returns the absolute path to a workspace's library subdirectory. Each
+ * workspace owns a subtree under `library/` keyed by workspaceId so that
+ * GET/POST/DELETE /library?workspaceId=... can filter by real on-disk
+ * scope, not a DB column.
+ */
+export function workspaceLibraryDir(home: string, workspaceId: string): string {
+  validateId(workspaceId, ID_PREFIXES.workspace);
+  return path.join(libraryDir(home), workspaceId);
 }
 
 /** Returns the temp directory for in-progress uploads. */

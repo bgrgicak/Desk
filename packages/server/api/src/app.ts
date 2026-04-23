@@ -25,6 +25,11 @@ import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import {
+  requireLibraryPathInWorkspace,
+  requireWorkspaceId,
+  resolveWorkspaceId,
+} from "./workspace-scope.js";
 
 type RunManager = ReturnType<typeof createRunManager>;
 
@@ -377,8 +382,7 @@ export function createApp(opts: AppOptions): Server {
 
     // Chat routes
     if (path === "/chats" && method === "GET") {
-      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
-      const wsId = workspaces[0]?.id;
+      const wsId = await resolveWorkspaceId(pool, userId, query);
       const result = wsId ? await chatRoutes.listChats(pool, wsId) : [];
       sendJson(res, 200, result);
       return;
@@ -484,8 +488,7 @@ export function createApp(opts: AppOptions): Server {
     // query parameter rather than embedding it in the URL path — simpler to
     // parse and no URL-encoding of slashes.
     if (path === "/library" && method === "GET") {
-      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
-      const wsId = workspaces[0]?.id;
+      const wsId = await resolveWorkspaceId(pool, userId, query);
       const cursor = query.get("cursor") ?? undefined;
       const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
       const result = wsId ? await libraryRoutes.list(storage, wsId, { cursor, limit }) : { items: [] };
@@ -493,6 +496,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/library" && method === "POST") {
+      const wsId = await requireWorkspaceId(pool, userId, query);
       const form = await parseMultipart(req);
       const part = form.get("file");
       if (!(part instanceof Blob)) {
@@ -501,8 +505,6 @@ export function createApp(opts: AppOptions): Server {
       const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
       const mime = part.type || "application/octet-stream";
       const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
-      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
-      const wsId = workspaces[0]?.id ?? "";
       const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream }, emitEvent);
       sendJson(res, 201, result);
       return;
@@ -510,6 +512,8 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/library/meta" && method === "GET") {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      requireLibraryPathInWorkspace(p, wsId);
       const result = await libraryRoutes.get(storage, p);
       sendJson(res, 200, result);
       return;
@@ -517,6 +521,8 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/library/download" && method === "GET") {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      requireLibraryPathInWorkspace(p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -528,8 +534,8 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/library" && method === "DELETE") {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
-      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
-      const wsId = workspaces[0]?.id ?? "";
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      requireLibraryPathInWorkspace(p, wsId);
       await libraryRoutes.remove(storage, wsId, p, emitEvent);
       sendJson(res, 200, { ok: true });
       return;

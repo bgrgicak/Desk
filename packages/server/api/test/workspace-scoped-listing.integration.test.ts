@@ -1,0 +1,450 @@
+/**
+ * Integration tests for workspace-scoped `GET /chats` and /library routes
+ * (feature-gap-matrix.md §4.2.3 / §4.3.5).
+ *
+ * Hits a real Postgres + real filesystem — follows the pattern in
+ * ownership.integration.test.ts. Seeds one user with two workspaces
+ * (wsA + wsB) plus a second user to cover cross-tenant 404 cases, then
+ * exercises each of the six routes with explicit and implicit
+ * workspaceId query params.
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as http from "node:http";
+import * as net from "node:net";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import pg from "pg";
+import { runMigrations, queries, hashPassword } from "@desk/db";
+import { ensureLayout } from "@desk/storage";
+import { createRunManager, createMemoryAdapter } from "@desk/scheduler";
+import { generateId } from "@desk/shared";
+import { createApp } from "../src/app.js";
+import { clearSessions } from "../src/auth/sessions.js";
+import { clearConnections } from "../src/ws/registry.js";
+
+const workerId = process.env.VITEST_WORKER_ID ?? "0";
+const testDbName = `desk_ws_scope_${workerId}`;
+
+function adminConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = "/postgres";
+  return url.toString();
+}
+function testConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = `/${testDbName}`;
+  return url.toString();
+}
+
+let pool: pg.Pool;
+let server: http.Server;
+let port: number;
+let home: string;
+
+interface SeededUser {
+  token: string;
+  wsA: string;
+  wsB: string;
+  agentId: string;
+  chatA: string;
+  chatB: string;
+}
+let alpha: SeededUser;
+let betaToken: string;
+let betaWs: string;
+
+async function seedUser(suffix: string): Promise<SeededUser> {
+  const userId = generateId("user");
+  const username = `wsscope_${suffix}`;
+  const password = `pw-${suffix}`;
+  await queries.users.insert(pool, {
+    id: userId,
+    username,
+    passwordHash: await hashPassword(password),
+    email: `${username}@example.com`,
+  });
+
+  const wsA = generateId("workspace");
+  const wsB = generateId("workspace");
+  for (const [id, name] of [
+    [wsA, `ws-${suffix}-A`],
+    [wsB, `ws-${suffix}-B`],
+  ] as const) {
+    await queries.workspaces.insert(pool, {
+      id,
+      userId,
+      name,
+      description: "",
+      icon: "",
+    });
+  }
+
+  const agentId = generateId("agent");
+  await queries.agents.insert(pool, {
+    id: agentId,
+    userId,
+    name: `agent-${suffix}`,
+    instructions: "",
+    model: "anthropic/claude-sonnet-4-5",
+    toolAllowlist: [],
+  });
+  for (const ws of [wsA, wsB]) {
+    await pool.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+       VALUES ($1, $2, true)`,
+      [ws, agentId],
+    );
+  }
+
+  const chatA = generateId("chat");
+  const chatB = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    [chatA, wsA, agentId, `chat-${suffix}-A`],
+  );
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    [chatB, wsB, agentId, `chat-${suffix}-B`],
+  );
+
+  const login = await request("POST", "/auth/login", null, { username, password });
+  const token = (login.body as { token: string }).token;
+
+  return { token, wsA, wsB, agentId, chatA, chatB };
+}
+
+function request(
+  method: string,
+  pathStr: string,
+  token: string | null,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const payload = body !== undefined ? JSON.stringify(body) : undefined;
+    if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: pathStr, method, headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function requestMultipart(
+  method: string,
+  pathStr: string,
+  token: string,
+  parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const boundary = `----desk-ws-${Math.random().toString(16).slice(2)}`;
+    const chunks: Buffer[] = [];
+    for (const p of parts) {
+      const header = [`--${boundary}`];
+      const disposition = p.filename
+        ? `Content-Disposition: form-data; name="${p.name}"; filename="${p.filename}"`
+        : `Content-Disposition: form-data; name="${p.name}"`;
+      header.push(disposition);
+      if (p.contentType) header.push(`Content-Type: ${p.contentType}`);
+      header.push("", "");
+      chunks.push(Buffer.from(header.join("\r\n")));
+      chunks.push(p.body);
+      chunks.push(Buffer.from("\r\n"));
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    const payload = Buffer.concat(chunks);
+
+    const headers: Record<string, string> = {
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(payload.length),
+      Authorization: `Bearer ${token}`,
+    };
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: pathStr, method, headers },
+      (res) => {
+        const bufs: Buffer[] = [];
+        res.on("data", (c: Buffer) => bufs.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(bufs).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+beforeAll(async () => {
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+    await admin.query(`CREATE DATABASE ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
+
+  pool = new pg.Pool({ connectionString: testConn() });
+  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  await runMigrations(pool);
+
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-scope-"));
+  await ensureLayout(home);
+  process.env.DESK_HOME = home;
+
+  const runManager = createRunManager({
+    pool,
+    adapter: createMemoryAdapter(),
+    execRunFn: async () => ({ exitCode: 0 }),
+  });
+  server = createApp({ pool, storage: { pool, home }, runManager });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  port = (server.address() as net.AddressInfo).port;
+
+  alpha = await seedUser("alpha");
+
+  const beta = await seedUser("beta");
+  betaToken = beta.token;
+  betaWs = beta.wsA;
+});
+
+afterAll(async () => {
+  clearSessions();
+  clearConnections();
+  server?.close();
+  if (pool) await pool.end();
+  if (home) await fs.rm(home, { recursive: true, force: true });
+  delete process.env.DESK_HOME;
+
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
+});
+
+describe("GET /chats?workspaceId=", () => {
+  it("filters to the given workspace", async () => {
+    const a = await request("GET", `/chats?workspaceId=${alpha.wsA}`, alpha.token);
+    expect(a.status).toBe(200);
+    const aList = a.body as Array<{ id: string; workspaceId: string }>;
+    expect(aList.map((c) => c.id)).toContain(alpha.chatA);
+    expect(aList.map((c) => c.id)).not.toContain(alpha.chatB);
+
+    const b = await request("GET", `/chats?workspaceId=${alpha.wsB}`, alpha.token);
+    expect(b.status).toBe(200);
+    const bList = b.body as Array<{ id: string }>;
+    expect(bList.map((c) => c.id)).toContain(alpha.chatB);
+    expect(bList.map((c) => c.id)).not.toContain(alpha.chatA);
+  });
+
+  it("defaults to the caller's first workspace when workspaceId is absent", async () => {
+    const res = await request("GET", "/chats", alpha.token);
+    expect(res.status).toBe(200);
+    const list = res.body as Array<{ id: string; workspaceId: string }>;
+    // Every row must belong to a single workspace (the first one).
+    const workspaceIds = new Set(list.map((c) => c.workspaceId));
+    expect(workspaceIds.size).toBe(1);
+    expect(workspaceIds.has(alpha.wsA) || workspaceIds.has(alpha.wsB)).toBe(true);
+  });
+
+  it("returns 404 when asking for a peer's workspace", async () => {
+    const res = await request("GET", `/chats?workspaceId=${betaWs}`, alpha.token);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 for a malformed workspaceId", async () => {
+    const res = await request("GET", "/chats?workspaceId=foo", alpha.token);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /library?workspaceId=", () => {
+  it("uploads land in the requested workspace and are isolated from peers", async () => {
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsB}`,
+      alpha.token,
+      [{ name: "file", filename: "hello.txt", contentType: "text/plain", body: Buffer.from("hi wsB") }],
+    );
+    expect(up.status).toBe(201);
+    const uploaded = up.body as { path: string; name: string };
+    expect(uploaded.path.startsWith(`library/${alpha.wsB}/`)).toBe(true);
+
+    const inB = await request("GET", `/library?workspaceId=${alpha.wsB}`, alpha.token);
+    expect(inB.status).toBe(200);
+    const bItems = (inB.body as { items: Array<{ path: string }> }).items;
+    expect(bItems.some((f) => f.path === uploaded.path)).toBe(true);
+
+    const inA = await request("GET", `/library?workspaceId=${alpha.wsA}`, alpha.token);
+    expect(inA.status).toBe(200);
+    const aItems = (inA.body as { items: Array<{ path: string }> }).items;
+    expect(aItems.some((f) => f.path === uploaded.path)).toBe(false);
+  });
+
+  it("defaults to the caller's first workspace when workspaceId is absent", async () => {
+    // Upload into wsA explicitly so we have a file to find via the default.
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [{ name: "file", filename: "default-ws.txt", contentType: "text/plain", body: Buffer.from("default") }],
+    );
+    expect(up.status).toBe(201);
+
+    const res = await request("GET", "/library", alpha.token);
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Array<{ path: string }> }).items;
+    const firstWs = items[0]?.path.split("/")[1];
+    if (firstWs) {
+      // All returned items must belong to the same (first) workspace.
+      for (const it of items) {
+        expect(it.path.startsWith(`library/${firstWs}/`)).toBe(true);
+      }
+    }
+  });
+
+  it("returns 404 when asking for a peer's workspace", async () => {
+    const res = await request("GET", `/library?workspaceId=${betaWs}`, alpha.token);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 for a malformed workspaceId", async () => {
+    const res = await request("GET", "/library?workspaceId=foo", alpha.token);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("DELETE /library", () => {
+  it("deletes only within the requested workspace", async () => {
+    // Upload one file in each workspace.
+    const upA = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [{ name: "file", filename: "only-A.txt", contentType: "text/plain", body: Buffer.from("A") }],
+    );
+    expect(upA.status).toBe(201);
+    const fileA = (upA.body as { path: string }).path;
+
+    const upB = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsB}`,
+      alpha.token,
+      [{ name: "file", filename: "only-B.txt", contentType: "text/plain", body: Buffer.from("B") }],
+    );
+    expect(upB.status).toBe(201);
+    const fileB = (upB.body as { path: string }).path;
+
+    // DELETE in wsB removes only fileB.
+    const del = await request(
+      "DELETE",
+      `/library?workspaceId=${alpha.wsB}&path=${encodeURIComponent(fileB)}`,
+      alpha.token,
+    );
+    expect(del.status).toBe(200);
+
+    const listA = await request("GET", `/library?workspaceId=${alpha.wsA}`, alpha.token);
+    const itemsA = (listA.body as { items: Array<{ path: string }> }).items;
+    expect(itemsA.some((i) => i.path === fileA)).toBe(true);
+
+    const listB = await request("GET", `/library?workspaceId=${alpha.wsB}`, alpha.token);
+    const itemsB = (listB.body as { items: Array<{ path: string }> }).items;
+    expect(itemsB.some((i) => i.path === fileB)).toBe(false);
+  });
+
+  it("cannot delete a path that belongs to a different workspace (404)", async () => {
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [{ name: "file", filename: "safe.txt", contentType: "text/plain", body: Buffer.from("safe") }],
+    );
+    const filePath = (up.body as { path: string }).path;
+    const res = await request(
+      "DELETE",
+      `/library?workspaceId=${alpha.wsB}&path=${encodeURIComponent(filePath)}`,
+      alpha.token,
+    );
+    expect(res.status).toBe(404);
+
+    // Confirm unchanged.
+    const listA = await request("GET", `/library?workspaceId=${alpha.wsA}`, alpha.token);
+    const itemsA = (listA.body as { items: Array<{ path: string }> }).items;
+    expect(itemsA.some((i) => i.path === filePath)).toBe(true);
+  });
+});
+
+describe("GET /library/meta and /library/download", () => {
+  it("meta + download only resolve paths inside the requested workspace", async () => {
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [{ name: "file", filename: "meta.txt", contentType: "text/plain", body: Buffer.from("meta body") }],
+    );
+    const filePath = (up.body as { path: string }).path;
+
+    const metaOk = await request(
+      "GET",
+      `/library/meta?workspaceId=${alpha.wsA}&path=${encodeURIComponent(filePath)}`,
+      alpha.token,
+    );
+    expect(metaOk.status).toBe(200);
+
+    const metaWrongWs = await request(
+      "GET",
+      `/library/meta?workspaceId=${alpha.wsB}&path=${encodeURIComponent(filePath)}`,
+      alpha.token,
+    );
+    expect(metaWrongWs.status).toBe(404);
+
+    const dlOk = await request(
+      "GET",
+      `/library/download?workspaceId=${alpha.wsA}&path=${encodeURIComponent(filePath)}`,
+      alpha.token,
+    );
+    expect(dlOk.status).toBe(200);
+
+    const dlWrongWs = await request(
+      "GET",
+      `/library/download?workspaceId=${alpha.wsB}&path=${encodeURIComponent(filePath)}`,
+      alpha.token,
+    );
+    expect(dlWrongWs.status).toBe(404);
+  });
+});

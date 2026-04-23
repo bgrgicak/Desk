@@ -13,7 +13,7 @@
     { "key": "workspaceId", "value": "", "type": "string" },
     { "key": "agentId", "value": "", "type": "string" },
     { "key": "chatId", "value": "", "type": "string" },
-    { "key": "libraryPath", "value": "library/readme.txt", "type": "string" }
+    { "key": "libraryPath", "value": "readme.txt", "type": "string" }
   ],
   "auth": {
     "type": "bearer",
@@ -284,7 +284,15 @@
           "name": "GET /chats",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/chats", "host": ["{{baseUrl}}"], "path": ["chats"] }
+            "description": "Lists chats filtered by workspaceId. Omit the param to fall back to the caller's first workspace.",
+            "url": {
+              "raw": "{{baseUrl}}/chats?workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of a workspace the caller owns. Omit for the first-workspace default.", "disabled": false }
+              ]
+            }
           }
         },
         {
@@ -452,11 +460,13 @@
           "name": "GET /library",
           "request": {
             "method": "GET",
+            "description": "List library files in the given workspace. Omit workspaceId to fall back to the caller's first workspace. Files live under library/{workspaceId}/… on disk.",
             "url": {
-              "raw": "{{baseUrl}}/library?cursor=&limit=50",
+              "raw": "{{baseUrl}}/library?workspaceId={{workspaceId}}&cursor=&limit=50",
               "host": ["{{baseUrl}}"],
               "path": ["library"],
               "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of a workspace the caller owns. Omit for first-workspace default." },
                 { "key": "cursor", "value": "" },
                 { "key": "limit", "value": "50" }
               ]
@@ -467,25 +477,36 @@
           "name": "POST /library",
           "request": {
             "method": "POST",
+            "description": "Upload a file into the given workspace's library. Lands at library/{workspaceId}/{filename}; auto-suffixes on collision.",
             "body": {
               "mode": "formdata",
               "formdata": [
                 { "key": "file", "type": "file", "src": [] }
               ]
             },
-            "url": { "raw": "{{baseUrl}}/library", "host": ["{{baseUrl}}"], "path": ["library"] }
+            "url": {
+              "raw": "{{baseUrl}}/library?workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of destination workspace. Omit for first-workspace default." }
+              ]
+            }
           }
         },
         {
           "name": "GET /library/meta",
           "request": {
             "method": "GET",
-            "description": "Stat a library file by workspace-relative path.",
+            "description": "Stat a library file by workspace-relative path inside the given workspace. Returns 404 if the path escapes the workspace subtree.",
             "url": {
-              "raw": "{{baseUrl}}/library/meta?path={{libraryPath}}",
+              "raw": "{{baseUrl}}/library/meta?path={{libraryPath}}&workspaceId={{workspaceId}}",
               "host": ["{{baseUrl}}"],
               "path": ["library", "meta"],
-              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
             }
           }
         },
@@ -493,12 +514,15 @@
           "name": "GET /library/download",
           "request": {
             "method": "GET",
-            "description": "Stream a library file's bytes.",
+            "description": "Stream a library file's bytes from the given workspace.",
             "url": {
-              "raw": "{{baseUrl}}/library/download?path={{libraryPath}}",
+              "raw": "{{baseUrl}}/library/download?path={{libraryPath}}&workspaceId={{workspaceId}}",
               "host": ["{{baseUrl}}"],
               "path": ["library", "download"],
-              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
             }
           }
         },
@@ -506,12 +530,15 @@
           "name": "DELETE /library",
           "request": {
             "method": "DELETE",
-            "description": "Moves the file at ?path= to ~/Desk/.trash/.",
+            "description": "Moves the file at ?path= (inside the given workspace) to ~/Desk/.trash/.",
             "url": {
-              "raw": "{{baseUrl}}/library?path={{libraryPath}}",
+              "raw": "{{baseUrl}}/library?path={{libraryPath}}&workspaceId={{workspaceId}}",
               "host": ["{{baseUrl}}"],
               "path": ["library"],
-              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
             }
           }
         }
