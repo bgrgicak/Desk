@@ -211,6 +211,7 @@ export interface SettingsAgent {
   providerId: string
   model: string
   instructions: string
+  enabled: boolean
 }
 
 export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {
@@ -250,6 +251,7 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-claude',
     model: 'Claude Haiku 3.5',
     instructions: 'Summarise any input into three crisp bullet points. No fluff, no preamble.',
+    enabled: true,
   },
   {
     id: 'sa-research-pro',
@@ -257,6 +259,7 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-chatgpt',
     model: 'GPT-4o',
     instructions: 'Do deep, source-backed research. Prefer primary sources and cite everything with links.',
+    enabled: true,
   },
   {
     id: 'sa-copywriter',
@@ -264,6 +267,87 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-claude',
     model: 'Claude Sonnet 4',
     instructions: 'Write punchy, on-brand marketing copy. Warm, direct, never corporate.',
+    enabled: false,
+  },
+]
+
+// ─── Connections (Settings → Connections) ───
+
+export type ConnectionKind =
+  | 'claude' | 'chatgpt'
+  | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+
+export interface ConnectionMeta {
+  name: string
+  description: string
+  icon: string // emoji used when no brand mark applies
+}
+
+export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
+  'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API',  icon: '🅰️' },
+  'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',     icon: '🅶' },
+  'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',              icon: '📁' },
+  'notion':       { name: 'Notion',       description: 'Pages and databases',                   icon: '📝' },
+  'github':       { name: 'GitHub',       description: 'Repositories and issues',               icon: '🐙' },
+  'slack':        { name: 'Slack',        description: 'Messages and channels',                 icon: '💬' },
+  'figma':        { name: 'Figma',        description: 'Design files and prototypes',           icon: '🎨' },
+  'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',           icon: '🔷' },
+  'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',          icon: '🌐' },
+}
+
+export interface Connection {
+  id: string
+  kind: ConnectionKind
+  name: string
+  apiKey?: string
+  baseUrl?: string
+  enabled: boolean
+}
+
+export const MOCK_CONNECTIONS: Connection[] = [
+  {
+    id: 'conn-claude',
+    kind: 'claude',
+    name: 'Claude',
+    apiKey: 'sk-ant-••••••••••••••••••••••••1f4a',
+    baseUrl: 'https://api.anthropic.com',
+    enabled: true,
+  },
+  {
+    id: 'conn-chatgpt',
+    kind: 'chatgpt',
+    name: 'ChatGPT',
+    apiKey: 'sk-••••••••••••••••••••••••••••••••f3c2',
+    baseUrl: 'https://api.openai.com/v1',
+    enabled: false,
+  },
+  {
+    id: 'conn-notion',
+    kind: 'notion',
+    name: 'Notion',
+    apiKey: 'secret_••••••••••••••••••••••••9b2d',
+    enabled: true,
+  },
+  {
+    id: 'conn-github',
+    kind: 'github',
+    name: 'GitHub',
+    apiKey: 'ghp_••••••••••••••••••••••••••••7a1c',
+    enabled: true,
+  },
+  {
+    id: 'conn-slack',
+    kind: 'slack',
+    name: 'Slack',
+    apiKey: 'xoxb-••••••••••••••••••••••••ae3f',
+    enabled: false,
+  },
+  {
+    id: 'conn-figma',
+    kind: 'figma',
+    name: 'Figma',
+    apiKey: 'figd_••••••••••••••••••••••••62c8',
+    enabled: false,
   },
 ]
 
