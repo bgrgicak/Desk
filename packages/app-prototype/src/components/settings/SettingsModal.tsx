@@ -1352,7 +1352,7 @@ export function SettingsModal({
           <div className="w-52 shrink-0 flex flex-col border-r bg-muted/30">
             <div className="px-4 pt-5 pb-3">
               {/* Workspace identity */}
-              <div className="flex items-center gap-2 mb-4">
+              <div className="flex items-center gap-2">
                 <div
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
                   style={{ backgroundColor: workspace.bg }}
@@ -1361,9 +1361,6 @@ export function SettingsModal({
                 </div>
                 <span className="text-sm font-semibold truncate">{workspace.name}</span>
               </div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1.5">
-                Settings
-              </p>
             </div>
 
             <nav className="flex-1 px-2 space-y-0.5">
