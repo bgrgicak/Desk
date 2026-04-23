@@ -27,14 +27,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import {
   MOCK_PROVIDERS,
@@ -269,14 +261,15 @@ interface AgentsSectionProps {
   providers: Provider[]
   agents: SettingsAgent[]
   search: string
+  onSearchChange: (next: string) => void
   onFocus: (next: AgentsFocus) => void
   onSaveAgent: (agent: SettingsAgent) => void
   onDeleteAgent: (id: string) => void
 }
 
 function AgentsSection({
-  view, focus, providers, agents, search,
-  onFocus,
+  focus, providers, agents, search,
+  onSearchChange, onFocus,
   onSaveAgent, onDeleteAgent,
 }: AgentsSectionProps) {
   if (focus !== null) {
@@ -302,16 +295,33 @@ function AgentsSection({
     : agents
 
   return (
-    <AgentsList
-      agents={filteredAgents}
-      providers={providers}
-      hasAnyAgents={agents.length > 0}
-      hasAnyProviders={providers.length > 0}
-      query={q}
-      onOpen={(id) => onFocus({ mode: 'edit', id })}
-      onAdd={() => onFocus({ mode: 'new' })}
-      onDelete={onDeleteAgent}
-    />
+    <div className="space-y-4">
+      <div className="flex items-center justify-end gap-2">
+        <SearchInput
+          value={search}
+          onChange={onSearchChange}
+          placeholder="Search agents…"
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => onFocus({ mode: 'new' })}
+        >
+          <Plus className="h-3.5 w-3.5" />Add
+        </Button>
+      </div>
+      <AgentsList
+        agents={filteredAgents}
+        providers={providers}
+        hasAnyAgents={agents.length > 0}
+        hasAnyProviders={providers.length > 0}
+        query={q}
+        onOpen={(id) => onFocus({ mode: 'edit', id })}
+        onAdd={() => onFocus({ mode: 'new' })}
+        onDelete={onDeleteAgent}
+      />
+    </div>
   )
 }
 
@@ -377,47 +387,34 @@ function AgentsList({
     )
   }
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead className="px-0">Name</TableHead>
-          <TableHead className="px-0">Provider</TableHead>
-          <TableHead className="px-0">Model</TableHead>
-          <TableHead className="px-0 w-0" />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {agents.map(a => {
-          const provider = providers.find(p => p.id === a.providerId)
-          const providerLabel = provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'
-          return (
-            <TableRow key={a.id}>
-              <TableCell className="px-0 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {provider
-                    ? <ProviderGlyph kind={provider.kind} size="sm" />
-                    : <span className="h-5 w-5 shrink-0 rounded-md bg-muted" />
-                  }
-                  <span className="text-sm font-medium truncate">{a.name}</span>
-                </div>
-              </TableCell>
-              <TableCell className="px-0 py-2 text-muted-foreground">
-                {providerLabel}
-              </TableCell>
-              <TableCell className="px-0 py-2 text-muted-foreground">
-                {a.model}
-              </TableCell>
-              <TableCell className="px-0 py-2 w-0">
-                <div className="flex items-center justify-end gap-1.5">
-                  <Button variant="outline" size="xs" onClick={() => onOpen(a.id)}>Edit</Button>
-                  <Button variant="outline" size="xs" onClick={() => onDelete(a.id)}>Delete</Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+    <div className="flex flex-col">
+      {agents.map(a => {
+        const provider = providers.find(p => p.id === a.providerId)
+        const providerLabel = provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'
+        return (
+          <div
+            key={a.id}
+            className="flex items-center gap-3 py-4 border-b last:border-b-0"
+          >
+            {provider
+              ? <ProviderGlyph kind={provider.kind} size="lg" />
+              : <span className="h-10 w-10 shrink-0 rounded-lg bg-muted" />
+            }
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{a.name}</p>
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+                <span className="shrink-0">{providerLabel}</span>
+                <span className="truncate">{a.model}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button variant="outline" size="sm" onClick={() => onOpen(a.id)}>Edit</Button>
+              <Button variant="outline" size="sm" onClick={() => onDelete(a.id)}>Delete</Button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -511,9 +508,9 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
   )
 }
 
-function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' | 'md' }) {
-  const box  = size === 'sm' ? 'h-5 w-5' : 'h-8 w-8'
-  const mark = size === 'sm' ? 'h-3 w-3' : 'h-[18px] w-[18px]'
+function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' | 'md' | 'lg' }) {
+  const box  = size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8'
+  const mark = size === 'sm' ? 'h-3 w-3' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-[18px] w-[18px]'
   if (kind === 'claude') {
     return (
       <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-[#F5E6DA] text-[#CC785C]', box)}>
@@ -825,8 +822,6 @@ export function SettingsModal({
     )
   }
 
-  const showAgentsToolbar = activeSection === 'agents' && agentsFocus === null
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -876,37 +871,18 @@ export function SettingsModal({
 
           {/* Right content */}
           <div className="flex-1 flex flex-col min-w-0">
-            {/* Header: breadcrumbs + inline actions + close */}
+            {/* Header: breadcrumbs + close */}
             <div className="h-[52px] flex items-center justify-between gap-3 border-b px-4 shrink-0">
               {renderHeaderBreadcrumb()}
-              <div className="flex items-center gap-2 shrink-0">
-                {showAgentsToolbar && (
-                  <>
-                    <SearchInput
-                      value={agentsSearch}
-                      onChange={setAgentsSearch}
-                      placeholder="Search agents…"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={() => setAgentsFocusAndReset({ mode: 'new' })}
-                    >
-                      <Plus className="h-3.5 w-3.5" />Add
-                    </Button>
-                  </>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground"
-                  onClick={() => onOpenChange(false)}
-                  aria-label="Close"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground shrink-0"
+                onClick={() => onOpenChange(false)}
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </Button>
             </div>
 
             {/* Scrollable body */}
@@ -924,6 +900,7 @@ export function SettingsModal({
                   providers={providers}
                   agents={agents}
                   search={agentsSearch}
+                  onSearchChange={setAgentsSearch}
                   onFocus={setAgentsFocusAndReset}
                   onSaveAgent={handleSaveAgent}
                   onDeleteAgent={handleDeleteAgent}
