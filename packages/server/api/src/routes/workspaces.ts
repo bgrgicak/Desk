@@ -2,7 +2,8 @@ import pg from "pg";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError } from "@desk/shared";
 
-export async function listWorkspaces(pool: pg.Pool) {
+export async function listWorkspaces(pool: pg.Pool, userId?: string) {
+  if (userId) return queries.workspaces.listByUser(pool, userId);
   return queries.workspaces.list(pool);
 }
 

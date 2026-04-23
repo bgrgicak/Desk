@@ -7,6 +7,12 @@ import type { createRunManager } from "@desk/scheduler";
 import { requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
 import { verifySession } from "./auth/sessions.js";
+import {
+  requireOwnedAgent,
+  requireOwnedChat,
+  requireOwnedMessage,
+  requireOwnedWorkspace,
+} from "./auth/ownership.js";
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
@@ -282,9 +288,10 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Workspace routes
+    // Workspace routes — all scoped to the authenticated user. Non-owned
+    // workspaces return 404 to avoid leaking existence.
     if (path === "/workspaces" && method === "GET") {
-      const result = await workspaceRoutes.listWorkspaces(pool);
+      const result = await workspaceRoutes.listWorkspaces(pool, userId);
       sendJson(res, 200, result);
       return;
     }
@@ -295,39 +302,48 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "GET") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.getWorkspace(pool, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "PATCH") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const body = await parseBody(req) as { name?: string; description?: string; icon?: string };
       const result = await workspaceRoutes.patchWorkspace(pool, segments[1], body);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "DELETE") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.deleteWorkspace(pool, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "GET") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.listWorkspaceAgents(pool, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "POST") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const body = await parseBody(req) as { agentId: string };
+      await requireOwnedAgent(pool, body.agentId, userId);
       const result = await workspaceRoutes.addAgentToWorkspace(pool, segments[1], body.agentId);
       sendJson(res, 201, result);
       return;
     }
     if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 4 && method === "DELETE") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.removeAgentFromWorkspace(pool, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments[2] === "default-agent" && segments.length === 3 && method === "POST") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
       const body = await parseBody(req) as { agentId: string };
+      await requireOwnedAgent(pool, body.agentId, userId);
       const result = await workspaceRoutes.setWorkspaceDefaultAgent(pool, segments[1], body.agentId);
       sendJson(res, 200, result);
       return;
@@ -346,11 +362,13 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "GET") {
+      await requireOwnedAgent(pool, segments[1], userId);
       const result = await agentRoutes.getAgent(pool, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
+      await requireOwnedAgent(pool, segments[1], userId);
       const body = await parseBody(req) as { name?: string; instructions?: string; model?: string };
       const result = await agentRoutes.patchAgent(pool, segments[1], body);
       sendJson(res, 200, result);
@@ -359,36 +377,42 @@ export function createApp(opts: AppOptions): Server {
 
     // Chat routes
     if (path === "/chats" && method === "GET") {
-      const workspaces = await workspaceRoutes.listWorkspaces(pool);
+      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
       const wsId = workspaces[0]?.id;
       const result = wsId ? await chatRoutes.listChats(pool, wsId) : [];
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "GET") {
+      await requireOwnedChat(pool, segments[1], userId);
       const result = await chatRoutes.getChat(pool, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (path === "/chats" && method === "POST") {
       const body = await parseBody(req) as { workspaceId: string; agentId: string; title: string; goal?: string };
+      await requireOwnedWorkspace(pool, body.workspaceId, userId);
+      await requireOwnedAgent(pool, body.agentId, userId);
       const result = await chatRoutes.createChat(pool, body);
       sendJson(res, 201, result);
       return;
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
+      await requireOwnedChat(pool, segments[1], userId);
       const body = await parseBody(req) as { title?: string; goal?: string };
       const result = await chatRoutes.patchChat(pool, segments[1], body);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
+      await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
       const result = await chatRoutes.listMessages(pool, segments[1], { cursor });
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
       const body = await parseBody(req) as { content: string };
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
@@ -404,33 +428,39 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
       await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3], runManager.adapter);
       sendJson(res, 200, { ok: true });
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "logs" && segments.length === 5 && method === "GET") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const { stream, contentType } = await chatRoutes.getMessageLogs(storage, segments[1], segments[3]);
       res.writeHead(200, { "Content-Type": contentType });
       stream.pipe(res);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "GET") {
+      await requireOwnedChat(pool, segments[1], userId);
       const result = await chatRoutes.listArtifacts(storage, segments[1]);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
       const form = await parseMultipart(req);
       const part = form.get("file");
       if (!(part instanceof Blob)) {
@@ -454,7 +484,7 @@ export function createApp(opts: AppOptions): Server {
     // query parameter rather than embedding it in the URL path — simpler to
     // parse and no URL-encoding of slashes.
     if (path === "/library" && method === "GET") {
-      const workspaces = await workspaceRoutes.listWorkspaces(pool);
+      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
       const wsId = workspaces[0]?.id;
       const cursor = query.get("cursor") ?? undefined;
       const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
@@ -471,7 +501,7 @@ export function createApp(opts: AppOptions): Server {
       const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
       const mime = part.type || "application/octet-stream";
       const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
-      const workspaces = await workspaceRoutes.listWorkspaces(pool);
+      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
       const wsId = workspaces[0]?.id ?? "";
       const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream }, emitEvent);
       sendJson(res, 201, result);
@@ -498,7 +528,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/library" && method === "DELETE") {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
-      const workspaces = await workspaceRoutes.listWorkspaces(pool);
+      const workspaces = await workspaceRoutes.listWorkspaces(pool, userId);
       const wsId = workspaces[0]?.id ?? "";
       await libraryRoutes.remove(storage, wsId, p, emitEvent);
       sendJson(res, 200, { ok: true });

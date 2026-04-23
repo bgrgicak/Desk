@@ -19,6 +19,14 @@ export async function list(db: Queryable): Promise<Workspace[]> {
   return rows.map(rowToWorkspace);
 }
 
+export async function listByUser(db: Queryable, userId: string): Promise<Workspace[]> {
+  const { rows } = await db.query(
+    "SELECT * FROM workspaces WHERE user_id = $1 ORDER BY created_at",
+    [userId],
+  );
+  return rows.map(rowToWorkspace);
+}
+
 export async function findById(db: Queryable, id: string): Promise<Workspace | null> {
   const { rows } = await db.query("SELECT * FROM workspaces WHERE id = $1", [id]);
   return rows.length ? rowToWorkspace(rows[0]) : null;
