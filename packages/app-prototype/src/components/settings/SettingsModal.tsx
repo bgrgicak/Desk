@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, ChevronDown, X,
+  Trash2, Plus, ChevronDown, X, Search,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -44,6 +44,30 @@ import {
   type SettingsAgent,
 } from '@/data/mock-data'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
+
+// ── Brand marks (Anthropic + OpenAI) ─────────────────────────────────────────
+
+function ClaudeLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden className={className}>
+      <path
+        fill="currentColor"
+        d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zM6.569 3.52h3.767L16.906 20h-3.674l-1.343-3.461H5.017L3.673 20H0L6.569 3.52zm4.132 9.959L8.453 7.687 6.205 13.479z"
+      />
+    </svg>
+  )
+}
+
+function OpenAILogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden className={className}>
+      <path
+        fill="currentColor"
+        d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.911 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.182a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.998-2.9 6.056 6.056 0 0 0-.748-7.073zm-9.022 12.608a4.476 4.476 0 0 1-2.876-1.04l.142-.08 4.778-2.759a.795.795 0 0 0 .393-.681v-6.737l2.02 1.169a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.495 4.494zm-9.66-4.126a4.471 4.471 0 0 1-.535-3.013l.142.085 4.783 2.758a.771.771 0 0 0 .78 0l5.843-3.368v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.499 4.499 0 0 1-6.14-1.647zM2.341 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.677l5.814 3.354-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786a4.504 4.504 0 0 1-1.647-6.14zm16.597 3.856L13.104 8.364l2.015-1.164a.076.076 0 0 1 .071 0l4.83 2.79a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.41 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.499 4.499 0 0 1 6.68 4.66zM8.307 12.863l-2.02-1.164a.08.08 0 0 1-.038-.056V6.074A4.499 4.499 0 0 1 13.626 2.62l-.142.08L8.7 5.46a.795.795 0 0 0-.393.681zm1.098-2.365 2.602-1.5 2.607 1.5v3l-2.598 1.5-2.607-1.5z"
+      />
+    </svg>
+  )
+}
 
 // ── Color + emoji options (mirrored from WorkspaceBar) ──────────────────────
 
@@ -242,137 +266,120 @@ type AgentsFocus =
   | { kind: 'provider'; mode: 'new'; providerKind: ProviderKind }
   | null
 
-function AgentsSection() {
-  const [tab, setTab]             = useState<AgentsTab>('agents')
-  const [focus, setFocus]         = useState<AgentsFocus>(null)
-  const [providers, setProviders] = useState<Provider[]>(MOCK_PROVIDERS)
-  const [agents, setAgents]       = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
+interface AgentsSectionProps {
+  tab: AgentsTab
+  focus: AgentsFocus
+  providers: Provider[]
+  agents: SettingsAgent[]
+  search: string
+  onSearchChange: (next: string) => void
+  onFocus: (next: AgentsFocus) => void
+  onSaveAgent: (agent: SettingsAgent) => void
+  onDeleteAgent: (id: string) => void
+  onSaveProvider: (provider: Provider) => void
+  onDeleteProvider: (id: string) => void
+}
 
-  const handleTabChange = (next: string) => {
-    setTab(next as AgentsTab)
-    setFocus(null)
-  }
-
-  if (focus === null) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-sm font-semibold mb-0.5">Agents</h3>
-          <p className="text-xs text-muted-foreground">
-            Manage the agents you use and the providers that power them.
-          </p>
-        </div>
-
-        <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
-          <div className="flex items-center justify-between">
-            <TabsList>
-              <TabsTrigger value="agents">Agents</TabsTrigger>
-              <TabsTrigger value="providers">Providers</TabsTrigger>
-            </TabsList>
-            {tab === 'agents' ? (
-              <Button
-                size="sm"
-                className="gap-1.5"
-                onClick={() => setFocus({ kind: 'agent', mode: 'new' })}
-              >
-                <Plus className="h-3.5 w-3.5" />Add
-              </Button>
-            ) : (
-              <AddProviderButton
-                existing={providers}
-                onPick={(k) => setFocus({ kind: 'provider', mode: 'new', providerKind: k })}
-              />
-            )}
-          </div>
-
-          <TabsContent value="agents">
-            <AgentsList
-              agents={agents}
-              providers={providers}
-              onOpen={(id) => setFocus({ kind: 'agent', mode: 'edit', id })}
-              onAdd={() => setFocus({ kind: 'agent', mode: 'new' })}
-            />
-          </TabsContent>
-
-          <TabsContent value="providers">
-            <ProvidersList
-              providers={providers}
-              onOpen={(id) => setFocus({ kind: 'provider', mode: 'edit', id })}
-              onPickNew={(k) => setFocus({ kind: 'provider', mode: 'new', providerKind: k })}
-            />
-          </TabsContent>
-        </Tabs>
-      </div>
+function AgentsSection({
+  tab, focus, providers, agents, search,
+  onSearchChange, onFocus,
+  onSaveAgent, onDeleteAgent,
+  onSaveProvider, onDeleteProvider,
+}: AgentsSectionProps) {
+  if (focus !== null) {
+    return focus.kind === 'agent' ? (
+      <AgentDetail
+        agents={agents}
+        providers={providers}
+        focus={focus}
+        onSave={onSaveAgent}
+        onCancel={() => onFocus(null)}
+        onDelete={onDeleteAgent}
+      />
+    ) : (
+      <ProviderDetail
+        providers={providers}
+        focus={focus}
+        onSave={onSaveProvider}
+        onCancel={() => onFocus(null)}
+        onDelete={onDeleteProvider}
+      />
     )
   }
 
-  // Drilled-in detail view: breadcrumb back to list, then the form
-  const tabLabel   = focus.kind === 'agent' ? 'Agents' : 'Providers'
-  const leafLabel  = focus.kind === 'agent'
-    ? (focus.mode === 'new' ? 'New agent' : agents.find(a => a.id === focus.id)?.name ?? 'Agent')
-    : (focus.mode === 'new'
-        ? `New ${PROVIDER_LABELS[focus.providerKind]} provider`
-        : providers.find(p => p.id === focus.id)?.name ?? 'Provider')
-
-  const backToList = () => {
-    setTab(focus.kind === 'agent' ? 'agents' : 'providers')
-    setFocus(null)
-  }
+  const q = search.trim().toLowerCase()
+  const filteredAgents = q
+    ? agents.filter(a => {
+        const providerName = providers.find(p => p.id === a.providerId)?.name ?? ''
+        return a.name.toLowerCase().includes(q)
+          || a.model.toLowerCase().includes(q)
+          || providerName.toLowerCase().includes(q)
+      })
+    : agents
+  const filteredProviders = q
+    ? providers.filter(p =>
+        p.name.toLowerCase().includes(q)
+        || PROVIDER_LABELS[p.kind].toLowerCase().includes(q),
+      )
+    : providers
 
   return (
-    <div className="space-y-6">
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <button type="button" onClick={backToList}>{tabLabel}</button>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{leafLabel}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        {tab === 'agents' ? (
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => onFocus({ kind: 'agent', mode: 'new' })}
+          >
+            <Plus className="h-3.5 w-3.5" />Add
+          </Button>
+        ) : (
+          <AddProviderButton
+            onPick={(k) => onFocus({ kind: 'provider', mode: 'new', providerKind: k })}
+          />
+        )}
+        <SearchInput
+          value={search}
+          onChange={onSearchChange}
+          placeholder={tab === 'agents' ? 'Search agents…' : 'Search providers…'}
+        />
+      </div>
 
-      {focus.kind === 'agent' ? (
-        <AgentDetail
-          agents={agents}
+      {tab === 'agents' ? (
+        <AgentsList
+          agents={filteredAgents}
           providers={providers}
-          focus={focus}
-          onSave={(agent) => {
-            setAgents(prev => {
-              const exists = prev.some(a => a.id === agent.id)
-              return exists ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
-            })
-            setFocus(null)
-          }}
-          onCancel={backToList}
-          onDelete={(id) => {
-            setAgents(prev => prev.filter(a => a.id !== id))
-            setFocus(null)
-          }}
+          hasAnyAgents={agents.length > 0}
+          hasAnyProviders={providers.length > 0}
+          query={q}
+          onOpen={(id) => onFocus({ kind: 'agent', mode: 'edit', id })}
+          onAdd={() => onFocus({ kind: 'agent', mode: 'new' })}
         />
       ) : (
-        <ProviderDetail
-          providers={providers}
-          focus={focus}
-          onSave={(provider) => {
-            setProviders(prev => {
-              const exists = prev.some(p => p.id === provider.id)
-              return exists ? prev.map(p => p.id === provider.id ? provider : p) : [...prev, provider]
-            })
-            setFocus(null)
-          }}
-          onCancel={backToList}
-          onDelete={(id) => {
-            setProviders(prev => prev.filter(p => p.id !== id))
-            // Agents bound to the removed provider lose their link; drop them.
-            setAgents(prev => prev.filter(a => a.providerId !== id))
-            setFocus(null)
-          }}
+        <ProvidersList
+          providers={filteredProviders}
+          hasAnyProviders={providers.length > 0}
+          query={q}
+          onOpen={(id) => onFocus({ kind: 'provider', mode: 'edit', id })}
         />
       )}
+    </div>
+  )
+}
+
+function SearchInput({
+  value, onChange, placeholder,
+}: { value: string; onChange: (next: string) => void; placeholder?: string }) {
+  return (
+    <div className="relative w-56">
+      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-8 pl-8 text-sm"
+      />
     </div>
   )
 }
@@ -382,12 +389,17 @@ function AgentsSection() {
 interface AgentsListProps {
   agents: SettingsAgent[]
   providers: Provider[]
+  hasAnyAgents: boolean
+  hasAnyProviders: boolean
+  query: string
   onOpen: (id: string) => void
   onAdd: () => void
 }
 
-function AgentsList({ agents, providers, onOpen, onAdd }: AgentsListProps) {
-  if (providers.length === 0) {
+function AgentsList({
+  agents, providers, hasAnyAgents, hasAnyProviders, query, onOpen, onAdd,
+}: AgentsListProps) {
+  if (!hasAnyProviders) {
     return (
       <EmptyState
         title="Add a provider first"
@@ -395,7 +407,7 @@ function AgentsList({ agents, providers, onOpen, onAdd }: AgentsListProps) {
       />
     )
   }
-  if (agents.length === 0) {
+  if (!hasAnyAgents) {
     return (
       <EmptyState
         title="No agents yet"
@@ -405,6 +417,14 @@ function AgentsList({ agents, providers, onOpen, onAdd }: AgentsListProps) {
             <Plus className="h-3.5 w-3.5" />Add agent
           </Button>
         }
+      />
+    )
+  }
+  if (agents.length === 0) {
+    return (
+      <EmptyState
+        title="No matches"
+        body={`No agents match “${query}”.`}
       />
     )
   }
@@ -544,17 +564,25 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel, onDelete }: A
 
 interface ProvidersListProps {
   providers: Provider[]
+  hasAnyProviders: boolean
+  query: string
   onOpen: (id: string) => void
-  onPickNew: (kind: ProviderKind) => void
 }
 
-function ProvidersList({ providers, onOpen, onPickNew }: ProvidersListProps) {
-  if (providers.length === 0) {
+function ProvidersList({ providers, hasAnyProviders, query, onOpen }: ProvidersListProps) {
+  if (!hasAnyProviders) {
     return (
       <EmptyState
         title="No providers yet"
         body="Add an API key for Claude or ChatGPT to start creating agents."
-        action={<AddProviderButton existing={providers} onPick={onPickNew} />}
+      />
+    )
+  }
+  if (providers.length === 0) {
+    return (
+      <EmptyState
+        title="No matches"
+        body={`No providers match “${query}”.`}
       />
     )
   }
@@ -580,14 +608,11 @@ function ProvidersList({ providers, onOpen, onPickNew }: ProvidersListProps) {
 }
 
 interface AddProviderButtonProps {
-  existing: Provider[]
   onPick: (kind: ProviderKind) => void
 }
 
-function AddProviderButton({ existing, onPick }: AddProviderButtonProps) {
-  const [open, setOpen]  = useState(false)
-  const hasClaude        = existing.some(p => p.kind === 'claude')
-  const hasChatGPT       = existing.some(p => p.kind === 'chatgpt')
+function AddProviderButton({ onPick }: AddProviderButtonProps) {
+  const [open, setOpen] = useState(false)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -596,17 +621,15 @@ function AddProviderButton({ existing, onPick }: AddProviderButtonProps) {
           <Plus className="h-3.5 w-3.5" />Add
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-52 p-1">
+      <PopoverContent align="start" className="w-52 p-1">
         <ProviderPickerItem
           kind="chatgpt"
           label="ChatGPT"
-          disabled={hasChatGPT}
           onClick={() => { onPick('chatgpt'); setOpen(false) }}
         />
         <ProviderPickerItem
           kind="claude"
           label="Claude"
-          disabled={hasClaude}
           onClick={() => { onPick('claude'); setOpen(false) }}
         />
         <ProviderPickerItem
@@ -636,22 +659,31 @@ function ProviderPickerItem({
     >
       <ProviderGlyph kind={kind} size="sm" />
       {label}
-      {disabled && <span className="ml-auto text-xs text-muted-foreground/70">
-        {kind === 'other' ? 'Soon' : 'Added'}
-      </span>}
+      {disabled && <span className="ml-auto text-xs text-muted-foreground/70">Soon</span>}
     </button>
   )
 }
 
 function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' | 'md' }) {
-  const letter = kind === 'claude' ? 'C' : kind === 'chatgpt' ? 'G' : '·'
-  const bg = kind === 'claude' ? 'bg-orange-100 text-orange-700'
-    : kind === 'chatgpt' ? 'bg-emerald-100 text-emerald-700'
-    : 'bg-muted text-muted-foreground'
-  const dim = size === 'sm' ? 'h-5 w-5 text-[11px]' : 'h-8 w-8 text-sm'
+  const box  = size === 'sm' ? 'h-5 w-5' : 'h-8 w-8'
+  const mark = size === 'sm' ? 'h-3 w-3' : 'h-[18px] w-[18px]'
+  if (kind === 'claude') {
+    return (
+      <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-[#F5E6DA] text-[#CC785C]', box)}>
+        <ClaudeLogo className={mark} />
+      </span>
+    )
+  }
+  if (kind === 'chatgpt') {
+    return (
+      <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-black text-white', box)}>
+        <OpenAILogo className={mark} />
+      </span>
+    )
+  }
   return (
-    <span className={cn('shrink-0 rounded-lg flex items-center justify-center font-semibold', dim, bg)}>
-      {letter}
+    <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-muted text-muted-foreground font-semibold', box, size === 'sm' ? 'text-[11px]' : 'text-sm')}>
+      ·
     </span>
   )
 }
@@ -962,6 +994,99 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>('workspace')
 
+  // Agents section state (lifted so the modal header can render tabs/breadcrumbs)
+  const [agentsTab, setAgentsTab]       = useState<AgentsTab>('agents')
+  const [agentsFocus, setAgentsFocus]   = useState<AgentsFocus>(null)
+  const [providers, setProviders]       = useState<Provider[]>(MOCK_PROVIDERS)
+  const [agents, setAgents]             = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
+  const [agentsSearch, setAgentsSearch] = useState('')
+
+  const changeAgentsTab = (next: string) => {
+    setAgentsTab(next as AgentsTab)
+    setAgentsFocus(null)
+    setAgentsSearch('')
+  }
+  const setAgentsFocusAndReset = (next: AgentsFocus) => {
+    setAgentsFocus(next)
+    setAgentsSearch('')
+  }
+  const backToAgentsList = () => {
+    if (agentsFocus) setAgentsTab(agentsFocus.kind === 'agent' ? 'agents' : 'providers')
+    setAgentsFocus(null)
+  }
+
+  const handleSaveAgent = (agent: SettingsAgent) => {
+    setAgents(prev => {
+      const exists = prev.some(a => a.id === agent.id)
+      return exists ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
+    })
+    setAgentsFocus(null)
+  }
+  const handleDeleteAgent = (id: string) => {
+    setAgents(prev => prev.filter(a => a.id !== id))
+    setAgentsFocus(null)
+  }
+  const handleSaveProvider = (provider: Provider) => {
+    setProviders(prev => {
+      const exists = prev.some(p => p.id === provider.id)
+      return exists ? prev.map(p => p.id === provider.id ? provider : p) : [...prev, provider]
+    })
+    setAgentsFocus(null)
+  }
+  const handleDeleteProvider = (id: string) => {
+    setProviders(prev => prev.filter(p => p.id !== id))
+    // Agents bound to the removed provider lose their link; drop them.
+    setAgents(prev => prev.filter(a => a.providerId !== id))
+    setAgentsFocus(null)
+  }
+
+  const renderHeaderContent = () => {
+    if (activeSection === 'agents') {
+      if (agentsFocus === null) {
+        return (
+          <Tabs
+            value={agentsTab}
+            onValueChange={changeAgentsTab}
+            className="flex-1 min-w-0"
+          >
+            <TabsList variant="line" className="gap-4">
+              <TabsTrigger value="agents" className="px-0">Agents</TabsTrigger>
+              <TabsTrigger value="providers" className="px-0">Providers</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )
+      }
+      const tabLabel  = agentsFocus.kind === 'agent' ? 'Agents' : 'Providers'
+      const leafLabel = agentsFocus.kind === 'agent'
+        ? (agentsFocus.mode === 'new'
+            ? 'New agent'
+            : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent')
+        : (agentsFocus.mode === 'new'
+            ? `New ${PROVIDER_LABELS[agentsFocus.providerKind]} provider`
+            : providers.find(p => p.id === agentsFocus.id)?.name ?? 'Provider')
+      return (
+        <Breadcrumb className="min-w-0">
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild>
+                <button type="button" onClick={backToAgentsList}>{tabLabel}</button>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="truncate">{leafLabel}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+      )
+    }
+    return (
+      <span className="text-foreground font-medium truncate">
+        {NAV.find(n => n.id === activeSection)?.label}
+      </span>
+    )
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -1011,17 +1136,13 @@ export function SettingsModal({
 
           {/* Right content */}
           <div className="flex-1 flex flex-col min-w-0">
-            {/* Header: breadcrumbs + close */}
-            <div className="flex items-center justify-between h-12 px-5 border-b shrink-0">
-              <nav className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
-                <span className="text-foreground font-medium truncate">
-                  {NAV.find(n => n.id === activeSection)?.label}
-                </span>
-              </nav>
+            {/* Header: tabs / breadcrumbs + close */}
+            <div className="flex items-center justify-between gap-3 h-12 px-5 border-b shrink-0">
+              {renderHeaderContent()}
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-muted-foreground"
+                className="h-7 w-7 text-muted-foreground shrink-0"
                 onClick={() => onOpenChange(false)}
                 aria-label="Close"
               >
@@ -1038,7 +1159,21 @@ export function SettingsModal({
                   onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
                 />
               )}
-              {activeSection === 'agents' && <AgentsSection />}
+              {activeSection === 'agents' && (
+                <AgentsSection
+                  tab={agentsTab}
+                  focus={agentsFocus}
+                  providers={providers}
+                  agents={agents}
+                  search={agentsSearch}
+                  onSearchChange={setAgentsSearch}
+                  onFocus={setAgentsFocusAndReset}
+                  onSaveAgent={handleSaveAgent}
+                  onDeleteAgent={handleDeleteAgent}
+                  onSaveProvider={handleSaveProvider}
+                  onDeleteProvider={handleDeleteProvider}
+                />
+              )}
               {activeSection === 'connections' && <ConnectionsSection />}
               {activeSection === 'preferences' && <PreferencesSection />}
             </div>
