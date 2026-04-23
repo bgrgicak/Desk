@@ -6,8 +6,6 @@ import {
   ChatSchema,
   MessageSchema,
   FileSchema,
-  RunSchema,
-  ScheduledJobSchema,
 } from "../src/index.js";
 
 function roundTrip<T>(schema: { parse: (v: unknown) => T }, data: unknown): T {
@@ -152,57 +150,42 @@ describe("FileSchema (FS-backed FileRef)", () => {
   });
 });
 
-describe("RunSchema", () => {
-  const valid = { id: "run_abc", kind: "immediate", state: "pending" };
+describe("MessageSchema execution metadata", () => {
+  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "ai_note_request" }, createdAt: now };
 
-  it("parses a minimal run", () => {
-    expect(RunSchema.parse(valid)).toEqual(valid);
+  it("accepts state + executeAt + schedulerRef", () => {
+    const msg = {
+      ...base,
+      state: "pending",
+      executeAt: now,
+      schedulerRef: { kind: "at", id: "42" },
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("parses a full run", () => {
-    const full = { ...valid, chatId: "cht_abc", scheduledJobId: "job_abc", state: "succeeded", startedAt: now, finishedAt: now, exitCode: 0, logPath: "/logs/r.log" };
-    expect(RunSchema.parse(full)).toEqual(full);
+  it("accepts cron + parentId + agentId + timing fields", () => {
+    const msg = {
+      ...base,
+      cron: "0 9 * * *",
+      parentId: "msg_parent",
+      agentId: "agt_abc",
+      startedAt: now,
+      endedAt: now,
+      updatedAt: now,
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
   it("rejects invalid state", () => {
-    expect(() => RunSchema.parse({ id: "run_abc", kind: "immediate", state: "paused" })).toThrow();
+    expect(() =>
+      MessageSchema.parse({ ...base, state: "paused" }),
+    ).toThrow();
   });
 
-  it("round-trips through JSON", () => {
-    expect(roundTrip(RunSchema, valid)).toEqual(valid);
-  });
-});
-
-describe("ScheduledJobSchema", () => {
-  const base = { id: "job_abc", kind: "once", active: true };
-
-  it("parses once spec", () => {
-    const job = { ...base, spec: { type: "once", onceAt: now } };
-    expect(ScheduledJobSchema.parse(job)).toEqual(job);
-  });
-
-  it("parses recurring spec", () => {
-    const job = { ...base, kind: "recurring", spec: { type: "recurring", cronExpr: "0 * * * *" } };
-    expect(ScheduledJobSchema.parse(job)).toEqual(job);
-  });
-
-  it("parses ai_note spec", () => {
-    const job = { ...base, kind: "ai_note", spec: { type: "ai_note", aiNoteDelayMs: 5000 } };
-    expect(ScheduledJobSchema.parse(job)).toEqual(job);
-  });
-
-  it("rejects negative aiNoteDelayMs", () => {
-    expect(() => ScheduledJobSchema.parse({ ...base, kind: "ai_note", spec: { type: "ai_note", aiNoteDelayMs: -1 } })).toThrow();
-  });
-
-  it("accepts optional fields", () => {
-    const job = { ...base, spec: { type: "once", onceAt: now }, chatId: "cht_abc", atJobId: "42", crontabId: "c1", nextRunAt: now };
-    expect(ScheduledJobSchema.parse(job)).toMatchObject({ chatId: "cht_abc" });
-  });
-
-  it("round-trips through JSON", () => {
-    const job = { ...base, spec: { type: "once", onceAt: now } };
-    expect(roundTrip(ScheduledJobSchema, job)).toEqual(job);
+  it("rejects invalid schedulerRef kind", () => {
+    expect(() =>
+      MessageSchema.parse({ ...base, schedulerRef: { kind: "bogus", id: "x" } }),
+    ).toThrow();
   });
 });
 

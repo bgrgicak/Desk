@@ -51,25 +51,46 @@ export async function listMessages(
   return queries.messages.listByChat(pool, chatId, opts);
 }
 
+/**
+ * User sends a chat message. Inserts two rows:
+ *   1. The user's message (role=user, immutable)
+ *   2. A pending system trigger message that fireMessage will execute,
+ *      producing the agent reply as a child
+ *
+ * The trigger's content copies the user's text so fireMessage can use
+ * it verbatim as the prompt. Callers (app.ts) get the trigger's id
+ * back so they can schedule the fire.
+ */
 export async function sendMessage(
   pool: pg.Pool,
   chatId: string,
   data: { content: string },
   emit: (event: WsEvent) => void,
-) {
+): Promise<{ userMessage: Message; triggerId: string }> {
   const chat = await queries.chats.findById(pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
-  const message = await queries.messages.insert(pool, {
+  const userMessage = await queries.messages.insert(pool, {
     id: generateId("message"),
     chatId,
     role: "user",
     content: { type: "text", text: data.content },
   });
 
-  emit({ type: "message.appended", payload: message });
+  emit({ type: "message.appended", payload: userMessage });
 
-  return message;
+  const triggerId = generateId("message");
+  await queries.messages.insert(pool, {
+    id: triggerId,
+    chatId,
+    role: "system",
+    content: { type: "text", text: data.content },
+    state: "pending",
+    parentId: userMessage.id,
+    agentId: chat.agentId,
+  });
+
+  return { userMessage, triggerId };
 }
 
 /**

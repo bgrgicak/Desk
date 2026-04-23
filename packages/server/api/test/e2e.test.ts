@@ -73,6 +73,8 @@ beforeAll(async () => {
   // Create temp home directory with storage layout
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-api-e2e-"));
   await ensureLayout(home);
+  // fireMessage reads DESK_HOME for its log file path.
+  process.env.DESK_HOME = home;
 
   const storage = { pool, home };
   const adapter = createMemoryAdapter();
@@ -282,8 +284,7 @@ describe("API e2e (real Postgres)", () => {
     expect(chats.some((c) => c.id === chat.id)).toBe(true);
   });
 
-  it("POST /chats/:id/messages creates a message and triggers a run", async () => {
-    // Create a chat first
+  it("POST /chats/:id/messages creates a user message and fires a trigger that produces an agent reply", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -296,23 +297,27 @@ describe("API e2e (real Postgres)", () => {
     });
     const chat = chatRes.body as { id: string };
 
-    // Send a message
     const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
       content: "Hello from e2e test",
     });
     expect(msgRes.status).toBe(201);
-    const msg = msgRes.body as { id: string; role: string; content: unknown };
-    expect(msg.id).toMatch(/^msg_/);
-    expect(msg.role).toBe("user");
+    const userMsg = msgRes.body as { id: string; role: string };
+    expect(userMsg.id).toMatch(/^msg_/);
+    expect(userMsg.role).toBe("user");
 
-    // Wait for the run to complete (fake driver is fast)
-    await new Promise((r) => setTimeout(r, 500));
-
-    // Verify runs were created
-    const runsRes = await request("GET", "/runs", token);
-    expect(runsRes.status).toBe(200);
-    const runs = runsRes.body as Array<{ id: string; state: string }>;
-    expect(runs.length).toBeGreaterThanOrEqual(1);
+    // Poll until the agent's reply message lands.
+    const start = Date.now();
+    let replied = false;
+    while (Date.now() - start < 5_000) {
+      await new Promise((r) => setTimeout(r, 100));
+      const list = await request("GET", `/chats/${chat.id}/messages`, token);
+      const items = (list.body as { items: Array<{ role: string; parentId?: string }> }).items;
+      if (items.some((m) => m.role === "agent")) {
+        replied = true;
+        break;
+      }
+    }
+    expect(replied).toBe(true);
   });
 
   it("GET /search searches across real data", async () => {
@@ -603,9 +608,10 @@ describe("API e2e (real Postgres)", () => {
     expect(body.ok).toBe(true);
   });
 
-  // Gap 14: GET /runs/:id/logs cursor pagination
-  it("GET /runs/:id/logs supports cursor pagination", async () => {
-    // Create a chat and send message to trigger a run
+  // M6 replacement for the old /runs/:id/logs pagination test: logs
+  // live on disk per message now, accessed via
+  // GET /chats/{id}/messages/{messageId}/logs.
+  it("GET /chats/{id}/messages/{messageId}/logs returns the fired message's log body", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -614,33 +620,27 @@ describe("API e2e (real Postgres)", () => {
     const chatRes = await request("POST", "/chats", token, {
       workspaceId: workspaces[0].id,
       agentId: agents[0].id,
-      title: "Logs Pagination Chat",
+      title: "Logs Chat",
     });
     const chat = chatRes.body as { id: string };
 
-    await request("POST", `/chats/${chat.id}/messages`, token, { content: "trigger run" });
+    await request("POST", `/chats/${chat.id}/messages`, token, { content: "log something" });
 
-    // Wait for run to complete
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const runsRes = await request("GET", "/runs", token);
-    const runs = runsRes.body as Array<{ id: string }>;
-    expect(runs.length).toBeGreaterThan(0);
-
-    const runId = runs[0].id;
-
-    // First page (no cursor)
-    const page1 = await request("GET", `/runs/${runId}/logs`, token);
-    expect(page1.status).toBe(200);
-    const logs1 = page1.body as { items: Array<{ seq: number }>; nextCursor?: number };
-    expect(Array.isArray(logs1.items)).toBe(true);
-
-    // With cursor=0 should return from seq 0
-    const page0 = await request("GET", `/runs/${runId}/logs?cursor=0`, token);
-    expect(page0.status).toBe(200);
-    const logs0 = page0.body as { items: Array<{ seq: number }> };
-    // cursor=0 means seq > 0, so may return fewer
-    expect(Array.isArray(logs0.items)).toBe(true);
+    // Poll for the trigger message (role=system, state=succeeded) and check
+    // its logs endpoint.
+    const start = Date.now();
+    while (Date.now() - start < 5_000) {
+      await new Promise((r) => setTimeout(r, 100));
+      const list = await request("GET", `/chats/${chat.id}/messages`, token);
+      const items = (list.body as { items: Array<{ id: string; role: string; state?: string }> }).items;
+      const trigger = items.find((m) => m.role === "system" && m.state === "succeeded");
+      if (trigger) {
+        const logs = await request("GET", `/chats/${chat.id}/messages/${trigger.id}/logs`, token);
+        expect(logs.status).toBe(200);
+        return;
+      }
+    }
+    throw new Error("no trigger message reached succeeded in time");
   });
 
   // Gap 10: Agent instruction PATCH reflected in next run
@@ -840,30 +840,12 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
     });
     expect(msgRes.status).toBe(201);
 
-    // Wait for the run to complete (real Anthropic API call)
-    let attempts = 0;
-    let runCompleted = false;
-    let lastRuns: Array<{ id: string; state: string; chatId?: string }> = [];
-    while (attempts < 30) {
-      await new Promise((r) => setTimeout(r, 500));
-      const runsRes = await realRequest("GET", "/runs", realToken);
-      lastRuns = runsRes.body as Array<{ id: string; state: string; chatId?: string }>;
-      const ourRun = lastRuns.find((r) => r.chatId === chat.id && (r.state === "succeeded" || r.state === "failed"));
-      if (ourRun) {
-        runCompleted = true;
-        break;
-      }
-      attempts++;
-    }
-
-    expect(runCompleted).toBe(true);
-
-    // Poll for assistant message (persisted shortly after run state update)
+    // Poll the chat's messages for an agent reply (messages-as-truth).
     let assistantMsgs: Array<{ role: string; content: unknown }> = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 500));
       const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
-      expect(msgsRes.status).toBe(200);
+      if (msgsRes.status !== 200) continue;
       const messages = msgsRes.body as { items: Array<{ role: string; content: unknown }> };
       assistantMsgs = messages.items.filter((m) => m.role === "agent");
       if (assistantMsgs.length > 0) break;
@@ -912,33 +894,20 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
     });
     expect(msgRes.status).toBe(201);
 
-    // Poll runs until succeeded
-    let attempts = 0;
-    let runCompleted = false;
-    while (attempts < 60) {
+    // Poll chat messages for an agent reply carrying the sentinel.
+    let agentText = "";
+    for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const runsRes = await realRequest("GET", "/runs", realToken);
-      const runs = runsRes.body as Array<{ id: string; state: string; chatId?: string }>;
-      const ourRun = runs.find((r) => r.chatId === chat.id && (r.state === "succeeded" || r.state === "failed"));
-      if (ourRun) {
-        runCompleted = true;
-        break;
-      }
-      attempts++;
+      const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
+      if (msgsRes.status !== 200) continue;
+      const messages = msgsRes.body as { items: Array<{ role: string; content: { type: string; text?: string } }> };
+      const agentMsgs = messages.items.filter((m) => m.role === "agent");
+      if (agentMsgs.length === 0) continue;
+      const last = agentMsgs[agentMsgs.length - 1];
+      agentText = last.content.type === "text" ? last.content.text ?? "" : "";
+      if (agentText.includes("CORSAIR_SENTINEL")) break;
     }
-
-    expect(runCompleted).toBe(true);
-
-    // GET messages and assert the agent response contains the sentinel
-    const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
-    expect(msgsRes.status).toBe(200);
-    const messages = msgsRes.body as { items: Array<{ role: string; content: { type: string; text?: string } }> };
-    const agentMsgs = messages.items.filter((m) => m.role === "agent");
-    expect(agentMsgs.length).toBeGreaterThanOrEqual(1);
-
-    const lastAgent = agentMsgs[agentMsgs.length - 1];
-    const text = lastAgent.content.type === "text" ? lastAgent.content.text ?? "" : "";
-    expect(text).toContain("CORSAIR_SENTINEL");
+    expect(agentText).toContain("CORSAIR_SENTINEL");
   }, 180000);
 });
 

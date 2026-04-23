@@ -20,14 +20,12 @@ const expectedTables = [
   "workspace_agents",
   "chats",
   "messages",
-  "runs",
-  "run_events",
-  "scheduled_jobs",
   "sandbox_sessions",
   "schema_migrations",
 ];
 
-const droppedTables = ["files"];
+// M4 dropped files; M6 dropped runs/scheduled_jobs/run_events.
+const droppedTables = ["files", "runs", "run_events", "scheduled_jobs"];
 
 describe("migrations", () => {
   it("creates all expected tables", async () => {
@@ -51,10 +49,10 @@ describe("migrations", () => {
     const indexNames = rows.map((r) => r.indexname);
     expect(indexNames).toContain("idx_chats_workspace_updated");
     expect(indexNames).toContain("idx_messages_chat_created");
-    expect(indexNames).toContain("idx_run_events_run_seq");
-    // files indexes are gone along with the table.
+    // files, runs, scheduled_jobs, run_events indexes all gone with their tables.
     expect(indexNames).not.toContain("idx_files_workspace_class_created");
     expect(indexNames).not.toContain("idx_files_name_trgm");
+    expect(indexNames).not.toContain("idx_run_events_run_seq");
   });
 
   it("creates pg_trgm GIN indexes for chats and messages", async () => {

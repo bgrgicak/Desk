@@ -1,10 +1,6 @@
 import { z } from "zod";
 import {
   MESSAGE_ROLES,
-  RUN_EVENT_KINDS,
-  RUN_KINDS,
-  RUN_STATES,
-  SCHEDULED_JOB_KINDS,
 } from "./constants.js";
 
 export const UserSchema = z.object({
@@ -171,62 +167,6 @@ export const FileSchema = z.object({
 });
 export type File = z.infer<typeof FileSchema>;
 
-export const RunSchema = z.object({
-  id: z.string(),
-  chatId: z.string().optional(),
-  scheduledJobId: z.string().optional(),
-  kind: z.enum(RUN_KINDS),
-  state: z.enum(RUN_STATES),
-  startedAt: z.string().optional(),
-  finishedAt: z.string().optional(),
-  exitCode: z.number().int().optional(),
-  logPath: z.string().optional(),
-});
-export type Run = z.infer<typeof RunSchema>;
-
-export const ScheduledJobOnceSpecSchema = z.object({
-  type: z.literal("once"),
-  onceAt: z.string(),
-});
-
-export const ScheduledJobRecurringSpecSchema = z.object({
-  type: z.literal("recurring"),
-  cronExpr: z.string(),
-});
-
-export const ScheduledJobAiNoteSpecSchema = z.object({
-  type: z.literal("ai_note"),
-  aiNoteDelayMs: z.number().int().nonnegative(),
-});
-
-export const ScheduledJobSpecSchema = z.discriminatedUnion("type", [
-  ScheduledJobOnceSpecSchema,
-  ScheduledJobRecurringSpecSchema,
-  ScheduledJobAiNoteSpecSchema,
-]);
-export type ScheduledJobSpec = z.infer<typeof ScheduledJobSpecSchema>;
-
-export const ScheduledJobSchema = z.object({
-  id: z.string(),
-  chatId: z.string().optional(),
-  kind: z.enum(SCHEDULED_JOB_KINDS),
-  spec: ScheduledJobSpecSchema,
-  atJobId: z.string().optional(),
-  crontabId: z.string().optional(),
-  nextRunAt: z.string().optional(),
-  active: z.boolean(),
-});
-export type ScheduledJob = z.infer<typeof ScheduledJobSchema>;
-
-export const RunEventSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  seq: z.number().int().nonnegative(),
-  kind: z.enum(RUN_EVENT_KINDS),
-  payload: z.record(z.unknown()),
-  createdAt: z.string(),
-});
-export type RunEvent = z.infer<typeof RunEventSchema>;
 
 export const SandboxSessionSchema = z.object({
   id: z.string(),

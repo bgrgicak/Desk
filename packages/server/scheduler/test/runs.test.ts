@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
-import { generateId } from "@desk/shared";
+import { generateId, type WsEvent } from "@desk/shared";
 import { createRunManager } from "../src/runs.js";
 import { createMemoryAdapter } from "../src/scheduleAdapter.js";
 import type { LogEvent } from "@desk/runtime";
-import type { WsEvent } from "@desk/shared";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_scheduler_test_${workerId}`;
@@ -50,11 +52,7 @@ beforeAll(async () => {
   }
 
   pool = new pg.Pool({ connectionString: testConnectionString() });
-
-  try {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
-  } catch { /* ok */ }
-
+  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
@@ -64,11 +62,9 @@ beforeAll(async () => {
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;
-
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;
 
-  // Ensure the workspace agent membership exists (M3 invariant)
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
      VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
@@ -80,11 +76,14 @@ beforeAll(async () => {
     `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
     [chatId, workspaceId, agentId, "Test Chat"],
   );
+
+  // Log files land under $DESK_HOME/Desk/workspaces/desk/.chats/{chatId}/logs/
+  const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scheduler-"));
+  process.env.DESK_HOME = tmpHome;
 });
 
 afterAll(async () => {
   if (pool) await pool.end();
-
   const admin = adminPool();
   try {
     await admin.query(
@@ -97,245 +96,181 @@ afterAll(async () => {
   }
 });
 
-describe("createRunManager", () => {
-  it("enqueueRun immediate: creates a run, executes it, transitions state", async () => {
-    const events: WsEvent[] = [];
-    const adapter = createMemoryAdapter();
+async function insertPendingMessage(content: unknown): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, state)
+     VALUES ($1, $2, 'system', $3, 'pending')`,
+    [id, chatId, JSON.stringify(content)],
+  );
+  return id;
+}
 
+describe("fireMessage", () => {
+  it("claims pending → running, runs the agent, produces a text child, succeeds", async () => {
+    const events: WsEvent[] = [];
     const fakeExec = async (
-      _runId: string,
+      messageId: string,
       _agentId: string,
       _prompt: string,
       onLog: (evt: LogEvent) => void,
     ) => {
-      onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "hello" });
+      onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "hello from agent" });
       return { exitCode: 0 };
     };
 
     const mgr = createRunManager({
       pool,
-      adapter,
+      adapter: createMemoryAdapter(),
       emit: (evt) => events.push(evt),
       execRunFn: fakeExec,
     });
 
-    const run = await mgr.enqueueRun({
-      chatId,
-      prompt: "Test immediate run",
-      mode: "immediate",
-    });
+    const messageId = await insertPendingMessage({ type: "text", text: "hi agent" });
 
-    expect(run.id).toMatch(/^run_/);
-    expect(run.state).toBe("pending");
+    const result = await mgr.fireMessage(messageId);
+    expect(result.fired).toBe(true);
+    expect(result.childIds).toHaveLength(1);
 
-    // Wait for async execution to complete
-    await new Promise((r) => setTimeout(r, 200));
+    const parent = await queries.messages.findById(pool, messageId);
+    expect(parent?.state).toBe("succeeded");
+    expect(parent?.startedAt).toBeDefined();
+    expect(parent?.endedAt).toBeDefined();
 
-    const updated = await queries.runs.findById(pool, run.id);
-    expect(updated!.state).toBe("succeeded");
-
-    // Should have emitted run.state_changed events
-    const stateEvents = events.filter((e) => e.type === "run.state_changed");
-    expect(stateEvents.length).toBeGreaterThanOrEqual(2); // running + succeeded
+    // Emitted events include message.updated and message.appended
+    const updated = events.filter((e) => e.type === "message.updated");
+    expect(updated.length).toBeGreaterThanOrEqual(2);
+    const appended = events.filter((e) => e.type === "message.appended");
+    expect(appended.length).toBe(1);
   });
 
-  it("enqueueRun scheduled: creates a job with at", async () => {
-    const adapter = createMemoryAdapter();
-
+  it("ai_note_request content produces a note-content child", async () => {
     const mgr = createRunManager({
       pool,
-      adapter,
-      execRunFn: async () => ({ exitCode: 0 }),
-    });
-
-    await mgr.enqueueRun({
-      chatId,
-      prompt: "Test scheduled",
-      mode: "scheduled",
-      spec: "now + 5 minutes",
-    });
-
-    const atJobs = await adapter.listAt();
-    expect(atJobs.length).toBe(1);
-  });
-
-  it("enqueueRun recurring: installs a cron line", async () => {
-    const adapter = createMemoryAdapter();
-
-    const mgr = createRunManager({
-      pool,
-      adapter,
-      execRunFn: async () => ({ exitCode: 0 }),
-    });
-
-    await mgr.enqueueRun({
-      chatId,
-      prompt: "Test recurring",
-      mode: "recurring",
-      spec: "*/10 * * * *",
-    });
-
-    const cronJobs = await adapter.listCron();
-    expect(cronJobs.length).toBe(1);
-    expect(cronJobs[0].cronExpr).toBe("*/10 * * * *");
-  });
-
-  it("executeRun ai_note: produces a note-content message on success", async () => {
-    const adapter = createMemoryAdapter();
-
-    const mgr = createRunManager({
-      pool,
-      adapter,
-      execRunFn: async (runId, _a, _p, onLog) => {
-        onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThis chat covered vacation plans." });
+      adapter: createMemoryAdapter(),
+      execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "Note about the vacation chat." });
         return { exitCode: 0 };
       },
     });
 
-    // Directly create a run row with kind=ai_note so executeRun sees it
-    // as an ai_note and emits note-content. Bypasses the 30-min delay
-    // of the scheduled path.
-    const runId = generateId("run");
-    await pool.query(
-      `INSERT INTO runs (id, chat_id, kind, state) VALUES ($1, $2, 'ai_note', 'pending')`,
-      [runId, chatId],
-    );
-
-    await mgr.executeRun(runId, "Generate an AI note summarizing this chat conversation.");
-
-    const r = await queries.runs.findById(pool, runId);
-    expect(r?.state).toBe("succeeded");
-
-    const { items } = await queries.messages.listByChat(pool, chatId, { limit: 100 });
-    const noteMsg = items.find((m) => {
-      const c = m.content as { type?: string };
-      return c.type === "note";
-    });
-    expect(noteMsg, "Expected a note-content message in the chat").toBeDefined();
-    const content = noteMsg!.content as { type: "note"; body: string };
-    expect(content.body).toContain("vacation plans");
+    const messageId = await insertPendingMessage({ type: "ai_note_request" });
+    const result = await mgr.fireMessage(messageId);
+    expect(result.childIds).toHaveLength(1);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as { type: string; body?: string };
+    expect(content.type).toBe("note");
+    expect(content.body).toContain("vacation");
   });
 
-  it("scheduleAiNote (message path): creates a pending ai_note_request message with an at ref", async () => {
+  it("is idempotent — second fire on same message is a no-op", async () => {
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "idempotent" });
+    const a = await mgr.fireMessage(messageId);
+    expect(a.fired).toBe(true);
+
+    const b = await mgr.fireMessage(messageId);
+    expect(b.fired).toBe(false);
+    expect(b.childIds).toHaveLength(0);
+  });
+
+  it("unknown messageId: fired=false, no side effects", async () => {
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+    const result = await mgr.fireMessage("msg_does_not_exist");
+    expect(result.fired).toBe(false);
+  });
+
+  it("exec failure: message transitions to failed", async () => {
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 1 }),
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "will fail" });
+    await mgr.fireMessage(messageId);
+    const msg = await queries.messages.findById(pool, messageId);
+    expect(msg?.state).toBe("failed");
+  });
+});
+
+describe("scheduleAiNote", () => {
+  async function clearNotes(): Promise<void> {
+    await pool.query(
+      `DELETE FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+  }
+
+  it("creates a pending ai_note_request message with an at scheduler_ref", async () => {
     const adapter = createMemoryAdapter();
     const mgr = createRunManager({
       pool,
       adapter,
       execRunFn: async () => ({ exitCode: 0 }),
     });
-
-    // Clean slate: remove any pending ai_note_request messages from prior tests.
-    await pool.query(
-      `DELETE FROM messages
-       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
-      [chatId],
-    );
+    await clearNotes();
 
     await mgr.scheduleAiNote(chatId);
 
     const { rows } = await pool.query(
-      `SELECT id, state, scheduler_ref, content FROM messages
+      `SELECT id, state, scheduler_ref FROM messages
        WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
       [chatId],
     );
-    expect(rows.length).toBe(1);
+    expect(rows).toHaveLength(1);
     expect(rows[0].state).toBe("pending");
     expect(rows[0].scheduler_ref).toMatchObject({ kind: "at" });
-
-    // The adapter should show the at-job.
-    const ats = await adapter.listAt();
-    expect(ats.length).toBeGreaterThanOrEqual(1);
+    expect((await adapter.listAt()).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("scheduleAiNote cancels previous pending ai_note_request before scheduling", async () => {
+  it("cancels the previous ai_note_request before scheduling a new one", async () => {
     const adapter = createMemoryAdapter();
-    const mgr = createRunManager({
-      pool,
-      adapter,
-      execRunFn: async () => ({ exitCode: 0 }),
-    });
-
-    await pool.query(
-      `DELETE FROM messages
-       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
-      [chatId],
-    );
+    const mgr = createRunManager({ pool, adapter, execRunFn: async () => ({ exitCode: 0 }) });
+    await clearNotes();
 
     await mgr.scheduleAiNote(chatId);
-    const firstRows = await pool.query(
+    const first = (await pool.query(
       `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
       [chatId],
-    );
-    const firstId = firstRows.rows[0].id as string;
+    )).rows[0].id as string;
 
     await mgr.scheduleAiNote(chatId);
-    const afterRows = await pool.query(
+    const after = (await pool.query(
       `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
       [chatId],
+    )).rows;
+    expect(after).toHaveLength(1);
+    expect(after[0].id).not.toBe(first);
+  });
+});
+
+describe("cancelMessage", () => {
+  it("removes the row and cancels the at ref", async () => {
+    const adapter = createMemoryAdapter();
+    const mgr = createRunManager({ pool, adapter, execRunFn: async () => ({ exitCode: 0 }) });
+    await mgr.scheduleAiNote(chatId);
+
+    const { rows } = await pool.query(
+      `SELECT id, scheduler_ref FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      [chatId],
     );
-    // Still exactly one, and it's not the first one.
-    expect(afterRows.rows.length).toBe(1);
-    expect(afterRows.rows[0].id).not.toBe(firstId);
-  });
+    const messageId = rows[0].id as string;
+    const beforeCount = (await adapter.listAt()).length;
 
-  it("enqueueRun ai_note: cancels previous and schedules new", async () => {
-    const adapter = createMemoryAdapter();
+    await mgr.cancelMessage(messageId);
 
-    const mgr = createRunManager({
-      pool,
-      adapter,
-      execRunFn: async () => ({ exitCode: 0 }),
-    });
-
-    // First ai_note
-    await mgr.enqueueRun({
-      chatId,
-      prompt: "AI note 1",
-      mode: "ai_note",
-    });
-
-    const firstAtJobs = await adapter.listAt();
-    expect(firstAtJobs.length).toBe(1);
-    const firstJobId = firstAtJobs[0].id;
-
-    // Second ai_note for same chat — should cancel the first
-    await mgr.enqueueRun({
-      chatId,
-      prompt: "AI note 2",
-      mode: "ai_note",
-    });
-
-    const secondAtJobs = await adapter.listAt();
-    // The first should be removed, a new one created
-    expect(secondAtJobs.length).toBe(1);
-    expect(secondAtJobs[0].id).not.toBe(firstJobId);
-  });
-
-  it("cancelRun marks state as cancelled", async () => {
-    const adapter = createMemoryAdapter();
-
-    const mgr = createRunManager({
-      pool,
-      adapter,
-      execRunFn: async (_runId, _agentId, _prompt, onLog) => {
-        // Simulate a long-running task
-        await new Promise((r) => setTimeout(r, 5000));
-        return { exitCode: 0 };
-      },
-    });
-
-    const run = await mgr.enqueueRun({
-      chatId,
-      prompt: "Cancel me",
-      mode: "immediate",
-    });
-
-    // Give it a moment to start
-    await new Promise((r) => setTimeout(r, 50));
-
-    await mgr.cancelRun(run.id);
-
-    const updated = await queries.runs.findById(pool, run.id);
-    expect(updated!.state).toBe("cancelled");
+    expect(await queries.messages.findById(pool, messageId)).toBeNull();
+    const afterCount = (await adapter.listAt()).length;
+    expect(afterCount).toBeLessThan(beforeCount);
   });
 });

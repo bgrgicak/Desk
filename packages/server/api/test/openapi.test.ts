@@ -31,17 +31,10 @@ describe("OpenAPI spec", () => {
       "/library",
       "/library/meta",
       "/library/download",
-      "/runs",
-      "/runs/{id}",
-      "/runs/{id}/logs",
-      "/runs/{id}/cancel",
-      "/scheduled-jobs",
-      "/scheduled-jobs/{id}",
       "/tools/models",
       "/search",
       "/ws",
       "/openapi.json",
-      "/internal/runs/fire",
       "/internal/messages/fire",
     ];
 
