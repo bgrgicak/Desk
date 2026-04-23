@@ -225,6 +225,15 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}": {
         get: { summary: "Get chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Chat" } } },
         patch: { summary: "Update chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Updated chat" } } },
+        delete: {
+          summary: "Delete chat (cascades messages + on-disk dirs)",
+          description: "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Desk/.trash/`. Emits a `chat.deleted` WS event.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "404": { description: "Chat not found" },
+          },
+        },
       },
       "/chats/{id}/messages": {
         get: { summary: "List messages", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "cursor", in: "query", schema: { type: "string" } }], responses: { "200": { description: "Message array" } } },

@@ -16,6 +16,7 @@ export {
   statFile,
   moveFile,
   deleteFile,
+  trashChatDirectories,
   resolveForSandbox,
 } from "./files.js";
 export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";

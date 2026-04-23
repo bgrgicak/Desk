@@ -9,12 +9,61 @@ import {
   chatAttachmentsDir,
   listNoteHistory,
   snapshotNote,
+  trashChatDirectories,
   uploadArtifact,
   workspaceRootPath,
   type FileRef,
   type NoteVersion,
   type StorageContext,
 } from "@desk/storage";
+
+interface SchedulerCancelAdapter {
+  removeAt: (id: string) => Promise<void>;
+  removeCron: (id: string) => Promise<void>;
+}
+
+/**
+ * Cancels the at/cron entry a single message owned via `schedulerRef`.
+ * Best-effort: a stale ref (already fired, already removed) is swallowed
+ * so deletion isn't blocked on infra drift. Shared by per-message delete
+ * and by the per-chat cascade.
+ */
+async function cancelSchedulerRef(
+  msg: Message,
+  adapter: SchedulerCancelAdapter | null,
+): Promise<void> {
+  const ref = msg.schedulerRef;
+  if (!ref || !adapter) return;
+  try {
+    if (ref.kind === "at") await adapter.removeAt(ref.id);
+    else if (ref.kind === "cron") await adapter.removeCron(ref.id);
+  } catch {
+    // Stale refs are OK.
+  }
+}
+
+async function cancelSchedulerRefsForChat(
+  pool: pg.Pool,
+  chatId: string,
+  adapter: SchedulerCancelAdapter | null,
+): Promise<void> {
+  if (!adapter) return;
+  const { rows } = await pool.query(
+    `SELECT id, scheduler_ref FROM messages
+     WHERE chat_id = $1 AND scheduler_ref IS NOT NULL`,
+    [chatId],
+  );
+  for (const row of rows) {
+    const ref = row.scheduler_ref as { kind?: string; id?: string } | null;
+    if (!ref || !ref.id) continue;
+    try {
+      if (ref.kind === "at") await adapter.removeAt(ref.id);
+      else if (ref.kind === "cron") await adapter.removeCron(ref.id);
+    } catch {
+      // Stale refs are OK.
+    }
+  }
+}
 
 export async function listChats(pool: pg.Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
@@ -160,26 +209,14 @@ export async function deleteMessage(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  adapter: {
-    removeAt: (id: string) => Promise<void>;
-    removeCron: (id: string) => Promise<void>;
-  } | null,
+  adapter: SchedulerCancelAdapter | null,
 ): Promise<void> {
   const msg = await queries.messages.findById(pool, messageId);
   if (!msg || msg.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
 
-  // Cancel any scheduled infra entry this message owned.
-  const ref = msg.schedulerRef;
-  if (ref && adapter) {
-    try {
-      if (ref.kind === "at") await adapter.removeAt(ref.id);
-      else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-    } catch {
-      // Best-effort; stale refs are OK.
-    }
-  }
+  await cancelSchedulerRef(msg, adapter);
 
   await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
 
@@ -253,6 +290,41 @@ export async function listArtifacts(
   }
   out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   return out;
+}
+
+/**
+ * Soft-deletes a chat. Cancels scheduler refs for every pending/recurring
+ * message, deletes the chat row (FK cascade drops all message rows), and
+ * moves the chat's on-disk directories to `~/Desk/.trash/`. Emits a
+ * `chat.deleted` WS event with the deleted chat's ids so clients can drop
+ * it from their sidebar. Returns the (now-removed) workspace id so the
+ * caller can broadcast the event correctly.
+ */
+export async function deleteChat(
+  pool: pg.Pool,
+  storage: StorageContext,
+  chatId: string,
+  adapter: SchedulerCancelAdapter | null,
+  emit: (event: WsEvent) => void,
+): Promise<{ ok: true }> {
+  const chat = await queries.chats.findById(pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+
+  await cancelSchedulerRefsForChat(pool, chatId, adapter);
+
+  // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
+  await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+
+  await trashChatDirectories(storage.home, chatId).catch(() => {
+    // Best-effort; DB state is already gone.
+  });
+
+  emit({
+    type: "chat.deleted",
+    payload: { chatId, workspaceId: chat.workspaceId },
+  });
+
+  return { ok: true };
 }
 
 /**

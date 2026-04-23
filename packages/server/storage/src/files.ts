@@ -18,6 +18,7 @@ import {
   workspaceLibraryDir,
   workspaceRootPath,
 } from "./layout.js";
+import { ID_PREFIXES } from "@desk/shared";
 
 /**
  * v1 keeps a `pool` on the context for callers that still want a handle;
@@ -222,6 +223,47 @@ export async function deleteFile(ctx: StorageContext, relPath: string): Promise<
   const stamp = Date.now();
   const trashPath = path.join(trash, `${stamp}-${path.basename(abs)}`);
   await fs.rename(abs, trashPath);
+}
+
+/**
+ * Soft-deletes a chat's on-disk footprint by moving its two chat-scoped
+ * directories (`.chats/{chatId}/` for logs + note-history, and
+ * `chats/{chatId}/` for attachments) into `~/Desk/.trash/`. Either or
+ * both may be absent — best-effort. Returns whether anything moved.
+ *
+ * The trash layout mirrors the live layout so a curious user can pull
+ * a chat back by hand without hunting.
+ */
+export async function trashChatDirectories(
+  home: string,
+  chatId: string,
+): Promise<{ movedHidden: boolean; movedAttachments: boolean }> {
+  if (!chatId.startsWith(ID_PREFIXES.chat) || chatId.includes("/") || chatId.includes("..")) {
+    throw new ValidationError(`Invalid chat id: ${chatId}`);
+  }
+  const root = workspaceRootPath(home);
+  const stamp = Date.now();
+
+  const hiddenSrc = path.join(root, ".chats", chatId);
+  const hiddenDst = path.join(trashDir(home), ".chats", `${chatId}-${stamp}`);
+  const attachSrc = path.join(root, "chats", chatId);
+  const attachDst = path.join(trashDir(home), "chats", `${chatId}-${stamp}`);
+
+  const out = { movedHidden: false, movedAttachments: false };
+
+  const hiddenStat = await fs.stat(hiddenSrc).catch(() => null);
+  if (hiddenStat) {
+    await fs.mkdir(path.dirname(hiddenDst), { recursive: true });
+    await fs.rename(hiddenSrc, hiddenDst);
+    out.movedHidden = true;
+  }
+  const attachStat = await fs.stat(attachSrc).catch(() => null);
+  if (attachStat) {
+    await fs.mkdir(path.dirname(attachDst), { recursive: true });
+    await fs.rename(attachSrc, attachDst);
+    out.movedAttachments = true;
+  }
+  return out;
 }
 
 /**

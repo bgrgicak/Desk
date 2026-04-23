@@ -408,6 +408,18 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "chats" && segments.length === 2 && method === "DELETE") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const result = await chatRoutes.deleteChat(
+        pool,
+        storage,
+        segments[1],
+        runManager.adapter,
+        emitEvent,
+      );
+      sendJson(res, 200, result);
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;

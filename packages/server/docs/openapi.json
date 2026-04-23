@@ -670,6 +670,35 @@
             "description": "Updated chat"
           }
         }
+      },
+      "delete": {
+        "summary": "Delete chat (cascades messages + on-disk dirs)",
+        "description": "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Desk/.trash/`. Emits a `chat.deleted` WS event.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat not found"
+          }
+        }
       }
     },
     "/chats/{id}/messages": {

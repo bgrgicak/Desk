@@ -10,6 +10,19 @@ export const ChatUpdatedEventSchema = z.object({
   payload: ChatSchema,
 });
 
+/**
+ * Fired when a chat is deleted. Carries only the ids clients need to
+ * drop the chat from their local caches — the row and its messages are
+ * already gone by the time this event is broadcast.
+ */
+export const ChatDeletedEventSchema = z.object({
+  type: z.literal("chat.deleted"),
+  payload: z.object({
+    chatId: z.string(),
+    workspaceId: z.string(),
+  }),
+});
+
 export const MessageAppendedEventSchema = z.object({
   type: z.literal("message.appended"),
   payload: MessageSchema,
@@ -63,6 +76,7 @@ export const LibraryChangedEventSchema = z.object({
 
 export const WsEventSchema = z.discriminatedUnion("type", [
   ChatUpdatedEventSchema,
+  ChatDeletedEventSchema,
   MessageAppendedEventSchema,
   MessageUpdatedEventSchema,
   MessageLogAppendedEventSchema,

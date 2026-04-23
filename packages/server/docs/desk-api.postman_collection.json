@@ -13,6 +13,7 @@
     { "key": "workspaceId", "value": "", "type": "string" },
     { "key": "agentId", "value": "", "type": "string" },
     { "key": "chatId", "value": "", "type": "string" },
+    { "key": "messageId", "value": "", "type": "string" },
     { "key": "libraryPath", "value": "readme.txt", "type": "string" }
   ],
   "auth": {
@@ -339,6 +340,18 @@
               "mode": "raw",
               "raw": "{\n  \"title\": \"Renamed chat\",\n  \"goal\": \"Revised goal\"\n}"
             },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /chats/:id",
+          "request": {
+            "method": "DELETE",
+            "description": "Soft-deletes a chat: cascades messages, cancels scheduler refs, moves .chats/{chatId}/ + chats/{chatId}/ to ~/Desk/.trash/, and broadcasts chat.deleted over WS.",
             "url": {
               "raw": "{{baseUrl}}/chats/{{chatId}}",
               "host": ["{{baseUrl}}"],

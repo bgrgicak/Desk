@@ -84,6 +84,7 @@ explicit `agentId` uses the workspace default.
 | POST   | /chats                    | Create chat               |
 | GET    | /chats/{id}               | Get chat                  |
 | PATCH  | /chats/{id}               | Update chat               |
+| DELETE | /chats/{id}               | Soft-delete chat (cascades messages, cancels schedules, trashes on-disk dirs, emits `chat.deleted` WS) |
 | GET    | /chats/{id}/messages                    | List messages             |
 | POST   | /chats/{id}/messages                    | Send message              |
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
@@ -100,6 +101,17 @@ Lists chats in one of the caller's workspaces.
 **Query parameters:**
 
 - `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
+
+### DELETE /chats/{id}
+
+Soft-deletes a chat. In order:
+
+1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
+2. Drops the chat row from Postgres; `ON DELETE CASCADE` removes its messages.
+3. Moves both on-disk subtrees `~/Desk/.chats/{chatId}/` and `~/Desk/workspaces/*/chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
+4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
+
+Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE returns 404, never 403.
 
 ### POST /chats/{id}/artifacts
 
@@ -275,6 +287,17 @@ authenticated.
 | Path | Description                                             |
 |------|---------------------------------------------------------|
 | /ws  | Upgrade to WebSocket. Authenticate via `?token=` query. |
+
+Broadcast events (server → client):
+
+- `chat.updated` — `Chat` object
+- `chat.deleted` — `{ chatId, workspaceId }` (emitted by `DELETE /chats/{id}`)
+- `message.appended` — `Message`
+- `message.updated` — `Message`
+- `message.streaming` — `{ chatId, messageId, delta }` (incremental assistant text)
+- `message.log_appended` — `{ messageId, kind: 'stdout'|'stderr'|'event', line }`
+- `artifact.created` — `FileRef`
+- `library.changed` — `{ workspaceId, path, op: 'added'|'removed'|'updated'|'moved' }`
 
 ## Other
 
