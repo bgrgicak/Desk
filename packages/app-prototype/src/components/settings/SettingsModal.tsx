@@ -1065,7 +1065,16 @@ function PreferencesSection() {
             Automatically save artifacts created in chats to your Desk.
           </p>
         </div>
-        <Switch size="sm" checked={autoSave} onCheckedChange={setAutoSave} />
+        <div className="flex items-center h-7 bg-muted rounded-full p-0.5 w-36 shrink-0">
+          {([true, false] as const).map(val => (
+            <button key={String(val)} onClick={() => setAutoSave(val)}
+              className={`flex-1 rounded-full text-xs font-medium transition-colors h-full flex items-center justify-center ${
+                autoSave === val ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}>
+              {val ? 'Enabled' : 'Disabled'}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="border-t" />
@@ -1078,7 +1087,16 @@ function PreferencesSection() {
             Display unread counts on workspace tabs and nav items.
           </p>
         </div>
-        <Switch size="sm" checked={showBadges} onCheckedChange={setShowBadges} />
+        <div className="flex items-center h-7 bg-muted rounded-full p-0.5 w-36 shrink-0">
+          {([true, false] as const).map(val => (
+            <button key={String(val)} onClick={() => setShowBadges(val)}
+              className={`flex-1 rounded-full text-xs font-medium transition-colors h-full flex items-center justify-center ${
+                showBadges === val ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}>
+              {val ? 'Enabled' : 'Disabled'}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="border-t" />
