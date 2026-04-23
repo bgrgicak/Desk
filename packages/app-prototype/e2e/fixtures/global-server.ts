@@ -53,10 +53,24 @@ async function waitForHealth(url: string, timeoutMs = 60_000): Promise<void> {
   throw new Error(`health check failed for ${url}: ${String(lastErr)}`);
 }
 
+async function killListenersOnPort(port: number): Promise<void> {
+  // Best-effort: kill anything still holding the port from a prior run.
+  await new Promise<void>((resolve) => {
+    const proc = spawn("bash", [
+      "-c",
+      // fuser is widely available; ss fallback is noisy but harmless.
+      `fuser -k ${port}/tcp 2>/dev/null || true`,
+    ]);
+    proc.on("exit", () => resolve());
+    setTimeout(() => resolve(), 2000);
+  });
+}
+
 async function startVite(
   apiUrl: string,
   port: number,
 ): Promise<ChildProcess> {
+  await killListenersOnPort(port);
   // Build once (inherits DESK_API_URL so the config closure captures it),
   // then run preview. Keep stderr/stdout piped so we can surface issues.
   const env = { ...process.env, DESK_API_URL: apiUrl } as NodeJS.ProcessEnv;
@@ -75,10 +89,14 @@ async function startVite(
     });
   });
 
+  // Run vite directly from the installed binary — going via `npx` adds a
+  // parent shell process whose PID we track in the teardown handle, but
+  // the real vite process is a grandchild that outlives our SIGTERM and
+  // keeps port 5179 busy for the next run.
+  const viteBin = path.join(APP_ROOT, "node_modules", ".bin", "vite");
   const preview = spawn(
-    "npx",
+    viteBin,
     [
-      "vite",
       "preview",
       "--port",
       String(port),
@@ -86,16 +104,13 @@ async function startVite(
       "--logLevel",
       "warn",
     ],
-    { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"], detached: true },
+    { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
   );
   preview.stderr?.on("data", (b) => process.stderr.write(`[vite-err] ${b}`));
   preview.stdout?.on("data", (b) => process.stdout.write(`[vite-out] ${b}`));
   preview.on("exit", (code, signal) =>
     process.stderr.write(`[vite-exit] code=${code} signal=${signal}\n`),
   );
-  // Detach from the parent so Playwright's test runner doesn't kill it
-  // when it restarts between tests in fullyParallel=false mode.
-  preview.unref();
   return preview;
 }
 

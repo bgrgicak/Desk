@@ -23,10 +23,12 @@ import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
   useGetAgentsQuery,
+  useGetMessagesQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
 } from '@/store/api'
 import { toUiChat } from '@/store/selectors/chats'
+import { toUiRun } from '@/store/selectors/runs'
 
 const NEW_CHAT_STUB: Chat = {
   id: '__new__',
@@ -73,6 +75,14 @@ function App() {
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
+
+  // Scheduled / executing messages, scoped to the active workspace.
+  // Drives the Runs page.
+  const { data: runsResp } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, scheduled: true },
+    { skip: !activeWorkspaceId },
+  )
+  const runs = (runsResp?.items ?? []).map(m => toUiRun(m, serverAgents ?? []))
   const [readUpdateIds, setReadUpdateIds]          = useState<Set<string>>(new Set())
   const [readChatIds, setReadChatIds]              = useState<Set<string>>(new Set())
   const [todaySheetOpen, setTodaySheetOpen]        = useState(false)
@@ -295,7 +305,7 @@ function App() {
           />
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'runs' && (
-          <RunsPage runs={MOCK_RUNS} onCompose={enterCompose} />
+          <RunsPage runs={runs} onCompose={enterCompose} />
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList
