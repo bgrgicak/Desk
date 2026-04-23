@@ -489,9 +489,10 @@ interface AgentDetailProps {
   focus: Exclude<AgentsFocus, null>
   onSave: (agent: SettingsAgent) => void
   onCancel: () => void
+  onDelete?: (id: string) => void
 }
 
-function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetailProps) {
+function AgentDetail({ agents, providers, focus, onSave, onCancel, onDelete }: AgentDetailProps) {
   const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
   const defaultProvider = existing
     ? providers.find(p => p.id === existing.providerId) ?? providers[0]
@@ -528,6 +529,8 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
       enabled: existing?.enabled ?? true,
     })
   }
+
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   // Show the footer's top border only while content is hidden behind it.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -584,14 +587,47 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-end gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
           scrolledUnder && 'border-border',
         )}
       >
-        <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-        <Button size="sm" onClick={handleSave} disabled={!canSave}>
-          {focus.mode === 'new' ? 'Add agent' : 'Save'}
-        </Button>
+        <div>
+          {focus.mode === 'edit' && onDelete && existing && (
+            <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete agent
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-4" align="start">
+                <p className="text-sm font-medium mb-1">Delete {existing.name}?</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Any chats assigned to this agent will lose it. This can't be undone.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setDeleteOpen(false); onDelete(existing.id) }}
+                  >
+                    Delete
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={!canSave}>
+            {focus.mode === 'new' ? 'Add agent' : 'Save'}
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -927,9 +963,10 @@ interface ConnectionDetailProps {
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   onSave: (connection: Connection) => void
   onCancel: () => void
+  onDelete?: (id: string) => void
 }
 
-function ConnectionDetail({ connections, focus, onSave, onCancel }: ConnectionDetailProps) {
+function ConnectionDetail({ connections, focus, onSave, onCancel, onDelete }: ConnectionDetailProps) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
   const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
   const meta = CONNECTION_CATALOG[kind]
@@ -951,6 +988,8 @@ function ConnectionDetail({ connections, focus, onSave, onCancel }: ConnectionDe
       enabled: existing?.enabled ?? true,
     })
   }
+
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrolledUnder, setScrolledUnder] = useState(false)
@@ -998,14 +1037,47 @@ function ConnectionDetail({ connections, focus, onSave, onCancel }: ConnectionDe
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-end gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
           scrolledUnder && 'border-border',
         )}
       >
-        <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-        <Button size="sm" onClick={handleSave}>
-          {focus.mode === 'new' ? 'Add connection' : 'Save'}
-        </Button>
+        <div>
+          {focus.mode === 'edit' && onDelete && existing && (
+            <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove connection
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-4" align="start">
+                <p className="text-sm font-medium mb-1">Remove {existing.name}?</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Agents using this connection won't be able to run until a new one is configured. This can't be undone.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setDeleteOpen(false); onDelete(existing.id) }}
+                  >
+                    Remove
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={handleSave}>
+            {focus.mode === 'new' ? 'Add connection' : 'Save'}
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -1433,6 +1505,7 @@ export function SettingsModal({
                   focus={agentsFocus}
                   onSave={handleSaveAgent}
                   onCancel={() => setAgentsFocus(null)}
+                  onDelete={handleDeleteAgent}
                 />
               ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
                 <ConnectionsPicker
@@ -1444,6 +1517,7 @@ export function SettingsModal({
                   focus={connectionsFocus}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
+                  onDelete={handleDeleteConnection}
                 />
               ) : (
                 <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">
