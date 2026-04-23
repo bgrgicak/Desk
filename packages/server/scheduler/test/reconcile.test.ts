@@ -47,11 +47,7 @@ beforeAll(async () => {
   }
 
   pool = new pg.Pool({ connectionString: testConnectionString() });
-
-  try {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
-  } catch { /* ok */ }
-
+  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
@@ -64,6 +60,12 @@ beforeAll(async () => {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
 
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    [workspaceId, agentId],
+  );
+
   chatId = generateId("chat");
   await pool.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
@@ -73,7 +75,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (pool) await pool.end();
-
   const admin = adminPool();
   try {
     await admin.query(
@@ -86,93 +87,75 @@ afterAll(async () => {
   }
 });
 
-describe("reconcile", () => {
-  it("deactivates DB jobs missing from system", async () => {
-    const adapter = createMemoryAdapter();
+async function insertPendingScheduledMessage(schedulerRef: { kind: "at" | "cron"; id: string }): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, state, execute_at, scheduler_ref)
+     VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour', $4)`,
+    [id, chatId, JSON.stringify({ type: "text", text: "scheduled thing" }), JSON.stringify(schedulerRef)],
+  );
+  return id;
+}
 
-    // Insert a job in DB with an at_job_id, but no matching system job
-    const jobId = generateId("scheduledJob");
-    await queries.scheduledJobs.insert(pool, {
-      id: jobId,
-      chatId,
-      kind: "once",
-      spec: { type: "once", onceAt: "now + 1 hour" },
-      atJobId: "999",
-    });
+describe("reconcile", () => {
+  async function clearPending(): Promise<void> {
+    await pool.query("DELETE FROM messages WHERE chat_id = $1 AND state = 'pending'", [chatId]);
+  }
+
+  it("cancels pending messages whose at ref is missing from the system", async () => {
+    const adapter = createMemoryAdapter();
+    await clearPending();
+
+    const messageId = await insertPendingScheduledMessage({ kind: "at", id: "nonexistent_at" });
 
     await reconcile(pool, adapter);
 
-    const job = await queries.scheduledJobs.findById(pool, jobId);
-    expect(job!.active).toBe(false);
+    const msg = await queries.messages.findById(pool, messageId);
+    expect(msg?.state).toBe("cancelled");
   });
 
-  it("removes orphaned system jobs not in DB", async () => {
+  it("cancels pending messages whose cron ref is missing from the system", async () => {
     const adapter = createMemoryAdapter();
+    await clearPending();
 
-    // Add an at job to the system that has no corresponding DB row
-    await adapter.scheduleAt("orphan-command", "now + 1 hour");
-
-    const beforeList = await adapter.listAt();
-    expect(beforeList.length).toBe(1);
+    const messageId = await insertPendingScheduledMessage({ kind: "cron", id: "nonexistent_cron" });
 
     await reconcile(pool, adapter);
 
-    const afterList = await adapter.listAt();
-    expect(afterList.length).toBe(0);
+    const msg = await queries.messages.findById(pool, messageId);
+    expect(msg?.state).toBe("cancelled");
+  });
+
+  it("preserves pending messages whose ref still exists in the system", async () => {
+    const adapter = createMemoryAdapter();
+    await clearPending();
+
+    const atId = await adapter.scheduleAt("irrelevant cmd", "now + 1 hour");
+    const messageId = await insertPendingScheduledMessage({ kind: "at", id: atId });
+
+    await reconcile(pool, adapter);
+
+    const msg = await queries.messages.findById(pool, messageId);
+    expect(msg?.state).toBe("pending");
+  });
+
+  it("removes orphan at entries not referenced by any pending message", async () => {
+    const adapter = createMemoryAdapter();
+    await clearPending();
+
+    await adapter.scheduleAt("orphan-command", "now + 1 hour");
+    expect((await adapter.listAt()).length).toBeGreaterThanOrEqual(1);
+
+    await reconcile(pool, adapter);
+
+    expect((await adapter.listAt()).length).toBe(0);
   });
 
   it("is idempotent", async () => {
     const adapter = createMemoryAdapter();
+    await clearPending();
 
     await reconcile(pool, adapter);
-    await reconcile(pool, adapter);
-    // No errors — good
-  });
-
-  it("Gap 12: reconcile after restart preserves matching jobs", async () => {
-    const adapter = createMemoryAdapter();
-
-    // Create a cron job in both DB and system (simulating pre-restart state)
-    const jobId = generateId("scheduledJob");
-    const crontabId = jobId; // The crontab marker uses jobId
-
-    await adapter.installCron(crontabId, "*/10 * * * *", `desk-run ${jobId}`);
-    await queries.scheduledJobs.insert(pool, {
-      id: jobId,
-      chatId,
-      kind: "recurring",
-      spec: { type: "recurring", cronExpr: "*/10 * * * *" },
-      crontabId,
-    });
-
-    // Simulate restart: reconcile with the same adapter
-    await reconcile(pool, adapter);
-
-    // The job should still be active (it matches)
-    const job = await queries.scheduledJobs.findById(pool, jobId);
-    expect(job!.active).toBe(true);
-
-    // The cron entry should still exist
-    const cronJobs = await adapter.listCron();
-    expect(cronJobs.some((j) => j.jobId === crontabId)).toBe(true);
-  });
-
-  it("Gap 12: reconcile after restart deactivates DB jobs missing from system", async () => {
-    const adapter = createMemoryAdapter();
-
-    // Insert a DB job with no matching system entry (simulating lost state)
-    const jobId = generateId("scheduledJob");
-    await queries.scheduledJobs.insert(pool, {
-      id: jobId,
-      chatId,
-      kind: "recurring",
-      spec: { type: "recurring", cronExpr: "*/5 * * * *" },
-      crontabId: "nonexistent_cron_id",
-    });
-
-    await reconcile(pool, adapter);
-
-    const job = await queries.scheduledJobs.findById(pool, jobId);
-    expect(job!.active).toBe(false);
+    await reconcile(pool, adapter); // should not throw
   });
 });

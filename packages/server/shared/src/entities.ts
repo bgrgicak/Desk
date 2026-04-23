@@ -1,10 +1,6 @@
 import { z } from "zod";
 import {
   MESSAGE_ROLES,
-  RUN_EVENT_KINDS,
-  RUN_KINDS,
-  RUN_STATES,
-  SCHEDULED_JOB_KINDS,
 } from "./constants.js";
 
 export const UserSchema = z.object({
@@ -96,12 +92,35 @@ export const MessageContentEventsSchema = z.object({
   events: z.array(OpenCodeEventSchema),
 });
 
+/**
+ * A coherent narrative summary of a chat. Produced by scheduled ai_note
+ * runs and stored as a regular message in the chat timeline (no separate
+ * notes table). The user can edit it via PATCH on the message; the agent
+ * reads the most recent note to incorporate edits on the next refresh.
+ */
+export const MessageContentNoteSchema = z.object({
+  type: z.literal("note"),
+  body: z.string(),
+});
+
+/**
+ * Scheduled request for the agent to (re)generate the chat's note. Emitted
+ * as a pending system message; on fire the agent replaces it with a
+ * `note`-content child. Kept as its own content type so scheduled requests
+ * stay distinguishable from ordinary system messages in the chat log.
+ */
+export const MessageContentAiNoteRequestSchema = z.object({
+  type: z.literal("ai_note_request"),
+});
+
 export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentTextSchema,
   MessageContentToolCallSchema,
   MessageContentToolResultSchema,
   MessageContentArtifactRefSchema,
   MessageContentEventsSchema,
+  MessageContentNoteSchema,
+  MessageContentAiNoteRequestSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
@@ -148,62 +167,6 @@ export const FileSchema = z.object({
 });
 export type File = z.infer<typeof FileSchema>;
 
-export const RunSchema = z.object({
-  id: z.string(),
-  chatId: z.string().optional(),
-  scheduledJobId: z.string().optional(),
-  kind: z.enum(RUN_KINDS),
-  state: z.enum(RUN_STATES),
-  startedAt: z.string().optional(),
-  finishedAt: z.string().optional(),
-  exitCode: z.number().int().optional(),
-  logPath: z.string().optional(),
-});
-export type Run = z.infer<typeof RunSchema>;
-
-export const ScheduledJobOnceSpecSchema = z.object({
-  type: z.literal("once"),
-  onceAt: z.string(),
-});
-
-export const ScheduledJobRecurringSpecSchema = z.object({
-  type: z.literal("recurring"),
-  cronExpr: z.string(),
-});
-
-export const ScheduledJobAiNoteSpecSchema = z.object({
-  type: z.literal("ai_note"),
-  aiNoteDelayMs: z.number().int().nonnegative(),
-});
-
-export const ScheduledJobSpecSchema = z.discriminatedUnion("type", [
-  ScheduledJobOnceSpecSchema,
-  ScheduledJobRecurringSpecSchema,
-  ScheduledJobAiNoteSpecSchema,
-]);
-export type ScheduledJobSpec = z.infer<typeof ScheduledJobSpecSchema>;
-
-export const ScheduledJobSchema = z.object({
-  id: z.string(),
-  chatId: z.string().optional(),
-  kind: z.enum(SCHEDULED_JOB_KINDS),
-  spec: ScheduledJobSpecSchema,
-  atJobId: z.string().optional(),
-  crontabId: z.string().optional(),
-  nextRunAt: z.string().optional(),
-  active: z.boolean(),
-});
-export type ScheduledJob = z.infer<typeof ScheduledJobSchema>;
-
-export const RunEventSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  seq: z.number().int().nonnegative(),
-  kind: z.enum(RUN_EVENT_KINDS),
-  payload: z.record(z.unknown()),
-  createdAt: z.string(),
-});
-export type RunEvent = z.infer<typeof RunEventSchema>;
 
 export const SandboxSessionSchema = z.object({
   id: z.string(),
@@ -214,11 +177,3 @@ export const SandboxSessionSchema = z.object({
 });
 export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 
-export const NoteSchema = z.object({
-  id: z.string(),
-  fileId: z.string(),
-  chatId: z.string(),
-  createdAt: z.string(),
-  summary: z.string(),
-});
-export type Note = z.infer<typeof NoteSchema>;

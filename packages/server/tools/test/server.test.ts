@@ -69,7 +69,6 @@ describe("tool server", () => {
 
   describe("file.read", () => {
     it("reads an uploaded file", async () => {
-      // First upload a file via file.write
       const writeResult = await toolRequest(ctx, "file.write", {
         workspaceId: ctx.workspaceId,
         name: "test-read.txt",
@@ -77,10 +76,9 @@ describe("tool server", () => {
         contentBase64: Buffer.from("hello tools").toString("base64"),
       });
       expect(writeResult.status).toBe(200);
-      const written = writeResult.body as { id: string };
+      const written = writeResult.body as { path: string };
 
-      // Then read it
-      const readResult = await toolRequest(ctx, "file.read", { fileId: written.id });
+      const readResult = await toolRequest(ctx, "file.read", { path: written.path });
       expect(readResult.status).toBe(200);
       const read = readResult.body as { content: string; mime: string };
       expect(read.content).toBe("hello tools");
@@ -89,7 +87,7 @@ describe("tool server", () => {
   });
 
   describe("file.write", () => {
-    it("writes a file and returns the file record", async () => {
+    it("writes a file and returns a FileRef", async () => {
       const result = await toolRequest(ctx, "file.write", {
         workspaceId: ctx.workspaceId,
         name: "written.txt",
@@ -97,8 +95,8 @@ describe("tool server", () => {
         contentBase64: Buffer.from("written content").toString("base64"),
       });
       expect(result.status).toBe(200);
-      const file = result.body as { id: string; name: string };
-      expect(file.id).toMatch(/^fil_/);
+      const file = result.body as { path: string; name: string };
+      expect(file.path).toMatch(/^library\//);
       expect(file.name).toBe("written.txt");
     });
   });
@@ -115,20 +113,19 @@ describe("tool server", () => {
   });
 
   describe("library.get", () => {
-    it("gets a file by ID", async () => {
-      // Upload a file first
+    it("gets a file by path", async () => {
       const writeResult = await toolRequest(ctx, "file.write", {
         workspaceId: ctx.workspaceId,
         name: "lib-get-test.txt",
         mime: "text/plain",
         contentBase64: Buffer.from("lib content").toString("base64"),
       });
-      const file = writeResult.body as { id: string };
+      const file = writeResult.body as { path: string };
 
-      const result = await toolRequest(ctx, "library.get", { fileId: file.id });
+      const result = await toolRequest(ctx, "library.get", { path: file.path });
       expect(result.status).toBe(200);
-      const body = result.body as { id: string; name: string };
-      expect(body.id).toBe(file.id);
+      const body = result.body as { path: string; name: string };
+      expect(body.path).toBe(file.path);
     });
   });
 
@@ -154,7 +151,6 @@ describe("tool server", () => {
 
   describe("chat.attach_artifact", () => {
     it("attaches a file to a chat", async () => {
-      // Upload file first
       const writeResult = await toolRequest(ctx, "file.write", {
         workspaceId: ctx.workspaceId,
         chatId: ctx.chatId,
@@ -162,16 +158,16 @@ describe("tool server", () => {
         mime: "text/plain",
         contentBase64: Buffer.from("artifact").toString("base64"),
       });
-      const file = writeResult.body as { id: string };
+      const file = writeResult.body as { path: string };
 
       const result = await toolRequest(ctx, "chat.attach_artifact", {
         chatId: ctx.chatId,
-        fileId: file.id,
+        path: file.path,
       });
       expect(result.status).toBe(200);
-      const msg = result.body as { id: string; content: { type: string; fileId: string } };
+      const msg = result.body as { id: string; content: { type: string; path: string } };
       expect(msg.content.type).toBe("artifactRef");
-      expect(msg.content.fileId).toBe(file.id);
+      expect(msg.content.path).toBe(file.path);
     });
   });
 

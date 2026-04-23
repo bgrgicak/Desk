@@ -128,12 +128,15 @@ describe("WebSocket upgrade", () => {
     const received: Buffer[] = [];
     socket.on("data", (chunk: Buffer) => received.push(chunk));
 
-    // Broadcast an event to the connected user
+    // Broadcast a message.updated event (run.state_changed is gone in M6).
     broadcast(userId, {
-      type: "run.state_changed",
+      type: "message.updated",
       payload: {
-        id: "run_test1",
+        id: "msg_test1",
         chatId: "chat_1",
+        role: "agent",
+        content: { type: "text", text: "hi" },
+        createdAt: new Date().toISOString(),
         state: "running",
       },
     });
@@ -162,8 +165,8 @@ describe("WebSocket upgrade", () => {
     const payload = frame.subarray(payloadStart, payloadStart + payloadLen).toString("utf-8");
     const parsed = JSON.parse(payload);
 
-    expect(parsed.type).toBe("run.state_changed");
-    expect(parsed.payload.id).toBe("run_test1");
+    expect(parsed.type).toBe("message.updated");
+    expect(parsed.payload.id).toBe("msg_test1");
     expect(parsed.payload.state).toBe("running");
 
     socket.destroy();
