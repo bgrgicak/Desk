@@ -23,3 +23,4 @@ export type { LibraryContext } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
 export { snapshotNote, listNoteHistory, noteHistoryDir } from "./noteHistory.js";
 export type { NoteVersion } from "./noteHistory.js";
+export { enforceLogRetention } from "./logRetention.js";

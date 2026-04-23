@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
-import { ensureLayout, reconcileArtifactRefs } from "@desk/storage";
+import { ensureLayout, enforceLogRetention, reconcileArtifactRefs } from "@desk/storage";
 import { createRunManager, createAdapter } from "@desk/scheduler";
 import { createApp } from "./app.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -42,6 +42,26 @@ async function main(): Promise<void> {
       `artifactRef reconcile: checked=${reconciled.checked} repaired=${reconciled.repaired} missing=${reconciled.missing}`,
     );
   }
+
+  // Log retention: keep the last N log files per chat. Evicted files go
+  // to ~/Desk/.trash/logs/ so nothing is silently destroyed.
+  const LOG_RETENTION_FILES = parseInt(process.env.DESK_LOG_RETENTION_FILES ?? "500", 10);
+  const LOG_RETENTION_INTERVAL_MS = parseInt(process.env.DESK_LOG_RETENTION_INTERVAL_MS ?? "3600000", 10);
+  const runRetention = async (): Promise<void> => {
+    try {
+      const res = await enforceLogRetention(DESK_HOME, LOG_RETENTION_FILES);
+      if (res.evicted > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`log retention: scanned=${res.scanned} evicted=${res.evicted}`);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("log retention failed:", err);
+    }
+  };
+  await runRetention();
+  const retentionTimer = setInterval(() => { void runRetention(); }, LOG_RETENTION_INTERVAL_MS);
+  retentionTimer.unref();
 
   // Broadcast targets the single v1 user.
   const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
