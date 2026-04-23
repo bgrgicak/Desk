@@ -252,6 +252,7 @@ function App() {
             onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat')}
             onDeleteChat={isNewChat ? () => setSelectedChatId(null) : handleDeleteChat}
             onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
+            onArtifactAdded={isNewChat ? handleArtifactAdded : undefined}
             showNewBadge={!isNewChat && chatShowNewBadge}
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
