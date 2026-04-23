@@ -11,9 +11,7 @@ import { RunsPage } from '@/components/runs/RunsPage'
 import { ChatView } from '@/components/chats/ChatView'
 import {
   MOCK_ARTIFACTS,
-  MOCK_INBOX,
   MOCK_CONTEXT,
-  MOCK_RUNS,
   MOCK_ARTIFACT_UPDATES,
   type Artifact,
   type Chat,
@@ -206,7 +204,10 @@ function App() {
     setSelectedChatId(prev => prev === chatId ? null : prev)
   }, [deleteChatMutation])
 
-  const unreadCount      = MOCK_INBOX.filter(i => !i.read).length
+  // Inbox badge count = server-reported awaiting-user messages.
+  // Don't filter by workspace — the inbox is global.
+  const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
+  const unreadCount = awaitingResp?.items.length ?? 0
   const deskUnreadCount  = MOCK_ARTIFACT_UPDATES.filter(u => !readUpdateIds.has(u.id)).length
 
   const handleDismissUpdate = useCallback((id: string) => {
