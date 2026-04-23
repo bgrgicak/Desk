@@ -423,9 +423,13 @@ export function ChatView({
     onArtifactAdded?.(artifact)
   }, [onArtifactAdded])
 
+  const chatMode = isNewChat ? 'compose' : 'conversation'
+  // eslint-disable-next-line no-console
+  console.log('[ChatView] chat.id:', chat.id, 'isNewChat:', isNewChat, 'mode:', chatMode)
+
   const { messages, isTyping, statusText, sendMessage } = useMockChat({
     initialMessages,
-    mode: isNewChat ? 'compose' : 'conversation',
+    mode: chatMode,
     onArtifactCreated: isNewChat ? handleArtifactCreated : undefined,
   })
 
