@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
   Trash2, Plus, ChevronDown, X, Search,
@@ -266,7 +266,6 @@ const STATUS_FILTERS: { value: AgentsStatusFilter; label: string }[] = [
 ]
 
 interface AgentsSectionProps {
-  focus: AgentsFocus
   providers: Provider[]
   agents: SettingsAgent[]
   search: string
@@ -274,29 +273,16 @@ interface AgentsSectionProps {
   onSearchChange: (next: string) => void
   onStatusFilterChange: (next: AgentsStatusFilter) => void
   onFocus: (next: AgentsFocus) => void
-  onSaveAgent: (agent: SettingsAgent) => void
   onDeleteAgent: (id: string) => void
   onDuplicateAgent: (id: string) => void
   onToggleEnabled: (id: string) => void
 }
 
 function AgentsSection({
-  focus, providers, agents, search, statusFilter,
+  providers, agents, search, statusFilter,
   onSearchChange, onStatusFilterChange, onFocus,
-  onSaveAgent, onDeleteAgent, onDuplicateAgent, onToggleEnabled,
+  onDeleteAgent, onDuplicateAgent, onToggleEnabled,
 }: AgentsSectionProps) {
-  if (focus !== null) {
-    return (
-      <AgentDetail
-        agents={agents}
-        providers={providers}
-        focus={focus}
-        onSave={onSaveAgent}
-        onCancel={() => onFocus(null)}
-      />
-    )
-  }
-
   const q = search.trim().toLowerCase()
   const filteredAgents = agents
     .filter(a => statusFilter === 'all'
@@ -534,45 +520,69 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
       providerId,
       model,
       instructions: instructions.trim(),
+      enabled: existing?.enabled ?? true,
     })
   }
 
+  // Show the footer's top border only while content is hidden behind it.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrolledUnder, setScrolledUnder] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => {
+      setScrolledUnder(el.scrollHeight > el.clientHeight + el.scrollTop + 1)
+    }
+    update()
+    el.addEventListener('scroll', update)
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', update); ro.disconnect() }
+  }, [])
+
   return (
-    <div className="space-y-5 max-w-xl">
-      <Field label="Name">
-        <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
-      </Field>
+    <div className="flex-1 flex flex-col min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+        <Field label="Name">
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
+        </Field>
 
-      <Field label="Provider" help="Determines which models are available.">
-        <SelectDropdown
-          value={providerId}
-          placeholder="Select provider"
-          onChange={handleProviderChange}
-          options={providers.map(p => ({ value: p.id, label: `${p.name} (${PROVIDER_LABELS[p.kind]})` }))}
-        />
-      </Field>
+        <Field label="Provider" help="Determines which models are available.">
+          <SelectDropdown
+            value={providerId}
+            placeholder="Select provider"
+            onChange={handleProviderChange}
+            options={providers.map(p => ({ value: p.id, label: `${p.name} (${PROVIDER_LABELS[p.kind]})` }))}
+          />
+        </Field>
 
-      <Field label="Model">
-        <SelectDropdown
-          value={model}
-          placeholder={selectedProvider ? 'Select model' : 'Pick a provider first'}
-          onChange={setModel}
-          disabled={!selectedProvider || modelOptions.length === 0}
-          options={modelOptions.map(m => ({ value: m, label: m }))}
-        />
-      </Field>
+        <Field label="Model">
+          <SelectDropdown
+            value={model}
+            placeholder={selectedProvider ? 'Select model' : 'Pick a provider first'}
+            onChange={setModel}
+            disabled={!selectedProvider || modelOptions.length === 0}
+            options={modelOptions.map(m => ({ value: m, label: m }))}
+          />
+        </Field>
 
-      <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
-        <Textarea
-          value={instructions}
-          onChange={e => setInstructions(e.target.value)}
-          placeholder="Describe how this agent should behave, what tone to use, what to avoid…"
-          rows={4}
-          className="resize-none"
-        />
-      </Field>
+        <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
+          <Textarea
+            value={instructions}
+            onChange={e => setInstructions(e.target.value)}
+            placeholder="Describe how this agent should behave, what tone to use, what to avoid…"
+            rows={8}
+            className="resize-y min-h-40"
+          />
+        </Field>
+      </div>
 
-      <div className="flex items-center justify-end gap-2 pt-2 border-t">
+      <div
+        className={cn(
+          'shrink-0 h-[52px] px-4 flex items-center justify-end gap-2 border-t border-transparent',
+          scrolledUnder && 'border-border',
+        )}
+      >
         <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
         <Button size="sm" onClick={handleSave} disabled={!canSave}>
           {focus.mode === 'new' ? 'Add agent' : 'Save'}
@@ -890,7 +900,7 @@ export function SettingsModal({
             {leafLabel === null ? (
               <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
             ) : (
-              <BreadcrumbLink asChild>
+              <BreadcrumbLink asChild className={pageClass}>
                 <button
                   type="button"
                   onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}
@@ -976,34 +986,45 @@ export function SettingsModal({
               </Button>
             </div>
 
-            {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto px-4 py-6">
-              {activeSection === 'workspace' && (
-                <WorkspaceSection
-                  workspace={workspace}
-                  onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
-                  onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
-                />
-              )}
-              {activeSection === 'agents' && (
-                <AgentsSection
-                  focus={agentsFocus}
-                  providers={providers}
-                  agents={agents}
-                  search={agentsSearch}
-                  statusFilter={agentsStatusFilter}
-                  onSearchChange={setAgentsSearch}
-                  onStatusFilterChange={setAgentsStatusFilter}
-                  onFocus={setAgentsFocusAndReset}
-                  onSaveAgent={handleSaveAgent}
-                  onDeleteAgent={handleDeleteAgent}
-                  onDuplicateAgent={handleDuplicateAgent}
-                  onToggleEnabled={handleToggleAgentEnabled}
-                />
-              )}
-              {activeSection === 'connections' && <ConnectionsSection />}
-              {activeSection === 'preferences' && <PreferencesSection />}
-            </div>
+            {/* Content: agent detail takes over the full content area to
+                support its sticky footer; everything else lives inside the
+                padded scroll body. */}
+            {activeSection === 'agents' && agentsFocus !== null ? (
+              <AgentDetail
+                key={agentsFocus.mode === 'edit' ? agentsFocus.id : '__new__'}
+                agents={agents}
+                providers={providers}
+                focus={agentsFocus}
+                onSave={handleSaveAgent}
+                onCancel={() => setAgentsFocus(null)}
+              />
+            ) : (
+              <div className="flex-1 overflow-y-auto px-4 py-6">
+                {activeSection === 'workspace' && (
+                  <WorkspaceSection
+                    workspace={workspace}
+                    onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
+                    onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
+                  />
+                )}
+                {activeSection === 'agents' && (
+                  <AgentsSection
+                    providers={providers}
+                    agents={agents}
+                    search={agentsSearch}
+                    statusFilter={agentsStatusFilter}
+                    onSearchChange={setAgentsSearch}
+                    onStatusFilterChange={setAgentsStatusFilter}
+                    onFocus={setAgentsFocusAndReset}
+                    onDeleteAgent={handleDeleteAgent}
+                    onDuplicateAgent={handleDuplicateAgent}
+                    onToggleEnabled={handleToggleAgentEnabled}
+                  />
+                )}
+                {activeSection === 'connections' && <ConnectionsSection />}
+                {activeSection === 'preferences' && <PreferencesSection />}
+              </div>
+            )}
           </div>
         </div>
       </DialogContent>
