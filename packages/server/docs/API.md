@@ -3,6 +3,15 @@
 All endpoints require Bearer token authentication unless noted otherwise.
 The full OpenAPI 3.1.0 spec is served at `GET /openapi.json`.
 
+### Multi-user scoping
+
+Every route that resolves a workspace, agent, chat, or message id verifies
+that the record is owned by the authenticated user. Cross-tenant access
+returns `404 Not Found` (not `403`) so existence of a peer's resource is
+not leaked. `GET /workspaces` returns only the caller's workspaces;
+`POST /chats` validates that both `workspaceId` and `agentId` belong to the
+caller.
+
 ## Auth
 
 | Method | Path           | Auth | Description       |
@@ -80,6 +89,7 @@ explicit `agentId` uses the workspace default.
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
 | DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
 | GET    | /chats/{id}/messages/{messageId}/logs   | Stream execution log file |
+| GET    | /chats/{id}/messages/{messageId}/note-history | List archived versions of a note-content message |
 | GET    | /chats/{id}/artifacts                   | List chat artifacts       |
 | POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
 
@@ -99,6 +109,7 @@ Messages carry one of:
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
 - `{ type: "note", body }` — a running AI-generated summary of the chat; rendered specially in the UI, editable via PATCH
 - `{ type: "ai_note_request" }` — a scheduled system message that triggers a note refresh when fired
+- `{ type: "agent_turn", userMessageId }` — pending execution slot attached to a user message. Carries no textual copy of the prompt; `fireMessage` resolves `userMessageId` to build the prompt at fire time. Hidden from the visible chat timeline.
 
 ### Message execution metadata
 
@@ -135,6 +146,15 @@ Streams the execution log file (stdout/stderr) for a running or completed
 message. Served directly from
 `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
+
+### GET /chats/{id}/messages/{messageId}/note-history
+
+Returns every archived version of a `note`-content message, newest first.
+Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
+written automatically when a note is PATCH-edited or when `fireMessage`
+replaces it during an AI rewrite; files live under
+`~/Desk/workspaces/desk/.chats/{chatId}/note-history/`. Empty array when
+nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire
 

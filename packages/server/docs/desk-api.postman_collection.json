@@ -369,6 +369,55 @@
           }
         },
         {
+          "name": "PATCH /chats/:id/messages/:messageId",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": { \"type\": \"note\", \"body\": \"Edited note\" }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /chats/:id/messages/:messageId",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages/:messageId/logs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "logs"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages/:messageId/note-history",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/note-history",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "note-history"]
+            }
+          }
+        },
+        {
           "name": "GET /chats/:id/artifacts",
           "request": {
             "method": "GET",

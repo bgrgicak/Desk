@@ -283,6 +283,43 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
+      "/chats/{id}/messages/{messageId}/note-history": {
+        get: {
+          summary: "List archived versions of a note-content message",
+          description: "Each PATCH of a `note`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/note-history/. This endpoint returns every snapshot, newest first.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              description: "Note version array",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      versions: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            timestamp: { type: "string", format: "date-time" },
+                            body: { type: "string" },
+                          },
+                          required: ["timestamp", "body"],
+                        },
+                      },
+                    },
+                    required: ["versions"],
+                  },
+                },
+              },
+            },
+            "404": { description: "Message not found in chat" },
+          },
+        },
+      },
       "/chats/{id}/artifacts": {
         get: { summary: "List chat artifacts", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File array" } } },
         post: {
