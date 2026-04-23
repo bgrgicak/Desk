@@ -8,9 +8,7 @@ import {
   DeskError,
   ForbiddenError,
   ValidationError,
-  generateId,
 } from "@desk/shared";
-import { queries } from "@desk/db";
 import type { StorageContext } from "@desk/storage";
 import { authenticate, type AuthResult } from "./auth.js";
 import { handlers } from "./handlers/index.js";
@@ -89,33 +87,14 @@ export function createToolServer(opts: ToolServerOptions): http.Server {
         return;
       }
 
-      const startTime = Date.now();
       const result = await handler(ctx, parsed);
-      const durationMs = Date.now() - startTime;
 
       // Validate response
       const validated = tool.response.parse(result);
 
-      // Audit the call to run_events if there's an active run context
-      // For now, we audit to a special "tool_audit" table pattern via run_events
-      // The run_id comes from the session; if not available, we skip audit
-      try {
-        await queries.runEvents.append(pool, {
-          id: generateId("runEvent"),
-          runId: auth.session.id, // Use session ID as a proxy; real run_id wired later
-          seq: Date.now(), // Monotonic-enough for audit
-          kind: "event",
-          payload: {
-            type: "tool_call",
-            name: toolName,
-            args: parsed as Record<string, unknown>,
-            outcome: "success",
-            durationMs,
-          },
-        });
-      } catch {
-        // Audit failure should not block the response
-      }
+      // Audit is emitted via WS message.log_appended upstream; the
+      // former run_events table is gone. If needed later, audit can
+      // land in the per-message log file instead.
 
       sendJson(res, 200, validated);
     } catch (err) {

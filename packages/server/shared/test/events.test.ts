@@ -24,21 +24,25 @@ const fixtures: Record<string, WsEvent> = {
     type: "artifact.created",
     payload: { path: "library/a.txt", name: "a.txt", mime: "text/plain", size: 10, createdAt: now },
   },
-  "run.state_changed": {
-    type: "run.state_changed",
-    payload: { id: "run_abc", kind: "immediate", state: "running" },
-  },
-  "run.log_appended": {
-    type: "run.log_appended",
-    payload: { runId: "run_abc", seq: 0, kind: "stdout", payload: "line1" },
-  },
   "library.changed": {
     type: "library.changed",
     payload: { workspaceId: "wks_abc", path: "library/a.txt", op: "added" },
   },
-  "note.created": {
-    type: "note.created",
-    payload: { id: "note_abc", fileId: "fil_abc", chatId: "cht_abc", createdAt: now, summary: "A note" },
+  "message.updated": {
+    type: "message.updated",
+    payload: {
+      id: "msg_abc",
+      chatId: "cht_abc",
+      role: "agent",
+      content: { type: "text", text: "hi" },
+      createdAt: now,
+      state: "running",
+      startedAt: now,
+    },
+  },
+  "message.log_appended": {
+    type: "message.log_appended",
+    payload: { messageId: "msg_abc", kind: "stdout", line: "hello from opencode" },
   },
 };
 

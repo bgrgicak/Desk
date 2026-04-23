@@ -17,7 +17,6 @@ import * as workspaceRoutes from "./routes/workspaces.js";
 import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
-import * as runRoutes from "./routes/runs.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 
@@ -226,12 +225,12 @@ export function createApp(opts: AppOptions): Server {
     }
 
     // Internal routes — loopback + shared-secret auth (not the user session).
-    if (path === "/internal/runs/fire" && method === "POST") {
+    if (path === "/internal/messages/fire" && method === "POST") {
       requireInternal(req);
-      const body = await parseBody(req) as { jobId?: string };
-      if (!body.jobId) throw new ValidationError("Missing jobId");
-      const runId = await runManager.fireJob(body.jobId);
-      sendJson(res, 200, { ok: true, runId });
+      const body = await parseBody(req) as { messageId?: string };
+      if (!body.messageId) throw new ValidationError("Missing messageId");
+      const result = await runManager.fireMessage(body.messageId);
+      sendJson(res, 200, { ok: true, ...result });
       return;
     }
 
@@ -391,18 +390,34 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
       const body = await parseBody(req) as { content: string };
-      const result = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
+      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Trigger immediate run + AI note
-      runManager.enqueueRun({
-        chatId: segments[1],
-        prompt: body.content,
-        mode: "immediate",
-      }).catch(() => {});
-
+      // Fire the pending trigger message (messages-as-truth path) and
+      // schedule an ai-note refresh for this chat.
+      runManager.fireMessage(triggerId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(`fireMessage for trigger ${triggerId} failed:`, err);
+      });
       runManager.scheduleAiNote(segments[1]).catch(() => {});
 
-      sendJson(res, 201, result);
+      sendJson(res, 201, userMessage);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
+      const result = await chatRoutes.patchMessage(pool, segments[1], segments[3], body, emitEvent);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
+      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3], runManager.adapter);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "logs" && segments.length === 5 && method === "GET") {
+      const { stream, contentType } = await chatRoutes.getMessageLogs(storage, segments[1], segments[3]);
+      res.writeHead(200, { "Content-Type": contentType });
+      stream.pipe(res);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "GET") {
@@ -485,44 +500,9 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Run routes
-    if (path === "/runs" && method === "GET") {
-      const result = await runRoutes.listRuns(pool);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "runs" && segments.length === 2 && method === "GET") {
-      const result = await runRoutes.getRun(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "runs" && segments[2] === "logs" && segments.length === 3 && method === "GET") {
-      const cursor = query.get("cursor") ? parseInt(query.get("cursor")!) : undefined;
-      const result = await runRoutes.getRunLogs(pool, segments[1], { cursor });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "runs" && segments[2] === "cancel" && segments.length === 3 && method === "POST") {
-      const result = await runRoutes.cancelRun(runManager, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/scheduled-jobs" && method === "GET") {
-      const result = await runRoutes.listScheduledJobs(pool);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/scheduled-jobs" && method === "POST") {
-      const body = await parseBody(req) as { chatId?: string; prompt: string; mode: "scheduled" | "recurring"; spec: string };
-      const result = await runRoutes.createScheduledJob(runManager, body);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "scheduled-jobs" && segments.length === 2 && method === "DELETE") {
-      const result = await runRoutes.deleteScheduledJob(runManager, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
+    // Legacy /runs and /scheduled-jobs routes are gone — chat-scoped
+    // execution state now lives on the messages table; use
+    // GET /chats/{id}/messages and its PATCH/DELETE/logs sub-routes.
 
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {
