@@ -1,4 +1,4 @@
-import type { Run, RunOccurrence } from "@/data/mock-data";
+import type { Run, RunOccurrence } from "@/data/ui-types";
 import type { ServerAgent, ServerMessage } from "../types";
 
 const COLOR_PALETTE: Run["color"][] = [

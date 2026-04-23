@@ -6,8 +6,8 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
-import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 
 type PanelTab = 'chat' | 'details'
 

@@ -1,4 +1,4 @@
-import type { Chat as UiChat } from "@/data/mock-data";
+import type { Chat as UiChat } from "@/data/ui-types";
 import type { ServerChat } from "../types";
 
 /**
@@ -19,5 +19,6 @@ export function toUiChat(c: ServerChat): UiChat {
     unread: c.unread,
     referenceIds: [],
     workspaceId: c.workspaceId,
+    agentId: c.agentId,
   };
 }

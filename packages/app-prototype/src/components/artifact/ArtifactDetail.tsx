@@ -46,8 +46,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ArtifactPreview } from './ArtifactPreview'
 import { ConversationPanel } from './ConversationPanel'
-import type { Artifact, ArtifactUpdate } from '@/data/mock-data'
-import { getArtifactIcon, getRelativeTime } from '@/data/mock-data'
+import type { Artifact, ArtifactUpdate } from '@/data/ui-types'
+import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 
 interface ArtifactDetailProps {
   artifact: Artifact

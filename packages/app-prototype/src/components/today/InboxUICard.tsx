@@ -1,5 +1,5 @@
 import { Mail, Calendar, Receipt } from 'lucide-react'
-import type { InboxUICard as InboxUICardData } from '@/data/mock-data'
+import type { InboxUICard as InboxUICardData } from '@/data/ui-types'
 
 interface InboxUICardProps {
   card: InboxUICardData

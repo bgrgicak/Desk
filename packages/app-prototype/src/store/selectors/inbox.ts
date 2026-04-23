@@ -1,4 +1,4 @@
-import type { InboxItem } from "@/data/mock-data";
+import type { InboxItem } from "@/data/ui-types";
 import type { ServerAgent, ServerMessage } from "../types";
 
 function typeFor(m: ServerMessage): InboxItem["type"] {

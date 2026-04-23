@@ -1,4 +1,4 @@
-import type { ContextItem } from "@/data/mock-data";
+import type { ContextItem } from "@/data/ui-types";
 import type { ServerFile } from "../types";
 
 function humanSize(bytes: number): string {

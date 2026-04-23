@@ -1,7 +1,7 @@
 import { Bot, BookmarkPlus, Check } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Artifact } from '@/data/mock-data'
-import { getArtifactIcon } from '@/data/mock-data'
+import type { Artifact } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',

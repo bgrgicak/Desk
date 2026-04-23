@@ -11,8 +11,8 @@ import {
   Calendar,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { Run } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { Run } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 
 interface RunsListProps {
   runs: Run[]

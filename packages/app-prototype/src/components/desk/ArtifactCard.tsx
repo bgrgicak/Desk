@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import { Bot } from 'lucide-react'
-import type { Artifact, ArtifactUpdate } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { Artifact, ArtifactUpdate } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 import { ArtifactThumbnail } from './ArtifactThumbnail'
 
 interface ArtifactCardProps {

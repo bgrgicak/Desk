@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { InboxCard } from './InboxCard'
-import { type InboxItem } from '@/data/mock-data'
+import { type InboxItem } from '@/data/ui-types'
 import { useGetMessagesQuery, useGetAgentsQuery } from '@/store/api'
 import { toInboxItem } from '@/store/selectors/inbox'
 

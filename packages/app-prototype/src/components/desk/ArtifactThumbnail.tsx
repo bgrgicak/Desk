@@ -1,4 +1,4 @@
-import type { Artifact } from '@/data/mock-data'
+import type { Artifact } from '@/data/ui-types'
 import { ArtifactPreview } from '@/components/artifact/ArtifactPreview'
 
 const SCALE = 0.25

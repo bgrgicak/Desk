@@ -48,8 +48,8 @@ import {
 } from '@/components/ui/command'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
-import type { Chat, Artifact, InboxItem } from '@/data/mock-data'
-import { getArtifactIcon } from '@/data/mock-data'
+import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
 import {
   useGetWorkspacesQuery,
   useCreateWorkspaceMutation,

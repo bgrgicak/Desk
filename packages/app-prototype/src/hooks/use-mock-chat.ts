@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import type { ChatMessage } from '@/data/mock-data'
-import { matchComposeScenario } from '@/data/mock-data'
+import type { ChatMessage } from '@/data/ui-types'
+import { matchComposeScenario } from '@/data/ui-types'
 
 interface UseMockChatOptions {
   initialMessages?: ChatMessage[]

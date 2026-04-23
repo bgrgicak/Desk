@@ -1,4 +1,4 @@
-import type { Artifact } from "@/data/mock-data";
+import type { Artifact } from "@/data/ui-types";
 import type { ServerFile } from "../types";
 
 function artifactType(mime: string, name: string): Artifact["type"] {

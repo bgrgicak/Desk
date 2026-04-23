@@ -1,4 +1,4 @@
-import type { Artifact } from '@/data/mock-data'
+import type { Artifact } from '@/data/ui-types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FileText } from 'lucide-react'

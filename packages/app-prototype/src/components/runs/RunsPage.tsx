@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RunDetailPanel } from './RunDetailPanel'
-import type { Run, RunOccurrence } from '@/data/mock-data'
+import type { Run, RunOccurrence } from '@/data/ui-types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
