@@ -112,11 +112,12 @@ describeCrontab("real schedule adapter — crontab", () => {
 });
 
 /**
- * Gap 7: Real `at` scheduled run end-to-end.
- * Schedules a job via RunManager with the real adapter, verifies the at queue,
- * then cleans up. Skipped if `at` is not installed.
+ * Real `at` scheduled message end-to-end (messages-as-truth).
+ * Schedules a pending message + at entry via the real adapter, asserts both
+ * exist, then cancels through cancelMessage and verifies both are gone.
+ * Skipped if `at` is not installed.
  */
-describeAt("real at scheduled run via RunManager", () => {
+describeAt("real at scheduled message via RunManager", () => {
 
   const workerId = process.env.VITEST_WORKER_ID ?? "0";
   const testDbName = `desk_real_at_test_${workerId}`;
@@ -157,6 +158,11 @@ describeAt("real at scheduled run via RunManager", () => {
 
     const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
     const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
+    await pool.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
+       VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+      [wsRows[0].id, agentRows[0].id],
+    );
 
     chatId = generateId("chat");
     await pool.query(
@@ -181,7 +187,7 @@ describeAt("real at scheduled run via RunManager", () => {
     }
   });
 
-  it("schedules a run with real at, verifies atq, cleans up", async () => {
+  it("schedules a pending message + at entry, then cancels both via cancelMessage", async () => {
     delete process.env.DESK_SCHEDULE_ADAPTER;
     const adapter = createAdapter();
 
@@ -191,31 +197,29 @@ describeAt("real at scheduled run via RunManager", () => {
       execRunFn: async () => ({ exitCode: 0 }),
     });
 
-    const run = await mgr.enqueueRun({
-      chatId,
-      prompt: "Real at test",
-      mode: "scheduled",
-      spec: "now + 59 minutes",
-    });
+    // Use scheduleAiNote as the public entry point that creates a pending
+    // message with a real at ref — same code path ordinary scheduled
+    // messages take.
+    await mgr.scheduleAiNote(chatId);
 
-    expect(run.id).toMatch(/^run_/);
+    const { rows } = await pool.query(
+      `SELECT id, scheduler_ref FROM messages
+       WHERE chat_id = $1 AND state = 'pending' AND content->>'type' = 'ai_note_request'`,
+      [chatId],
+    );
+    expect(rows.length).toBe(1);
+    const messageId = rows[0].id as string;
+    const ref = rows[0].scheduler_ref as { kind: "at"; id: string };
+    expect(ref.kind).toBe("at");
+    expect(ref.id).toBeTruthy();
 
-    // Verify the at job exists in system queue
     const atJobs = await adapter.listAt();
-    expect(atJobs.length).toBeGreaterThanOrEqual(1);
+    expect(atJobs.some((j) => j.id === ref.id)).toBe(true);
 
-    // Look up the scheduled_job that was created
-    const activeJobs = await queries.scheduledJobs.listActive(pool);
-    const ourJob = activeJobs.find((j: any) => j.chatId === chatId && j.kind === "once");
-    expect(ourJob).toBeDefined();
-    expect(ourJob!.atJobId).toBeTruthy();
+    await mgr.cancelMessage(messageId);
 
-    // Clean up: cancel the job
-    await mgr.cancelJob(ourJob!.id);
-
-    // Verify it was removed from at queue
+    expect(await queries.messages.findById(pool, messageId)).toBeNull();
     const afterJobs = await adapter.listAt();
-    const stillThere = afterJobs.find((j: any) => j.id === ourJob!.atJobId);
-    expect(stillThere).toBeUndefined();
+    expect(afterJobs.some((j) => j.id === ref.id)).toBe(false);
   });
 });
