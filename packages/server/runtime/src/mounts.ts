@@ -133,15 +133,57 @@ export function activeRunCount(workspaceId: string): number {
 }
 
 /**
- * The bind specs passed to Docker at container create time.
- *   files/library/chats are read-only so the agent cannot tamper with source.
- *   desktop is read-write so the agent has a scratch area.
+ * Declarative description of a single bind-mount into a sandbox. The
+ * runtime compiles an array of these into Docker `Binds`.
+ */
+export interface MountPlanEntry {
+  /** Absolute host path to bind. Must exist or be creatable by caller. */
+  sourcePath: string;
+  /** Absolute path inside the sandbox to bind onto. */
+  targetPath: string;
+  mode: "ro" | "rw";
+  /**
+   * Classifier used by tooling and debugging manifests. "external" covers
+   * user-attached directories (e.g. ~/Projects/foo) that live outside the
+   * Desk-managed tree.
+   */
+  category: "workspace" | "chat" | "external" | "desktop";
+}
+
+export type MountPlan = MountPlanEntry[];
+
+/**
+ * Default mount plan — equivalent to the pre-G5 hardcoded binds:
+ *   files/library/chats read-only, desktop read-write.
+ * Custom plans can be built by callers that need to expose additional
+ * directories (e.g. ~/Projects) or narrow the default surface.
+ */
+export function buildDefaultMountPlan(home: string, workspaceId: string): MountPlan {
+  return [
+    { sourcePath: filesDir(home), targetPath: "/mnt/desk/files", mode: "ro", category: "workspace" },
+    { sourcePath: libraryDir(home), targetPath: "/mnt/desk/library", mode: "ro", category: "workspace" },
+    { sourcePath: chatsDir(home), targetPath: "/mnt/desk/chats", mode: "ro", category: "chat" },
+    { sourcePath: desktopDir(home, workspaceId), targetPath: "/mnt/desk/desktop", mode: "rw", category: "desktop" },
+  ];
+}
+
+/**
+ * Compiles a MountPlan into the Docker `Binds` string format
+ * (`host:sandbox:mode`). Strips duplicate targets (last wins) so an
+ * override plan can replace an entry from a base plan.
+ */
+export function bindsFromPlan(plan: MountPlan): string[] {
+  const byTarget = new Map<string, string>();
+  for (const entry of plan) {
+    byTarget.set(entry.targetPath, `${entry.sourcePath}:${entry.targetPath}:${entry.mode}`);
+  }
+  return [...byTarget.values()];
+}
+
+/**
+ * Legacy default bind list (kept for callers that haven't moved to a
+ * MountPlan yet). Equivalent to `bindsFromPlan(buildDefaultMountPlan(...))`.
  */
 export function containerBinds(home: string, workspaceId: string): string[] {
-  return [
-    `${filesDir(home)}:/mnt/desk/files:ro`,
-    `${libraryDir(home)}:/mnt/desk/library:ro`,
-    `${chatsDir(home)}:/mnt/desk/chats:ro`,
-    `${desktopDir(home, workspaceId)}:/mnt/desk/desktop:rw`,
-  ];
+  return bindsFromPlan(buildDefaultMountPlan(home, workspaceId));
 }

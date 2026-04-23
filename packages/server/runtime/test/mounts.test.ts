@@ -10,6 +10,8 @@ import {
   sandboxMountRoot,
   desktopDir,
   containerBinds,
+  buildDefaultMountPlan,
+  bindsFromPlan,
 } from "../src/mounts.js";
 import type { SandboxHandle } from "../src/docker.js";
 
@@ -78,6 +80,32 @@ describe("mounts", () => {
       `${chatsDir(home)}:/mnt/desk/chats:ro`,
       `${desktopDir(home, "wks_test_binds")}:/mnt/desk/desktop:rw`,
     ]);
+  });
+
+  it("buildDefaultMountPlan describes the same 4 binds containerBinds emits (G5)", () => {
+    const plan = buildDefaultMountPlan(home, "wks_plan_test");
+    expect(plan.map((p) => p.category).sort()).toEqual(["chat", "desktop", "workspace", "workspace"]);
+    expect(plan.filter((p) => p.mode === "rw").map((p) => p.category)).toEqual(["desktop"]);
+    expect(bindsFromPlan(plan)).toEqual(containerBinds(home, "wks_plan_test"));
+  });
+
+  it("custom MountPlan produces its own bind set (G5)", () => {
+    const binds = bindsFromPlan([
+      { sourcePath: "/tmp/project", targetPath: "/mnt/desk/project", mode: "rw", category: "external" },
+      { sourcePath: "/tmp/docs", targetPath: "/mnt/desk/docs", mode: "ro", category: "external" },
+    ]);
+    expect(binds).toEqual([
+      "/tmp/project:/mnt/desk/project:rw",
+      "/tmp/docs:/mnt/desk/docs:ro",
+    ]);
+  });
+
+  it("later plan entries with the same targetPath override earlier ones", () => {
+    const binds = bindsFromPlan([
+      { sourcePath: "/a", targetPath: "/mnt/desk/x", mode: "ro", category: "workspace" },
+      { sourcePath: "/b", targetPath: "/mnt/desk/x", mode: "rw", category: "external" },
+    ]);
+    expect(binds).toEqual(["/b:/mnt/desk/x:rw"]);
   });
 
   it("activeRunCount tracks runs correctly", async () => {

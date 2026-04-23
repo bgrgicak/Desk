@@ -6,8 +6,11 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { PROVIDER_KEY_VARS } from "@desk/shared";
-import { filesDir, libraryDir, chatsDir } from "@desk/storage";
-import { containerBinds, desktopDir } from "./mounts.js";
+import {
+  bindsFromPlan,
+  buildDefaultMountPlan,
+  type MountPlan,
+} from "./mounts.js";
 
 /**
  * Resolves the Docker socket path from the active docker context.
@@ -72,6 +75,7 @@ export async function createOrReuse(
   workspaceId: string,
   home?: string,
   providerKeys?: Record<string, string>,
+  mountPlan?: MountPlan,
 ): Promise<SandboxHandle> {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
     return { containerId: `fake-${workspaceId}`, workspaceId };
@@ -90,18 +94,17 @@ export async function createOrReuse(
     return { containerId: info.Id, workspaceId };
   } catch {
     const deskHome = home ?? process.env.DESK_HOME ?? "/opt/desk";
+    const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceId);
 
-    // Pre-create the real source dirs (files/library/chats) and the
-    // per-sandbox desktop scratch as the current user, so Docker doesn't
-    // auto-create them as root and break subsequent non-root writes.
-    await fs.mkdir(filesDir(deskHome), { recursive: true });
-    await fs.mkdir(libraryDir(deskHome), { recursive: true });
-    await fs.mkdir(chatsDir(deskHome), { recursive: true });
-    await fs.mkdir(desktopDir(deskHome, workspaceId), { recursive: true });
+    // Pre-create every source dir in the plan so Docker doesn't auto-create
+    // them as root and break subsequent non-root writes.
+    for (const entry of plan) {
+      await fs.mkdir(entry.sourcePath, { recursive: true });
+    }
 
     const toolSocket = process.env.DESK_TOOL_SOCKET;
     const binds = [
-      ...containerBinds(deskHome, workspaceId),
+      ...bindsFromPlan(plan),
       // Only mount the tool socket when it actually exists on the host. Binding
       // a non-existent path makes Docker create an empty directory there,
       // which then confuses the sandbox CLI. With the socket absent, the
