@@ -312,7 +312,7 @@ function AgentsSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center rounded-lg border p-0.5">
           {STATUS_FILTERS.map(f => (
             <button
@@ -329,18 +329,20 @@ function AgentsSection({
             </button>
           ))}
         </div>
-        <SearchInput
-          value={search}
-          onChange={onSearchChange}
-          placeholder="Search agents…"
-        />
-        <Button
-          size="sm"
-          className="gap-1.5"
-          onClick={() => onFocus({ mode: 'new' })}
-        >
-          <Plus className="h-3.5 w-3.5" />Add
-        </Button>
+        <div className="flex items-center gap-2">
+          <SearchInput
+            value={search}
+            onChange={onSearchChange}
+            placeholder="Search agents…"
+          />
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => onFocus({ mode: 'new' })}
+          >
+            <Plus className="h-3.5 w-3.5" />Add
+          </Button>
+        </div>
       </div>
       <AgentsList
         agents={filteredAgents}
@@ -433,6 +435,7 @@ function AgentsList({
             className="group flex items-center gap-3 py-4 border-b last:border-b-0"
           >
             <Switch
+              size="sm"
               checked={a.enabled}
               onCheckedChange={() => onToggleEnabled(a.id)}
               aria-label={`${a.enabled ? 'Disable' : 'Enable'} ${a.name} in this workspace`}
