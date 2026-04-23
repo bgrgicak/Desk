@@ -20,8 +20,6 @@ export function useMockChat({ initialMessages = [], onArtifactCreated, mode = 'c
   }, [])
 
   const sendMessage = useCallback((content: string) => {
-    // eslint-disable-next-line no-console
-    console.log('[useMockChat] sendMessage fired, mode:', mode)
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
