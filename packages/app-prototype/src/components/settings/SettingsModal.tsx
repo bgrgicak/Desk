@@ -1065,7 +1065,7 @@ function PreferencesSection() {
             Automatically save artifacts created in chats to your Desk.
           </p>
         </div>
-        <Switch checked={autoSave} onCheckedChange={setAutoSave} />
+        <Switch size="sm" checked={autoSave} onCheckedChange={setAutoSave} />
       </div>
 
       <div className="border-t" />
@@ -1078,7 +1078,7 @@ function PreferencesSection() {
             Display unread counts on workspace tabs and nav items.
           </p>
         </div>
-        <Switch checked={showBadges} onCheckedChange={setShowBadges} />
+        <Switch size="sm" checked={showBadges} onCheckedChange={setShowBadges} />
       </div>
 
       <div className="border-t" />
@@ -1091,20 +1091,13 @@ function PreferencesSection() {
             The view shown when you switch to this workspace.
           </p>
         </div>
-        <div className="flex rounded-md border overflow-hidden shrink-0">
-          {VIEW_OPTIONS.map(opt => (
-            <button
-              key={opt.value}
-              onClick={() => setDefaultView(opt.value)}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                defaultView === opt.value
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+        <div className="w-36 shrink-0">
+          <SelectDropdown
+            value={defaultView}
+            placeholder="Select view"
+            onChange={(v) => setDefaultView(v as DefaultView)}
+            options={VIEW_OPTIONS}
+          />
         </div>
       </div>
     </div>
