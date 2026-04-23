@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, reconcileArtifactRefs } from "@desk/storage";
 import { createRunManager, createAdapter } from "@desk/scheduler";
 import { createApp } from "./app.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -32,6 +32,16 @@ async function main(): Promise<void> {
 
   await fs.mkdir(DESK_HOME, { recursive: true });
   await ensureLayout(DESK_HOME);
+
+  // Repair/flag artifactRef messages whose target moved or vanished while
+  // the server was down.
+  const reconciled = await reconcileArtifactRefs(pool, DESK_HOME);
+  if (reconciled.checked > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `artifactRef reconcile: checked=${reconciled.checked} repaired=${reconciled.repaired} missing=${reconciled.missing}`,
+    );
+  }
 
   // Broadcast targets the single v1 user.
   const { rows } = await pool.query("SELECT id FROM users LIMIT 1");

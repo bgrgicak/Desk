@@ -20,3 +20,4 @@ export {
 export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";
 export { listLibrary } from "./library.js";
 export type { LibraryContext } from "./library.js";
+export { reconcileArtifactRefs } from "./reconcile.js";
