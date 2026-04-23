@@ -180,3 +180,115 @@ export async function listPendingScheduled(db: Queryable): Promise<Message[]> {
   );
   return rows.map(rowToMessage);
 }
+
+export interface CrossChatListOptions {
+  userId: string;
+  workspaceId?: string;
+  chatId?: string;
+  states?: string[];
+  scheduled?: boolean;
+  awaitingUser?: boolean;
+  contentKinds?: string[];
+  since?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * Cross-chat message listing — joins messages → chats → workspaces and filters
+ * by the caller's ownership so users only ever see their own rows. Ordered
+ * `created_at DESC, id DESC` for a stable "newest first" feed usable by the
+ * Runs and Today surfaces. Cursor is opaque to callers; format here is
+ * `<createdAtISO>|<id>` which lets us seek on the composite (created_at, id)
+ * key and break ties deterministically.
+ */
+export async function listCrossChat(
+  db: Queryable,
+  opts: CrossChatListOptions,
+): Promise<PaginatedMessages> {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const conditions: string[] = ["w.user_id = $1"];
+  const params: unknown[] = [opts.userId];
+  let idx = 2;
+
+  if (opts.workspaceId) {
+    conditions.push(`c.workspace_id = $${idx++}`);
+    params.push(opts.workspaceId);
+  }
+  if (opts.chatId) {
+    conditions.push(`m.chat_id = $${idx++}`);
+    params.push(opts.chatId);
+  }
+  if (opts.states && opts.states.length > 0) {
+    const placeholders = opts.states.map(() => `$${idx++}`).join(", ");
+    conditions.push(`m.state IN (${placeholders})`);
+    params.push(...opts.states);
+  }
+  if (opts.scheduled === true) {
+    conditions.push("(m.execute_at IS NOT NULL OR m.cron IS NOT NULL)");
+  } else if (opts.scheduled === false) {
+    conditions.push("(m.execute_at IS NULL AND m.cron IS NULL)");
+  }
+  if (opts.contentKinds && opts.contentKinds.length > 0) {
+    const placeholders = opts.contentKinds.map(() => `$${idx++}`).join(", ");
+    conditions.push(`(m.content->>'type') IN (${placeholders})`);
+    params.push(...opts.contentKinds);
+  }
+  if (opts.since) {
+    conditions.push(`m.created_at > $${idx++}`);
+    params.push(new Date(opts.since));
+  }
+  // `awaitingUser=true`: a message is "awaiting user" when it's the latest row
+  // in a chat whose awaiting_user flag is set, authored by the agent in a
+  // succeeded state. `false` returns the complement.
+  const awaitingClause = `(
+    c.awaiting_user = true
+    AND m.role = 'agent'
+    AND m.state = 'succeeded'
+    AND m.id = (
+      SELECT m2.id FROM messages m2
+      WHERE m2.chat_id = m.chat_id
+      ORDER BY m2.created_at DESC, m2.id DESC
+      LIMIT 1
+    )
+  )`;
+  if (opts.awaitingUser === true) {
+    conditions.push(awaitingClause);
+  } else if (opts.awaitingUser === false) {
+    conditions.push(`NOT ${awaitingClause}`);
+  }
+  if (opts.cursor) {
+    const sep = opts.cursor.indexOf("|");
+    if (sep === -1) {
+      throw new Error("Invalid cursor format");
+    }
+    const cursorIso = opts.cursor.slice(0, sep);
+    const cursorId = opts.cursor.slice(sep + 1);
+    conditions.push(`(m.created_at, m.id) < ($${idx++}, $${idx++})`);
+    params.push(new Date(cursorIso));
+    params.push(cursorId);
+  }
+
+  const limitIdx = idx;
+  params.push(limit + 1);
+
+  const sql = `
+    SELECT m.*
+    FROM messages m
+    JOIN chats c ON c.id = m.chat_id
+    JOIN workspaces w ON w.id = c.workspace_id
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT $${limitIdx}
+  `;
+
+  const { rows } = await db.query(sql, params);
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit).map(rowToMessage);
+  let nextCursor: string | undefined;
+  if (hasMore && items.length > 0) {
+    const last = items[items.length - 1];
+    nextCursor = `${last.createdAt}|${last.id}`;
+  }
+  return { items, nextCursor };
+}

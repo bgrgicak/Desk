@@ -418,6 +418,42 @@ export function generateOpenApiSpec(): OpenApiSpec {
       // Runs / scheduled-jobs endpoints are gone — execution state lives
       // on messages. See /chats/{id}/messages/{messageId}/... for the
       // replacement surface.
+      "/messages": {
+        get: {
+          summary: "List messages across the caller's chats",
+          description: "Cross-chat, read-only paginator. AND-combines the optional filters; ownership is enforced via a join on chats → workspaces so results are naturally scoped to the caller. Ordered by `createdAt DESC`, with `id DESC` as the stable tiebreaker. Response shape matches `GET /chats/{id}/messages`. Unknown `workspaceId` / `chatId` that the caller does not own → 404 (existence-hiding, same as the rest of the API).",
+          parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" }, description: "Restrict to chats in this workspace. Absent = all of the caller's workspaces." },
+            { name: "chatId", in: "query", schema: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$" }, description: "Restrict to a single chat. Absent = all of the caller's chats." },
+            { name: "state", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.state` values (`pending|running|succeeded|failed|cancelled`)." },
+            { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
+            { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
+            { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
+            { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
+            { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+          ],
+          responses: {
+            "200": {
+              description: "Paginated message array; same shape as `GET /chats/{id}/messages`.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      items: { type: "array", items: { type: "object" } },
+                      nextCursor: { type: "string" },
+                    },
+                    required: ["items"],
+                  },
+                },
+              },
+            },
+            "400": { description: "Invalid query parameter (malformed id, unknown state, etc.)" },
+            "404": { description: "Explicit `workspaceId` or `chatId` is not owned by the caller" },
+          },
+        },
+      },
       "/tools/models": {
         get: {
           summary: "List AI models that are ready to use",

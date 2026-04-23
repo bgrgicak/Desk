@@ -558,6 +558,34 @@
       ]
     },
     {
+      "name": "Messages (cross-chat)",
+      "item": [
+        {
+          "name": "GET /messages",
+          "request": {
+            "method": "GET",
+            "description": "Read-only cross-chat message list. All filters AND-combined. Ownership enforced by SQL join on chats → workspaces.user_id. Ordered createdAt DESC, id DESC. Use to drive Runs (scheduled=true&state=pending, state=running, etc.) and Today/Inbox (awaitingUser=true) without fan-out.",
+            "url": {
+              "raw": "{{baseUrl}}/messages?workspaceId={{workspaceId}}&chatId=&state=&scheduled=&awaitingUser=&contentKind=&since=&cursor=&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["messages"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit to span all of the caller's workspaces." },
+                { "key": "chatId", "value": "", "description": "chat_* id. Omit to span all chats." },
+                { "key": "state", "value": "", "description": "pending|running|succeeded|failed|cancelled. Comma-separated list accepted." },
+                { "key": "scheduled", "value": "", "description": "true = only rows with executeAt or cron; false = only unscheduled; omit for both." },
+                { "key": "awaitingUser", "value": "", "description": "true = only messages in chats whose awaitingUser flag is set." },
+                { "key": "contentKind", "value": "", "description": "text|toolCall|toolResult|artifactRef|events|note|ai_note_request|agent_turn. Comma-separated list accepted." },
+                { "key": "since", "value": "", "description": "ISO-8601 timestamp. Returns rows with createdAt > since (reconnect catchup)." },
+                { "key": "cursor", "value": "", "description": "Opaque pagination cursor from a previous response's nextCursor." },
+                { "key": "limit", "value": "50", "description": "Page size, max 200." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "Tools",
       "item": [
         {

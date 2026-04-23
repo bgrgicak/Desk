@@ -23,6 +23,7 @@ import * as workspaceRoutes from "./routes/workspaces.js";
 import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
+import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import {
@@ -556,6 +557,15 @@ export function createApp(opts: AppOptions): Server {
     // Legacy /runs and /scheduled-jobs routes are gone — chat-scoped
     // execution state now lives on the messages table; use
     // GET /chats/{id}/messages and its PATCH/DELETE/logs sub-routes.
+
+    // Cross-chat message listing — read-only, AND-combined filters.
+    // Powers the Runs page (scheduled/state filters) and Today / Inbox
+    // (awaitingUser) without introducing new top-level resources.
+    if (path === "/messages" && method === "GET") {
+      const result = await messageRoutes.listMessages(pool, userId, query);
+      sendJson(res, 200, result);
+      return;
+    }
 
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {

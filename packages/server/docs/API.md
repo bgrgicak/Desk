@@ -229,6 +229,42 @@ All five routes accept `workspaceId=<wks_*>`:
 - Absent → defaults to the caller's first workspace for backwards compatibility. Returns `[]` / 404 as appropriate if the caller has no workspaces.
 - `path` is interpreted relative to the resolved workspace subtree. Attempts to traverse outside that subtree (`..`, absolute paths, etc.) return 404.
 
+## Messages (cross-chat)
+
+| Method | Path      | Description                                 |
+|--------|-----------|---------------------------------------------|
+| GET    | /messages | Read-only cross-chat list with server-side filters |
+
+### GET /messages
+
+Lists messages across all of the caller's chats with AND-combined filters. Read-only; per-chat CRUD stays on `/chats/{id}/messages`. Ownership is enforced by SQL join on `chats → workspaces.user_id`; users can only ever see messages from chats they own.
+
+**Query parameters (all optional, all AND-combined):**
+
+| Param | Shape | Meaning |
+|---|---|---|
+| `workspaceId` | `wks_*` | Restrict to chats in this workspace. Absent = all of the caller's workspaces. |
+| `chatId` | `chat_*` | Restrict to a single chat. |
+| `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
+| `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
+| `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
+| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|note\|ai_note_request\|agent_turn` |
+| `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
+| `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
+| `limit` | integer, default 50, max 200 | Page size. |
+
+Returns `{ items: Message[], nextCursor?: string }` — identical shape to `GET /chats/{id}/messages`. Ordering is `createdAt DESC, id DESC`.
+
+Malformed params → 400. Non-owned `workspaceId` / `chatId` → 404.
+
+**Use cases:**
+
+- Runs "Upcoming": `?scheduled=true&state=pending`
+- Runs "Active": `?state=running`
+- Runs "Completed / Cancelled / Failed": `?scheduled=true&state=succeeded,failed,cancelled`
+- Today / Inbox "Due now": `?awaitingUser=true`
+- Artifact badges: `?contentKind=artifactRef&since=…`
+
 ## Runs and scheduled jobs
 
 Removed in M6. Execution state and scheduling both live on the
