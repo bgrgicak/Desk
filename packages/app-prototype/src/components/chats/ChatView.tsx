@@ -21,6 +21,11 @@ import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
 import type { Chat, Artifact, ChatMessage as ChatMessageType, ComposeScenario, ContextItem } from '@/data/mock-data'
 import { MOCK_CONTEXT, getArtifactIcon, getRelativeTime } from '@/data/mock-data'
+import {
+  useGetChatMessagesQuery,
+  usePostChatMessageMutation,
+} from '@/store/api'
+import type { ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -59,6 +64,21 @@ const CONTEXT_ICON: Record<ContextItem['type'], typeof FileText> = {
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
+}
+
+function toUiChatMessage(m: ServerMessage): ChatMessageType {
+  const role: ChatMessageType['role'] = m.role === 'agent' ? 'assistant' : 'user'
+  let content = ''
+  if (m.content.type === 'text') content = m.content.text
+  else if (m.content.type === 'note') content = m.content.body
+  else if (m.content.type === 'artifactRef') content = `(artifact) ${m.content.name ?? m.content.path}`
+  else content = `(${m.content.type})`
+  return {
+    id: m.id,
+    role,
+    content,
+    timestamp: new Date(m.createdAt),
+  }
 }
 
 // ── Right panel: Artifacts tab ─────────────────────────────────────────────────
@@ -386,8 +406,28 @@ export function ChatView({
 
   const isNewChat = chat.id === '__new__'
 
-  // Prioritise the chat's own messages; fall back to the linked artifact's conversation
-  const initialMessages: ChatMessageType[] = chat.messages ?? artifacts[0]?.conversation ?? []
+  // Fetch persisted messages for this chat from the server. Skipped for
+  // the "new chat" placeholder (not yet created) and until we have a
+  // real server id.
+  const { data: serverMsgs } = useGetChatMessagesQuery(
+    { chatId: chat.id },
+    { skip: isNewChat || chat.id.startsWith('chat-new-') },
+  )
+  const [postMessageMutation] = usePostChatMessageMutation()
+
+  // Map the server's message shape onto what the existing compose UI
+  // expects. Non-text content types (toolCall, events, notes, …) are
+  // currently squashed to a text label — the full renderer is slice 12.
+  const serverInitialMessages: ChatMessageType[] = (serverMsgs?.items ?? [])
+    .filter(m => m.role === 'user' || m.role === 'agent')
+    .map(toUiChatMessage)
+
+  // Prioritise the chat's own messages (server-loaded if present);
+  // fall back to the linked artifact's conversation for mocked rows.
+  const initialMessages: ChatMessageType[] =
+    serverInitialMessages.length > 0
+      ? serverInitialMessages
+      : chat.messages ?? artifacts[0]?.conversation ?? []
 
   const lastInitialAssistantId = useMemo(() => {
     for (let i = initialMessages.length - 1; i >= 0; i--) {
@@ -571,6 +611,12 @@ export function ChatView({
                 }
                 if (uploads.length > 0) {
                   setUploadsByIndex(prev => new Map([...prev, [messages.length, uploads]]))
+                }
+                // For real chats, persist the user message so it's there
+                // on reload and so other clients see it. New-chat flow
+                // delegates to onFirstMessage (which creates the chat).
+                if (!isNewChat && !chat.id.startsWith('chat-new-')) {
+                  void postMessageMutation({ chatId: chat.id, content: msg })
                 }
                 sendMessage(msg)
                 setPrefillText(undefined)
