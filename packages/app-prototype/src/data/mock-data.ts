@@ -211,6 +211,7 @@ export interface SettingsAgent {
   providerId: string
   model: string
   instructions: string
+  enabled: boolean
 }
 
 export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {
@@ -250,6 +251,7 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-claude',
     model: 'Claude Haiku 3.5',
     instructions: 'Summarise any input into three crisp bullet points. No fluff, no preamble.',
+    enabled: true,
   },
   {
     id: 'sa-research-pro',
@@ -257,6 +259,7 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-chatgpt',
     model: 'GPT-4o',
     instructions: 'Do deep, source-backed research. Prefer primary sources and cite everything with links.',
+    enabled: true,
   },
   {
     id: 'sa-copywriter',
@@ -264,6 +267,7 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
     providerId: 'prov-claude',
     model: 'Claude Sonnet 4',
     instructions: 'Write punchy, on-brand marketing copy. Warm, direct, never corporate.',
+    enabled: false,
   },
 ]
 

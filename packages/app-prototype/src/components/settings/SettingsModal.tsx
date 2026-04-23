@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
   Trash2, Plus, ChevronDown, X, Search,
+  Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -256,21 +257,33 @@ type AgentsFocus =
   | { mode: 'new' }
   | null
 
+type AgentsStatusFilter = 'all' | 'active' | 'inactive'
+
+const STATUS_FILTERS: { value: AgentsStatusFilter; label: string }[] = [
+  { value: 'all',      label: 'All'      },
+  { value: 'active',   label: 'Active'   },
+  { value: 'inactive', label: 'Inactive' },
+]
+
 interface AgentsSectionProps {
   focus: AgentsFocus
   providers: Provider[]
   agents: SettingsAgent[]
   search: string
+  statusFilter: AgentsStatusFilter
   onSearchChange: (next: string) => void
+  onStatusFilterChange: (next: AgentsStatusFilter) => void
   onFocus: (next: AgentsFocus) => void
   onSaveAgent: (agent: SettingsAgent) => void
   onDeleteAgent: (id: string) => void
+  onDuplicateAgent: (id: string) => void
+  onToggleEnabled: (id: string) => void
 }
 
 function AgentsSection({
-  focus, providers, agents, search,
-  onSearchChange, onFocus,
-  onSaveAgent, onDeleteAgent,
+  focus, providers, agents, search, statusFilter,
+  onSearchChange, onStatusFilterChange, onFocus,
+  onSaveAgent, onDeleteAgent, onDuplicateAgent, onToggleEnabled,
 }: AgentsSectionProps) {
   if (focus !== null) {
     return (
@@ -285,25 +298,43 @@ function AgentsSection({
   }
 
   const q = search.trim().toLowerCase()
-  const filteredAgents = q
-    ? agents.filter(a => {
-        const providerName = providers.find(p => p.id === a.providerId)?.name ?? ''
-        return a.name.toLowerCase().includes(q)
-          || a.model.toLowerCase().includes(q)
-          || providerName.toLowerCase().includes(q)
-      })
-    : agents
+  const filteredAgents = agents
+    .filter(a => statusFilter === 'all'
+      || (statusFilter === 'active' && a.enabled)
+      || (statusFilter === 'inactive' && !a.enabled))
+    .filter(a => {
+      if (!q) return true
+      const providerName = providers.find(p => p.id === a.providerId)?.name ?? ''
+      return a.name.toLowerCase().includes(q)
+        || a.model.toLowerCase().includes(q)
+        || providerName.toLowerCase().includes(q)
+    })
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end gap-2">
+        <div className="flex items-center rounded-lg border p-0.5">
+          {STATUS_FILTERS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => onStatusFilterChange(f.value)}
+              className={cn(
+                'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+                statusFilter === f.value
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
         <SearchInput
           value={search}
           onChange={onSearchChange}
           placeholder="Search agents…"
         />
         <Button
-          variant="outline"
           size="sm"
           className="gap-1.5"
           onClick={() => onFocus({ mode: 'new' })}
@@ -320,6 +351,8 @@ function AgentsSection({
         onOpen={(id) => onFocus({ mode: 'edit', id })}
         onAdd={() => onFocus({ mode: 'new' })}
         onDelete={onDeleteAgent}
+        onDuplicate={onDuplicateAgent}
+        onToggleEnabled={onToggleEnabled}
       />
     </div>
   )
@@ -352,10 +385,13 @@ interface AgentsListProps {
   onOpen: (id: string) => void
   onAdd: () => void
   onDelete: (id: string) => void
+  onDuplicate: (id: string) => void
+  onToggleEnabled: (id: string) => void
 }
 
 function AgentsList({
-  agents, providers, hasAnyAgents, hasAnyProviders, query, onOpen, onAdd, onDelete,
+  agents, providers, hasAnyAgents, hasAnyProviders, query,
+  onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled,
 }: AgentsListProps) {
   if (!hasAnyProviders) {
     return (
@@ -371,7 +407,7 @@ function AgentsList({
         title="No agents yet"
         body="Create an agent with a name, a model, and the default instructions it should follow."
         action={
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={onAdd}>
+          <Button size="sm" className="gap-1.5" onClick={onAdd}>
             <Plus className="h-3.5 w-3.5" />Add agent
           </Button>
         }
@@ -394,8 +430,13 @@ function AgentsList({
         return (
           <div
             key={a.id}
-            className="flex items-center gap-3 py-4 border-b last:border-b-0"
+            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
           >
+            <Switch
+              checked={a.enabled}
+              onCheckedChange={() => onToggleEnabled(a.id)}
+              aria-label={`${a.enabled ? 'Disable' : 'Enable'} ${a.name} in this workspace`}
+            />
             {provider
               ? <ProviderGlyph kind={provider.kind} size="lg" />
               : <span className="h-10 w-10 shrink-0 rounded-lg bg-muted" />
@@ -408,8 +449,38 @@ function AgentsList({
               </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <Button variant="outline" size="sm" onClick={() => onOpen(a.id)}>Edit</Button>
-              <Button variant="outline" size="sm" onClick={() => onDelete(a.id)}>Delete</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => onOpen(a.id)}
+              >
+                Edit
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="More actions">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  <DropdownMenuItem onSelect={() => onOpen(a.id)}>
+                    <Pencil className="h-4 w-4" />Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { /* stub: open chat with this agent */ }}>
+                    <MessageSquare className="h-4 w-4" />Chat now
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onDuplicate(a.id)}>
+                    <Copy className="h-4 w-4" />Duplicate
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => onDelete(a.id)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         )
@@ -747,10 +818,11 @@ export function SettingsModal({
   const [activeSection, setActiveSection] = useState<NavSection>('workspace')
 
   // Agents section state
-  const [agentsFocus, setAgentsFocus]   = useState<AgentsFocus>(null)
-  const [providers]                     = useState<Provider[]>(MOCK_PROVIDERS)
-  const [agents, setAgents]             = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
-  const [agentsSearch, setAgentsSearch] = useState('')
+  const [agentsFocus, setAgentsFocus]       = useState<AgentsFocus>(null)
+  const [providers]                         = useState<Provider[]>(MOCK_PROVIDERS)
+  const [agents, setAgents]                 = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
+  const [agentsSearch, setAgentsSearch]     = useState('')
+  const [agentsStatusFilter, setAgentsStatusFilter] = useState<AgentsStatusFilter>('all')
 
   const setAgentsFocusAndReset = (next: AgentsFocus) => {
     setAgentsFocus(next)
@@ -767,6 +839,22 @@ export function SettingsModal({
   const handleDeleteAgent = (id: string) => {
     setAgents(prev => prev.filter(a => a.id !== id))
     setAgentsFocus(null)
+  }
+  const handleDuplicateAgent = (id: string) => {
+    setAgents(prev => {
+      const source = prev.find(a => a.id === id)
+      if (!source) return prev
+      const copy: SettingsAgent = {
+        ...source,
+        id: `sa-${Date.now()}`,
+        name: `${source.name} (copy)`,
+      }
+      const i = prev.findIndex(a => a.id === id)
+      return [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)]
+    })
+  }
+  const handleToggleAgentEnabled = (id: string) => {
+    setAgents(prev => prev.map(a => a.id === id ? { ...a, enabled: !a.enabled } : a))
   }
 
   const renderHeaderBreadcrumb = () => {
@@ -900,10 +988,14 @@ export function SettingsModal({
                   providers={providers}
                   agents={agents}
                   search={agentsSearch}
+                  statusFilter={agentsStatusFilter}
                   onSearchChange={setAgentsSearch}
+                  onStatusFilterChange={setAgentsStatusFilter}
                   onFocus={setAgentsFocusAndReset}
                   onSaveAgent={handleSaveAgent}
                   onDeleteAgent={handleDeleteAgent}
+                  onDuplicateAgent={handleDuplicateAgent}
+                  onToggleEnabled={handleToggleAgentEnabled}
                 />
               )}
               {activeSection === 'connections' && <ConnectionsSection />}
