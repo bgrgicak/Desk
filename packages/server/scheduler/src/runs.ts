@@ -218,6 +218,25 @@ export function createRunManager(opts: RunManagerOptions) {
 
       const body = (await readLogFileBody(logFile)).trim();
       if (body) {
+        // When the run produced a new note, snapshot the previous note
+        // (if any) so a bad rewrite doesn't silently erase user edits.
+        if (outputKind === "note") {
+          const { snapshotNote } = await import("@desk/storage");
+          const prev = await pool.query(
+            `SELECT id, content FROM messages
+             WHERE chat_id = $1 AND content->>'type' = 'note'
+             ORDER BY created_at DESC LIMIT 1`,
+            [msg.chatId],
+          );
+          if (prev.rows[0]) {
+            const prevRow = prev.rows[0] as { id: string; content: { body?: string } };
+            if (typeof prevRow.content.body === "string") {
+              const home = process.env.DESK_HOME ?? "/opt/desk";
+              await snapshotNote(home, msg.chatId, prevRow.id, prevRow.content.body).catch(() => { /* best-effort */ });
+            }
+          }
+        }
+
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
           chatId: msg.chatId,

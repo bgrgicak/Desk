@@ -7,9 +7,12 @@ import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError, type Message, type WsEvent } from "@desk/shared";
 import {
   chatAttachmentsDir,
+  listNoteHistory,
+  snapshotNote,
   uploadArtifact,
   workspaceRootPath,
   type FileRef,
+  type NoteVersion,
   type StorageContext,
 } from "@desk/storage";
 
@@ -97,9 +100,14 @@ export async function sendMessage(
  * PATCH a message. Supports editing content (e.g. user edits a note) and
  * cancelling state (setting state to 'cancelled'). Returns the updated
  * row. Emits message.updated over WS.
+ *
+ * When the previous content was a `note`, the prior body is snapshotted
+ * under `.chats/{chatId}/note-history/` before the update lands, so user
+ * edits and AI rewrites both leave a trail.
  */
 export async function patchMessage(
   pool: pg.Pool,
+  storage: StorageContext,
   chatId: string,
   messageId: string,
   data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
@@ -114,10 +122,31 @@ export async function patchMessage(
       `state can only be patched to 'cancelled' or 'pending' via this endpoint`,
     );
   }
+
+  if (data.content !== undefined) {
+    const prev = current.content as { type?: string; body?: string };
+    if (prev?.type === "note" && typeof prev.body === "string") {
+      await snapshotNote(storage.home, chatId, messageId, prev.body);
+    }
+  }
+
   const updated = await queries.messages.updateMessage(pool, messageId, data);
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
   emit({ type: "message.updated", payload: updated });
   return updated;
+}
+
+/**
+ * Returns every archived version of the supplied note-content message,
+ * newest first. Returns an empty list if no snapshots exist yet.
+ */
+export async function getNoteHistory(
+  storage: StorageContext,
+  chatId: string,
+  messageId: string,
+): Promise<{ versions: NoteVersion[] }> {
+  const versions = await listNoteHistory(storage.home, chatId, messageId);
+  return { versions };
 }
 
 /**

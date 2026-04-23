@@ -405,7 +405,12 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
-      const result = await chatRoutes.patchMessage(pool, segments[1], segments[3], body, emitEvent);
+      const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
+      const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }

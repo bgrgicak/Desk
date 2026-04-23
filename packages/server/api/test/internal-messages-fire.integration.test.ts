@@ -296,6 +296,90 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
   });
 });
 
+describe("Note versioning via note-history (G6)", () => {
+  async function userRequest(
+    method: string,
+    urlPath: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const userTok = (loginRes.body as { token: string }).token;
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
+      const payload = body !== undefined ? JSON.stringify(body) : undefined;
+      if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
+      const req = http.request({ hostname: "127.0.0.1", port, path: urlPath, method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      });
+      req.on("error", reject);
+      if (payload) req.write(payload);
+      req.end();
+    });
+  }
+
+  it("PATCH on a note snapshots the previous body and surfaces it via GET /note-history", async () => {
+    // Create a note-content message by firing an ai_note_request.
+    const requestId = await insertPendingMessage({ type: "ai_note_request" });
+    const fireRes = await postInternal("/internal/messages/fire", { messageId: requestId }, token);
+    const { childIds } = fireRes.body as { childIds: string[] };
+    const noteId = childIds[0];
+
+    const beforeHistory = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    expect((beforeHistory.body as { versions: unknown[] }).versions.length).toBe(0);
+
+    const patched = await userRequest(
+      "PATCH",
+      `/chats/${chatId}/messages/${noteId}`,
+      { content: { type: "note", body: "User rewrite 1." } },
+    );
+    expect(patched.status).toBe(200);
+
+    const afterFirst = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    const versionsA = (afterFirst.body as { versions: Array<{ body: string }> }).versions;
+    expect(versionsA.length).toBe(1);
+    expect(versionsA[0].body).toContain("vacation plans");
+
+    await userRequest(
+      "PATCH",
+      `/chats/${chatId}/messages/${noteId}`,
+      { content: { type: "note", body: "User rewrite 2." } },
+    );
+
+    const afterSecond = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    const versionsB = (afterSecond.body as { versions: Array<{ body: string }> }).versions;
+    expect(versionsB.length).toBe(2);
+    // Newest first.
+    expect(versionsB[0].body).toBe("User rewrite 1.");
+    expect(versionsB[1].body).toContain("vacation plans");
+  });
+
+  it("firing an ai_note_request snapshots the prior note before the new child lands", async () => {
+    // First fire: produces the initial note.
+    const firstRequest = await insertPendingMessage({ type: "ai_note_request" });
+    const firstFire = await postInternal("/internal/messages/fire", { messageId: firstRequest }, token);
+    const firstNoteId = (firstFire.body as { childIds: string[] }).childIds[0];
+
+    // Second fire: should snapshot the first note before inserting the new one.
+    const secondRequest = await insertPendingMessage({ type: "ai_note_request" });
+    await postInternal("/internal/messages/fire", { messageId: secondRequest }, token);
+
+    const history = await userRequest(
+      "GET",
+      `/chats/${chatId}/messages/${firstNoteId}/note-history`,
+    );
+    const versions = (history.body as { versions: Array<{ body: string }> }).versions;
+    expect(versions.length).toBeGreaterThanOrEqual(1);
+    expect(versions[0].body).toContain("vacation plans");
+  });
+});
+
 describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
   async function userRequest(
     method: string,

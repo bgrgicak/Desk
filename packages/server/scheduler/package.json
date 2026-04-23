@@ -18,6 +18,7 @@
     "@desk/shared": "*",
     "@desk/db": "*",
     "@desk/runtime": "*",
+    "@desk/storage": "*",
     "pg": "^8.13.0"
   },
   "devDependencies": {
