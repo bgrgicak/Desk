@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, Check, ChevronDown, X,
+  Trash2, Plus, ChevronDown, X,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,36 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { MOCK_AGENTS } from '@/data/mock-data'
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs'
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
+import {
+  MOCK_PROVIDERS,
+  MOCK_SETTINGS_AGENTS,
+  PROVIDER_LABELS,
+  PROVIDER_MODELS,
+  type Provider,
+  type ProviderKind,
+  type SettingsAgent,
+} from '@/data/mock-data'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
 // ── Color + emoji options (mirrored from WorkspaceBar) ──────────────────────
@@ -202,88 +231,588 @@ function WorkspaceSection({
   )
 }
 
-// ── Agent row ────────────────────────────────────────────────────────────────
+// ── Agents section: Agents + Providers tabs ─────────────────────────────────
 
-interface AgentConfig {
-  name: string
-  model: string
-  enabled: boolean
-}
+type AgentsTab = 'agents' | 'providers'
+
+type AgentsFocus =
+  | { kind: 'agent'; mode: 'edit'; id: string }
+  | { kind: 'agent'; mode: 'new' }
+  | { kind: 'provider'; mode: 'edit'; id: string }
+  | { kind: 'provider'; mode: 'new'; providerKind: ProviderKind }
+  | null
 
 function AgentsSection() {
-  const [agents, setAgents] = useState<AgentConfig[]>(
-    MOCK_AGENTS.map(a => ({ ...a, enabled: true }))
-  )
-  const [modelPickerOpen, setModelPickerOpen] = useState<string | null>(null)
+  const [tab, setTab]             = useState<AgentsTab>('agents')
+  const [focus, setFocus]         = useState<AgentsFocus>(null)
+  const [providers, setProviders] = useState<Provider[]>(MOCK_PROVIDERS)
+  const [agents, setAgents]       = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
 
-  const MODELS = ['Claude Opus 4', 'Claude Sonnet 4', 'Claude Haiku 3.5', 'GPT-4o', 'GPT-4o mini']
+  const handleTabChange = (next: string) => {
+    setTab(next as AgentsTab)
+    setFocus(null)
+  }
 
-  const toggle = (name: string) =>
-    setAgents(prev => prev.map(a => a.name === name ? { ...a, enabled: !a.enabled } : a))
+  if (focus === null) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-sm font-semibold mb-0.5">Agents</h3>
+          <p className="text-xs text-muted-foreground">
+            Manage the agents you use and the providers that power them.
+          </p>
+        </div>
 
-  const setModel = (name: string, model: string) => {
-    setAgents(prev => prev.map(a => a.name === name ? { ...a, model } : a))
-    setModelPickerOpen(null)
+        <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+          <div className="flex items-center justify-between">
+            <TabsList>
+              <TabsTrigger value="agents">Agents</TabsTrigger>
+              <TabsTrigger value="providers">Providers</TabsTrigger>
+            </TabsList>
+            {tab === 'agents' ? (
+              <Button
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setFocus({ kind: 'agent', mode: 'new' })}
+              >
+                <Plus className="h-3.5 w-3.5" />Add
+              </Button>
+            ) : (
+              <AddProviderButton
+                existing={providers}
+                onPick={(k) => setFocus({ kind: 'provider', mode: 'new', providerKind: k })}
+              />
+            )}
+          </div>
+
+          <TabsContent value="agents">
+            <AgentsList
+              agents={agents}
+              providers={providers}
+              onOpen={(id) => setFocus({ kind: 'agent', mode: 'edit', id })}
+              onAdd={() => setFocus({ kind: 'agent', mode: 'new' })}
+            />
+          </TabsContent>
+
+          <TabsContent value="providers">
+            <ProvidersList
+              providers={providers}
+              onOpen={(id) => setFocus({ kind: 'provider', mode: 'edit', id })}
+              onPickNew={(k) => setFocus({ kind: 'provider', mode: 'new', providerKind: k })}
+            />
+          </TabsContent>
+        </Tabs>
+      </div>
+    )
+  }
+
+  // Drilled-in detail view: breadcrumb back to list, then the form
+  const tabLabel   = focus.kind === 'agent' ? 'Agents' : 'Providers'
+  const leafLabel  = focus.kind === 'agent'
+    ? (focus.mode === 'new' ? 'New agent' : agents.find(a => a.id === focus.id)?.name ?? 'Agent')
+    : (focus.mode === 'new'
+        ? `New ${PROVIDER_LABELS[focus.providerKind]} provider`
+        : providers.find(p => p.id === focus.id)?.name ?? 'Provider')
+
+  const backToList = () => {
+    setTab(focus.kind === 'agent' ? 'agents' : 'providers')
+    setFocus(null)
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold mb-0.5">Agents</h3>
-        <p className="text-xs text-muted-foreground">
-          Manage which agents are available in this workspace and configure their models.
-        </p>
-      </div>
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink asChild>
+              <button type="button" onClick={backToList}>{tabLabel}</button>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>{leafLabel}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
 
-      <div className="space-y-1">
-        {agents.map(agent => (
-          <div
-            key={agent.name}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors"
+      {focus.kind === 'agent' ? (
+        <AgentDetail
+          agents={agents}
+          providers={providers}
+          focus={focus}
+          onSave={(agent) => {
+            setAgents(prev => {
+              const exists = prev.some(a => a.id === agent.id)
+              return exists ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
+            })
+            setFocus(null)
+          }}
+          onCancel={backToList}
+          onDelete={(id) => {
+            setAgents(prev => prev.filter(a => a.id !== id))
+            setFocus(null)
+          }}
+        />
+      ) : (
+        <ProviderDetail
+          providers={providers}
+          focus={focus}
+          onSave={(provider) => {
+            setProviders(prev => {
+              const exists = prev.some(p => p.id === provider.id)
+              return exists ? prev.map(p => p.id === provider.id ? provider : p) : [...prev, provider]
+            })
+            setFocus(null)
+          }}
+          onCancel={backToList}
+          onDelete={(id) => {
+            setProviders(prev => prev.filter(p => p.id !== id))
+            // Agents bound to the removed provider lose their link; drop them.
+            setAgents(prev => prev.filter(a => a.providerId !== id))
+            setFocus(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Agents list + detail ─────────────────────────────────────────────────────
+
+interface AgentsListProps {
+  agents: SettingsAgent[]
+  providers: Provider[]
+  onOpen: (id: string) => void
+  onAdd: () => void
+}
+
+function AgentsList({ agents, providers, onOpen, onAdd }: AgentsListProps) {
+  if (providers.length === 0) {
+    return (
+      <EmptyState
+        title="Add a provider first"
+        body="Agents run through a provider. Add Claude or ChatGPT on the Providers tab to get started."
+      />
+    )
+  }
+  if (agents.length === 0) {
+    return (
+      <EmptyState
+        title="No agents yet"
+        body="Create an agent with a name, a model, and the default instructions it should follow."
+        action={
+          <Button size="sm" className="gap-1.5" onClick={onAdd}>
+            <Plus className="h-3.5 w-3.5" />Add agent
+          </Button>
+        }
+      />
+    )
+  }
+  return (
+    <div className="space-y-1">
+      {agents.map(a => {
+        const provider = providers.find(p => p.id === a.providerId)
+        return (
+          <button
+            key={a.id}
+            onClick={() => onOpen(a.id)}
+            className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors text-left"
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
               <Bot className="h-4 w-4 text-muted-foreground/70" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">{agent.name}</p>
-              {/* Model picker */}
-              <Popover
-                open={modelPickerOpen === agent.name}
-                onOpenChange={open => setModelPickerOpen(open ? agent.name : null)}
-              >
-                <PopoverTrigger asChild>
-                  <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-0.5">
-                    {agent.model}
-                    <ChevronDown className="h-3 w-3 opacity-60" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-48 p-1" align="start">
-                  {MODELS.map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setModel(agent.name, m)}
-                      className="flex items-center gap-2 w-full px-2.5 py-1.5 text-sm rounded-md hover:bg-muted/60 transition-colors text-left"
-                    >
-                      {m === agent.model && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-                      {m !== agent.model && <span className="w-3.5 shrink-0" />}
-                      {m}
-                    </button>
-                  ))}
-                </PopoverContent>
-              </Popover>
+              <p className="text-sm font-medium">{a.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{a.model}</p>
             </div>
-            <Switch
-              checked={agent.enabled}
-              onCheckedChange={() => toggle(agent.name)}
-            />
+            <span className="text-xs text-muted-foreground shrink-0">
+              {provider ? PROVIDER_LABELS[provider.kind] : 'Unlinked'}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+interface AgentDetailProps {
+  agents: SettingsAgent[]
+  providers: Provider[]
+  focus: Extract<AgentsFocus, { kind: 'agent' }>
+  onSave: (agent: SettingsAgent) => void
+  onCancel: () => void
+  onDelete: (id: string) => void
+}
+
+function AgentDetail({ agents, providers, focus, onSave, onCancel, onDelete }: AgentDetailProps) {
+  const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
+  const defaultProvider = existing
+    ? providers.find(p => p.id === existing.providerId) ?? providers[0]
+    : providers[0]
+
+  const [name, setName]                 = useState(existing?.name ?? '')
+  const [providerId, setProviderId]     = useState(defaultProvider?.id ?? '')
+  const [model, setModel]               = useState(existing?.model ?? '')
+  const [instructions, setInstructions] = useState(existing?.instructions ?? '')
+
+  const selectedProvider = providers.find(p => p.id === providerId)
+  const modelOptions = useMemo(
+    () => (selectedProvider ? PROVIDER_MODELS[selectedProvider.kind] : []),
+    [selectedProvider],
+  )
+
+  const handleProviderChange = (nextId: string) => {
+    setProviderId(nextId)
+    const next = providers.find(p => p.id === nextId)
+    if (next && !PROVIDER_MODELS[next.kind].includes(model)) {
+      setModel(PROVIDER_MODELS[next.kind][0] ?? '')
+    }
+  }
+
+  const canSave = name.trim() && providerId && model
+  const handleSave = () => {
+    if (!canSave) return
+    onSave({
+      id: existing?.id ?? `sa-${Date.now()}`,
+      name: name.trim(),
+      providerId,
+      model,
+      instructions: instructions.trim(),
+    })
+  }
+
+  return (
+    <div className="space-y-5 max-w-xl">
+      <Field label="Name">
+        <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
+      </Field>
+
+      <Field label="Provider" help="Determines which models are available.">
+        <SelectDropdown
+          value={providerId}
+          placeholder="Select provider"
+          onChange={handleProviderChange}
+          options={providers.map(p => ({ value: p.id, label: `${p.name} (${PROVIDER_LABELS[p.kind]})` }))}
+        />
+      </Field>
+
+      <Field label="Model">
+        <SelectDropdown
+          value={model}
+          placeholder={selectedProvider ? 'Select model' : 'Pick a provider first'}
+          onChange={setModel}
+          disabled={!selectedProvider || modelOptions.length === 0}
+          options={modelOptions.map(m => ({ value: m, label: m }))}
+        />
+      </Field>
+
+      <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
+        <Textarea
+          value={instructions}
+          onChange={e => setInstructions(e.target.value)}
+          placeholder="Describe how this agent should behave, what tone to use, what to avoid…"
+          rows={4}
+          className="resize-none"
+        />
+      </Field>
+
+      <div className="flex items-center justify-between pt-2 border-t">
+        <div>
+          {focus.mode === 'edit' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive gap-1.5"
+              onClick={() => onDelete(focus.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />Delete
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={!canSave}>
+            {focus.mode === 'new' ? 'Add agent' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Providers list + Add popover + detail ────────────────────────────────────
+
+interface ProvidersListProps {
+  providers: Provider[]
+  onOpen: (id: string) => void
+  onPickNew: (kind: ProviderKind) => void
+}
+
+function ProvidersList({ providers, onOpen, onPickNew }: ProvidersListProps) {
+  if (providers.length === 0) {
+    return (
+      <EmptyState
+        title="No providers yet"
+        body="Add an API key for Claude or ChatGPT to start creating agents."
+        action={<AddProviderButton existing={providers} onPick={onPickNew} />}
+      />
+    )
+  }
+  return (
+    <div className="space-y-1">
+      {providers.map(p => (
+        <button
+          key={p.id}
+          onClick={() => onOpen(p.id)}
+          className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors text-left"
+        >
+          <ProviderGlyph kind={p.kind} />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">{p.name}</p>
+            <p className="text-xs text-muted-foreground truncate">
+              {PROVIDER_LABELS[p.kind]} · {p.apiKey ? 'API key set' : 'No API key'}
+            </p>
           </div>
-        ))}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+interface AddProviderButtonProps {
+  existing: Provider[]
+  onPick: (kind: ProviderKind) => void
+}
+
+function AddProviderButton({ existing, onPick }: AddProviderButtonProps) {
+  const [open, setOpen]  = useState(false)
+  const hasClaude        = existing.some(p => p.kind === 'claude')
+  const hasChatGPT       = existing.some(p => p.kind === 'chatgpt')
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" className="gap-1.5">
+          <Plus className="h-3.5 w-3.5" />Add
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-52 p-1">
+        <ProviderPickerItem
+          kind="chatgpt"
+          label="ChatGPT"
+          disabled={hasChatGPT}
+          onClick={() => { onPick('chatgpt'); setOpen(false) }}
+        />
+        <ProviderPickerItem
+          kind="claude"
+          label="Claude"
+          disabled={hasClaude}
+          onClick={() => { onPick('claude'); setOpen(false) }}
+        />
+        <ProviderPickerItem
+          kind="other"
+          label="Other"
+          disabled
+          onClick={() => { /* disabled */ }}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function ProviderPickerItem({
+  kind, label, disabled, onClick,
+}: { kind: ProviderKind; label: string; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-md text-left transition-colors',
+        disabled
+          ? 'text-muted-foreground/60 cursor-not-allowed'
+          : 'hover:bg-muted/60',
+      )}
+    >
+      <ProviderGlyph kind={kind} size="sm" />
+      {label}
+      {disabled && <span className="ml-auto text-xs text-muted-foreground/70">
+        {kind === 'other' ? 'Soon' : 'Added'}
+      </span>}
+    </button>
+  )
+}
+
+function ProviderGlyph({ kind, size = 'md' }: { kind: ProviderKind; size?: 'sm' | 'md' }) {
+  const letter = kind === 'claude' ? 'C' : kind === 'chatgpt' ? 'G' : '·'
+  const bg = kind === 'claude' ? 'bg-orange-100 text-orange-700'
+    : kind === 'chatgpt' ? 'bg-emerald-100 text-emerald-700'
+    : 'bg-muted text-muted-foreground'
+  const dim = size === 'sm' ? 'h-5 w-5 text-[11px]' : 'h-8 w-8 text-sm'
+  return (
+    <span className={cn('shrink-0 rounded-lg flex items-center justify-center font-semibold', dim, bg)}>
+      {letter}
+    </span>
+  )
+}
+
+interface ProviderDetailProps {
+  providers: Provider[]
+  focus: Extract<AgentsFocus, { kind: 'provider' }>
+  onSave: (provider: Provider) => void
+  onCancel: () => void
+  onDelete: (id: string) => void
+}
+
+function ProviderDetail({ providers, focus, onSave, onCancel, onDelete }: ProviderDetailProps) {
+  const existing = focus.mode === 'edit' ? providers.find(p => p.id === focus.id) : undefined
+  const kind: ProviderKind = existing?.kind ?? (focus.mode === 'new' ? focus.providerKind : 'other')
+
+  const [name, setName]            = useState(existing?.name ?? PROVIDER_LABELS[kind])
+  const [apiKey, setApiKey]        = useState(existing?.apiKey ?? '')
+  const [organizationId, setOrgId] = useState(existing?.organizationId ?? '')
+  const [baseUrl, setBaseUrl]      = useState(
+    existing?.baseUrl ?? (kind === 'claude' ? 'https://api.anthropic.com'
+      : kind === 'chatgpt' ? 'https://api.openai.com/v1' : ''),
+  )
+
+  const handleSave = () => {
+    onSave({
+      id: existing?.id ?? `prov-${kind}-${Date.now()}`,
+      kind,
+      name: name.trim() || PROVIDER_LABELS[kind],
+      apiKey: apiKey.trim(),
+      organizationId: kind === 'chatgpt' ? organizationId.trim() || undefined : undefined,
+      baseUrl: baseUrl.trim() || undefined,
+    })
+  }
+
+  return (
+    <div className="space-y-5 max-w-xl">
+      <div className="flex items-center gap-3">
+        <ProviderGlyph kind={kind} />
+        <div>
+          <p className="text-sm font-medium">{PROVIDER_LABELS[kind]} provider</p>
+          <p className="text-xs text-muted-foreground">
+            {kind === 'claude' && 'Connects Claude models (Sonnet, Opus, Haiku) via the Anthropic API.'}
+            {kind === 'chatgpt' && 'Connects OpenAI models (GPT-4o, GPT-4o mini) via the OpenAI API.'}
+            {kind === 'other' && 'Custom provider.'}
+          </p>
+        </div>
       </div>
 
-      <Button variant="outline" size="sm" className="gap-1.5">
-        <Plus className="h-3.5 w-3.5" />
-        Add custom agent
-      </Button>
+      <Field label="Display name">
+        <Input value={name} onChange={e => setName(e.target.value)} placeholder={PROVIDER_LABELS[kind]} />
+      </Field>
+
+      <Field label="API key" help="Stored locally. Used to authenticate against the provider.">
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : ''}
+        />
+      </Field>
+
+      {kind === 'chatgpt' && (
+        <Field label="Organization ID" help="Optional. Used for billing isolation on multi-org accounts.">
+          <Input value={organizationId} onChange={e => setOrgId(e.target.value)} placeholder="org-…" />
+        </Field>
+      )}
+
+      <Field label="Base URL" help="Override only if proxying through a gateway.">
+        <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+      </Field>
+
+      <div className="flex items-center justify-between pt-2 border-t">
+        <div>
+          {focus.mode === 'edit' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive gap-1.5"
+              onClick={() => onDelete(focus.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />Remove
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={handleSave}>
+            {focus.mode === 'new' ? 'Add provider' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Small shared bits used by AgentsSection ──────────────────────────────────
+
+function Field({
+  label, help, children,
+}: { label: string; help?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      {children}
+      {help && <p className="text-xs text-muted-foreground/80">{help}</p>}
+    </div>
+  )
+}
+
+interface SelectDropdownProps {
+  value: string
+  placeholder: string
+  onChange: (next: string) => void
+  options: { value: string; label: string }[]
+  disabled?: boolean
+}
+
+function SelectDropdown({ value, placeholder, onChange, options, disabled }: SelectDropdownProps) {
+  const selected = options.find(o => o.value === value)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs text-left flex items-center justify-between gap-2 transition-colors',
+            'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none',
+            disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
+          )}
+        >
+          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
+            {selected?.label ?? placeholder}
+          </span>
+          <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[var(--radix-dropdown-menu-trigger-width)]">
+        {options.length === 0 ? (
+          <div className="px-2.5 py-1.5 text-sm text-muted-foreground">No options</div>
+        ) : (
+          options.map(o => (
+            <DropdownMenuItem key={o.value} onSelect={() => onChange(o.value)}>
+              {o.label}
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function EmptyState({
+  title, body, action,
+}: { title: string; body: string; action?: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-dashed px-6 py-10 text-center flex flex-col items-center gap-3">
+      <p className="text-sm font-medium">{title}</p>
+      <p className="text-xs text-muted-foreground max-w-sm">{body}</p>
+      {action}
     </div>
   )
 }
