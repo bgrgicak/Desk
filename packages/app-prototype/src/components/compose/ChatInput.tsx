@@ -5,8 +5,14 @@ import {
   Zap, ImageIcon, Table, Globe, Play, Target,
   type LucideIcon,
 } from 'lucide-react'
-import { MOCK_AGENTS, MOCK_FOLDERS, MOCK_CONTEXT } from '@/data/mock-data'
-import type { ContextItem } from '@/data/mock-data'
+import type { ContextItem } from '@/data/ui-types'
+import {
+  useGetAgentsQuery,
+  useGetLibraryQuery,
+} from '@/store/api'
+import { useAppSelector } from '@/store/hooks'
+import { selectFolders } from '@/store/slices/derivedSlice'
+import { toContextItem } from '@/store/selectors/library'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -67,6 +73,13 @@ interface ChatInputProps {
   showGoalPicker?: boolean
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
+  /**
+   * Optional chat context. When chatAgentId is set the agent picker
+   * hydrates from it (one-agent-per-chat contract). workspaceId scopes
+   * the attach picker to that workspace's library.
+   */
+  chatAgentId?: string
+  chatWorkspaceId?: string
 }
 
 // Calculate fixed position above a trigger button
@@ -91,10 +104,21 @@ export function ChatInput({
   showGoalPicker = true,
   prefillValue,
   focusRef,
+  chatAgentId,
+  chatWorkspaceId,
 }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // ── Server-backed pickers ───────────────────────────────────────────────
+  const { data: serverAgents } = useGetAgentsQuery()
+  const { data: libraryResp } = useGetLibraryQuery(
+    chatWorkspaceId ? { workspaceId: chatWorkspaceId } : undefined,
+    { skip: !chatWorkspaceId },
+  )
+  const folders = useAppSelector(selectFolders)
+  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
 
   // Register imperative focus handle
   useEffect(() => {
@@ -128,7 +152,22 @@ export function ChatInput({
   const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
 
   // Selections
-  const [selectedAgent, setSelectedAgent] = useState(MOCK_AGENTS[0])
+  // The picker surface is "pick the agent for this chat" now that the
+  // server enforces one agent per chat (see plan §6, row 3). When we
+  // know the chat's agentId, hydrate from it; otherwise fall back to
+  // the first agent returned by /agents.
+  //
+  // TODO(api-gap): PATCH /chats/:id doesn't yet accept agentId, so
+  // clicking another agent for an existing chat is a display-only
+  // preview that resets on reload — matrix §4.3.4. The selection will
+  // be persisted server-side once the endpoint carries it.
+  const serverActiveAgent =
+    (chatAgentId ? serverAgents?.find(a => a.id === chatAgentId) : undefined)
+    ?? serverAgents?.[0]
+    ?? null
+  const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
+  const activeAgent =
+    (previewAgentId ? serverAgents?.find(a => a.id === previewAgentId) : undefined) ?? serverActiveAgent
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
   const suggestedGoal = inferGoal(value)
   const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : suggestedGoal
@@ -139,17 +178,18 @@ export function ChatInput({
     ? (effectiveGoal?.placeholder ?? placeholder)
     : placeholder
 
-  // Attachment list
+  // Attachment list — folders are client-derived (empty for now; matrix
+  // §4.2.1), files come straight from the library.
   const allAttachments = [
-    ...MOCK_FOLDERS.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
-    ...MOCK_CONTEXT.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
+    ...folders.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
+    ...libraryItems.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
   ]
   const filteredAttachments = allAttachments.filter(
     a => !attachSearch || a.name.toLowerCase().includes(attachSearch.toLowerCase())
   )
-  const filteredAgents = MOCK_AGENTS.filter(
+  const filteredAgents = (serverAgents ?? []).filter(
     a => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())
-      || a.model.toLowerCase().includes(agentSearch.toLowerCase())
+      || (a.model?.toLowerCase().includes(agentSearch.toLowerCase()) ?? false)
   )
 
   // Auto-focus
@@ -436,7 +476,7 @@ export function ChatInput({
             className={pickerBtnClass}
           >
             <Bot className="h-3 w-3" />
-            {selectedAgent.name}
+            {activeAgent?.name ?? 'Agent'}
             <ChevronDown className="h-3 w-3 opacity-60" />
           </button>
           {agentOpen && agentRect && createPortal(
@@ -455,9 +495,14 @@ export function ChatInput({
                 {filteredAgents.length === 0 && (
                   <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
                 )}
-                {filteredAgents.map((agent, i) => (
-                  <button key={i} onClick={() => { setSelectedAgent(agent); setAgentOpen(false) }}
-                    className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${selectedAgent === agent ? 'bg-muted/30' : ''}`}
+                {filteredAgents.map(agent => (
+                  <button
+                    key={agent.id}
+                    onClick={() => {
+                      setPreviewAgentId(agent.id)
+                      setAgentOpen(false)
+                    }}
+                    className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
                   >
                     <span>{agent.name}</span>
                     <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>

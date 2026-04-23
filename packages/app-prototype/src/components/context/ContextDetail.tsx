@@ -51,8 +51,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ImagePreview } from '@/components/ImagePreview'
-import type { ContextItem, Artifact } from '@/data/mock-data'
-import { getRelativeTime, getArtifactIcon, getFolderPath, MOCK_ARTIFACTS } from '@/data/mock-data'
+import type { ContextItem, Artifact } from '@/data/ui-types'
+import { getRelativeTime, getArtifactIcon, getFolderPath } from '@/data/ui-types'
+import { useAppSelector } from '@/store/hooks'
+import { selectFolders } from '@/store/slices/derivedSlice'
+import { useGetLibraryQuery } from '@/store/api'
+import { toArtifactFromFile } from '@/store/selectors/artifacts'
 
 interface ContextDetailProps {
   item: ContextItem
@@ -117,7 +121,15 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
     setSaveStatus('idle')
   }, [])
 
-  const relatedArtifacts = MOCK_ARTIFACTS.filter(a => item.relatedArtifactIds.includes(a.id))
+  // "Related artifacts" — the server has no explicit artifact-to-context
+  // relation yet. We hydrate against the library and filter by the ids
+  // the UI already tracks on the item; it's empty for server-backed
+  // items today. TODO(api-gap): replace with a first-class relation in
+  // matrix §4.2.5 once the server exposes it.
+  const folders = useAppSelector(selectFolders)
+  const { data: libraryResp } = useGetLibraryQuery()
+  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
+  const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
   const FileIcon = item.type === 'note' ? StickyNote : item.type === 'link' ? Link2 : getFileIcon(item.mimeType)
 
   return (
@@ -130,7 +142,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
 
           {/* Breadcrumb */}
           {(() => {
-            const folderPath = getFolderPath(item.folderId ?? null)
+            const folderPath = getFolderPath(folders, item.folderId ?? null)
             return (
               <Breadcrumb className="min-w-0 flex-1">
                 <BreadcrumbList className="flex-nowrap">

@@ -19,12 +19,14 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
-import type { Chat, Artifact, ChatMessage as ChatMessageType, ComposeScenario, ContextItem } from '@/data/mock-data'
-import { MOCK_CONTEXT, getArtifactIcon, getRelativeTime } from '@/data/mock-data'
+import type { Chat, Artifact, ChatMessage as ChatMessageType, ComposeScenario, ContextItem } from '@/data/ui-types'
+import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 import {
   useGetChatMessagesQuery,
+  useGetLibraryQuery,
   usePostChatMessageMutation,
 } from '@/store/api'
+import { toContextItem } from '@/store/selectors/library'
 import type { ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 
@@ -203,11 +205,15 @@ function ArtifactsPanel({
 
 function FilesPanel({
   initialReferenceIds,
+  libraryItems,
 }: {
   initialReferenceIds: string[]
+  libraryItems: ContextItem[]
 }) {
   const [refs, setRefs] = useState<ContextItem[]>(() =>
-    initialReferenceIds.map(id => MOCK_CONTEXT.find(c => c.id === id)).filter(Boolean) as ContextItem[]
+    initialReferenceIds
+      .map(id => libraryItems.find(c => c.id === id))
+      .filter(Boolean) as ContextItem[]
   )
   const [pickerOpen, setPickerOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -217,7 +223,7 @@ function FilesPanel({
     !search.trim() || r.name.toLowerCase().includes(search.toLowerCase())
   )
 
-  const available = MOCK_CONTEXT.filter(
+  const available = libraryItems.filter(
     c => !refs.some(r => r.id === c.id) &&
     (!pickerSearch || c.name.toLowerCase().includes(pickerSearch.toLowerCase()))
   )
@@ -414,6 +420,15 @@ export function ChatView({
     { skip: isNewChat || chat.id.startsWith('chat-new-') },
   )
   const [postMessageMutation] = usePostChatMessageMutation()
+
+  // Library items for the workspace backing this chat. Used as the pool
+  // for the "Add files to chat" picker in the right panel. If the chat
+  // doesn't carry a workspaceId yet (new-chat stub) we skip the query.
+  const { data: libraryResp } = useGetLibraryQuery(
+    chat.workspaceId ? { workspaceId: chat.workspaceId } : undefined,
+    { skip: !chat.workspaceId },
+  )
+  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
 
   // Map the server's message shape onto what the existing compose UI
   // expects. Non-text content types (toolCall, events, notes, …) are
@@ -626,6 +641,8 @@ export function ChatView({
               compact={true}
               showGoalPicker={true}
               prefillValue={prefillText}
+              chatAgentId={chat.agentId}
+              chatWorkspaceId={chat.workspaceId}
             />
           </div>
         </div>
@@ -670,6 +687,7 @@ export function ChatView({
             {rightTab === 'files' && (
               <FilesPanel
                 initialReferenceIds={chat.referenceIds ?? []}
+                libraryItems={libraryItems}
               />
             )}
           </div>

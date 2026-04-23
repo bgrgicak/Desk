@@ -15,11 +15,11 @@ import {
 import { useMockChat } from '@/hooks/use-mock-chat'
 import { InboxUICard } from './InboxUICard'
 import {
-  MOCK_ARTIFACTS,
-  MOCK_RUNS,
   getArtifactIcon,
+  type Artifact,
   type InboxItem,
-} from '@/data/mock-data'
+  type Run,
+} from '@/data/ui-types'
 
 interface TodayDetailPanelProps {
   item: InboxItem
@@ -28,14 +28,24 @@ interface TodayDetailPanelProps {
   onOpenRun?: (runId: string) => void
   focusInput?: boolean
   onFocusConsumed?: () => void
+  /** Optional artifact associated with this item (looked up by parent). */
+  artifact?: Artifact | null
+  /** Optional run associated with this item (looked up by parent). */
+  run?: Run | null
 }
 
-export function TodayDetailPanel({ item, onClose, onOpenArtifact, onOpenRun, focusInput, onFocusConsumed }: TodayDetailPanelProps) {
+export function TodayDetailPanel({
+  item,
+  onClose,
+  onOpenArtifact,
+  onOpenRun,
+  focusInput,
+  onFocusConsumed,
+  artifact = null,
+  run = null,
+}: TodayDetailPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputFocusRef = useRef<(() => void) | null>(null)
-
-  const artifact = item.artifactId ? (MOCK_ARTIFACTS.find(a => a.id === item.artifactId) ?? null) : null
-  const run      = item.runId      ? (MOCK_RUNS.find(r => r.id === item.runId) ?? null)           : null
 
   const initialMessages = [{
     id: `${item.id}-ctx`,

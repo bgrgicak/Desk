@@ -8,8 +8,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { InboxItem } from '@/data/mock-data'
-import { getRelativeTime, getArtifactIcon, MOCK_ARTIFACTS, MOCK_RUNS } from '@/data/mock-data'
+import type { Artifact, InboxItem, Run } from '@/data/ui-types'
+import { getRelativeTime, getArtifactIcon } from '@/data/ui-types'
 
 interface InboxCardProps {
   item: InboxItem
@@ -17,11 +17,21 @@ interface InboxCardProps {
   onSomethingElse?: () => void
   index?: number
   isSelected?: boolean
+  /** Optional artifact — looked up by parent from the library cache. */
+  artifact?: Artifact | null
+  /** Optional run — looked up by parent from the runs cache. */
+  run?: Run | null
 }
 
-export function InboxCard({ item, onClick, onSomethingElse, index = 0, isSelected = false }: InboxCardProps) {
-  const artifact = item.artifactId ? MOCK_ARTIFACTS.find(a => a.id === item.artifactId) : null
-  const run      = item.runId      ? MOCK_RUNS.find(r => r.id === item.runId)           : null
+export function InboxCard({
+  item,
+  onClick,
+  onSomethingElse,
+  index = 0,
+  isSelected = false,
+  artifact = null,
+  run = null,
+}: InboxCardProps) {
   const contextName = artifact?.name ?? run?.name ?? 'Ask'
   const ContextIcon = artifact ? getArtifactIcon(artifact.type) : run ? Zap : Bot
 

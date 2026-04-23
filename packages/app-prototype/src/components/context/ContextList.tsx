@@ -48,16 +48,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { ContextItem, Folder } from '@/data/mock-data'
+import type { ContextItem, Folder } from '@/data/ui-types'
 import {
   getRelativeTime,
-  MOCK_FOLDERS,
   getFolderById,
   getFolderPath,
   getChildFolders,
   getItemsInFolder,
   countItemsRecursive,
-} from '@/data/mock-data'
+} from '@/data/ui-types'
+import { useAppSelector } from '@/store/hooks'
+import { selectFolders } from '@/store/slices/derivedSlice'
 
 interface ContextListProps {
   items: ContextItem[]
@@ -105,12 +106,16 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
 
-  const currentFolder = getFolderById(currentFolderId)
-  const breadcrumbPath = getFolderPath(currentFolderId)
+  // Folders are client-derived (TODO(api-gap) — matrix §4.2.1). The
+  // selector returns `[]` until path-prefix derivation lands.
+  const folders = useAppSelector(selectFolders)
+
+  const currentFolder = getFolderById(folders, currentFolderId)
+  const breadcrumbPath = getFolderPath(folders, currentFolderId)
   const isInsideFolder = currentFolder != null
 
   // Get folders + items in current location
-  const childFolders = getChildFolders(currentFolderId)
+  const childFolders = getChildFolders(folders, currentFolderId)
   const folderItems = getItemsInFolder(currentFolderId, items)
 
   // Apply filters
@@ -338,7 +343,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countItemsRecursive(folder.id, items)
+                const itemCount = countItemsRecursive(folders, folder.id, items)
                 return (
                   <motion.div
                     key={folder.id}
@@ -503,7 +508,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countItemsRecursive(folder.id, items)
+              const itemCount = countItemsRecursive(folders, folder.id, items)
               return (
                 <motion.div
                   key={folder.id}
