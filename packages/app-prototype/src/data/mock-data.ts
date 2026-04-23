@@ -271,6 +271,58 @@ export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
   },
 ]
 
+// ─── Connections (Settings → Connections) ───
+
+export type ConnectionKind =
+  | 'claude' | 'chatgpt'
+  | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+
+export interface ConnectionMeta {
+  name: string
+  description: string
+  icon: string // emoji used when no brand mark applies
+}
+
+export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
+  'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API',  icon: '🅰️' },
+  'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',     icon: '🅶' },
+  'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',              icon: '📁' },
+  'notion':       { name: 'Notion',       description: 'Pages and databases',                   icon: '📝' },
+  'github':       { name: 'GitHub',       description: 'Repositories and issues',               icon: '🐙' },
+  'slack':        { name: 'Slack',        description: 'Messages and channels',                 icon: '💬' },
+  'figma':        { name: 'Figma',        description: 'Design files and prototypes',           icon: '🎨' },
+  'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',           icon: '🔷' },
+  'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',          icon: '🌐' },
+}
+
+export interface Connection {
+  id: string
+  kind: ConnectionKind
+  name: string
+  apiKey?: string
+  baseUrl?: string
+  enabled: boolean
+}
+
+export const MOCK_CONNECTIONS: Connection[] = [
+  {
+    id: 'conn-claude',
+    kind: 'claude',
+    name: 'Claude',
+    apiKey: 'sk-ant-••••••••••••••••••••••••1f4a',
+    baseUrl: 'https://api.anthropic.com',
+    enabled: true,
+  },
+  {
+    id: 'conn-chatgpt',
+    kind: 'chatgpt',
+    name: 'ChatGPT',
+    apiKey: 'sk-••••••••••••••••••••••••••••••••f3c2',
+    baseUrl: 'https://api.openai.com/v1',
+    enabled: false,
+  },
+]
+
 // ─── Mock Artifacts ───
 
 export const MOCK_ARTIFACTS: Artifact[] = [

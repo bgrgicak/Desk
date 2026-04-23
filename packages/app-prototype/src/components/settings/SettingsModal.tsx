@@ -30,10 +30,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import {
+  CONNECTION_CATALOG,
+  MOCK_CONNECTIONS,
   MOCK_PROVIDERS,
   MOCK_SETTINGS_AGENTS,
   PROVIDER_LABELS,
   PROVIDER_MODELS,
+  type Connection,
+  type ConnectionKind,
   type Provider,
   type ProviderKind,
   type SettingsAgent,
@@ -83,24 +87,6 @@ const COLOR_OPTIONS = [
   { value: '#ccfbf1', label: 'Teal'   },
 ]
 
-// ── Mock connections ─────────────────────────────────────────────────────────
-
-interface Connection {
-  id: string
-  name: string
-  description: string
-  icon: string
-}
-
-const ALL_CONNECTIONS: Connection[] = [
-  { id: 'google-drive',  name: 'Google Drive',    description: 'Docs, Sheets and Slides',          icon: '📁' },
-  { id: 'notion',        name: 'Notion',           description: 'Pages and databases',              icon: '📝' },
-  { id: 'github',        name: 'GitHub',           description: 'Repositories and issues',         icon: '🐙' },
-  { id: 'slack',         name: 'Slack',            description: 'Messages and channels',            icon: '💬' },
-  { id: 'figma',         name: 'Figma',            description: 'Design files and prototypes',     icon: '🎨' },
-  { id: 'linear',        name: 'Linear',           description: 'Issues, projects and cycles',     icon: '🔷' },
-  { id: 'web-clipper',   name: 'Web Clipper',      description: 'Save pages from your browser',   icon: '🌐' },
-]
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 
@@ -257,9 +243,9 @@ type AgentsFocus =
   | { mode: 'new' }
   | null
 
-type AgentsStatusFilter = 'all' | 'active' | 'inactive'
+type StatusFilter = 'all' | 'active' | 'inactive'
 
-const STATUS_FILTERS: { value: AgentsStatusFilter; label: string }[] = [
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all',      label: 'All'      },
   { value: 'active',   label: 'Active'   },
   { value: 'inactive', label: 'Inactive' },
@@ -269,9 +255,9 @@ interface AgentsSectionProps {
   providers: Provider[]
   agents: SettingsAgent[]
   search: string
-  statusFilter: AgentsStatusFilter
+  statusFilter: StatusFilter
   onSearchChange: (next: string) => void
-  onStatusFilterChange: (next: AgentsStatusFilter) => void
+  onStatusFilterChange: (next: StatusFilter) => void
   onFocus: (next: AgentsFocus) => void
   onDeleteAgent: (id: string) => void
   onDuplicateAgent: (id: string) => void
@@ -579,7 +565,7 @@ function AgentDetail({ agents, providers, focus, onSave, onCancel }: AgentDetail
 
       <div
         className={cn(
-          'shrink-0 h-[52px] px-4 flex items-center justify-end gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex items-center justify-end gap-2 border-t border-transparent',
           scrolledUnder && 'border-border',
         )}
       >
@@ -685,50 +671,347 @@ function EmptyState({
   )
 }
 
-// ── Connections ──────────────────────────────────────────────────────────────
+// ── Connections section ──────────────────────────────────────────────────────
 
-function ConnectionsSection() {
-  const [enabled, setEnabled] = useState<Set<string>>(
-    new Set(['google-drive', 'notion'])
-  )
+type ConnectionsFocus =
+  | { mode: 'picker' }
+  | { mode: 'new'; kind: ConnectionKind }
+  | { mode: 'edit'; id: string }
+  | null
 
-  const toggle = (id: string) =>
-    setEnabled(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
+interface ConnectionsSectionProps {
+  connections: Connection[]
+  search: string
+  statusFilter: StatusFilter
+  onSearchChange: (next: string) => void
+  onStatusFilterChange: (next: StatusFilter) => void
+  onFocus: (next: ConnectionsFocus) => void
+  onDeleteConnection: (id: string) => void
+  onDuplicateConnection: (id: string) => void
+  onToggleEnabled: (id: string) => void
+}
+
+function ConnectionsSection({
+  connections, search, statusFilter,
+  onSearchChange, onStatusFilterChange, onFocus,
+  onDeleteConnection, onDuplicateConnection, onToggleEnabled,
+}: ConnectionsSectionProps) {
+  const q = search.trim().toLowerCase()
+  const filtered = connections
+    .filter(c => statusFilter === 'all'
+      || (statusFilter === 'active' && c.enabled)
+      || (statusFilter === 'inactive' && !c.enabled))
+    .filter(c => {
+      if (!q) return true
+      const kindLabel = CONNECTION_CATALOG[c.kind].name.toLowerCase()
+      return c.name.toLowerCase().includes(q) || kindLabel.includes(q)
     })
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold mb-0.5">Connections</h3>
-        <p className="text-xs text-muted-foreground">
-          Connected sources appear in this workspace's library and can be referenced in chats.
-        </p>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center rounded-lg border p-0.5">
+          {STATUS_FILTERS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => onStatusFilterChange(f.value)}
+              className={cn(
+                'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+                statusFilter === f.value
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <SearchInput
+            value={search}
+            onChange={onSearchChange}
+            placeholder="Search connections…"
+          />
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => onFocus({ mode: 'picker' })}
+          >
+            <Plus className="h-3.5 w-3.5" />Add
+          </Button>
+        </div>
+      </div>
+      <ConnectionsList
+        connections={filtered}
+        hasAnyConnections={connections.length > 0}
+        query={q}
+        onOpen={(id) => onFocus({ mode: 'edit', id })}
+        onPickNew={() => onFocus({ mode: 'picker' })}
+        onDelete={onDeleteConnection}
+        onDuplicate={onDuplicateConnection}
+        onToggleEnabled={onToggleEnabled}
+      />
+    </div>
+  )
+}
+
+interface ConnectionsListProps {
+  connections: Connection[]
+  hasAnyConnections: boolean
+  query: string
+  onOpen: (id: string) => void
+  onPickNew: () => void
+  onDelete: (id: string) => void
+  onDuplicate: (id: string) => void
+  onToggleEnabled: (id: string) => void
+}
+
+function ConnectionsList({
+  connections, hasAnyConnections, query,
+  onOpen, onPickNew, onDelete, onDuplicate, onToggleEnabled,
+}: ConnectionsListProps) {
+  if (!hasAnyConnections) {
+    return (
+      <EmptyState
+        title="No connections yet"
+        body="Add Claude, ChatGPT, or another tool to make it available in this workspace."
+        action={
+          <Button size="sm" className="gap-1.5" onClick={onPickNew}>
+            <Plus className="h-3.5 w-3.5" />Add connection
+          </Button>
+        }
+      />
+    )
+  }
+  if (connections.length === 0) {
+    return (
+      <EmptyState
+        title="No matches"
+        body={`No connections match “${query}”.`}
+      />
+    )
+  }
+  return (
+    <div className="flex flex-col">
+      {connections.map(c => {
+        const meta = CONNECTION_CATALOG[c.kind]
+        return (
+          <div
+            key={c.id}
+            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
+          >
+            <Switch
+              size="sm"
+              checked={c.enabled}
+              onCheckedChange={() => onToggleEnabled(c.id)}
+              aria-label={`${c.enabled ? 'Disable' : 'Enable'} ${c.name} in this workspace`}
+            />
+            <ConnectionGlyph kind={c.kind} size="lg" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{c.name}</p>
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+                <span className="truncate">{meta.description}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => onOpen(c.id)}
+              >
+                Edit
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="More actions">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  <DropdownMenuItem onSelect={() => onOpen(c.id)}>
+                    <Pencil className="h-4 w-4" />Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onDuplicate(c.id)}>
+                    <Copy className="h-4 w-4" />Duplicate
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => onDelete(c.id)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// 3-column picker for the Add flow.
+interface ConnectionsPickerProps {
+  onPick: (kind: ConnectionKind) => void
+}
+
+function ConnectionsPicker({ onPick }: ConnectionsPickerProps) {
+  const [search, setSearch] = useState('')
+  const q = search.trim().toLowerCase()
+  const entries = (Object.entries(CONNECTION_CATALOG) as [ConnectionKind, typeof CONNECTION_CATALOG[ConnectionKind]][])
+    .filter(([, meta]) => !q
+      || meta.name.toLowerCase().includes(q)
+      || meta.description.toLowerCase().includes(q))
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+      <div className="flex items-center justify-end">
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search connections…"
+        />
+      </div>
+      {entries.length === 0 ? (
+        <EmptyState title="No matches" body={`No connections match “${q}”.`} />
+      ) : (
+        <div className="grid grid-cols-3 gap-3">
+          {entries.map(([kind, meta]) => (
+            <button
+              key={kind}
+              onClick={() => onPick(kind)}
+              className="group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+            >
+              <ConnectionGlyph kind={kind} size="lg" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{meta.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Shared config form for new + edit. Same sticky-footer layout as AgentDetail.
+interface ConnectionDetailProps {
+  connections: Connection[]
+  focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
+  onSave: (connection: Connection) => void
+  onCancel: () => void
+}
+
+function ConnectionDetail({ connections, focus, onSave, onCancel }: ConnectionDetailProps) {
+  const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
+  const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
+  const meta = CONNECTION_CATALOG[kind]
+
+  const [name, setName]       = useState(existing?.name ?? meta.name)
+  const [apiKey, setApiKey]   = useState(existing?.apiKey ?? '')
+  const [baseUrl, setBaseUrl] = useState(
+    existing?.baseUrl ?? (kind === 'claude' ? 'https://api.anthropic.com'
+      : kind === 'chatgpt' ? 'https://api.openai.com/v1' : ''),
+  )
+
+  const handleSave = () => {
+    onSave({
+      id: existing?.id ?? `conn-${kind}-${Date.now()}`,
+      kind,
+      name: name.trim() || meta.name,
+      apiKey: apiKey.trim() || undefined,
+      baseUrl: baseUrl.trim() || undefined,
+      enabled: existing?.enabled ?? true,
+    })
+  }
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrolledUnder, setScrolledUnder] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => {
+      setScrolledUnder(el.scrollHeight > el.clientHeight + el.scrollTop + 1)
+    }
+    update()
+    el.addEventListener('scroll', update)
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', update); ro.disconnect() }
+  }, [])
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+        <div className="flex items-center gap-3">
+          <ConnectionGlyph kind={kind} size="lg" />
+          <div>
+            <p className="text-sm font-medium">{meta.name}</p>
+            <p className="text-xs text-muted-foreground">{meta.description}</p>
+          </div>
+        </div>
+
+        <Field label="Display name">
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder={meta.name} />
+        </Field>
+
+        <Field label="API key" help="Stored locally. Used to authenticate against the service.">
+          <Input
+            type="password"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : 'Paste the API key or token'}
+          />
+        </Field>
+
+        <Field label="Base URL" help="Override only if proxying through a gateway.">
+          <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://…" />
+        </Field>
       </div>
 
-      <div className="space-y-1">
-        {ALL_CONNECTIONS.map(conn => (
-          <div
-            key={conn.id}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors"
-          >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-base">
-              {conn.icon}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">{conn.name}</p>
-              <p className="text-xs text-muted-foreground">{conn.description}</p>
-            </div>
-            <Switch
-              checked={enabled.has(conn.id)}
-              onCheckedChange={() => toggle(conn.id)}
-            />
-          </div>
-        ))}
+      <div
+        className={cn(
+          'shrink-0 p-4 flex items-center justify-end gap-2 border-t border-transparent',
+          scrolledUnder && 'border-border',
+        )}
+      >
+        <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button size="sm" onClick={handleSave}>
+          {focus.mode === 'new' ? 'Add connection' : 'Save'}
+        </Button>
       </div>
     </div>
+  )
+}
+
+// Icon chip. Uses real brand marks for Claude/ChatGPT and the catalog
+// emoji for anything else.
+function ConnectionGlyph({ kind, size = 'md' }: { kind: ConnectionKind; size?: 'sm' | 'md' | 'lg' }) {
+  const box = size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8'
+  if (kind === 'claude') {
+    const mark = size === 'sm' ? 'h-3 w-3' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-[18px] w-[18px]'
+    return (
+      <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-[#F5E6DA] text-[#CC785C]', box)}>
+        <ClaudeLogo className={mark} />
+      </span>
+    )
+  }
+  if (kind === 'chatgpt') {
+    const mark = size === 'sm' ? 'h-3 w-3' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-[18px] w-[18px]'
+    return (
+      <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-black text-white', box)}>
+        <OpenAILogo className={mark} />
+      </span>
+    )
+  }
+  const meta = CONNECTION_CATALOG[kind]
+  const text = size === 'sm' ? 'text-sm' : size === 'lg' ? 'text-lg' : 'text-base'
+  return (
+    <span className={cn('shrink-0 rounded-lg flex items-center justify-center bg-muted', box, text)}>
+      {meta.icon}
+    </span>
   )
 }
 
@@ -831,11 +1114,11 @@ export function SettingsModal({
   const [activeSection, setActiveSection] = useState<NavSection>('workspace')
 
   // Agents section state
-  const [agentsFocus, setAgentsFocus]       = useState<AgentsFocus>(null)
-  const [providers]                         = useState<Provider[]>(MOCK_PROVIDERS)
-  const [agents, setAgents]                 = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
-  const [agentsSearch, setAgentsSearch]     = useState('')
-  const [agentsStatusFilter, setAgentsStatusFilter] = useState<AgentsStatusFilter>('all')
+  const [agentsFocus, setAgentsFocus]             = useState<AgentsFocus>(null)
+  const [providers]                               = useState<Provider[]>(MOCK_PROVIDERS)
+  const [agents, setAgents]                       = useState<SettingsAgent[]>(MOCK_SETTINGS_AGENTS)
+  const [agentsSearch, setAgentsSearch]           = useState('')
+  const [agentsStatusFilter, setAgentsStatusFilter] = useState<StatusFilter>('all')
 
   const setAgentsFocusAndReset = (next: AgentsFocus) => {
     setAgentsFocus(next)
@@ -870,54 +1153,151 @@ export function SettingsModal({
     setAgents(prev => prev.map(a => a.id === id ? { ...a, enabled: !a.enabled } : a))
   }
 
+  // Connections section state
+  const [connectionsFocus, setConnectionsFocus]             = useState<ConnectionsFocus>(null)
+  const [connections, setConnections]                       = useState<Connection[]>(MOCK_CONNECTIONS)
+  const [connectionsSearch, setConnectionsSearch]           = useState('')
+  const [connectionsStatusFilter, setConnectionsStatusFilter] = useState<StatusFilter>('all')
+
+  const setConnectionsFocusAndReset = (next: ConnectionsFocus) => {
+    setConnectionsFocus(next)
+    setConnectionsSearch('')
+  }
+
+  const handleSaveConnection = (conn: Connection) => {
+    setConnections(prev => {
+      const exists = prev.some(c => c.id === conn.id)
+      return exists ? prev.map(c => c.id === conn.id ? conn : c) : [...prev, conn]
+    })
+    setConnectionsFocus(null)
+  }
+  const handleDeleteConnection = (id: string) => {
+    setConnections(prev => prev.filter(c => c.id !== id))
+    setConnectionsFocus(null)
+  }
+  const handleDuplicateConnection = (id: string) => {
+    setConnections(prev => {
+      const source = prev.find(c => c.id === id)
+      if (!source) return prev
+      const copy: Connection = {
+        ...source,
+        id: `conn-${Date.now()}`,
+        name: `${source.name} (copy)`,
+      }
+      const i = prev.findIndex(c => c.id === id)
+      return [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)]
+    })
+  }
+  const handleToggleConnectionEnabled = (id: string) => {
+    setConnections(prev => prev.map(c => c.id === id ? { ...c, enabled: !c.enabled } : c))
+  }
+
   const renderHeaderBreadcrumb = () => {
     const pageClass = 'text-sm font-semibold text-foreground'
 
-    if (activeSection !== 'agents') {
+    if (activeSection === 'agents') {
+      const leafLabel = agentsFocus === null
+        ? null
+        : agentsFocus.mode === 'new'
+          ? 'New agent'
+          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent'
+
       return (
         <Breadcrumb className="min-w-0">
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbPage className={pageClass}>
-                {NAV.find(n => n.id === activeSection)?.label}
-              </BreadcrumbPage>
+              {leafLabel === null ? (
+                <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink asChild className={pageClass}>
+                  <button
+                    type="button"
+                    onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}
+                  >
+                    Agents
+                  </button>
+                </BreadcrumbLink>
+              )}
             </BreadcrumbItem>
+            {leafLabel && (
+              <>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbPage className={cn(pageClass, 'truncate')}>{leafLabel}</BreadcrumbPage>
+                </BreadcrumbItem>
+              </>
+            )}
           </BreadcrumbList>
         </Breadcrumb>
       )
     }
 
-    const leafLabel = agentsFocus === null
-      ? null
-      : agentsFocus.mode === 'new'
-        ? 'New agent'
-        : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent'
+    if (activeSection === 'connections') {
+      // Layers: Connections › (New | <name>) › <leaf connection name>
+      const atNew   = connectionsFocus?.mode === 'picker' || connectionsFocus?.mode === 'new'
+      const leaf    = connectionsFocus?.mode === 'new'
+        ? CONNECTION_CATALOG[connectionsFocus.kind].name
+        : connectionsFocus?.mode === 'edit'
+          ? connections.find(c => c.id === connectionsFocus.id)?.name ?? 'Connection'
+          : null
+
+      return (
+        <Breadcrumb className="min-w-0">
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              {connectionsFocus === null ? (
+                <BreadcrumbPage className={pageClass}>Connections</BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink asChild className={pageClass}>
+                  <button
+                    type="button"
+                    onClick={() => { setConnectionsFocus(null); setConnectionsSearch('') }}
+                  >
+                    Connections
+                  </button>
+                </BreadcrumbLink>
+              )}
+            </BreadcrumbItem>
+            {atNew && (
+              <>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  {connectionsFocus?.mode === 'picker' ? (
+                    <BreadcrumbPage className={pageClass}>New</BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink asChild className={pageClass}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectionsFocus({ mode: 'picker' })}
+                      >
+                        New
+                      </button>
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+              </>
+            )}
+            {leaf && (
+              <>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbPage className={cn(pageClass, 'truncate')}>{leaf}</BreadcrumbPage>
+                </BreadcrumbItem>
+              </>
+            )}
+          </BreadcrumbList>
+        </Breadcrumb>
+      )
+    }
 
     return (
       <Breadcrumb className="min-w-0">
         <BreadcrumbList>
           <BreadcrumbItem>
-            {leafLabel === null ? (
-              <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
-            ) : (
-              <BreadcrumbLink asChild className={pageClass}>
-                <button
-                  type="button"
-                  onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}
-                >
-                  Agents
-                </button>
-              </BreadcrumbLink>
-            )}
+            <BreadcrumbPage className={pageClass}>
+              {NAV.find(n => n.id === activeSection)?.label}
+            </BreadcrumbPage>
           </BreadcrumbItem>
-          {leafLabel && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage className={cn(pageClass, 'truncate')}>{leafLabel}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </>
-          )}
         </BreadcrumbList>
       </Breadcrumb>
     )
@@ -986,9 +1366,9 @@ export function SettingsModal({
               </Button>
             </div>
 
-            {/* Content: agent detail takes over the full content area to
-                support its sticky footer; everything else lives inside the
-                padded scroll body. */}
+            {/* Content. Detail / picker screens take over the full content
+                area to support sticky footers and custom layouts. Lists and
+                other sections live inside the padded scroll body. */}
             {activeSection === 'agents' && agentsFocus !== null ? (
               <AgentDetail
                 key={agentsFocus.mode === 'edit' ? agentsFocus.id : '__new__'}
@@ -997,6 +1377,18 @@ export function SettingsModal({
                 focus={agentsFocus}
                 onSave={handleSaveAgent}
                 onCancel={() => setAgentsFocus(null)}
+              />
+            ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
+              <ConnectionsPicker
+                onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
+              />
+            ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
+              <ConnectionDetail
+                key={connectionsFocus.mode === 'edit' ? connectionsFocus.id : `__new__${connectionsFocus.kind}`}
+                connections={connections}
+                focus={connectionsFocus}
+                onSave={handleSaveConnection}
+                onCancel={() => setConnectionsFocus(null)}
               />
             ) : (
               <div className="flex-1 overflow-y-auto px-4 py-6">
@@ -1021,7 +1413,19 @@ export function SettingsModal({
                     onToggleEnabled={handleToggleAgentEnabled}
                   />
                 )}
-                {activeSection === 'connections' && <ConnectionsSection />}
+                {activeSection === 'connections' && (
+                  <ConnectionsSection
+                    connections={connections}
+                    search={connectionsSearch}
+                    statusFilter={connectionsStatusFilter}
+                    onSearchChange={setConnectionsSearch}
+                    onStatusFilterChange={setConnectionsStatusFilter}
+                    onFocus={setConnectionsFocusAndReset}
+                    onDeleteConnection={handleDeleteConnection}
+                    onDuplicateConnection={handleDuplicateConnection}
+                    onToggleEnabled={handleToggleConnectionEnabled}
+                  />
+                )}
                 {activeSection === 'preferences' && <PreferencesSection />}
               </div>
             )}
