@@ -28,6 +28,7 @@ import {
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiRun } from '@/store/selectors/runs'
 import { toContextItem } from '@/store/selectors/library'
+import { toArtifactFromFile } from '@/store/selectors/artifacts'
 
 const NEW_CHAT_STUB: Chat = {
   id: '__new__',
@@ -57,12 +58,19 @@ function App() {
   const [selectedChatId, setSelectedChatId]       = useState<string | null>(null)
   const [selectedArtifact, setSelectedArtifact]   = useState<Artifact | null>(null)
   const [artifactTransitionSource, setArtifactTransitionSource] = useState<'compose' | 'chat' | null>(null)
-  // IDs of artifacts that have been explicitly saved to the Desk. All pre-existing mock artifacts start saved.
+  // IDs of artifacts that have been explicitly saved to the Desk. Server-
+  // persisted artifacts from the library are considered saved by default
+  // (they're already on disk). Local compose-session artifacts start
+  // unsaved — the user must explicitly save them via handleSaveArtifact.
   const [savedArtifactIds, setSavedArtifactIds] = useState<Set<string>>(
-    () => new Set(MOCK_ARTIFACTS.map(a => a.id))
+    () => new Set(),
   )
   const [selectedContextItem, setSelectedContextItem] = useState<ContextItem | null>(null)
-  const [artifacts, setArtifacts]                 = useState<Artifact[]>(MOCK_ARTIFACTS)
+  // Local additions from the compose flow (optimistic — the chat's
+  // server-side artifact appears via the library query once it's
+  // persisted). We keep them merged in until the library refetch
+  // catches up.
+  const [localArtifacts, setLocalArtifacts] = useState<Artifact[]>([])
 
   // Server-backed chats for the active workspace. Sidebar + selectors
   // consume the same Chat shape they did with MOCK_CHATS; the mapper
@@ -159,8 +167,10 @@ function App() {
   }, [clearDetailViews])
 
   const handleArtifactAdded = useCallback((artifact: Artifact) => {
-    // Add to the artifact pool but NOT to savedArtifactIds — user must explicitly save to desk
-    setArtifacts(prev => [artifact, ...prev])
+    // Keep compose-generated artifacts locally until the server's
+    // library refetch picks them up. Not added to savedArtifactIds —
+    // user must explicitly save to desk.
+    setLocalArtifacts(prev => [artifact, ...prev])
   }, [])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat') => {
@@ -217,6 +227,26 @@ function App() {
     { skip: !activeWorkspaceId },
   )
   const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
+
+  // Desk grid / chat artifact lookups read from the same library query
+  // (which is where the server persists artifact files). We merge
+  // compose-generated local artifacts on top until the refetch arrives.
+  const artifacts: Artifact[] = [
+    ...localArtifacts,
+    ...(libraryResp?.items ?? []).map(toArtifactFromFile),
+  ]
+
+  // Auto-register server-backed artifacts as "saved to desk" once they
+  // arrive. User-created compose artifacts stay unsaved until the user
+  // explicitly saves them via the detail view.
+  useEffect(() => {
+    if (!libraryResp?.items) return
+    setSavedArtifactIds(prev => {
+      const next = new Set(prev)
+      for (const f of libraryResp.items) next.add(f.path)
+      return next
+    })
+  }, [libraryResp])
   const deskUnreadCount  = MOCK_ARTIFACT_UPDATES.filter(u => !readUpdateIds.has(u.id)).length
 
   const handleDismissUpdate = useCallback((id: string) => {
