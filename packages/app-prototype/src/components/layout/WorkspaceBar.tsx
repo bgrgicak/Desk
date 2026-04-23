@@ -142,8 +142,22 @@ export function WorkspaceBar({
     document.documentElement.classList.toggle('dark', next)
   }
 
-  // Ordered workspaces (drag-to-reorder)
+  // Ordered workspaces (drag-to-reorder). We preserve any client-side
+  // reordering the user has already done, but fold in new server-side
+  // entries + drop removed ones so workspaces created via the API or in
+  // another tab appear without a reload.
   const [orderedWorkspaces, setOrderedWorkspaces] = useState<WorkspaceInfo[]>(workspaces)
+  useEffect(() => {
+    setOrderedWorkspaces(prev => {
+      const byId = new Map(workspaces.map(w => [w.id, w]))
+      const kept = prev
+        .filter(w => byId.has(w.id))
+        .map(w => byId.get(w.id)!)
+      const keptIds = new Set(kept.map(w => w.id))
+      const added = workspaces.filter(w => !keptIds.has(w.id))
+      return [...kept, ...added]
+    })
+  }, [workspaces])
 
   // New / edit workspace modal
   const [createOpen, setCreateOpen] = useState(false)

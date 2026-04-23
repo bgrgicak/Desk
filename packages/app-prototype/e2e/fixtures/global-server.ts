@@ -86,9 +86,16 @@ async function startVite(
       "--logLevel",
       "warn",
     ],
-    { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"], detached: true },
   );
-  preview.stderr?.on("data", (b) => process.stderr.write(`[vite] ${b}`));
+  preview.stderr?.on("data", (b) => process.stderr.write(`[vite-err] ${b}`));
+  preview.stdout?.on("data", (b) => process.stdout.write(`[vite-out] ${b}`));
+  preview.on("exit", (code, signal) =>
+    process.stderr.write(`[vite-exit] code=${code} signal=${signal}\n`),
+  );
+  // Detach from the parent so Playwright's test runner doesn't kill it
+  // when it restarts between tests in fullyParallel=false mode.
+  preview.unref();
   return preview;
 }
 

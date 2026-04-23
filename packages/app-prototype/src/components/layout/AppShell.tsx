@@ -50,6 +50,13 @@ import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './Works
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import type { Chat, Artifact, InboxItem } from '@/data/mock-data'
 import { getArtifactIcon } from '@/data/mock-data'
+import {
+  useGetWorkspacesQuery,
+  useCreateWorkspaceMutation,
+  usePatchWorkspaceMutation,
+  useDeleteWorkspaceMutation,
+} from '@/store/api'
+import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 
 export type View = 'today' | 'desk' | 'runs' | 'chats' | 'context' | 'compose'
 
@@ -60,12 +67,16 @@ const NAV_ITEMS: { view: View; icon: LucideIcon; label: string }[] = [
   { view: 'context', icon: FolderOpen,  label: 'Library' },
 ]
 
-// ── Workspaces with mock unread counts ────────────────────────────────────────
-const INITIAL_WORKSPACES: WorkspaceInfo[] = [
-  { id: 'general',  name: 'General',      description: 'My personal AI workspace for everyday projects and tasks', emoji: '🏡', bg: '#fef3c7', unreadCount: 3 },
-  { id: 'work',     name: 'Work',         description: 'Professional projects, client deliverables and briefs',    emoji: '💼', bg: '#dbeafe', unreadCount: 8 },
-  { id: 'creative', name: 'Creative Lab', description: 'Design experiments, visual ideas and creative projects',   emoji: '🎨', bg: '#fce7f3', unreadCount: 0 },
-]
+// Fallback used only while the /workspaces query is in flight — the real
+// list comes from the server via useGetWorkspacesQuery().
+const LOADING_WORKSPACE: WorkspaceInfo = {
+  id: '__loading__',
+  name: '…',
+  description: '',
+  emoji: '…',
+  bg: '#e5e7eb',
+  unreadCount: 0,
+}
 
 const CHATS_PER_PAGE = 10
 
@@ -140,10 +151,22 @@ export function AppShell({
   const [chatSearchQuery, setChatSearchQuery] = useState('')
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(INITIAL_WORKSPACES)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) ?? workspaces[0]
+  // Server-backed workspaces. The WorkspaceBar/Settings components still
+  // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
+  // — we map in a selector so nothing in the render tree needs to change.
+  const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  const [patchWorkspaceMutation] = usePatchWorkspaceMutation()
+  const [deleteWorkspaceMutation] = useDeleteWorkspaceMutation()
+  // Keep mutations reachable; the `create` modal lives inside WorkspaceBar
+  // and can be wired when we expose it via props. For now mutations below
+  // cover update + delete from the settings modal.
+  const workspaces: WorkspaceInfo[] = (serverWorkspaces ?? []).map(toWorkspaceInfo)
+  const displayWorkspaces = workspaces.length > 0 ? workspaces : [LOADING_WORKSPACE]
+  const activeWorkspace =
+    displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
+
   const allChats        = sortedChats(chats)
   const visibleChats    = allChats.slice(0, chatPage * CHATS_PER_PAGE)
   const hasMore         = allChats.length > visibleChats.length
@@ -153,7 +176,7 @@ export function AppShell({
 
       {/* ── Global workspace bar ── */}
       <WorkspaceBar
-        workspaces={workspaces}
+        workspaces={displayWorkspaces}
         activeWorkspaceId={activeWorkspaceId}
         isGlobalToday={todaySheetOpen}
         todayUnreadCount={unreadCount}
@@ -417,13 +440,19 @@ export function AppShell({
         onOpenChange={setSettingsOpen}
         workspace={activeWorkspace}
         onUpdateWorkspace={updated => {
-          setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w))
+          void patchWorkspaceMutation({
+            id: updated.id,
+            patch: {
+              name: updated.name,
+              description: updated.description,
+              icon: updated.emoji,
+            },
+          })
         }}
         onDeleteWorkspace={() => {
-          setWorkspaces(prev => {
-            const next = prev.filter(w => w.id !== activeWorkspace.id)
+          void deleteWorkspaceMutation(activeWorkspace.id).then(() => {
+            const next = workspaces.filter(w => w.id !== activeWorkspace.id)
             if (next.length > 0) onSelectWorkspace(next[0].id)
-            return next
           })
         }}
       />

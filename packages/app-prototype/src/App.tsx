@@ -20,6 +20,7 @@ import {
   type Chat,
   type ContextItem,
 } from '@/data/mock-data'
+import { useGetWorkspacesQuery } from '@/store/api'
 
 const NEW_CHAT_STUB: Chat = {
   id: '__new__',
@@ -34,8 +35,17 @@ const NEW_CHAT_STUB: Chat = {
 }
 
 function App() {
+  const { data: serverWorkspaces } = useGetWorkspacesQuery()
   const [activeView, setActiveView]               = useState<View>('desk')
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState('general')
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('')
+
+  // Once workspaces arrive, default to the first one. Re-runs only if the
+  // active id isn't present (user deleted it, etc.).
+  useEffect(() => {
+    if (!serverWorkspaces || serverWorkspaces.length === 0) return
+    const exists = serverWorkspaces.some(w => w.id === activeWorkspaceId)
+    if (!exists) setActiveWorkspaceId(serverWorkspaces[0].id)
+  }, [serverWorkspaces, activeWorkspaceId])
   const [selectedChatId, setSelectedChatId]       = useState<string | null>(null)
   const [selectedArtifact, setSelectedArtifact]   = useState<Artifact | null>(null)
   const [artifactTransitionSource, setArtifactTransitionSource] = useState<'compose' | 'chat' | null>(null)
