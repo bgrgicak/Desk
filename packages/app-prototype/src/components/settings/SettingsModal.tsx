@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, Check, ChevronDown,
+  Trash2, Plus, Check, ChevronDown, X,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -436,16 +436,16 @@ export function SettingsModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="p-0 gap-0 sm:max-w-[760px] overflow-hidden"
+        className="p-0 gap-0 sm:max-w-[900px] overflow-hidden"
         showCloseButton={false}
-        style={{ height: '540px' }}
+        style={{ height: '620px' }}
       >
         {/* Hidden title for accessibility */}
         <DialogTitle className="sr-only">Workspace settings</DialogTitle>
 
         <div className="flex h-full">
           {/* Left nav */}
-          <div className="w-48 shrink-0 flex flex-col border-r bg-muted/30">
+          <div className="w-52 shrink-0 flex flex-col border-r bg-muted/30">
             <div className="px-4 pt-5 pb-3">
               {/* Workspace identity */}
               <div className="flex items-center gap-2 mb-4">
@@ -467,9 +467,9 @@ export function SettingsModal({
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
-                  className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors ${
+                  className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
                     activeSection === id
-                      ? 'bg-background text-foreground shadow-xs'
+                      ? 'bg-muted text-foreground font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
                   }`}
                 >
@@ -478,32 +478,41 @@ export function SettingsModal({
                 </button>
               ))}
             </nav>
-
-            {/* Close button at bottom of nav */}
-            <div className="p-3 border-t">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full text-muted-foreground"
-                onClick={() => onOpenChange(false)}
-              >
-                Close
-              </Button>
-            </div>
           </div>
 
           {/* Right content */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {activeSection === 'workspace' && (
-              <WorkspaceSection
-                workspace={workspace}
-                onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
-                onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
-              />
-            )}
-            {activeSection === 'agents' && <AgentsSection />}
-            {activeSection === 'connections' && <ConnectionsSection />}
-            {activeSection === 'preferences' && <PreferencesSection />}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Header: breadcrumbs + close */}
+            <div className="flex items-center justify-between h-12 px-5 border-b shrink-0">
+              <nav className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
+                <span className="text-foreground font-medium truncate">
+                  {NAV.find(n => n.id === activeSection)?.label}
+                </span>
+              </nav>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground"
+                onClick={() => onOpenChange(false)}
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {activeSection === 'workspace' && (
+                <WorkspaceSection
+                  workspace={workspace}
+                  onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
+                  onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
+                />
+              )}
+              {activeSection === 'agents' && <AgentsSection />}
+              {activeSection === 'connections' && <ConnectionsSection />}
+              {activeSection === 'preferences' && <PreferencesSection />}
+            </div>
           </div>
         </div>
       </DialogContent>
