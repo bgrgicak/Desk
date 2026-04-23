@@ -13,9 +13,7 @@
     { "key": "workspaceId", "value": "", "type": "string" },
     { "key": "agentId", "value": "", "type": "string" },
     { "key": "chatId", "value": "", "type": "string" },
-    { "key": "libraryFileId", "value": "", "type": "string" },
-    { "key": "runId", "value": "", "type": "string" },
-    { "key": "jobId", "value": "", "type": "string" }
+    { "key": "libraryPath", "value": "library/readme.txt", "type": "string" }
   ],
   "auth": {
     "type": "bearer",
@@ -467,144 +465,53 @@
         },
         {
           "name": "POST /library",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const body = pm.response.json();",
-                  "if (body && body.id) pm.collectionVariables.set('libraryFileId', body.id);"
-                ]
-              }
-            }
-          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"readme.txt\",\n  \"mime\": \"text/plain\",\n  \"contentBase64\": \"aGVsbG8gbGlicmFyeQ==\"\n}"
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] }
+              ]
             },
             "url": { "raw": "{{baseUrl}}/library", "host": ["{{baseUrl}}"], "path": ["library"] }
           }
         },
         {
-          "name": "GET /library/:id",
+          "name": "GET /library/meta",
           "request": {
             "method": "GET",
+            "description": "Stat a library file by workspace-relative path.",
             "url": {
-              "raw": "{{baseUrl}}/library/{{libraryFileId}}",
+              "raw": "{{baseUrl}}/library/meta?path={{libraryPath}}",
               "host": ["{{baseUrl}}"],
-              "path": ["library", "{{libraryFileId}}"]
+              "path": ["library", "meta"],
+              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
             }
           }
         },
         {
-          "name": "GET /library/:id/download",
+          "name": "GET /library/download",
           "request": {
             "method": "GET",
+            "description": "Stream a library file's bytes.",
             "url": {
-              "raw": "{{baseUrl}}/library/{{libraryFileId}}/download",
+              "raw": "{{baseUrl}}/library/download?path={{libraryPath}}",
               "host": ["{{baseUrl}}"],
-              "path": ["library", "{{libraryFileId}}", "download"]
+              "path": ["library", "download"],
+              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
             }
           }
         },
         {
-          "name": "DELETE /library/:id",
+          "name": "DELETE /library",
           "request": {
             "method": "DELETE",
+            "description": "Moves the file at ?path= to ~/Desk/.trash/.",
             "url": {
-              "raw": "{{baseUrl}}/library/{{libraryFileId}}",
+              "raw": "{{baseUrl}}/library?path={{libraryPath}}",
               "host": ["{{baseUrl}}"],
-              "path": ["library", "{{libraryFileId}}"]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "Runs",
-      "item": [
-        {
-          "name": "GET /runs",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{baseUrl}}/runs", "host": ["{{baseUrl}}"], "path": ["runs"] }
-          }
-        },
-        {
-          "name": "GET /runs/:id",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/runs/{{runId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["runs", "{{runId}}"]
-            }
-          }
-        },
-        {
-          "name": "GET /runs/:id/logs",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/runs/{{runId}}/logs?cursor=0",
-              "host": ["{{baseUrl}}"],
-              "path": ["runs", "{{runId}}", "logs"],
-              "query": [{ "key": "cursor", "value": "0", "description": "Integer log seq to start after" }]
-            }
-          }
-        },
-        {
-          "name": "POST /runs/:id/cancel",
-          "request": {
-            "method": "POST",
-            "url": {
-              "raw": "{{baseUrl}}/runs/{{runId}}/cancel",
-              "host": ["{{baseUrl}}"],
-              "path": ["runs", "{{runId}}", "cancel"]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "Scheduled jobs",
-      "item": [
-        {
-          "name": "POST /scheduled-jobs",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const body = pm.response.json();",
-                  "if (body && body.id) pm.collectionVariables.set('jobId', body.id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"chatId\": \"{{chatId}}\",\n  \"prompt\": \"Summarise today\",\n  \"mode\": \"recurring\",\n  \"spec\": \"0 9 * * *\"\n}"
-            },
-            "url": { "raw": "{{baseUrl}}/scheduled-jobs", "host": ["{{baseUrl}}"], "path": ["scheduled-jobs"] }
-          }
-        },
-        {
-          "name": "DELETE /scheduled-jobs/:id",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/scheduled-jobs/{{jobId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["scheduled-jobs", "{{jobId}}"]
+              "path": ["library"],
+              "query": [{ "key": "path", "value": "{{libraryPath}}" }]
             }
           }
         }
