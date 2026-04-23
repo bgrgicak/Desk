@@ -192,6 +192,81 @@ export const MOCK_AGENTS = [
   { name: 'Copywriter',       model: 'Claude Sonnet 4'  },
 ]
 
+// ─── Providers + configurable agents (Settings → Agents) ───
+
+export type ProviderKind = 'claude' | 'chatgpt' | 'other'
+
+export interface Provider {
+  id: string
+  kind: ProviderKind
+  name: string
+  apiKey: string
+  organizationId?: string
+  baseUrl?: string
+}
+
+export interface SettingsAgent {
+  id: string
+  name: string
+  providerId: string
+  model: string
+  instructions: string
+}
+
+export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {
+  claude: ['Claude Sonnet 4', 'Claude Opus 4', 'Claude Haiku 3.5'],
+  chatgpt: ['GPT-4o', 'GPT-4o mini', 'GPT-4 Turbo'],
+  other: [],
+}
+
+export const PROVIDER_LABELS: Record<ProviderKind, string> = {
+  claude: 'Claude',
+  chatgpt: 'ChatGPT',
+  other: 'Other',
+}
+
+export const MOCK_PROVIDERS: Provider[] = [
+  {
+    id: 'prov-claude',
+    kind: 'claude',
+    name: 'Claude',
+    apiKey: 'sk-ant-••••••••••••••••••••••••1f4a',
+    baseUrl: 'https://api.anthropic.com',
+  },
+  {
+    id: 'prov-chatgpt',
+    kind: 'chatgpt',
+    name: 'ChatGPT',
+    apiKey: 'sk-••••••••••••••••••••••••••••••••f3c2',
+    organizationId: 'org-acme',
+    baseUrl: 'https://api.openai.com/v1',
+  },
+]
+
+export const MOCK_SETTINGS_AGENTS: SettingsAgent[] = [
+  {
+    id: 'sa-summariser',
+    name: 'Summariser',
+    providerId: 'prov-claude',
+    model: 'Claude Haiku 3.5',
+    instructions: 'Summarise any input into three crisp bullet points. No fluff, no preamble.',
+  },
+  {
+    id: 'sa-research-pro',
+    name: 'Research Pro',
+    providerId: 'prov-chatgpt',
+    model: 'GPT-4o',
+    instructions: 'Do deep, source-backed research. Prefer primary sources and cite everything with links.',
+  },
+  {
+    id: 'sa-copywriter',
+    name: 'Copywriter',
+    providerId: 'prov-claude',
+    model: 'Claude Sonnet 4',
+    instructions: 'Write punchy, on-brand marketing copy. Warm, direct, never corporate.',
+  },
+]
+
 // ─── Mock Artifacts ───
 
 export const MOCK_ARTIFACTS: Artifact[] = [
