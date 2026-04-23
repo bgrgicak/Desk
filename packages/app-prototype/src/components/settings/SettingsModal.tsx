@@ -13,7 +13,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { MOCK_AGENTS } from '@/data/mock-data'
+import { useGetAgentsQuery, usePatchAgentMutation } from '@/store/api'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
 // ── Color + emoji options (mirrored from WorkspaceBar) ──────────────────────
@@ -205,24 +205,32 @@ function WorkspaceSection({
 // ── Agent row ────────────────────────────────────────────────────────────────
 
 interface AgentConfig {
+  id: string
   name: string
   model: string
   enabled: boolean
 }
 
 function AgentsSection() {
-  const [agents, setAgents] = useState<AgentConfig[]>(
-    MOCK_AGENTS.map(a => ({ ...a, enabled: true }))
-  )
+  const { data: serverAgents } = useGetAgentsQuery()
+  const [patchAgent] = usePatchAgentMutation()
+  const agents: AgentConfig[] = (serverAgents ?? []).map(a => ({
+    id: a.id,
+    name: a.name,
+    model: a.model,
+    enabled: true,
+  }))
   const [modelPickerOpen, setModelPickerOpen] = useState<string | null>(null)
 
   const MODELS = ['Claude Opus 4', 'Claude Sonnet 4', 'Claude Haiku 3.5', 'GPT-4o', 'GPT-4o mini']
 
-  const toggle = (name: string) =>
-    setAgents(prev => prev.map(a => a.name === name ? { ...a, enabled: !a.enabled } : a))
+  const toggle = (_name: string) => {
+    // TODO(api-gap): server has no "enabled" field on agents; wire once
+    // workspace_agents exposes it (matrix §4).
+  }
 
-  const setModel = (name: string, model: string) => {
-    setAgents(prev => prev.map(a => a.name === name ? { ...a, model } : a))
+  const setModel = (agent: AgentConfig, model: string) => {
+    void patchAgent({ id: agent.id, patch: { model } })
     setModelPickerOpen(null)
   }
 
@@ -261,7 +269,7 @@ function AgentsSection() {
                   {MODELS.map(m => (
                     <button
                       key={m}
-                      onClick={() => setModel(agent.name, m)}
+                      onClick={() => setModel(agent, m)}
                       className="flex items-center gap-2 w-full px-2.5 py-1.5 text-sm rounded-md hover:bg-muted/60 transition-colors text-left"
                     >
                       {m === agent.model && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
