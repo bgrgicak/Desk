@@ -39,7 +39,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import { SettingsModal } from '@/components/settings/SettingsModal'
 import type { View } from './AppShell'
 
 // ── Logo ──────────────────────────────────────────────────────────────────────
@@ -118,7 +117,6 @@ export function WorkspaceBar({
 }: WorkspaceBarProps) {
   // Command palette
   const [commandOpen, setCommandOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Dark mode
   const [isDark, setIsDark] = useState(false)
@@ -311,9 +309,7 @@ export function WorkspaceBar({
               <DropdownMenuSeparator />
               <DropdownMenuItem><User className="h-4 w-4" />My account</DropdownMenuItem>
               <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
-                <Settings2 className="h-4 w-4" />Preferences
-              </DropdownMenuItem>
+              <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-muted-foreground">
                 <LogOut className="h-4 w-4" />Sign out
@@ -458,9 +454,6 @@ export function WorkspaceBar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* ── Settings modal ── */}
-      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
     </>
   )
 }

@@ -47,6 +47,7 @@ import {
   CommandSeparator,
 } from '@/components/ui/command'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
+import { SettingsModal } from '@/components/settings/SettingsModal'
 import type { Chat, Artifact, InboxItem } from '@/data/mock-data'
 import { getArtifactIcon } from '@/data/mock-data'
 
@@ -60,7 +61,7 @@ const NAV_ITEMS: { view: View; icon: LucideIcon; label: string }[] = [
 ]
 
 // ── Workspaces with mock unread counts ────────────────────────────────────────
-export const WORKSPACES: WorkspaceInfo[] = [
+const INITIAL_WORKSPACES: WorkspaceInfo[] = [
   { id: 'general',  name: 'General',      description: 'My personal AI workspace for everyday projects and tasks', emoji: '🏡', bg: '#fef3c7', unreadCount: 3 },
   { id: 'work',     name: 'Work',         description: 'Professional projects, client deliverables and briefs',    emoji: '💼', bg: '#dbeafe', unreadCount: 8 },
   { id: 'creative', name: 'Creative Lab', description: 'Design experiments, visual ideas and creative projects',   emoji: '🎨', bg: '#fce7f3', unreadCount: 0 },
@@ -139,8 +140,10 @@ export function AppShell({
   const [chatSearchQuery, setChatSearchQuery] = useState('')
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(INITIAL_WORKSPACES)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const activeWorkspace = WORKSPACES.find(w => w.id === activeWorkspaceId) ?? WORKSPACES[0]
+  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) ?? workspaces[0]
   const allChats        = sortedChats(chats)
   const visibleChats    = allChats.slice(0, chatPage * CHATS_PER_PAGE)
   const hasMore         = allChats.length > visibleChats.length
@@ -150,7 +153,7 @@ export function AppShell({
 
       {/* ── Global workspace bar ── */}
       <WorkspaceBar
-        workspaces={WORKSPACES}
+        workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}
         isGlobalToday={todaySheetOpen}
         todayUnreadCount={unreadCount}
@@ -359,7 +362,7 @@ export function AppShell({
             <div className="absolute -top-12 inset-x-0 h-12 bg-gradient-to-b from-sidebar/0 to-sidebar pointer-events-none" />
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton>
+                <SidebarMenuButton onClick={() => setSettingsOpen(true)}>
                   <SlidersHorizontal className="h-4 w-4" />
                   <span>Customize</span>
                 </SidebarMenuButton>
@@ -407,6 +410,23 @@ export function AppShell({
 
       </div>{/* end card inner */}
       </div>{/* end card outer */}
+
+      {/* ── Workspace settings modal ── */}
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        workspace={activeWorkspace}
+        onUpdateWorkspace={updated => {
+          setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w))
+        }}
+        onDeleteWorkspace={() => {
+          setWorkspaces(prev => {
+            const next = prev.filter(w => w.id !== activeWorkspace.id)
+            if (next.length > 0) onSelectWorkspace(next[0].id)
+            return next
+          })
+        }}
+      />
 
       {/* ── Chat search command palette ── */}
       <CommandDialog
