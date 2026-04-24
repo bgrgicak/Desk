@@ -45,7 +45,7 @@ export interface RunManagerOptions {
  * The token is read fresh from disk at fire time via $(cat ...) so
  * rotations don't invalidate scheduled entries (reconcile regenerates).
  */
-function buildMessageFireCmd(messageId: string): string {
+export function buildMessageFireCmd(messageId: string): string {
   const tokenPath = process.env.DESK_INTERNAL_TOKEN_PATH ?? "/etc/desk-server/internal-token";
   const port = process.env.DESK_API_PORT ?? process.env.PORT ?? "8080";
   const url = `http://127.0.0.1:${port}/internal/messages/fire`;

@@ -138,7 +138,7 @@ describe.skipIf(!bothAvailable)("reconcile after real process restart (messages-
     }
   });
 
-  it("cancels pending messages whose scheduler_ref was lost; cleans orphan at entries", async () => {
+  it("reinstalls at-entry when scheduler_ref was lost; cleans orphan at entries", async () => {
     // --- Process A: create a pending message + matching at entry ---
     const poolA = new pg.Pool({ connectionString: testUrl });
     const adapterA = createAdapter();
@@ -167,8 +167,17 @@ describe.skipIf(!bothAvailable)("reconcile after real process restart (messages-
 
     await reconcile(poolB, adapterB);
 
+    // Missing entry is repaired: message stays pending with a fresh ref,
+    // and the new at-entry exists on the system.
     const msg = await queries.messages.findById(poolB, messageId);
-    expect(msg?.state).toBe("cancelled");
+    expect(msg?.state).toBe("pending");
+    expect(msg?.schedulerRef?.kind).toBe("at");
+    expect(msg?.schedulerRef?.id).not.toBe(atId);
+    const ats = await adapterB.listAt();
+    const reinstalled = ats.find((j) => j.id === msg?.schedulerRef?.id);
+    expect(reinstalled).toBeDefined();
+    // Clean up the reinstalled entry so it doesn't outlive the test.
+    try { await adapterB.removeAt(msg!.schedulerRef!.id); } catch { /* ok */ }
 
     // --- Orphan cleanup: schedule an at entry that no message references ---
     const orphanAtId = await adapterB.scheduleAt("echo desk-orphan", "now + 60 minutes");

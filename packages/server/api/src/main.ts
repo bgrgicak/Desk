@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import { ensureLayout, enforceLogRetention, reconcileArtifactRefs } from "@desk/storage";
-import { createRunManager, createAdapter, reconcile } from "@desk/scheduler";
+import { createRunManager, createAdapter, reconcile, sweepStaleRuns } from "@desk/scheduler";
 import { createApp } from "./app.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@desk/shared";
@@ -67,16 +67,33 @@ async function main(): Promise<void> {
 
   const adapter = createAdapter();
 
-  // Cancel pending messages whose at/cron entry vanished while the server
-  // was down, and garbage-collect scheduler entries nothing references.
-  // Without this, a lost at-job leaves the message stuck in `pending` with
-  // a past execute_at, which the UI renders as "Scheduled for …".
+  // Repair drift between pending messages and the at/cron daemons:
+  // reinstall missing entries, fire overdue at-jobs immediately, and
+  // garbage-collect orphan scheduler entries. Without this, a lost or
+  // missed at-job leaves the message stuck in `pending` with a past
+  // execute_at, which the UI renders as "Overdue since …".
   try {
     await reconcile(pool, adapter);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("scheduler reconcile failed:", err);
   }
+
+  // Periodic sweep for runs that go stale while the server is up — e.g.
+  // an at-job the daemon silently dropped, or a message whose executeAt
+  // has passed without a fire. sweepStaleRuns is the same repair logic
+  // reconcile runs at boot, minus the orphan GC (which is boot-only).
+  const SWEEP_INTERVAL_MS = parseInt(
+    process.env.DESK_SCHEDULER_SWEEP_INTERVAL_MS ?? "300000",
+    10,
+  );
+  const sweepTimer = setInterval(() => {
+    void sweepStaleRuns(pool, adapter).catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error("scheduler sweep failed:", err);
+    });
+  }, SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
 
   const runManager = createRunManager({
     pool,
