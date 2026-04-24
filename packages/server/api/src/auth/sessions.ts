@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 
 const TOKEN_PREFIX = "ses_";
 const TOKEN_BYTES = 32;
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface SessionEntry {
   userId: string;
@@ -31,7 +32,12 @@ export function revokeSession(token: string): boolean {
 export function verifySession(token: string): string | null {
   const hash = hashToken(token);
   const entry = sessions.get(hash);
-  return entry ? entry.userId : null;
+  if (!entry) return null;
+  if (Date.now() - entry.issuedAt > SESSION_TTL_MS) {
+    sessions.delete(hash);
+    return null;
+  }
+  return entry.userId;
 }
 
 /** Clears all sessions. For testing. */
