@@ -15,21 +15,24 @@ afterAll(async () => {
 });
 
 describe("ensureLayout", () => {
-  it("creates the workspace directory tree", async () => {
+  it("creates the workspace root and the hidden .chats subtree", async () => {
     await ensureLayout(home);
 
     const root = path.join(home, "Desk", "workspaces", "desk");
     const stat = await fs.stat(root);
     expect(stat.isDirectory()).toBe(true);
 
-    for (const dir of ["files", "chats", "library"]) {
-      const s = await fs.stat(path.join(root, dir));
-      expect(s.isDirectory()).toBe(true);
-    }
+    // The only pre-created subtree is the hidden chat conversation root.
+    // User-visible folders live directly at the workspace root and are
+    // created on-demand.
+    const chatsStat = await fs.stat(path.join(root, ".chats"));
+    expect(chatsStat.isDirectory()).toBe(true);
 
-    // .tmp dir exists
+    // .tmp and .trash exist outside the workspace (they're global).
     const tmpStat = await fs.stat(path.join(home, "Desk", ".tmp"));
     expect(tmpStat.isDirectory()).toBe(true);
+    const trashStat = await fs.stat(path.join(home, "Desk", ".trash"));
+    expect(trashStat.isDirectory()).toBe(true);
   });
 
   it("is idempotent", async () => {

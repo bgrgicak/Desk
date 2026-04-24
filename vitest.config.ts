@@ -22,7 +22,7 @@ export default defineConfig({
       "**/node_modules/**",
       "**/dist/**",
       "**/test/e2e/**",
-      "packages/app/**",
+      "packages/app-prototype/e2e/**",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,

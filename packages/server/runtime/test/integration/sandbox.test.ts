@@ -7,9 +7,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, workspaceRootPath } from "@desk/storage";
 import { createOrReuse, stopSandbox, ensureImage, dockerSocketPath } from "../../src/docker.js";
-import { projectMounts, teardownMounts, sandboxMountRoot } from "../../src/mounts.js";
+import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
 
 function dockerAvailable(): boolean {
   try {
@@ -67,7 +67,7 @@ describeIf("sandbox integration", () => {
     expect(h1.containerId).toBe(h2.containerId);
   });
 
-  it("projectMounts creates staging dirs visible on host", async () => {
+  it("projectMounts resolves the workspace root that gets bind-mounted at $HOME", async () => {
     const handle = await createOrReuse(testWorkspaceId, home);
     const mounts = await projectMounts(handle, {
       home,
@@ -75,13 +75,14 @@ describeIf("sandbox integration", () => {
       runId: "run_int_1",
     });
 
-    expect(mounts.files).toBeTruthy();
-    expect(mounts.desktop).toBeTruthy();
+    expect(mounts.workspace).toBe(workspaceRootPath(home));
 
-    // The staging dir should exist on disk
-    const root = sandboxMountRoot(home, testWorkspaceId);
-    const stat = await fs.stat(path.join(root, "desktop"));
+    // The workspace root should exist on disk
+    const stat = await fs.stat(mounts.workspace);
     expect(stat.isDirectory()).toBe(true);
+
+    // And it's what gets mounted at /home/agent inside the sandbox
+    expect(SANDBOX_HOME).toBe("/home/agent");
 
     await teardownMounts(handle, "run_int_1");
   });

@@ -8,7 +8,7 @@ function workspaceRoot(home: string): string {
   return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG);
 }
 
-/** Absolute path to the global trash directory. Not mounted into sandboxes. */
+/** Absolute path to the global trash directory. Sits outside the workspace so the agent can't see it. */
 export function trashDir(home: string): string {
   return path.join(home, "Desk", ".trash");
 }
@@ -23,12 +23,15 @@ function validateId(id: string, prefix: string): void {
 /**
  * Ensures the workspace directory tree + trash directory exist.
  * Idempotent — safe to call on every boot.
+ *
+ * Under the workspace-as-home model the workspace root itself is the
+ * library; user files live at this root. Hidden (dot-prefixed) subdirs
+ * hold conversation state, agent config, and any other app infrastructure.
  */
 export async function ensureLayout(home: string): Promise<void> {
   const root = workspaceRoot(home);
-  await fs.mkdir(path.join(root, "files"), { recursive: true });
-  await fs.mkdir(path.join(root, "chats"), { recursive: true });
-  await fs.mkdir(path.join(root, "library"), { recursive: true });
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(path.join(root, ".chats"), { recursive: true });
   await fs.mkdir(path.join(home, "Desk", ".tmp"), { recursive: true });
   await fs.mkdir(trashDir(home), { recursive: true });
 }
@@ -39,41 +42,22 @@ export function workspaceDir(_workspaceId: string): string {
   return "";
 }
 
-/** Returns the absolute path to the workspace files directory. */
-export function filesDir(home: string): string {
-  return path.join(workspaceRoot(home), "files");
-}
-
 /**
  * Returns the absolute path to the chats root directory. Contains one
- * subdirectory per chat, each with its own `attachments/` inside.
+ * subdirectory per chat, each with `attachments/`, `logs/`, and
+ * `note-history/` inside. Hidden from user file listings via the
+ * leading-dot convention.
  */
 export function chatsDir(home: string): string {
-  return path.join(workspaceRoot(home), "chats");
+  return path.join(workspaceRoot(home), ".chats");
 }
 
 /** Returns the absolute path to a chat's attachments directory. Creates it lazily. */
 export async function chatAttachmentsDir(home: string, chatId: string): Promise<string> {
   validateId(chatId, ID_PREFIXES.chat);
-  const dir = path.join(workspaceRoot(home), "chats", chatId, "attachments");
+  const dir = path.join(workspaceRoot(home), ".chats", chatId, "attachments");
   await fs.mkdir(dir, { recursive: true });
   return dir;
-}
-
-/** Returns the absolute path to the shared library root (contains per-workspace subdirs). */
-export function libraryDir(home: string): string {
-  return path.join(workspaceRoot(home), "library");
-}
-
-/**
- * Returns the absolute path to a workspace's library subdirectory. Each
- * workspace owns a subtree under `library/` keyed by workspaceId so that
- * GET/POST/DELETE /library?workspaceId=... can filter by real on-disk
- * scope, not a DB column.
- */
-export function workspaceLibraryDir(home: string, workspaceId: string): string {
-  validateId(workspaceId, ID_PREFIXES.workspace);
-  return path.join(libraryDir(home), workspaceId);
 }
 
 /** Returns the temp directory for in-progress uploads. */

@@ -1,107 +1,81 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
-import { filesDir, libraryDir, chatsDir, chatAttachmentsDir } from "@desk/storage";
+import { chatAttachmentsDir, tmpDir, workspaceRootPath } from "@desk/storage";
 
 /**
- * Mount model for the sandbox (matches v1 spec §@desk/runtime):
+ * Mount model (workspace-as-home):
  *
- *   /mnt/desk/files        ← ro bind of the workspace files dir
- *   /mnt/desk/library      ← ro bind of the library dir
- *   /mnt/desk/chats        ← ro bind of the chats tree (each chat has
- *                             attachments/ under its chatId)
- *   /mnt/desk/desktop      ← rw per-sandbox scratch dir
+ *   host: ~/Desk/workspaces/desk/   →   sandbox: /home/agent/   (rw)
  *
- * The ro binds are attached once at container create time (binds are immutable
- * on running containers), and they stay live-synced with the host because
- * bind-mounts reflect the host filesystem in real time — a file uploaded via
- * the API appears inside the container immediately.
+ * The workspace root *is* the agent's home directory inside the sandbox.
+ * User-visible files live at the root; dot-prefixed entries (`.chats/`,
+ * `.opencode/`, `.bashrc`, etc.) are hidden from the user's file-manager
+ * view by the universal dotfile convention — every listing/search API
+ * skips them unless `showHidden` is set.
  *
  * `projectMounts` is still called per run to:
- *   - resolve the per-run MountSet (current chat's attachments path inside the
- *     container) so the agent knows where to look,
- *   - record a manifest on disk so the bridge between "which run" and "which
- *     chat" is observable,
- *   - bump a per-sandbox active-run counter that `teardownMounts` decrements.
- *
- * It does NOT create staging subdirs anymore — that was the previous design
- * that never populated them and left /mnt/desk/* empty inside the container.
+ *   - resolve the current chat's attachments path inside the container so
+ *     the agent knows where to look,
+ *   - record a manifest on disk (operator debugging: "which run saw which
+ *     chat"),
+ *   - track active runs for a lightweight teardown counter.
  */
+
+export const SANDBOX_HOME = "/home/agent";
 
 const activeMounts = new Map<string, Map<string, MountSet>>();
 
 export interface MountSet {
-  /** Host path of the files dir (also what the container sees at /mnt/desk/files). */
-  files: string;
-  /** Host path of the library dir. */
-  library: string;
-  /** Host path of the per-sandbox desktop scratch dir. */
-  desktop: string;
+  /** Host path of the workspace root (mounted at /home/agent inside the sandbox). */
+  workspace: string;
   /** Host path of the current chat's attachments dir, if this run is chat-scoped. */
   attachments?: string;
   /** Path inside the container where the current chat's attachments live. */
   attachmentsInSandbox?: string;
 }
 
-/** Host path of the per-sandbox mount root. Keyed by workspace. */
-export function sandboxMountRoot(home: string, workspaceId: string): string {
-  return path.join(home, "sandbox-mounts", workspaceId);
-}
-
-/** Host path of a sandbox's desktop scratch dir. */
-export function desktopDir(home: string, workspaceId: string): string {
-  return path.join(sandboxMountRoot(home, workspaceId), "desktop");
-}
-
 /**
- * Records the current-run → current-chat mapping, ensures the real source
- * dirs exist (so the bind-mount shows non-empty content), and writes a
+ * Records the current-run → current-chat mapping, ensures the workspace
+ * root exists (so the bind-mount has something to show), and writes a
  * manifest for debugging. Returns the MountSet the driver can pass to
  * OpenCode via the system prompt / chat context.
+ *
+ * The manifest lives in `~/Desk/.tmp/manifests/`, outside the workspace,
+ * so it isn't visible to the agent and doesn't pollute the user's library.
  */
 export async function projectMounts(
   handle: SandboxHandle,
   opts: { home: string; workspaceId: string; chatId?: string; runId: string },
 ): Promise<MountSet> {
-  const fHost = filesDir(opts.home);
-  const lHost = libraryDir(opts.home);
-  const dHost = desktopDir(opts.home, handle.workspaceId);
-
-  // Ensure every real source dir exists so the bind-mount has something to
-  // show (an empty parent dir is fine; Docker is happy).
-  await fs.mkdir(fHost, { recursive: true });
-  await fs.mkdir(lHost, { recursive: true });
-  await fs.mkdir(dHost, { recursive: true });
+  const wsRoot = workspaceRootPath(opts.home);
+  await fs.mkdir(wsRoot, { recursive: true });
 
   const mountSet: MountSet = {
-    files: fHost,
-    library: lHost,
-    desktop: dHost,
+    workspace: wsRoot,
   };
 
   if (opts.chatId) {
     const aHost = await chatAttachmentsDir(opts.home, opts.chatId);
     mountSet.attachments = aHost;
-    // The bind-mount exposes the whole chats tree, so a specific chat's
-    // attachments appear at this path inside the container.
-    mountSet.attachmentsInSandbox = `/mnt/desk/chats/${opts.chatId}/attachments`;
+    // The workspace is bind-mounted at /home/agent, so the chat's attachments
+    // surface at this path inside the container.
+    mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
   }
 
-  // Manifest for operator debugging: "which run saw which chat".
   const manifest = {
     runId: opts.runId,
     chatId: opts.chatId ?? null,
     host: mountSet,
     inSandbox: {
-      files: "/mnt/desk/files",
-      library: "/mnt/desk/library",
-      desktop: "/mnt/desk/desktop",
+      home: SANDBOX_HOME,
       attachments: mountSet.attachmentsInSandbox ?? null,
     },
   };
-  await fs.mkdir(sandboxMountRoot(opts.home, handle.workspaceId), { recursive: true });
+  const manifestRoot = path.join(tmpDir(opts.home), "manifests");
+  await fs.mkdir(manifestRoot, { recursive: true });
   await fs.writeFile(
-    path.join(sandboxMountRoot(opts.home, handle.workspaceId), `manifest-${opts.runId}.json`),
+    path.join(manifestRoot, `manifest-${opts.runId}.json`),
     JSON.stringify(manifest, null, 2),
   );
 
@@ -113,7 +87,7 @@ export async function projectMounts(
   return mountSet;
 }
 
-/** Drops the per-run tracking entry. The real bind-mounts persist (set at container create). */
+/** Drops the per-run tracking entry. The real bind-mount persists (set at container create). */
 export async function teardownMounts(
   handle: SandboxHandle,
   runId: string,
@@ -147,23 +121,24 @@ export interface MountPlanEntry {
    * user-attached directories (e.g. ~/Projects/foo) that live outside the
    * Desk-managed tree.
    */
-  category: "workspace" | "chat" | "external" | "desktop";
+  category: "workspace" | "external";
 }
 
 export type MountPlan = MountPlanEntry[];
 
 /**
- * Default mount plan — equivalent to the pre-G5 hardcoded binds:
- *   files/library/chats read-only, desktop read-write.
- * Custom plans can be built by callers that need to expose additional
- * directories (e.g. ~/Projects) or narrow the default surface.
+ * Default mount plan — one rw bind of the workspace root onto the
+ * container's $HOME. Custom plans can be built by callers that need to
+ * expose additional directories (e.g. ~/Projects) alongside.
  */
-export function buildDefaultMountPlan(home: string, workspaceId: string): MountPlan {
+export function buildDefaultMountPlan(home: string, _workspaceId?: string): MountPlan {
   return [
-    { sourcePath: filesDir(home), targetPath: "/mnt/desk/files", mode: "ro", category: "workspace" },
-    { sourcePath: libraryDir(home), targetPath: "/mnt/desk/library", mode: "ro", category: "workspace" },
-    { sourcePath: chatsDir(home), targetPath: "/mnt/desk/chats", mode: "ro", category: "chat" },
-    { sourcePath: desktopDir(home, workspaceId), targetPath: "/mnt/desk/desktop", mode: "rw", category: "desktop" },
+    {
+      sourcePath: workspaceRootPath(home),
+      targetPath: SANDBOX_HOME,
+      mode: "rw",
+      category: "workspace",
+    },
   ];
 }
 
@@ -184,6 +159,6 @@ export function bindsFromPlan(plan: MountPlan): string[] {
  * Legacy default bind list (kept for callers that haven't moved to a
  * MountPlan yet). Equivalent to `bindsFromPlan(buildDefaultMountPlan(...))`.
  */
-export function containerBinds(home: string, workspaceId: string): string[] {
+export function containerBinds(home: string, workspaceId?: string): string[] {
   return bindsFromPlan(buildDefaultMountPlan(home, workspaceId));
 }

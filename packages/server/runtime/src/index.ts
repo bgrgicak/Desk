@@ -5,9 +5,9 @@ export {
   teardownMounts,
   activeRunCount,
   containerBinds,
-  sandboxMountRoot,
   buildDefaultMountPlan,
   bindsFromPlan,
+  SANDBOX_HOME,
 } from "./mounts.js";
 export type { MountSet, MountPlan, MountPlanEntry } from "./mounts.js";
 export { execRun, cancelRun } from "./opencode.js";

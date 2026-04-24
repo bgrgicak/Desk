@@ -52,7 +52,12 @@ afterAll(async () => {
 
 describeIf("opencode end-to-end", () => {
   it("execRun streams log events from a real OpenCode invocation", async () => {
-    const handle = await createOrReuse(testAgentId, home);
+    // Scope the container's provider env to Anthropic only. If OPENAI_API_KEY
+    // leaks in from the host env, opencode's auto-detection picks an OpenAI
+    // default (e.g. gpt-5.3-chat-latest) that the project may not have access
+    // to, and the run fails before any model output is produced.
+    const providerKeys = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "" };
+    const handle = await createOrReuse(testAgentId, home, providerKeys);
     const driver = createDriver();
     const logs: LogEvent[] = [];
 
@@ -60,6 +65,7 @@ describeIf("opencode end-to-end", () => {
       runId: "run_ai_test_1",
       prompt: "Say exactly: HELLO_DESK_TEST",
       onLog: (evt) => logs.push(evt),
+      providerKeys,
     });
 
     expect(result.exitCode).toBe(0);

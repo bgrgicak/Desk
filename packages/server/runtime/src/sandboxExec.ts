@@ -58,7 +58,7 @@ export async function execInSandbox(
 
   const exec = await container.exec({
     Cmd: opts.argv,
-    User: opts.user ?? "agent",
+    ...(opts.user ? { User: opts.user } : {}),
     Env: opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined,
     AttachStdout: true,
     AttachStderr: true,

@@ -22,6 +22,45 @@ export function noteHistoryDir(home: string, chatId: string): string {
   return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG, ".chats", chatId, "note-history");
 }
 
+/** Absolute path to a chat's current-notes directory. Files here mirror
+ * the latest body of each `note`-content message in the chat so the agent
+ * can read them with ordinary file tools. */
+export function notesDir(home: string, chatId: string): string {
+  validateChatId(chatId);
+  return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG, ".chats", chatId, "notes");
+}
+
+/**
+ * Writes the supplied note body to `{notesDir}/{messageId}.md`. Called
+ * whenever a `note`-content message is inserted or its body is patched,
+ * so the filesystem copy agents see stays in sync with the DB row.
+ * Overwrites any prior file for the same message id.
+ */
+export async function materializeNote(
+  home: string,
+  chatId: string,
+  messageId: string,
+  body: string,
+): Promise<string> {
+  validateMessageId(messageId);
+  const dir = notesDir(home, chatId);
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${messageId}.md`);
+  await fs.writeFile(file, body, "utf-8");
+  return file;
+}
+
+/** Removes a materialized note file. Best-effort — missing file is OK. */
+export async function deleteMaterializedNote(
+  home: string,
+  chatId: string,
+  messageId: string,
+): Promise<void> {
+  validateMessageId(messageId);
+  const file = path.join(notesDir(home, chatId), `${messageId}.md`);
+  await fs.rm(file, { force: true });
+}
+
 /**
  * Writes the supplied previous note body as a history snapshot. Filename
  * format: `{iso-utc}-{messageId}.md`, so sort order = reverse chronological

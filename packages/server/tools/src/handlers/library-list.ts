@@ -4,10 +4,11 @@ import type { File } from "@desk/shared";
 
 export async function handleLibraryList(
   ctx: HandlerContext,
-  req: { workspaceId: string; cursor?: string; limit?: number },
+  req: { workspaceId: string; cursor?: string; limit?: number; showHidden?: boolean },
 ): Promise<{ items: File[]; nextCursor?: string }> {
   return listLibrary(ctx.storage, req.workspaceId, {
     cursor: req.cursor,
     limit: req.limit,
+    showHidden: req.showHidden,
   });
 }

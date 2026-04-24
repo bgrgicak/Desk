@@ -41,7 +41,8 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
       stream: makeStream("library content"),
     });
 
-    expect(file.path).toMatch(/^library\//);
+    // Workspace root is the library — file lands directly at the root.
+    expect(file.path).toBe("report.md");
     expect(file.name).toBe("report.md");
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
@@ -60,7 +61,18 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
       stream: makeStream("fake-png-data"),
     });
 
-    expect(file.path).toContain(`chats/${ctx.chatId}/attachments/`);
+    expect(file.path).toContain(`.chats/${ctx.chatId}/attachments/`);
+  });
+
+  it("rejects user uploads whose name starts with a dot (reserved for agent artifacts)", async () => {
+    await expect(
+      uploadArtifact(ctx, {
+        workspaceId: ctx.workspaceId,
+        name: ".hidden.md",
+        mime: "text/markdown",
+        stream: makeStream("nope"),
+      }),
+    ).rejects.toThrow(ValidationError);
   });
 
   it("avoids collisions by suffixing -1, -2, ...", async () => {
@@ -140,7 +152,7 @@ describe("readFile / downloadFile / statFile", () => {
   });
 
   it("throws NotFoundError for an unknown path", async () => {
-    await expect(readFile(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(readFile(ctx, "does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -173,7 +185,7 @@ describe("deleteFile (moves to trash)", () => {
   });
 
   it("throws NotFoundError for unknown path", async () => {
-    await expect(deleteFile(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(deleteFile(ctx, "does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -186,7 +198,7 @@ describe("moveFile (symlink-on-move)", () => {
       stream: makeStream("follow me"),
     });
 
-    const newRel = `library/moved-${Date.now()}.txt`;
+    const newRel = `moved-${Date.now()}.txt`;
     const moved = await moveFile(ctx, uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
@@ -215,6 +227,6 @@ describe("resolveForSandbox", () => {
   });
 
   it("throws NotFoundError for unknown path", async () => {
-    await expect(resolveForSandbox(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(resolveForSandbox(ctx, "does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });

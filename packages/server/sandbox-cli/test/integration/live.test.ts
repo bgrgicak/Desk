@@ -54,10 +54,7 @@ describe.skipIf(!canRun)("integration: live CLI", () => {
           responseBody = { content: "file-content", mime: "text/plain" };
         } else if (url === "/tools/file.write") {
           responseBody = {
-            id: "f_1",
-            workspaceId: "ws_1",
-            class: "artifact",
-            path: "/test.txt",
+            path: "artifacts/test.txt",
             name: "test.txt",
             mime: "text/plain",
             size: 5,
@@ -110,7 +107,7 @@ describe.skipIf(!canRun)("integration: live CLI", () => {
   };
 
   it("file read sends correct request", async () => {
-    const { stdout } = await runCli(["file", "read", "f_x"]);
+    const { stdout } = await runCli(["file", "read", "notes/hello.md"]);
 
     expect(lastRequest.method).toBe("POST");
     expect(lastRequest.url).toBe("/tools/file.read");
@@ -118,7 +115,7 @@ describe.skipIf(!canRun)("integration: live CLI", () => {
     expect(lastRequest.headers["content-type"]).toBe("application/json");
 
     const reqBody = JSON.parse(lastRequest.body);
-    expect(reqBody).toEqual({ fileId: "f_x" });
+    expect(reqBody).toEqual({ path: "notes/hello.md" });
 
     const resBody = JSON.parse(stdout);
     expect(resBody.content).toBe("file-content");
@@ -136,7 +133,7 @@ describe.skipIf(!canRun)("integration: live CLI", () => {
     expect(reqBody.workspaceId).toBe("ws_1");
 
     const resBody = JSON.parse(stdout);
-    expect(resBody.id).toBe("f_1");
+    expect(resBody.path).toBe("artifacts/test.txt");
   });
 });
 

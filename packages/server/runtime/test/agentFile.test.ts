@@ -20,10 +20,13 @@ describe("renderAgentFile", () => {
     // Identity framing
     expect(result).toContain("You are Jarvis, a coworker of Bero.");
 
-    // File access docs
-    expect(result).toContain("/mnt/desk/files");
-    expect(result).toContain("/mnt/desk/library");
-    expect(result).toContain("/mnt/desk/desktop");
+    // Workspace-as-home framing
+    expect(result).toContain("~/ is your workspace");
+    // Dotfile visibility rule
+    expect(result).toContain("foo.md");
+    expect(result).toContain(".foo.md");
+    // Per-chat workbench
+    expect(result).toContain("~/.chats/");
 
     // User instructions
     expect(result).toContain("## User instructions");

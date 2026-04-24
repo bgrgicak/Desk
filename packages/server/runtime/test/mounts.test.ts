@@ -2,16 +2,15 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, filesDir, libraryDir, chatsDir } from "@desk/storage";
+import { ensureLayout, tmpDir, workspaceRootPath } from "@desk/storage";
 import {
   projectMounts,
   teardownMounts,
   activeRunCount,
-  sandboxMountRoot,
-  desktopDir,
   containerBinds,
   buildDefaultMountPlan,
   bindsFromPlan,
+  SANDBOX_HOME,
 } from "../src/mounts.js";
 import type { SandboxHandle } from "../src/docker.js";
 
@@ -28,16 +27,14 @@ afterAll(async () => {
 });
 
 describe("mounts", () => {
-  it("projectMounts returns paths to the REAL workspace dirs, not a staging copy", async () => {
+  it("projectMounts returns the workspace root that gets bind-mounted at $HOME", async () => {
     const mounts = await projectMounts(handle, {
       home,
       workspaceId: "wks_test",
       runId: "run_mount1",
     });
 
-    expect(mounts.files).toBe(filesDir(home));
-    expect(mounts.library).toBe(libraryDir(home));
-    expect(mounts.desktop).toBe(desktopDir(home, handle.workspaceId));
+    expect(mounts.workspace).toBe(workspaceRootPath(home));
     expect(mounts.attachments).toBeUndefined();
     expect(mounts.attachmentsInSandbox).toBeUndefined();
   });
@@ -50,62 +47,55 @@ describe("mounts", () => {
       runId: "run_mount2",
     });
 
-    expect(mounts.attachments).toContain("chats/cht_test12345678901234567/attachments");
+    expect(mounts.attachments).toContain(
+      ".chats/cht_test12345678901234567/attachments",
+    );
     expect(mounts.attachmentsInSandbox).toBe(
-      "/mnt/desk/chats/cht_test12345678901234567/attachments",
+      `${SANDBOX_HOME}/.chats/cht_test12345678901234567/attachments`,
     );
   });
 
-  it("projectMounts creates the desktop scratch dir on disk", async () => {
-    const stat = await fs.stat(desktopDir(home, handle.workspaceId));
-    expect(stat.isDirectory()).toBe(true);
-  });
-
   it("projectMounts writes a manifest with host + in-sandbox paths", async () => {
-    const root = sandboxMountRoot(home, handle.workspaceId);
-    const raw = await fs.readFile(path.join(root, "manifest-run_mount1.json"), "utf-8");
+    const manifestPath = path.join(tmpDir(home), "manifests", "manifest-run_mount1.json");
+    const raw = await fs.readFile(manifestPath, "utf-8");
     const manifest = JSON.parse(raw);
     expect(manifest.runId).toBe("run_mount1");
-    expect(manifest.host.files).toBe(filesDir(home));
-    expect(manifest.inSandbox.files).toBe("/mnt/desk/files");
-    expect(manifest.inSandbox.library).toBe("/mnt/desk/library");
-    expect(manifest.inSandbox.desktop).toBe("/mnt/desk/desktop");
+    expect(manifest.host.workspace).toBe(workspaceRootPath(home));
+    expect(manifest.inSandbox.home).toBe(SANDBOX_HOME);
   });
 
-  it("containerBinds binds the real workspace dirs read-only + desktop read-write", () => {
-    const binds = containerBinds(home, "wks_test_binds");
-    expect(binds).toEqual([
-      `${filesDir(home)}:/mnt/desk/files:ro`,
-      `${libraryDir(home)}:/mnt/desk/library:ro`,
-      `${chatsDir(home)}:/mnt/desk/chats:ro`,
-      `${desktopDir(home, "wks_test_binds")}:/mnt/desk/desktop:rw`,
-    ]);
+  it("containerBinds binds the workspace root at /home/agent rw", () => {
+    const binds = containerBinds(home);
+    expect(binds).toEqual([`${workspaceRootPath(home)}:${SANDBOX_HOME}:rw`]);
   });
 
-  it("buildDefaultMountPlan describes the same 4 binds containerBinds emits (G5)", () => {
-    const plan = buildDefaultMountPlan(home, "wks_plan_test");
-    expect(plan.map((p) => p.category).sort()).toEqual(["chat", "desktop", "workspace", "workspace"]);
-    expect(plan.filter((p) => p.mode === "rw").map((p) => p.category)).toEqual(["desktop"]);
-    expect(bindsFromPlan(plan)).toEqual(containerBinds(home, "wks_plan_test"));
+  it("buildDefaultMountPlan is a single workspace rw bind", () => {
+    const plan = buildDefaultMountPlan(home);
+    expect(plan).toHaveLength(1);
+    expect(plan[0].mode).toBe("rw");
+    expect(plan[0].category).toBe("workspace");
+    expect(plan[0].targetPath).toBe(SANDBOX_HOME);
+    expect(plan[0].sourcePath).toBe(workspaceRootPath(home));
+    expect(bindsFromPlan(plan)).toEqual(containerBinds(home));
   });
 
   it("custom MountPlan produces its own bind set (G5)", () => {
     const binds = bindsFromPlan([
-      { sourcePath: "/tmp/project", targetPath: "/mnt/desk/project", mode: "rw", category: "external" },
-      { sourcePath: "/tmp/docs", targetPath: "/mnt/desk/docs", mode: "ro", category: "external" },
+      { sourcePath: "/tmp/project", targetPath: "/home/agent/project", mode: "rw", category: "external" },
+      { sourcePath: "/tmp/docs", targetPath: "/home/agent/docs", mode: "ro", category: "external" },
     ]);
     expect(binds).toEqual([
-      "/tmp/project:/mnt/desk/project:rw",
-      "/tmp/docs:/mnt/desk/docs:ro",
+      "/tmp/project:/home/agent/project:rw",
+      "/tmp/docs:/home/agent/docs:ro",
     ]);
   });
 
   it("later plan entries with the same targetPath override earlier ones", () => {
     const binds = bindsFromPlan([
-      { sourcePath: "/a", targetPath: "/mnt/desk/x", mode: "ro", category: "workspace" },
-      { sourcePath: "/b", targetPath: "/mnt/desk/x", mode: "rw", category: "external" },
+      { sourcePath: "/a", targetPath: "/home/agent/x", mode: "ro", category: "workspace" },
+      { sourcePath: "/b", targetPath: "/home/agent/x", mode: "rw", category: "external" },
     ]);
-    expect(binds).toEqual(["/b:/mnt/desk/x:rw"]);
+    expect(binds).toEqual(["/b:/home/agent/x:rw"]);
   });
 
   it("activeRunCount tracks runs correctly", async () => {

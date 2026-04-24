@@ -15,7 +15,6 @@ import {
   resolveHostPath,
   tmpDir,
   trashDir,
-  workspaceLibraryDir,
   workspaceRootPath,
 } from "./layout.js";
 import { ID_PREFIXES } from "@desk/shared";
@@ -30,11 +29,19 @@ export interface StorageContext {
 }
 
 export interface UploadArtifactInput {
+  /** Retained on the type for callers; under v1 the single workspace means this field is advisory. */
   workspaceId: string;
   chatId?: string;
   name: string;
   mime: string;
   stream: Readable;
+  /**
+   * Optional workspace-root-relative subdirectory (e.g. "Projects/Q2").
+   * Only applies to library uploads (no chatId). Created recursively if
+   * missing. Rejected if it contains `..` segments, absolute paths, or
+   * dotfile segments.
+   */
+  subpath?: string;
 }
 
 export interface FileRef {
@@ -63,6 +70,43 @@ function guessMime(name: string): string {
   }
 }
 
+/**
+ * Validates and normalizes a workspace-root-relative subdirectory.
+ * Returns the cleaned subpath with forward slashes, or "" for the root.
+ *
+ * Rejects: absolute paths, `..` traversal, empty segments, segments
+ * starting with `.` (hidden — reserved for agent artifacts / infrastructure),
+ * backslashes.
+ */
+export function validateLibrarySubpath(raw: string | undefined): string {
+  if (!raw) return "";
+  if (raw.includes("\\")) {
+    throw new ValidationError(`Invalid subpath: ${raw}`);
+  }
+  const trimmed = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (trimmed === "") return "";
+  const segments = trimmed.split("/");
+  for (const seg of segments) {
+    if (seg === "" || seg === "." || seg === ".." || seg.startsWith(".")) {
+      throw new ValidationError(`Invalid subpath segment: ${seg}`);
+    }
+  }
+  return segments.join("/");
+}
+
+/**
+ * Rejects filenames reserved for hidden (agent-origin) content. The dotfile
+ * convention governs user-visibility workspace-wide; user uploads must
+ * always be visible.
+ */
+function rejectHiddenName(name: string): void {
+  if (name.startsWith(".")) {
+    throw new ValidationError(
+      `Filenames starting with '.' are reserved for agent artifacts. Please rename '${name}' to remove the leading dot.`,
+    );
+  }
+}
+
 /** Generates a non-colliding filename inside `dir` for a desired `name`. */
 async function uniqueDestPath(dir: string, name: string): Promise<string> {
   const ext = path.extname(name);
@@ -84,18 +128,25 @@ async function uniqueDestPath(dir: string, name: string): Promise<string> {
  * Uploads a file to the filesystem. No DB row is written — the FS is the
  * single source of truth. Returns a FileRef describing the workspace-relative
  * path and stat metadata.
+ *
+ * User uploads must not be dotfile-named. Agent-origin files write through
+ * the sandbox filesystem, not this route.
  */
 export async function uploadArtifact(
   ctx: StorageContext,
   input: UploadArtifactInput,
 ): Promise<FileRef> {
+  rejectHiddenName(input.name);
+
   const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
 
   let destDir: string;
   if (input.chatId) {
     destDir = await chatAttachmentsDir(ctx.home, input.chatId);
   } else {
-    destDir = workspaceLibraryDir(ctx.home, input.workspaceId);
+    const root = workspaceRootPath(ctx.home);
+    const sub = validateLibrarySubpath(input.subpath);
+    destDir = sub ? path.join(root, sub) : root;
   }
   await fs.mkdir(destDir, { recursive: true });
 
@@ -184,6 +235,50 @@ export async function statFile(ctx: StorageContext, relPath: string): Promise<Fi
 }
 
 /**
+ * Overwrites an existing library file's contents in place. Unlike
+ * `uploadArtifact`, this requires the file to already exist — it will not
+ * create a new file or auto-rename on collision. Writes through a temp
+ * file + atomic rename so partial writes don't leave the target truncated.
+ */
+export async function overwriteFile(
+  ctx: StorageContext,
+  relPath: string,
+  stream: Readable,
+): Promise<FileRef> {
+  const abs = resolveHostPath(ctx.home, relPath);
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
+  if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
+
+  const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
+  let size = 0;
+  const sizeEnforcer = new (await import("node:stream")).Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        callback(new ValidationError(`File exceeds maximum size of ${MAX_UPLOAD_BYTES} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(stream, sizeEnforcer, createWriteStream(tmpPath));
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+  try {
+    await fs.rename(tmpPath, abs);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+  return fileRefFromDisk(ctx.home, relPath);
+}
+
+/**
  * Move a file from one workspace-relative path to another. Leaves a symlink
  * at the old path pointing to the new absolute path so existing references
  * remain valid.
@@ -226,44 +321,29 @@ export async function deleteFile(ctx: StorageContext, relPath: string): Promise<
 }
 
 /**
- * Soft-deletes a chat's on-disk footprint by moving its two chat-scoped
- * directories (`.chats/{chatId}/` for logs + note-history, and
- * `chats/{chatId}/` for attachments) into `~/Desk/.trash/`. Either or
- * both may be absent — best-effort. Returns whether anything moved.
- *
- * The trash layout mirrors the live layout so a curious user can pull
- * a chat back by hand without hunting.
+ * Soft-deletes a chat's on-disk footprint by moving `.chats/{chatId}/`
+ * (which holds attachments, logs, and note-history) into
+ * `~/Desk/.trash/.chats/`. Idempotent — missing dirs are silently skipped.
  */
 export async function trashChatDirectories(
   home: string,
   chatId: string,
-): Promise<{ movedHidden: boolean; movedAttachments: boolean }> {
+): Promise<{ moved: boolean }> {
   if (!chatId.startsWith(ID_PREFIXES.chat) || chatId.includes("/") || chatId.includes("..")) {
     throw new ValidationError(`Invalid chat id: ${chatId}`);
   }
   const root = workspaceRootPath(home);
   const stamp = Date.now();
 
-  const hiddenSrc = path.join(root, ".chats", chatId);
-  const hiddenDst = path.join(trashDir(home), ".chats", `${chatId}-${stamp}`);
-  const attachSrc = path.join(root, "chats", chatId);
-  const attachDst = path.join(trashDir(home), "chats", `${chatId}-${stamp}`);
+  const src = path.join(root, ".chats", chatId);
+  const dst = path.join(trashDir(home), ".chats", `${chatId}-${stamp}`);
 
-  const out = { movedHidden: false, movedAttachments: false };
+  const stat = await fs.stat(src).catch(() => null);
+  if (!stat) return { moved: false };
 
-  const hiddenStat = await fs.stat(hiddenSrc).catch(() => null);
-  if (hiddenStat) {
-    await fs.mkdir(path.dirname(hiddenDst), { recursive: true });
-    await fs.rename(hiddenSrc, hiddenDst);
-    out.movedHidden = true;
-  }
-  const attachStat = await fs.stat(attachSrc).catch(() => null);
-  if (attachStat) {
-    await fs.mkdir(path.dirname(attachDst), { recursive: true });
-    await fs.rename(attachSrc, attachDst);
-    out.movedAttachments = true;
-  }
-  return out;
+  await fs.mkdir(path.dirname(dst), { recursive: true });
+  await fs.rename(src, dst);
+  return { moved: true };
 }
 
 /**

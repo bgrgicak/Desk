@@ -112,6 +112,19 @@ DESK_SEED_PASSWORD=change-me-before-first-boot
 DESK_RUN_BIN=/opt/desk-server/node_modules/.bin/desk-run
 ENVFILE
 
+# ---------- 8b. Internal shared secret ----------
+# Scheduled at/cron jobs loop back to /internal/messages/fire with this
+# token (see packages/server/api/src/auth/internal.ts). The API would
+# regenerate a missing token on first call, but it runs as the `desk`
+# user and can't write into root-owned /etc/desk-server — so we seed it
+# here at install time with the right owner + mode.
+log "Generating /etc/desk-server/internal-token"
+if [[ ! -f /etc/desk-server/internal-token ]]; then
+  ( umask 077 && openssl rand -hex 32 > /etc/desk-server/internal-token )
+fi
+chown desk:desk /etc/desk-server/internal-token
+chmod 0600 /etc/desk-server/internal-token
+
 # ---------- 9. Systemd unit ----------
 log "Writing desk-server.service"
 cat > /etc/systemd/system/desk-server.service <<'UNIT'
