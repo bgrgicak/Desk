@@ -8,11 +8,9 @@
  * hosts the I/O boundary that systemd drives.
  */
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
+import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import { ensureLayout, enforceLogRetention, reconcileArtifactRefs } from "@desk/storage";
-import { createRunManager, createAdapter } from "@desk/scheduler";
+import { createRunManager, createAdapter, reconcile } from "@desk/scheduler";
 import { createApp } from "./app.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@desk/shared";
@@ -20,10 +18,10 @@ import type { WsEvent } from "@desk/shared";
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgresql:///desk?host=/var/run/postgresql";
-const DESK_HOME = process.env.DESK_HOME ?? path.join(process.env.HOME ?? "/var/lib/desk", "Desk");
+const DESK_HOME = process.env.DESK_HOME ?? process.env.HOME ?? "/var/lib/desk";
 
 async function main(): Promise<void> {
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
+  const pool = createPool({ connectionString: DATABASE_URL });
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
@@ -67,9 +65,22 @@ async function main(): Promise<void> {
   const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
   const broadcastUserId: string | undefined = rows[0]?.id;
 
+  const adapter = createAdapter();
+
+  // Cancel pending messages whose at/cron entry vanished while the server
+  // was down, and garbage-collect scheduler entries nothing references.
+  // Without this, a lost at-job leaves the message stuck in `pending` with
+  // a past execute_at, which the UI renders as "Scheduled for …".
+  try {
+    await reconcile(pool, adapter);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("scheduler reconcile failed:", err);
+  }
+
   const runManager = createRunManager({
     pool,
-    adapter: createAdapter(),
+    adapter,
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
