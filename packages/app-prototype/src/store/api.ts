@@ -15,6 +15,7 @@ import type {
   ServerMessage,
   ServerUser,
   ServerWorkspace,
+  ServerWorkspaceAgent,
 } from "./types";
 
 const rawBaseQuery = fetchBaseQuery({
@@ -88,6 +89,7 @@ export const api = createApi({
   tagTypes: [
     "Me",
     "Workspace",
+    "WorkspaceAgents",
     "Chat",
     "Message",
     "Agent",
@@ -210,7 +212,43 @@ export const api = createApi({
         method: "PATCH",
         body: patch,
       }),
-      invalidatesTags: (_r, _e, { id }) => [{ type: "Agent", id }],
+      invalidatesTags: (_r, _e, { id }) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+      ],
+    }),
+    deleteAgent: build.mutation<{ ok: true }, string>({
+      query: (id) => ({ url: `/agents/${id}`, method: "DELETE" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+        // Agent delete cascades to chats on the server; mirror that here.
+        { type: "Chat", id: "LIST" },
+        // Membership rows go too — refresh per-workspace lists.
+        { type: "WorkspaceAgents", id: "LIST" },
+      ],
+    }),
+
+    // ── Workspace ↔ Agent membership ──────────────────────────────────
+    getWorkspaceAgents: build.query<ServerWorkspaceAgent[], string>({
+      query: (workspaceId) => `/workspaces/${workspaceId}/agents`,
+      providesTags: (_r, _e, workspaceId) => [
+        { type: "WorkspaceAgents", id: workspaceId },
+        { type: "WorkspaceAgents", id: "LIST" },
+      ],
+    }),
+    setWorkspaceDefaultAgent: build.mutation<
+      { ok: true },
+      { workspaceId: string; agentId: string }
+    >({
+      query: ({ workspaceId, agentId }) => ({
+        url: `/workspaces/${workspaceId}/default-agent`,
+        method: "POST",
+        body: { agentId },
+      }),
+      invalidatesTags: (_r, _e, { workspaceId }) => [
+        { type: "WorkspaceAgents", id: workspaceId },
+      ],
     }),
 
     // ── Chats ─────────────────────────────────────────────────────────
@@ -432,6 +470,9 @@ export const {
   useGetAgentsQuery,
   useCreateAgentMutation,
   usePatchAgentMutation,
+  useDeleteAgentMutation,
+  useGetWorkspaceAgentsQuery,
+  useSetWorkspaceDefaultAgentMutation,
   useGetChatsQuery,
   useCreateChatMutation,
   usePatchChatMutation,
