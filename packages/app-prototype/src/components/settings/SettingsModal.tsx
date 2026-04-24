@@ -1176,6 +1176,7 @@ function PreferencesSection() {
   const [autoSave, setAutoSave]           = useState(true)
   const [defaultView, setDefaultView]     = useState<DefaultView>('desk')
   const [showBadges, setShowBadges]       = useState(true)
+  const [devMode, setDevMode]             = useState(false)
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
     { value: 'desk',    label: 'Desk'    },
@@ -1244,6 +1245,28 @@ function PreferencesSection() {
             onChange={(v) => setDefaultView(v as DefaultView)}
             options={VIEW_OPTIONS}
           />
+        </div>
+      </div>
+
+      <div className="border-t" />
+
+      {/* Developer mode */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Developer mode</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Show debugging information and internal model feedback in the interface.
+          </p>
+        </div>
+        <div className="flex items-center h-7 bg-muted rounded-full p-0.5 w-36 shrink-0">
+          {([true, false] as const).map(val => (
+            <button key={String(val)} onClick={() => setDevMode(val)}
+              className={`flex-1 rounded-full text-xs font-medium transition-colors h-full flex items-center justify-center ${
+                devMode === val ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}>
+              {val ? 'Enabled' : 'Disabled'}
+            </button>
+          ))}
         </div>
       </div>
     </div>
@@ -1510,7 +1533,7 @@ export function SettingsModal({
                   className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                      : 'text-foreground hover:bg-muted/60'
                   }`}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
