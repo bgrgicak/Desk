@@ -1,10 +1,11 @@
 /**
- * Integration tests for `POST /workspaces/:id/default-agent`.
+ * Integration test for `POST /workspaces` auto-enrolling an agent.
  *
- * The route auto-enrolls the agent into the workspace before flipping the
- * `is_default` flag — clicking "make default" on a globally-listed agent
- * must not 404 just because it isn't separately enrolled. Owner-mismatch is
- * still rejected (delegated to addAgentToWorkspace).
+ * A freshly-created workspace has no agents until one is enrolled, which
+ * means chat creation rejects every agentId. To keep new workspaces
+ * chat-ready by default, `createWorkspace` auto-enrolls the caller's
+ * first agent (from `listByUser`) and marks it default. Users can override
+ * the enrollment via the settings modal afterwards.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -22,7 +23,7 @@ import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_ws_default_agent_${workerId}`;
+const testDbName = `desk_ws_autoenroll_${workerId}`;
 
 function adminConn(): string {
   const url = new URL(
@@ -49,7 +50,6 @@ let port: number;
 let home: string;
 let token: string;
 let userId: string;
-let workspaceId: string;
 
 function request(
   method: string,
@@ -98,7 +98,7 @@ beforeAll(async () => {
   try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-default-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-autoenroll-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
@@ -114,20 +114,12 @@ beforeAll(async () => {
   userId = generateId("user");
   await queries.users.insert(pool, {
     id: userId,
-    username: "wsd-agent",
+    username: "autoenroll",
     passwordHash: await hashPassword("pw"),
-    email: "wsd-agent@example.com",
-  });
-  workspaceId = generateId("workspace");
-  await queries.workspaces.insert(pool, {
-    id: workspaceId,
-    userId,
-    name: "primary",
-    description: "",
-    icon: "",
+    email: "autoenroll@example.com",
   });
   const login = await request("POST", "/auth/login", null, {
-    username: "wsd-agent",
+    username: "autoenroll",
     password: "pw",
   });
   token = (login.body as { token: string }).token;
@@ -166,49 +158,47 @@ async function insertAgent(name: string): Promise<string> {
   return id;
 }
 
-describe("POST /workspaces/:id/default-agent", () => {
-  it("auto-enrolls a non-member agent and marks it default", async () => {
-    const agentId = await insertAgent("auto-enroll-target");
+describe("POST /workspaces — auto-enroll caller's first agent", () => {
+  it("enrolls the first agent from listByUser and marks it default", async () => {
+    // Insert two agents; `listByUser` orders by name, so "alpha" is first.
+    const alphaId = await insertAgent("alpha");
+    await insertAgent("zeta");
 
-    const res = await request(
-      "POST",
-      `/workspaces/${workspaceId}/default-agent`,
-      token,
-      { agentId },
-    );
-    expect(res.status).toBe(200);
+    const res = await request("POST", "/workspaces", token, {
+      name: "fresh",
+    });
+    expect(res.status).toBe(201);
+    const ws = res.body as { id: string };
 
-    const list = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
-    const row = list.find(m => m.agentId === agentId);
-    expect(row).toBeTruthy();
-    expect(row?.isDefault).toBe(true);
-
-    // Exactly one default per workspace (enforced by partial unique index).
-    const defaults = list.filter(m => m.isDefault);
-    expect(defaults).toHaveLength(1);
-    expect(defaults[0].agentId).toBe(agentId);
+    const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].agentId).toBe(alphaId);
   });
 
-  it("promotes an already-enrolled agent and demotes the previous default", async () => {
-    const challenger = await insertAgent("challenger");
-    await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-       VALUES ($1, $2, false)`,
-      [workspaceId, challenger],
-    );
+  it("skips enrollment for a user with no agents (does not crash)", async () => {
+    // Build a second user with zero agents and confirm workspace creation
+    // still succeeds — no agent gets enrolled, and chat creation would
+    // require the user to enroll one manually.
+    const otherUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: otherUserId,
+      username: "noagents",
+      passwordHash: await hashPassword("pw"),
+      email: "noagents@example.com",
+    });
+    const login = await request("POST", "/auth/login", null, {
+      username: "noagents",
+      password: "pw",
+    });
+    const otherToken = (login.body as { token: string }).token;
 
-    const before = await queries.workspaceAgents.getDefault(pool, workspaceId);
-    expect(before?.agentId).not.toBe(challenger);
+    const res = await request("POST", "/workspaces", otherToken, {
+      name: "empty",
+    });
+    expect(res.status).toBe(201);
+    const ws = res.body as { id: string };
 
-    const res = await request(
-      "POST",
-      `/workspaces/${workspaceId}/default-agent`,
-      token,
-      { agentId: challenger },
-    );
-    expect(res.status).toBe(200);
-
-    const after = await queries.workspaceAgents.getDefault(pool, workspaceId);
-    expect(after?.agentId).toBe(challenger);
+    const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(memberships).toHaveLength(0);
   });
 });

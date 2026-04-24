@@ -25,7 +25,6 @@ export type Agent = z.infer<typeof AgentSchema>;
 export const WorkspaceAgentSchema = z.object({
   workspaceId: z.string(),
   agentId: z.string(),
-  isDefault: z.boolean(),
   addedAt: z.string(),
 });
 export type WorkspaceAgent = z.infer<typeof WorkspaceAgentSchema>;

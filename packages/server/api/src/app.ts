@@ -346,14 +346,6 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "workspaces" && segments[2] === "default-agent" && segments.length === 3 && method === "POST") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as { agentId: string };
-      await requireOwnedAgent(pool, body.agentId, userId);
-      const result = await workspaceRoutes.setWorkspaceDefaultAgent(pool, segments[1], body.agentId);
-      sendJson(res, 200, result);
-      return;
-    }
 
     // Agent routes
     if (path === "/agents" && method === "GET") {

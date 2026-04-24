@@ -52,9 +52,8 @@ export interface ServerAgent {
   toolAllowlist: string[];
 }
 
-/** Membership row from `GET /workspaces/:id/agents`: agent + per-workspace flags. */
+/** Membership row from `GET /workspaces/:id/agents`: agent + enrollment timestamp. */
 export interface ServerWorkspaceAgent extends ServerAgent {
-  isDefault: boolean;
   addedAt: string;
 }
 

@@ -6,6 +6,7 @@
  *  - Create: `+ Add custom agent` calls POST /agents and the row appears.
  *  - Edit:   pencil icon exposes name + instructions + model; Save PATCHes.
  *  - Delete: trash icon + confirm popover DELETEs and the row disappears.
+ *  - Per-workspace enrollment toggles round-trip through the membership API.
  *
  * The Agents section no longer exposes a hardcoded model list; it queries
  * GET /tools/models. In the e2e lane there is no Docker/opencode, so the
@@ -26,15 +27,14 @@ test("settings modal lists the seeded agent", async ({ loggedInPage }) => {
   ).toBeVisible({ timeout: 10_000 });
 });
 
-test("clicking the star promotes an agent to this workspace's default", async ({
+test("toggling an agent on/off in a workspace round-trips through the membership API", async ({
   loggedInPage,
   serverUrl,
   token,
 }) => {
-  const uniq = `spec09-def-${Date.now().toString(36)}`;
-  const candidateName = `${uniq}-candidate`;
+  const uniq = `spec09-acc-${Date.now().toString(36)}`;
+  const candidateName = `${uniq}-access`;
 
-  // Discover the seeded workspace id via the API (server-shared e2e fixture).
   const wsRes = await fetch(`${serverUrl}/workspaces`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -44,66 +44,102 @@ test("clicking the star promotes an agent to this workspace's default", async ({
   await openAgentsTab(loggedInPage);
   const dialog = loggedInPage.getByRole("dialog");
 
-  // Create a second agent so we have a non-default to promote.
+  // A brand-new agent is NOT auto-enrolled into existing workspaces —
+  // the auto-enroll only runs on workspace creation, not on agent creation.
   await dialog.getByRole("button", { name: /Add custom agent/i }).click();
   await dialog.getByLabel("Agent name").fill(candidateName);
   await dialog.getByRole("button", { name: /^Create agent$/i }).click();
   await expect(dialog.getByText(candidateName)).toBeVisible({ timeout: 5_000 });
 
-  // The candidate row's star starts unfilled ("Make ... the default agent ...").
   const candidateRow = dialog.locator("div.group", { hasText: candidateName }).first();
-  const makeDefaultBtn = candidateRow.getByRole("button", {
-    name: new RegExp(`Make ${candidateName} the default agent`, "i"),
+  const toggle = candidateRow.getByRole("switch", {
+    name: new RegExp(`Enable ${candidateName} in this workspace`, "i"),
   });
-  await expect(makeDefaultBtn).toBeVisible();
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("data-state", "unchecked");
 
-  await makeDefaultBtn.click();
-
-  // UI reflects the new default via the "Default" badge and the pressed star.
+  // Enable — server gets a POST, membership appears.
+  await toggle.click();
   await expect(
-    candidateRow.getByText("Default", { exact: false }),
-  ).toBeVisible({ timeout: 5_000 });
-  await expect(
-    candidateRow.getByRole("button", {
-      name: new RegExp(`${candidateName} is the default agent`, "i"),
+    candidateRow.getByRole("switch", {
+      name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
     }),
-  ).toBeVisible();
+  ).toHaveAttribute("data-state", "checked", { timeout: 5_000 });
 
-  // Server-side: /workspaces/:id/agents returns exactly one isDefault row,
-  // and it's our candidate.
-  const memRes = await fetch(
-    `${serverUrl}/workspaces/${workspaceId}/agents`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const memberships = (await memRes.json()) as Array<{
-    id: string;
-    name: string;
-    isDefault: boolean;
-  }>;
-  const defaults = memberships.filter(m => m.isDefault);
-  expect(defaults).toHaveLength(1);
-  expect(defaults[0].name).toBe(candidateName);
-
-  // Cleanup — restore the seeded "Desk" agent as default so later tests
-  // (and the shared fixture) aren't affected.
-  const desk = memberships.find(m => m.name === "Desk");
-  if (desk) {
-    await fetch(`${serverUrl}/workspaces/${workspaceId}/default-agent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ agentId: desk.id }),
-    });
+  {
+    const memRes = await fetch(
+      `${serverUrl}/workspaces/${workspaceId}/agents`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const memberships = (await memRes.json()) as Array<{ name: string }>;
+    expect(memberships.find(m => m.name === candidateName)).toBeTruthy();
   }
-  const candidate = memberships.find(m => m.name === candidateName);
+
+  // Disable — server gets a DELETE, membership goes away.
+  const disableToggle = candidateRow.getByRole("switch", {
+    name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
+  });
+  await disableToggle.click();
+  await expect(
+    candidateRow.getByRole("switch", {
+      name: new RegExp(`Enable ${candidateName} in this workspace`, "i"),
+    }),
+  ).toHaveAttribute("data-state", "unchecked", { timeout: 5_000 });
+
+  {
+    const memRes = await fetch(
+      `${serverUrl}/workspaces/${workspaceId}/agents`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const memberships = (await memRes.json()) as Array<{ name: string }>;
+    expect(memberships.find(m => m.name === candidateName)).toBeUndefined();
+  }
+
+  // Cleanup — remove the custom agent so later tests see the seeded list.
+  const agentsRes = await fetch(`${serverUrl}/agents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const allAgents = (await agentsRes.json()) as Array<{ id: string; name: string }>;
+  const candidate = allAgents.find(a => a.name === candidateName);
   if (candidate) {
     await fetch(`${serverUrl}/agents/${candidate.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
   }
+});
+
+test("a freshly-created workspace auto-enrolls the user's first agent", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  // Make sure the app is fully booted before we POST — mirrors slice02.
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+
+  const res = await fetch(`${serverUrl}/workspaces`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name: `spec09-auto-${Date.now().toString(36)}` }),
+  });
+  expect(res.status).toBe(201);
+  const ws = (await res.json()) as { id: string };
+
+  const memRes = await fetch(
+    `${serverUrl}/workspaces/${ws.id}/agents`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const memberships = (await memRes.json()) as Array<{ name: string }>;
+  expect(memberships).toHaveLength(1);
+
+  // Cleanup — the seeded workspace must remain, but we can delete this scratch one.
+  await fetch(`${serverUrl}/workspaces/${ws.id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
 });
 
 test("creating, renaming, and deleting an agent round-trips through the API", async ({

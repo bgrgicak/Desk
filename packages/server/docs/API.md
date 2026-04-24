@@ -42,7 +42,6 @@ caller.
 | GET    | /workspaces/{id}/agents              | List agents enrolled in workspace    |
 | POST   | /workspaces/{id}/agents              | Enroll an agent in the workspace     |
 | DELETE | /workspaces/{id}/agents/{agentId}    | Remove an agent from the workspace   |
-| POST   | /workspaces/{id}/default-agent       | Set the workspace default agent      |
 
 ### POST /workspaces
 
@@ -76,9 +75,9 @@ background; when empty the client falls back to a palette hash of the id.
 | PATCH  | /agents/{id}  | Update agent                   |
 
 Agents are user-owned. A chat can only reference an agent that has been
-enrolled in its workspace (via `POST /workspaces/{id}/agents`). Each
-workspace has exactly one default agent; creating a chat without an
-explicit `agentId` uses the workspace default.
+enrolled in its workspace (via `POST /workspaces/{id}/agents`). Creating a
+chat requires an explicit `agentId`; the client picks the first enrolled
+agent by default and lets the user change it from the compose bar.
 
 ## Chats
 

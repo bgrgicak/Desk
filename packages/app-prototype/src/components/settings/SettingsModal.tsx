@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, Check, ChevronDown, X, Pencil, Star,
+  Trash2, Plus, Check, ChevronDown, X, Pencil,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -19,10 +20,21 @@ import {
   usePatchAgentMutation,
   useDeleteAgentMutation,
   useGetWorkspaceAgentsQuery,
-  useSetWorkspaceDefaultAgentMutation,
+  useAddWorkspaceAgentMutation,
+  useRemoveWorkspaceAgentMutation,
   useGetModelsQuery,
   type ModelRef,
 } from '@/store/api'
+
+function describeApiError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { data?: { message?: unknown }; error?: unknown }
+    if (typeof e.data?.message === 'string') return e.data.message
+    if (typeof e.error === 'string') return e.error
+  }
+  if (err instanceof Error) return err.message
+  return 'Unknown error'
+}
 import type { ServerAgent } from '@/store/types'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
@@ -385,17 +397,17 @@ function AgentEditor({
 
 function AgentRow({
   agent,
-  isDefault,
+  enrolled,
   canDelete,
-  onMakeDefault,
+  onToggleEnrolled,
   onEdit,
   onDelete,
   onModelChange,
 }: {
   agent: ServerAgent
-  isDefault: boolean
+  enrolled: boolean
   canDelete: boolean
-  onMakeDefault: () => void
+  onToggleEnrolled: (next: boolean) => void
   onEdit: () => void
   onDelete: () => void
   onModelChange: (modelId: string) => void
@@ -404,42 +416,30 @@ function AgentRow({
 
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors group">
-      <button
-        type="button"
-        onClick={isDefault ? undefined : onMakeDefault}
-        disabled={isDefault}
-        aria-label={
-          isDefault
-            ? `${agent.name} is the default agent for this workspace`
-            : `Make ${agent.name} the default agent for this workspace`
-        }
-        aria-pressed={isDefault}
-        title={
-          isDefault
-            ? 'Default agent for this workspace'
-            : 'Make default for this workspace'
-        }
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 hover:text-amber-500 disabled:text-amber-500 disabled:cursor-default transition-colors"
-      >
-        <Star
-          className="h-4 w-4"
-          fill={isDefault ? 'currentColor' : 'none'}
-          strokeWidth={isDefault ? 0 : 1.75}
-        />
-      </button>
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
         <Bot className="h-4 w-4 text-muted-foreground/70" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">
-          {agent.name}
-          {isDefault && (
-            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wider text-amber-600">
-              Default
-            </span>
-          )}
-        </p>
+        <p className="text-sm font-medium truncate">{agent.name}</p>
         <ModelPicker value={agent.model} onChange={onModelChange} />
+      </div>
+
+      <div
+        title={
+          enrolled
+            ? 'Disable access to this workspace'
+            : 'Enable access to this workspace'
+        }
+      >
+        <Switch
+          checked={enrolled}
+          onCheckedChange={onToggleEnrolled}
+          aria-label={
+            enrolled
+              ? `Disable ${agent.name} in this workspace`
+              : `Enable ${agent.name} in this workspace`
+          }
+        />
       </div>
 
       <Button
@@ -503,15 +503,18 @@ function AgentsSection({ workspaceId }: { workspaceId: string }) {
   const [createAgent, { isLoading: creating }] = useCreateAgentMutation()
   const [patchAgent]  = usePatchAgentMutation()
   const [deleteAgent] = useDeleteAgentMutation()
-  const [setDefault]  = useSetWorkspaceDefaultAgentMutation()
+  const [addWorkspaceAgent]    = useAddWorkspaceAgentMutation()
+  const [removeWorkspaceAgent] = useRemoveWorkspaceAgentMutation()
 
   // null = none; 'NEW' = create form; otherwise = agent id being edited.
   const [editing, setEditing] = useState<'NEW' | string | null>(null)
 
   const agents = serverAgents ?? []
   const firstAvailableModel = models?.[0]?.id ?? DEFAULT_MODEL
-  const defaultAgentId =
-    workspaceAgents?.find(m => m.isDefault)?.id ?? null
+  const enrolledIds = useMemo(
+    () => new Set((workspaceAgents ?? []).map(a => a.id)),
+    [workspaceAgents],
+  )
 
   const handleCreate = async (v: { name: string; model: string; instructions: string }) => {
     await createAgent({
@@ -537,13 +540,29 @@ function AgentsSection({ workspaceId }: { workspaceId: string }) {
     await deleteAgent(id).unwrap()
   }
 
+  const handleToggleEnrolled = async (agentId: string, next: boolean) => {
+    try {
+      if (next) {
+        await addWorkspaceAgent({ workspaceId, agentId }).unwrap()
+      } else {
+        await removeWorkspaceAgent({ workspaceId, agentId }).unwrap()
+      }
+    } catch (err) {
+      toast.error(
+        next ? 'Could not enable agent' : 'Could not disable agent',
+        { description: describeApiError(err) },
+      )
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-semibold mb-0.5">Agents</h3>
         <p className="text-xs text-muted-foreground">
-          Agents you can start chats with. Tap the star to set the default
-          agent for this workspace — new chats open with it selected.
+          Toggle which agents can be used in this workspace. New chats open
+          with the first enrolled agent selected; pick a different one per
+          chat from the compose bar.
         </p>
       </div>
 
@@ -551,8 +570,9 @@ function AgentsSection({ workspaceId }: { workspaceId: string }) {
         {isLoading && agents.length === 0 && (
           <p className="text-xs text-muted-foreground px-3 py-2">Loading agents…</p>
         )}
-        {agents.map(agent =>
-          editing === agent.id ? (
+        {agents.map(agent => {
+          const enrolled = enrolledIds.has(agent.id)
+          return editing === agent.id ? (
             <AgentEditor
               key={agent.id}
               initial={{
@@ -568,15 +588,15 @@ function AgentsSection({ workspaceId }: { workspaceId: string }) {
             <AgentRow
               key={agent.id}
               agent={agent}
-              isDefault={agent.id === defaultAgentId}
+              enrolled={enrolled}
               canDelete={agents.length > 1}
-              onMakeDefault={() => setDefault({ workspaceId, agentId: agent.id })}
+              onToggleEnrolled={next => handleToggleEnrolled(agent.id, next)}
               onEdit={() => setEditing(agent.id)}
               onDelete={() => handleDelete(agent.id)}
               onModelChange={model => patchAgent({ id: agent.id, patch: { model } })}
             />
-          ),
-        )}
+          )
+        })}
       </div>
 
       {editing === 'NEW' ? (

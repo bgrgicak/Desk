@@ -193,20 +193,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "agentId", in: "path", required: true, schema: { type: "string" } },
           ],
-          responses: { "200": { description: "OK" }, "400": { description: "Cannot remove the default with other agents present" } },
-        },
-      },
-      "/workspaces/{id}/default-agent": {
-        post: {
-          summary: "Set the workspace default agent",
-          description: "Auto-enrolls the agent in the workspace first if it isn't already a member (idempotent), then flips the per-workspace `is_default` flag. Owner-mismatch (agent belongs to another user) is rejected by the underlying enroll step.",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { agentId: { type: "string" } }, required: ["agentId"] } } } },
-          responses: {
-            "200": { description: "OK" },
-            "400": { description: "Owner mismatch" },
-            "404": { description: "Workspace or agent not found" },
-          },
+          responses: { "200": { description: "OK" } },
         },
       },
       "/agents": {

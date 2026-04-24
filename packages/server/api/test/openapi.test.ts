@@ -19,7 +19,6 @@ describe("OpenAPI spec", () => {
       "/workspaces/{id}",
       "/workspaces/{id}/agents",
       "/workspaces/{id}/agents/{agentId}",
-      "/workspaces/{id}/default-agent",
       "/agents",
       "/agents/{id}",
       "/chats",

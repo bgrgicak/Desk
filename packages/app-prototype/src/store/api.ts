@@ -237,14 +237,26 @@ export const api = createApi({
         { type: "WorkspaceAgents", id: "LIST" },
       ],
     }),
-    setWorkspaceDefaultAgent: build.mutation<
+    addWorkspaceAgent: build.mutation<
+      unknown,
+      { workspaceId: string; agentId: string }
+    >({
+      query: ({ workspaceId, agentId }) => ({
+        url: `/workspaces/${workspaceId}/agents`,
+        method: "POST",
+        body: { agentId },
+      }),
+      invalidatesTags: (_r, _e, { workspaceId }) => [
+        { type: "WorkspaceAgents", id: workspaceId },
+      ],
+    }),
+    removeWorkspaceAgent: build.mutation<
       { ok: true },
       { workspaceId: string; agentId: string }
     >({
       query: ({ workspaceId, agentId }) => ({
-        url: `/workspaces/${workspaceId}/default-agent`,
-        method: "POST",
-        body: { agentId },
+        url: `/workspaces/${workspaceId}/agents/${agentId}`,
+        method: "DELETE",
       }),
       invalidatesTags: (_r, _e, { workspaceId }) => [
         { type: "WorkspaceAgents", id: workspaceId },
@@ -516,7 +528,8 @@ export const {
   usePatchAgentMutation,
   useDeleteAgentMutation,
   useGetWorkspaceAgentsQuery,
-  useSetWorkspaceDefaultAgentMutation,
+  useAddWorkspaceAgentMutation,
+  useRemoveWorkspaceAgentMutation,
   useGetChatsQuery,
   useCreateChatMutation,
   usePatchChatMutation,

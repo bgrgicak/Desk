@@ -186,8 +186,8 @@ describe("DELETE /agents/:id", () => {
     const keeperId = await insertAgent(alphaUserId, "keeper-happy");
     const agentId  = await insertAgent(alphaUserId, "disposable");
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-       VALUES ($1, $2, false)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id)
+       VALUES ($1, $2)`,
       [alphaWorkspaceId, agentId],
     );
 

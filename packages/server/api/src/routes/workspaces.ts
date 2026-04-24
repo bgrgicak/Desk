@@ -9,11 +9,16 @@ export async function listWorkspaces(pool: pg.Pool, userId?: string) {
 }
 
 /**
- * Creates a workspace with its own on-disk directory at
- * `~/Desk/workspaces/{slug}/`. The slug is derived from `name` with a
- * `-2`, `-3`, ... suffix on collision so two workspaces can't share a
- * directory; the folder is created before the DB insert so every
- * successful insert has a matching folder.
+ * Creates a workspace and auto-enrolls the caller's first agent (from
+ * `agents.listByUser`, which orders by name). Without this, chat creation
+ * would 400 on every agentId in the new workspace — users would have to
+ * open settings and enroll an agent before the workspace is usable.
+ * Users can override the enrollment via the Agent access settings panel.
+ *
+ * The workspace's on-disk directory at `~/Desk/workspaces/{slug}/` is
+ * created before the DB insert so every successful insert has a matching
+ * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
+ * collision so two workspaces can't share a directory.
  */
 export async function createWorkspace(
   pool: pg.Pool,
@@ -23,12 +28,17 @@ export async function createWorkspace(
 ) {
   const path = await queries.workspaces.reserveWorkspacePath(pool, data.name);
   await ensureWorkspaceLayout(home, path);
-  return queries.workspaces.insert(pool, {
+  const ws = await queries.workspaces.insert(pool, {
     id: generateId("workspace"),
     userId,
     path,
     ...data,
   });
+  const userAgents = await queries.agents.listByUser(pool, userId);
+  if (userAgents.length > 0) {
+    await queries.workspaceAgents.addToWorkspace(pool, ws.id, userAgents[0].id);
+  }
+  return ws;
 }
 
 export async function getWorkspace(pool: pg.Pool, id: string) {
@@ -95,7 +105,7 @@ export async function deleteWorkspace(
   return { ok: true };
 }
 
-/** Lists agents enabled in a workspace, with defaults. */
+/** Lists agents enabled in a workspace, ordered by enrollment time. */
 export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
@@ -103,7 +113,7 @@ export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
   const agents = await Promise.all(
     memberships.map(async (m) => {
       const agent = await queries.agents.findById(pool, m.agentId);
-      return agent ? { ...agent, isDefault: m.isDefault, addedAt: m.addedAt } : null;
+      return agent ? { ...agent, addedAt: m.addedAt } : null;
     }),
   );
   return agents.filter((a): a is NonNullable<typeof a> => a !== null);
@@ -133,28 +143,5 @@ export async function removeAgentFromWorkspace(
   agentId: string,
 ) {
   await queries.workspaceAgents.removeFromWorkspace(pool, workspaceId, agentId);
-  return { ok: true };
-}
-
-/**
- * Sets the workspace default agent. Auto-enrolls the agent in the workspace
- * first if it isn't already a member — clicking "make default" on a globally-
- * listed agent should not 404 just because the user hasn't separately enrolled
- * it. Owner mismatch is still rejected by addAgentToWorkspace.
- */
-export async function setWorkspaceDefaultAgent(
-  pool: pg.Pool,
-  workspaceId: string,
-  agentId: string,
-) {
-  const enrolled = await queries.workspaceAgents.findForWorkspace(
-    pool,
-    workspaceId,
-    agentId,
-  );
-  if (!enrolled) {
-    await addAgentToWorkspace(pool, workspaceId, agentId);
-  }
-  await queries.workspaceAgents.setDefault(pool, workspaceId, agentId);
   return { ok: true };
 }
