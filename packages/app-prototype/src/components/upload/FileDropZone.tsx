@@ -273,13 +273,20 @@ export function FileDropZone({
       />
       {directory && (
         <input
-          ref={dirInputRef}
+          ref={(el) => {
+            dirInputRef.current = el;
+            if (el) {
+              // `webkitdirectory` and `directory` aren't in the React
+              // attribute type map, so setAttribute at the DOM level
+              // is the reliable way to switch the picker to directory
+              // mode across Chromium, Firefox, and Safari.
+              el.setAttribute("webkitdirectory", "");
+              el.setAttribute("directory", "");
+            }
+          }}
           type="file"
           className="hidden"
           multiple
-          // Non-standard attributes for directory-mode pickers; both are
-          // needed for cross-browser coverage.
-          {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
           onChange={(e) => {
             handleFiles(collectFromFileList(e.target.files));
             e.target.value = "";

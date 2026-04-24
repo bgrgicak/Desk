@@ -79,11 +79,12 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
 
   // "History" is past-only — filter out the synthesized upcoming/paused
   // preview occurrences that the calendar uses to place scheduled runs
-  // on their future date.
-  const history = (run.history ?? []).filter(
-    occ => occ.status !== 'scheduled' && occ.status !== 'paused',
-  )
-  const visibleHistory = showAllHistory ? history : history.slice(0, 5)
+  // on their future date. Ordered old → new.
+  const history = (run.history ?? [])
+    .filter(occ => occ.status !== 'scheduled' && occ.status !== 'paused')
+    .slice()
+    .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())
+  const visibleHistory = showAllHistory ? history : history.slice(-5)
 
   async function transition(nextState: 'paused' | 'pending' | 'cancelled') {
     if (!run.chatId || !run.messageId) {
@@ -273,6 +274,15 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                   <p className="px-4 py-2 text-xs text-muted-foreground" data-testid="run-history-empty">No history yet.</p>
                 ) : (
                   <>
+                    {history.length > 5 && !showAllHistory && (
+                      <button
+                        onClick={() => setShowAllHistory(true)}
+                        className="w-full px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors text-left"
+                      >
+                        Show {history.length - 5} earlier…
+                      </button>
+                    )}
+
                     {visibleHistory.map(occ => (
                       <div
                         key={occ.id}
@@ -294,15 +304,6 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                         </span>
                       </div>
                     ))}
-
-                    {history.length > 5 && !showAllHistory && (
-                      <button
-                        onClick={() => setShowAllHistory(true)}
-                        className="w-full px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors text-left"
-                      >
-                        Show {history.length - 5} more…
-                      </button>
-                    )}
                   </>
                 )}
               </div>

@@ -78,6 +78,7 @@ function getOccurrencesForDay(day: Date, runs: Run[]): { run: Run; occ: RunOccur
       }
     }
   }
+  result.sort((a, b) => a.occ.startedAt.getTime() - b.occ.startedAt.getTime())
   return result
 }
 
@@ -225,6 +226,7 @@ function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
               dayOccs.push({ run, occ })
           }
         }
+        dayOccs.sort((a, b) => a.occ.startedAt.getTime() - b.occ.startedAt.getTime())
         return (
           <div key={di} className="flex-1 border-r last:border-r-0 flex flex-col">
             <div className={`flex flex-col items-center py-2 border-b shrink-0 ${isToday ? 'bg-muted/30' : ''}`}>
