@@ -59,6 +59,9 @@ import {
 } from '@/data/ui-types'
 import { useAppSelector } from '@/store/hooks'
 import { selectFolders } from '@/store/slices/derivedSlice'
+import { useUploadLibraryFileMutation } from '@/store/api'
+import { FileDropZone } from '@/components/upload/FileDropZone'
+import { toast } from 'sonner'
 
 interface ContextListProps {
   items: ContextItem[]
@@ -89,6 +92,26 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
+
+  const activeWorkspaceId = useAppSelector(s => s.ui.activeWorkspaceId) ?? undefined
+  const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
+
+  const handleUpload = async (files: File[]) => {
+    if (!activeWorkspaceId) {
+      toast.error('Pick a workspace before uploading')
+      return
+    }
+    for (const file of files) {
+      try {
+        await uploadLibraryFile({ workspaceId: activeWorkspaceId, file }).unwrap()
+        toast.success(`Uploaded ${file.name}`)
+      } catch (err) {
+        toast.error(`Upload failed: ${file.name}`, {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
+  }
 
   const createBlankNote = (): ContextItem => ({
     id: `note-new-${Date.now()}`,
@@ -175,7 +198,14 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   }
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+    <FileDropZone
+      onFiles={handleUpload}
+      disabled={!activeWorkspaceId || uploadState.isLoading}
+      overlayLabel={activeWorkspaceId ? 'Drop to add to Library' : 'Pick a workspace first'}
+      className="flex flex-1 flex-col min-h-0 overflow-hidden"
+    >
+      {({ openPicker }) => (
+        <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
       {/* ── Header bar ── */}
       <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
@@ -284,7 +314,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
               <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
             </DropdownMenuContent>
@@ -317,7 +347,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
-                  <DropdownMenuItem><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
                   <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
                 </DropdownMenuContent>
@@ -717,6 +747,8 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+        </div>
+      )}
+    </FileDropZone>
   )
 }

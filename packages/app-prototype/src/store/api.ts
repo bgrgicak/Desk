@@ -353,11 +353,42 @@ export const api = createApi({
       }),
       invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
+    uploadLibraryFile: build.mutation<
+      ServerFile,
+      { workspaceId?: string; file: File }
+    >({
+      query: ({ workspaceId, file }) => {
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        const url = workspaceId
+          ? `/library?workspaceId=${encodeURIComponent(workspaceId)}`
+          : "/library";
+        return { url, method: "POST", body: fd };
+      },
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
 
     // ── Chat artifacts ────────────────────────────────────────────────
     getChatArtifacts: build.query<ServerFile[], string>({
       query: (chatId) => `/chats/${chatId}/artifacts`,
       providesTags: (_r, _e, chatId) => [
+        { type: "ChatArtifact", id: `CHAT_${chatId}` },
+      ],
+    }),
+    uploadChatArtifact: build.mutation<
+      ServerFile,
+      { chatId: string; file: File }
+    >({
+      query: ({ chatId, file }) => {
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        return {
+          url: `/chats/${chatId}/artifacts`,
+          method: "POST",
+          body: fd,
+        };
+      },
+      invalidatesTags: (_r, _e, { chatId }) => [
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
@@ -411,7 +442,9 @@ export const {
   useGetMessagesQuery,
   useGetLibraryQuery,
   useDeleteLibraryFileMutation,
+  useUploadLibraryFileMutation,
   useGetChatArtifactsQuery,
+  useUploadChatArtifactMutation,
   useSearchQuery,
   useGetModelsQuery,
 } = api;

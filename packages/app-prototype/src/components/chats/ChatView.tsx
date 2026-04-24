@@ -25,10 +25,12 @@ import {
   useGetChatMessagesQuery,
   useGetLibraryQuery,
   usePostChatMessageMutation,
+  useUploadLibraryFileMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import type { ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
+import { FileDropZone } from '@/components/upload/FileDropZone'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -206,9 +208,11 @@ function ArtifactsPanel({
 function FilesPanel({
   initialReferenceIds,
   libraryItems,
+  workspaceId,
 }: {
   initialReferenceIds: string[]
   libraryItems: ContextItem[]
+  workspaceId?: string
 }) {
   const [refs, setRefs] = useState<ContextItem[]>(() =>
     initialReferenceIds
@@ -218,6 +222,38 @@ function FilesPanel({
   const [pickerOpen, setPickerOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [pickerSearch, setPickerSearch] = useState('')
+  const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
+
+  const handleUpload = async (files: File[]) => {
+    if (!workspaceId) {
+      toast.error('Cannot upload: no workspace context')
+      return
+    }
+    for (const file of files) {
+      try {
+        const serverFile = await uploadLibraryFile({ workspaceId, file }).unwrap()
+        setRefs(prev => [
+          ...prev,
+          {
+            id: serverFile.id ?? serverFile.path ?? `upload-${Date.now()}`,
+            type: 'file',
+            name: serverFile.name ?? file.name,
+            content: '',
+            addedAt: new Date(),
+            usedBy: [],
+            uploadedBy: 'user',
+            relatedArtifactIds: [],
+          },
+        ])
+        toast.success(`Uploaded ${file.name}`)
+      } catch (err) {
+        toast.error(`Upload failed: ${file.name}`, {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
+    setPickerOpen(false)
+  }
 
   const filteredRefs = refs.filter(r =>
     !search.trim() || r.name.toLowerCase().includes(search.toLowerCase())
@@ -236,6 +272,13 @@ function FilesPanel({
   }
 
   return (
+    <FileDropZone
+      onFiles={handleUpload}
+      disabled={!workspaceId || uploadState.isLoading}
+      overlayLabel={workspaceId ? 'Drop to add to Library' : 'No workspace selected'}
+      className="flex flex-col h-full"
+    >
+      {({ openPicker }) => (
     <div className="flex flex-col h-full">
       {/* Search + Add row */}
       <div className="flex items-center gap-2 px-3 py-2.5 border-b shrink-0">
@@ -298,22 +341,15 @@ function FilesPanel({
               <div className="border-t">
                 <button
                   onClick={() => {
-                    const mock: ContextItem = {
-                      id: `upload-${Date.now()}`,
-                      type: 'file',
-                      name: 'Uploaded file.pdf',
-                      content: '',
-                      addedAt: new Date(),
-                      usedBy: [],
-                      uploadedBy: 'user',
-                      relatedArtifactIds: [],
-                    }
-                    addRef(mock)
+                    setPickerOpen(false)
+                    openPicker()
                   }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground"
+                  disabled={!workspaceId || uploadState.isLoading}
+                  data-testid="files-panel-upload-a-file"
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>Upload a file…</span>
+                  <span>{uploadState.isLoading ? 'Uploading…' : 'Upload a file…'}</span>
                 </button>
               </div>
             </div>
@@ -353,6 +389,8 @@ function FilesPanel({
         )}
       </div>
     </div>
+      )}
+    </FileDropZone>
   )
 }
 
@@ -643,6 +681,7 @@ export function ChatView({
               prefillValue={prefillText}
               chatAgentId={chat.agentId}
               chatWorkspaceId={chat.workspaceId}
+              chatId={chat.id}
             />
           </div>
         </div>
@@ -688,6 +727,7 @@ export function ChatView({
               <FilesPanel
                 initialReferenceIds={chat.referenceIds ?? []}
                 libraryItems={libraryItems}
+                workspaceId={chat.workspaceId}
               />
             )}
           </div>

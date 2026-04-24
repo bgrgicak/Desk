@@ -9,10 +9,14 @@ import type { ContextItem } from '@/data/ui-types'
 import {
   useGetAgentsQuery,
   useGetLibraryQuery,
+  useUploadChatArtifactMutation,
+  useUploadLibraryFileMutation,
 } from '@/store/api'
 import { useAppSelector } from '@/store/hooks'
 import { selectFolders } from '@/store/slices/derivedSlice'
 import { toContextItem } from '@/store/selectors/library'
+import { FileDropZone } from '@/components/upload/FileDropZone'
+import { toast } from 'sonner'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -80,6 +84,13 @@ interface ChatInputProps {
    */
   chatAgentId?: string
   chatWorkspaceId?: string
+  /**
+   * When set, "Upload a file…" and drag-and-drop persist to the chat
+   * via POST /chats/:id/artifacts. When absent but chatWorkspaceId is
+   * set (compose flow before the chat exists), uploads go to the
+   * workspace library instead.
+   */
+  chatId?: string
 }
 
 // Calculate fixed position above a trigger button
@@ -106,6 +117,7 @@ export function ChatInput({
   focusRef,
   chatAgentId,
   chatWorkspaceId,
+  chatId,
 }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
@@ -321,6 +333,49 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
+  // Real upload paths — chat-scoped when the chat already exists,
+  // workspace-scoped library otherwise (compose before first message).
+  const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
+  const [uploadLibraryFile, libraryUploadState] = useUploadLibraryFileMutation()
+  const isUploading = chatUploadState.isLoading || libraryUploadState.isLoading
+  const uploadEnabled = Boolean(chatId) || Boolean(chatWorkspaceId)
+  const hasRealChatId = Boolean(chatId) && !chatId!.startsWith('chat-new-')
+
+  const handleFilesUpload = async (files: File[]) => {
+    for (const file of files) {
+      try {
+        if (hasRealChatId) {
+          const serverFile = await uploadChatArtifact({
+            chatId: chatId!,
+            file,
+          }).unwrap()
+          setAttachedItems(prev => [
+            ...prev,
+            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name, kind: 'item', type: 'file' },
+          ])
+        } else if (chatWorkspaceId) {
+          const serverFile = await uploadLibraryFile({
+            workspaceId: chatWorkspaceId,
+            file,
+          }).unwrap()
+          setAttachedItems(prev => [
+            ...prev,
+            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name, kind: 'item', type: 'file' },
+          ])
+        } else {
+          toast.error('Cannot upload: no chat or workspace context')
+          return
+        }
+        toast.success(`Uploaded ${file.name}`)
+      } catch (err) {
+        toast.error(`Upload failed: ${file.name}`, {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
+    setAttachOpen(false)
+  }
+
   const handleSubmit = () => {
     const trimmed = value.trim()
     if ((!trimmed && attachedItems.length === 0) || disabled) return
@@ -343,6 +398,21 @@ export function ChatInput({
   const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
   return (
+    <FileDropZone
+      onFiles={handleFilesUpload}
+      disabled={!uploadEnabled || isUploading}
+      overlayLabel={
+        isUploading
+          ? 'Uploading…'
+          : hasRealChatId
+            ? 'Drop to attach to chat'
+            : chatWorkspaceId
+              ? 'Drop to add to Library'
+              : 'Pick a workspace first'
+      }
+      className="w-full"
+    >
+      {({ openPicker }) => (
     <div className="w-full">
       {/* Input card */}
       <div className="rounded-lg border bg-background">
@@ -587,14 +657,15 @@ export function ChatInput({
               <div className="border-t">
                 <button
                   onClick={() => {
-                    const mock: AttachedItem = { id: `upload-${Date.now()}`, name: 'Uploaded file.pdf', kind: 'item', type: 'file' }
-                    setAttachedItems(prev => [...prev, mock])
                     setAttachOpen(false)
+                    openPicker()
                   }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground"
+                  disabled={!uploadEnabled || isUploading}
+                  data-testid="chat-upload-a-file"
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>Upload a file…</span>
+                  <span>{isUploading ? 'Uploading…' : 'Upload a file…'}</span>
                 </button>
               </div>
             </div>,
@@ -604,5 +675,7 @@ export function ChatInput({
 
       </div>
     </div>
+      )}
+    </FileDropZone>
   )
 }
