@@ -8,18 +8,19 @@ import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
-import { RunsPage } from '@/components/runs/RunsPage'
+import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
 import {
   MOCK_ARTIFACTS,
   MOCK_INBOX,
   MOCK_CONTEXT,
-  MOCK_RUNS,
+  MOCK_TASKS,
   MOCK_CHATS,
   MOCK_ARTIFACT_UPDATES,
   type Artifact,
   type Chat,
   type ContextItem,
+  type Task,
 } from '@/data/mock-data'
 
 const NEW_CHAT_STUB: Chat = {
@@ -51,6 +52,8 @@ function App() {
   const [readUpdateIds, setReadUpdateIds]          = useState<Set<string>>(new Set())
   const [readChatIds, setReadChatIds]              = useState<Set<string>>(new Set())
   const [todaySheetOpen, setTodaySheetOpen]        = useState(false)
+  const [tasks, setTasks]                          = useState<Task[]>(MOCK_TASKS)
+  const [createTaskSheetOpen, setCreateTaskSheetOpen] = useState(false)
 
   // Agentation widget (Option+A)
   const [agentationVisible, setAgentationVisible] = useState(true)
@@ -283,7 +286,13 @@ function App() {
           />
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'runs' && (
-          <RunsPage runs={MOCK_RUNS} onCompose={enterCompose} />
+          <TasksPage
+            tasks={tasks}
+            onTasksChange={setTasks}
+            createSheetOpen={createTaskSheetOpen}
+            onOpenCreateSheet={() => setCreateTaskSheetOpen(true)}
+            onCloseCreateSheet={() => setCreateTaskSheetOpen(false)}
+          />
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList

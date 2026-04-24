@@ -85,7 +85,7 @@ export interface Folder {
   createdAt: Date
 }
 
-export interface RunOccurrence {
+export interface TaskOccurrence {
   id: string
   startedAt: Date
   endedAt: Date
@@ -93,21 +93,26 @@ export interface RunOccurrence {
   statusText?: string
 }
 
-export interface Run {
+export interface Task {
   id: string
   name: string
+  description?: string
   agentName: string
-  status: 'active' | 'completed' | 'paused' | 'failed'
+  status: 'todo' | 'active' | 'complete' | 'scheduled'
   statusText: string
+  priority?: 'low' | 'medium' | 'high' | 'highest'
+  assigneeId?: string
   startedAt: Date
   completedAt?: Date
   artifactIds: string[]
-  scheduled?: boolean
-  nextRun?: Date
+  scheduledFor?: Date
+  scheduleEndDate?: Date
+  scheduleRepeat?: boolean
   color: 'blue' | 'emerald' | 'amber' | 'violet' | 'slate' | 'rose' | 'orange'
   schedule?: string
-  history: RunOccurrence[]
+  history: TaskOccurrence[]
 }
+
 
 export interface Chat {
   id: string          // matches conversation ID used in ComposeOverlay
@@ -994,7 +999,7 @@ function _makeWeekdayOccurrences(
   durationMins: number,
   currentStatus: 'completed' | 'failed' | 'active',
   currentStatusText?: string,
-): RunOccurrence[] {
+): TaskOccurrence[] {
   const weekdays: RunOccurrence[] = []
   // April 1 (Wed) through April 15 (Wed) — all weekdays except today's (Apr 16 handled separately)
   for (let day = 1; day <= 15; day++) {
@@ -1023,7 +1028,7 @@ function _makeWeekdayOccurrences(
   return weekdays.reverse() // most recent first
 }
 
-function _makeThursdayOccurrences(runId: string, hour: number, durationMins: number): RunOccurrence[] {
+function _makeThursdayOccurrences(runId: string, hour: number, durationMins: number): TaskOccurrence[] {
   // Thursdays in April 2026: Apr 2, 9, 16 (today) + next would be Apr 23
   const thursdays = [2, 9]
   const result: RunOccurrence[] = thursdays.map(day => {
@@ -1049,7 +1054,7 @@ function _makeThursdayOccurrences(runId: string, hour: number, durationMins: num
   return result.reverse()
 }
 
-function _makeWednesdayOccurrences(runId: string, hour: number, durationMins: number): RunOccurrence[] {
+function _makeWednesdayOccurrences(runId: string, hour: number, durationMins: number): TaskOccurrence[] {
   // Wednesdays in April 2026: Apr 1, 8, 15
   const wednesdays = [1, 8, 15]
   return wednesdays.map(day => {
@@ -1067,17 +1072,20 @@ function _makeWednesdayOccurrences(runId: string, hour: number, durationMins: nu
   }).reverse()
 }
 
-export const MOCK_RUNS: Run[] = [
+export const MOCK_TASKS: Task[] = [
   {
     id: 'run-1',
     name: 'Morning email digest',
+    description: 'Read inbox and sort by priority. Send a daily briefing at 8 am.',
     agentName: 'Claude',
     status: 'active',
     statusText: 'Reading your inbox and sorting by priority...',
+    priority: 'high',
+    assigneeId: 'Claude',
     startedAt: new Date('2026-04-16T08:00:00'),
     artifactIds: [],
-    scheduled: true,
-    nextRun: new Date('2026-04-17T08:00:00'),
+    scheduledFor: new Date('2026-04-17T08:00:00'),
+    scheduleRepeat: true,
     color: 'blue',
     schedule: 'Daily at 8 am',
     history: _makeWeekdayOccurrences('run-1', 8, 4, 'active', 'Reading your inbox and sorting by priority...'),
@@ -1085,14 +1093,17 @@ export const MOCK_RUNS: Run[] = [
   {
     id: 'run-2',
     name: 'Weekly team summary',
+    description: 'Summarise all Slack and Linear updates posted by the team across the week.',
     agentName: 'Claude',
-    status: 'completed',
+    status: 'complete',
     statusText: 'Finished. Summarised 47 updates from 8 team members.',
+    priority: 'medium',
+    assigneeId: 'Claude',
     startedAt: new Date('2026-04-16T07:00:00'),
     completedAt: new Date('2026-04-16T07:02:00'),
     artifactIds: ['art-1'],
-    scheduled: true,
-    nextRun: new Date('2026-04-23T07:00:00'),
+    scheduledFor: new Date('2026-04-23T07:00:00'),
+    scheduleRepeat: true,
     color: 'emerald',
     schedule: 'Every Thursday at 7 am',
     history: _makeThursdayOccurrences('run-2', 7, 2),
@@ -1100,14 +1111,17 @@ export const MOCK_RUNS: Run[] = [
   {
     id: 'run-3',
     name: 'Calendar sync',
+    description: "Couldn't connect to Google Calendar. The connection needs to be refreshed.",
     agentName: 'Claude',
-    status: 'failed',
+    status: 'todo',
     statusText: "Couldn't connect to Google Calendar. The connection needs to be refreshed.",
+    priority: 'highest',
+    assigneeId: 'user',
     startedAt: new Date('2026-04-15T06:00:00'),
     completedAt: new Date('2026-04-15T06:00:30'),
     artifactIds: [],
-    scheduled: true,
-    nextRun: new Date('2026-04-16T06:00:00'),
+    scheduledFor: new Date('2026-04-16T06:00:00'),
+    scheduleRepeat: true,
     color: 'slate',
     schedule: 'Daily at 6 am',
     history: _makeWednesdayOccurrences('run-3', 6, 1),
@@ -1115,9 +1129,12 @@ export const MOCK_RUNS: Run[] = [
   {
     id: 'run-4',
     name: 'Expense report compilation',
+    description: 'Compile expense reports from receipts in email and cloud storage. Flag missing entries.',
     agentName: 'Claude',
-    status: 'paused',
+    status: 'todo',
     statusText: 'Waiting for your input — found entries without receipts.',
+    priority: 'medium',
+    assigneeId: 'user',
     startedAt: new Date('2026-04-15T22:00:00'),
     artifactIds: ['art-2'],
     color: 'amber',
@@ -1149,9 +1166,12 @@ export const MOCK_RUNS: Run[] = [
   {
     id: 'run-5',
     name: 'Landing page deployment',
+    description: 'Deploy the latest changes to production. Build and push via CI/CD pipeline.',
     agentName: 'Claude',
-    status: 'completed',
+    status: 'complete',
     statusText: 'Successfully deployed. All changes are live.',
+    priority: 'high',
+    assigneeId: 'Claude',
     startedAt: new Date('2026-04-15T14:25:00'),
     completedAt: new Date('2026-04-15T14:30:00'),
     artifactIds: ['art-8'],
@@ -1169,9 +1189,12 @@ export const MOCK_RUNS: Run[] = [
   {
     id: 'run-6',
     name: 'Data migration',
+    description: 'Migrate all records from the legacy PostgreSQL database to the new schema in batches.',
     agentName: 'Claude',
     status: 'active',
     statusText: 'Migrating records from legacy database — 68% complete.',
+    priority: 'highest',
+    assigneeId: 'Claude',
     startedAt: new Date('2026-04-14T09:00:00'),
     artifactIds: [],
     color: 'orange',
@@ -1185,7 +1208,42 @@ export const MOCK_RUNS: Run[] = [
       },
     ],
   },
+  {
+    id: 'task-7',
+    name: 'Quarterly report draft',
+    description: 'Compile Q1 2026 metrics into a slide deck for the board presentation next week.',
+    agentName: 'Research Pro',
+    status: 'scheduled',
+    statusText: 'Scheduled to run on April 21.',
+    priority: 'high',
+    assigneeId: 'Research Pro',
+    startedAt: new Date('2026-04-21T10:00:00'),
+    scheduledFor: new Date('2026-04-21T10:00:00'),
+    scheduleRepeat: false,
+    artifactIds: [],
+    color: 'rose',
+    history: [],
+  },
+  {
+    id: 'task-8',
+    name: 'SEO audit',
+    description: 'Run a full audit of the marketing site. Flag broken links, missing meta tags, and slow pages.',
+    agentName: 'Research Pro',
+    status: 'scheduled',
+    statusText: 'Scheduled to repeat every Monday.',
+    priority: 'low',
+    assigneeId: 'Research Pro',
+    startedAt: new Date('2026-04-20T09:00:00'),
+    scheduledFor: new Date('2026-04-20T09:00:00'),
+    scheduleRepeat: true,
+    schedule: 'Every Monday at 9 am',
+    scheduleEndDate: new Date('2026-07-01T00:00:00'),
+    artifactIds: [],
+    color: 'emerald',
+    history: [],
+  },
 ]
+
 
 // ─── Mock Chats ───
 // Dates are relative to the fixed "now" used in getRelativeTime (2026-04-16)

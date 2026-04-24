@@ -305,7 +305,7 @@ export function ChatInput({
   return (
     <div className="w-full">
       {/* Input card */}
-      <div className="rounded-lg border bg-background">
+      <div className="rounded-lg border bg-background shadow-xs">
         {/* Chips — only when attachments exist */}
         {attachedItems.length > 0 && (
           <div className={`flex flex-wrap gap-1.5 px-3 ${compact ? 'pt-2' : 'pt-3'}`}>

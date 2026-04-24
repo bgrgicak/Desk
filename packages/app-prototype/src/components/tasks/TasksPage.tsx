@@ -6,38 +6,44 @@ import {
   CalendarDays,
   CalendarRange,
   List,
+  LayoutGrid,
   Search,
   Plus,
   Loader2,
   CheckCircle2,
   AlertCircle,
-  PauseCircle,
+  Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { RunDetailPanel } from './RunDetailPanel'
-import type { Run, RunOccurrence } from '@/data/mock-data'
+import { BoardView } from './BoardView'
+import { TaskDetailPanel } from './TaskDetailPanel'
+import { TaskSheet } from './TaskSheet'
+import type { Task, TaskOccurrence } from '@/data/mock-data'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
-type ViewMode   = 'month' | 'week' | 'list'
-type StatusFilter = 'all' | 'active' | 'completed' | 'cancelled' | 'failed'
+type ViewMode     = 'board' | 'month' | 'week' | 'list'
+type StatusFilter = 'all' | 'todo' | 'active' | 'complete' | 'scheduled'
 
-interface RunsPageProps {
-  runs: Run[]
-  onCompose: () => void
+interface TasksPageProps {
+  tasks: Task[]
+  onTasksChange: (tasks: Task[]) => void
+  createSheetOpen: boolean
+  onOpenCreateSheet: () => void
+  onCloseCreateSheet: () => void
 }
 
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all',       label: 'All'       },
+  { value: 'todo',      label: 'To do'     },
   { value: 'active',    label: 'Active'    },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'failed',    label: 'Failed'    },
+  { value: 'complete',  label: 'Complete'  },
+  { value: 'scheduled', label: 'Scheduled' },
 ]
 
-// ─── Calendar helpers ─────────────────────────────────────────────────────────
+// ── Calendar helpers ──────────────────────────────────────────────────────────
 
 function getCalendarWeeks(year: number, month: number): Date[][] {
   const firstDay  = new Date(year, month, 1)
@@ -64,38 +70,37 @@ function dateOnly(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
-// ─── Per-day occurrences helper ───────────────────────────────────────────────
-
-function getOccurrencesForDay(day: Date, runs: Run[]): { run: Run; occ: RunOccurrence }[] {
+function getOccurrencesForDay(day: Date, tasks: Task[]): { task: Task; occ: TaskOccurrence }[] {
   const d = dateOnly(day)
-  const result: { run: Run; occ: RunOccurrence }[] = []
-  for (const run of runs) {
-    for (const occ of run.history ?? []) {
+  const result: { task: Task; occ: TaskOccurrence }[] = []
+  for (const task of tasks) {
+    for (const occ of task.history ?? []) {
       if (dateOnly(occ.startedAt) <= d && dateOnly(occ.endedAt) >= d) {
-        result.push({ run, occ })
+        result.push({ task, occ })
       }
     }
   }
   return result
 }
 
-// ─── Status icon (small) ──────────────────────────────────────────────────────
+// ── Status icon (small) ───────────────────────────────────────────────────────
 
-function RunStatusIconSmall({ status, isFailed }: { status: Run['status'] | RunOccurrence['status']; isFailed?: boolean }) {
-  const cls = isFailed ? 'text-red-500' : ''
+function TaskStatusIconSmall({ status }: { status: Task['status'] | TaskOccurrence['status'] }) {
   switch (status) {
-    case 'active':    return <Loader2    className={`h-3 w-3 shrink-0 animate-spin text-blue-500`} />
-    case 'completed': return <CheckCircle2 className={`h-3 w-3 shrink-0 text-emerald-500`} />
-    case 'failed':    return <AlertCircle  className={`h-3 w-3 shrink-0 text-red-500`} />
-    case 'paused':    return <PauseCircle  className={`h-3 w-3 shrink-0 text-amber-500 ${cls}`} />
+    case 'active':    return <Loader2     className="h-3 w-3 shrink-0 animate-spin text-blue-500" />
+    case 'complete':
+    case 'completed': return <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+    case 'failed':    return <AlertCircle  className="h-3 w-3 shrink-0 text-red-500" />
+    case 'todo':
+    case 'scheduled': return <Clock        className="h-3 w-3 shrink-0 text-amber-500" />
     default:          return null
   }
 }
 
-// ─── Event bar ────────────────────────────────────────────────────────────────
+// ── Event bar ─────────────────────────────────────────────────────────────────
 
-function EventBar({ run, occurrence, isSelected, onClick }: {
-  run: Run; occurrence: RunOccurrence
+function EventBar({ task, occurrence, isSelected, onClick }: {
+  task: Task; occurrence: TaskOccurrence
   isSelected: boolean; onClick: () => void
 }) {
   const isFailed = occurrence.status === 'failed'
@@ -109,19 +114,19 @@ function EventBar({ run, occurrence, isSelected, onClick }: {
         ${isSelected ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}
       `}
     >
-      <RunStatusIconSmall status={occurrence.status} />
-      <span className="truncate text-foreground">{run.name}</span>
+      <TaskStatusIconSmall status={occurrence.status} />
+      <span className="truncate text-foreground">{task.name}</span>
     </button>
   )
 }
 
-// ─── Month view ───────────────────────────────────────────────────────────────
+// ── Month view ────────────────────────────────────────────────────────────────
 
 const MAX_VISIBLE = 3
 
-function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
-  year: number; month: number; runs: Run[]
-  selectedRunId: string | null; onSelectRun: (run: Run) => void
+function MonthView({ year, month, tasks, selectedTaskId, onSelectTask }: {
+  year: number; month: number; tasks: Task[]
+  selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
   const today = new Date('2026-04-16T10:00:00')
   const weeks = useMemo(() => getCalendarWeeks(year, month), [year, month])
@@ -129,28 +134,22 @@ function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Day-of-week header */}
       <div className="grid grid-cols-7 border-b shrink-0">
         {DOW.map(d => (
           <div key={d} className="text-center py-2 text-xs font-medium text-muted-foreground">{d}</div>
         ))}
       </div>
-
-      {/* Week rows — flex-1 on each row so they share the remaining height equally */}
       <div className="flex flex-col flex-1 min-h-0">
         {weeks.map((week, wi) => (
           <div key={wi} className="flex flex-1 border-b last:border-b-0 min-h-0">
             {week.map((day, di) => {
               const isCurrentMonth = day.getMonth() === month
               const isToday        = isSameDay(day, today)
-              const dayOccs        = getOccurrencesForDay(day, runs)
+              const dayOccs        = getOccurrencesForDay(day, tasks)
               const visible        = dayOccs.slice(0, MAX_VISIBLE)
               const overflow       = dayOccs.slice(MAX_VISIBLE)
-
               return (
-                <div key={di}
-                  className="flex-1 border-r last:border-r-0 flex flex-col min-w-0"
-                >
+                <div key={di} className="flex-1 border-r last:border-r-0 flex flex-col min-w-0">
                   <div className={`px-2 pt-2 pb-0 shrink-0 ${isCurrentMonth ? '' : 'opacity-40'}`}>
                     <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-medium ${
                       isToday ? 'bg-foreground text-background' : 'text-foreground'
@@ -158,13 +157,12 @@ function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
                       {day.getDate()}
                     </span>
                   </div>
-
                   <div className={`flex flex-col gap-0.5 px-2 pt-2 pb-2 ${isCurrentMonth ? '' : 'opacity-40'}`}>
-                    {visible.map(({ run, occ }) => (
-                      <EventBar key={`${run.id}-${occ.id}`}
-                        run={run} occurrence={occ}
-                        isSelected={selectedRunId === run.id}
-                        onClick={() => onSelectRun(run)}
+                    {visible.map(({ task, occ }) => (
+                      <EventBar key={`${task.id}-${occ.id}`}
+                        task={task} occurrence={occ}
+                        isSelected={selectedTaskId === task.id}
+                        onClick={() => onSelectTask(task)}
                       />
                     ))}
                     {overflow.length > 0 && (
@@ -176,13 +174,13 @@ function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
                         </PopoverTrigger>
                         <PopoverContent className="w-52 p-2" align="start">
                           <div className="flex flex-col gap-0.5">
-                            {overflow.map(({ run, occ }) => (
-                              <button key={`${run.id}-${occ.id}`}
-                                onClick={() => onSelectRun(run)}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-sm hover:bg-muted text-xs text-left w-full transition-colors ${selectedRunId === run.id ? 'bg-muted' : ''}`}
+                            {overflow.map(({ task, occ }) => (
+                              <button key={`${task.id}-${occ.id}`}
+                                onClick={() => onSelectTask(task)}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-sm hover:bg-muted text-xs text-left w-full transition-colors ${selectedTaskId === task.id ? 'bg-muted' : ''}`}
                               >
-                                <RunStatusIconSmall status={occ.status} />
-                                <span className={`truncate ${occ.status === 'failed' ? 'text-red-600' : 'text-foreground'}`}>{run.name}</span>
+                                <TaskStatusIconSmall status={occ.status} />
+                                <span className={`truncate ${occ.status === 'failed' ? 'text-red-600' : 'text-foreground'}`}>{task.name}</span>
                               </button>
                             ))}
                           </div>
@@ -200,26 +198,25 @@ function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
   )
 }
 
-// ─── Week view ────────────────────────────────────────────────────────────────
+// ── Week view ─────────────────────────────────────────────────────────────────
 
-function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
-  weekStart: Date; runs: Run[]
-  selectedRunId: string | null; onSelectRun: (run: Run) => void
+function WeekView({ weekStart, tasks, selectedTaskId, onSelectTask }: {
+  weekStart: Date; tasks: Task[]
+  selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
   const today = new Date('2026-04-16T10:00:00')
   const week: Date[] = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d
   })
-
   return (
     <div className="flex flex-1 min-h-0 border-b">
       {week.map((day, di) => {
         const isToday = isSameDay(day, today)
-        const dayOccs: { run: Run; occ: RunOccurrence }[] = []
-        for (const run of runs) {
-          for (const occ of run.history ?? []) {
+        const dayOccs: { task: Task; occ: TaskOccurrence }[] = []
+        for (const task of tasks) {
+          for (const occ of task.history ?? []) {
             if (dateOnly(occ.startedAt) <= day && dateOnly(occ.endedAt) >= day)
-              dayOccs.push({ run, occ })
+              dayOccs.push({ task, occ })
           }
         }
         return (
@@ -231,18 +228,18 @@ function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
               </span>
             </div>
             <div className="flex flex-col gap-1 p-1 overflow-y-auto flex-1">
-              {dayOccs.map(({ run, occ }) => {
+              {dayOccs.map(({ task, occ }) => {
                 const isFailed = occ.status === 'failed'
                 return (
                   <button
-                    key={`${run.id}-${occ.id}`}
-                    onClick={() => onSelectRun(run)}
+                    key={`${task.id}-${occ.id}`}
+                    onClick={() => onSelectTask(task)}
                     className={`flex items-center gap-1 px-1.5 py-1 rounded-sm text-xs border text-left w-full bg-background truncate ${
                       isFailed ? 'border-red-300' : 'border-border'
-                    } ${selectedRunId === run.id ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}`}
+                    } ${selectedTaskId === task.id ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}`}
                   >
-                    <RunStatusIconSmall status={occ.status} />
-                    <span className="truncate text-foreground">{run.name}</span>
+                    <TaskStatusIconSmall status={occ.status} />
+                    <span className="truncate text-foreground">{task.name}</span>
                   </button>
                 )
               })}
@@ -254,16 +251,16 @@ function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
   )
 }
 
-// ─── List view ────────────────────────────────────────────────────────────────
+// ── List view ─────────────────────────────────────────────────────────────────
 
-function ListView({ runs, selectedRunId, onSelectRun }: {
-  runs: Run[]; selectedRunId: string | null; onSelectRun: (run: Run) => void
+function ListView({ tasks, selectedTaskId, onSelectTask }: {
+  tasks: Task[]; selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
   const today     = new Date('2026-04-16T10:00:00')
   const todayDate = dateOnly(today)
 
-  const allOccs = runs.flatMap(run =>
-    (run.history ?? []).map(occ => ({ run, occ, date: dateOnly(occ.startedAt) }))
+  const allOccs = tasks.flatMap(task =>
+    (task.history ?? []).map(occ => ({ task, occ, date: dateOnly(occ.startedAt) }))
   ).sort((a, b) => b.date.getTime() - a.date.getTime())
 
   const getSection = (date: Date): string => {
@@ -292,17 +289,17 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
             <div key={section}>
               <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">{section}</h3>
               <div className="space-y-px">
-                {items.map(({ run, occ }) => {
+                {items.map(({ task, occ }) => {
                   const isFailed = occ.status === 'failed'
                   return (
                     <button
-                      key={`${run.id}-${occ.id}`}
-                      onClick={() => onSelectRun(run)}
-                      className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors text-left ${selectedRunId === run.id ? 'bg-muted/50' : ''}`}
+                      key={`${task.id}-${occ.id}`}
+                      onClick={() => onSelectTask(task)}
+                      className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors text-left ${selectedTaskId === task.id ? 'bg-muted/50' : ''}`}
                     >
-                      <RunStatusIconSmall status={occ.status} isFailed={isFailed} />
+                      <TaskStatusIconSmall status={occ.status} />
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${isFailed ? 'text-red-600' : 'text-foreground'}`}>{run.name}</p>
+                        <p className={`text-sm ${isFailed ? 'text-red-600' : 'text-foreground'}`}>{task.name}</p>
                         {occ.statusText && <p className="text-xs text-muted-foreground truncate">{occ.statusText}</p>}
                       </div>
                       <span className="text-xs text-muted-foreground shrink-0">
@@ -320,43 +317,61 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
   )
 }
 
-// ─── Main RunsPage ────────────────────────────────────────────────────────────
+// ── Main TasksPage ────────────────────────────────────────────────────────────
 
-export function RunsPage({ runs, onCompose }: RunsPageProps) {
+export function TasksPage({
+  tasks,
+  onTasksChange,
+  createSheetOpen,
+  onOpenCreateSheet,
+  onCloseCreateSheet,
+}: TasksPageProps) {
   const today = new Date('2026-04-16T10:00:00')
-  const [viewMode, setViewMode]         = useState<ViewMode>('month')
+  const [viewMode, setViewMode]         = useState<ViewMode>('board')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [defaultCreateStatus, setDefaultCreateStatus] = useState<Task['status']>('todo')
   const [currentYear, setCurrentYear]   = useState(today.getFullYear())
   const [currentMonth, setCurrentMonth] = useState(today.getMonth())
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(() => {
-    const d = new Date(today); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); return d
+    const d = new Date(today); d.setDate(d.getDate() - d.getDay()); d.setHours(0, 0, 0, 0); return d
   })
-  const [selectedRun, setSelectedRun]     = useState<Run | null>(null)
+  const [selectedTask, setSelectedTask]   = useState<Task | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [searchQuery, setSearchQuery]     = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const filteredRuns = useMemo(() => {
-    let result = runs
+  const filteredTasks = useMemo(() => {
+    let result = tasks
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
-      result = result.filter(r => r.name.toLowerCase().includes(q))
+      result = result.filter(t => t.name.toLowerCase().includes(q))
     }
     if (statusFilter !== 'all') {
-      result = result.filter(r => {
-        if (statusFilter === 'active')    return r.status === 'active'
-        if (statusFilter === 'completed') return r.status === 'completed'
-        if (statusFilter === 'cancelled') return r.status === 'paused'
-        if (statusFilter === 'failed')    return r.status === 'failed'
-        return true
-      })
+      result = result.filter(t => t.status === statusFilter)
     }
     return result
-  }, [runs, searchQuery, statusFilter])
+  }, [tasks, searchQuery, statusFilter])
 
-  function handleSelectRun(run: Run) {
-    setSelectedRun(run)
+  function handleSelectTask(task: Task) {
+    setSelectedTask(task)
     setPanelCollapsed(false)
+  }
+
+  function handleTaskChange(updated: Task) {
+    setSelectedTask(updated)
+    onTasksChange(tasks.map(t => t.id === updated.id ? updated : t))
+  }
+
+  function handleTaskStatusChange(taskId: string, newStatus: Task['status']) {
+    const updated = tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
+    onTasksChange(updated)
+    if (selectedTask?.id === taskId) {
+      setSelectedTask(prev => prev ? { ...prev, status: newStatus } : prev)
+    }
+  }
+
+  function handleCreateTask(task: Task) {
+    onTasksChange([...tasks, task])
   }
 
   function prevPeriod() {
@@ -389,7 +404,7 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
     return ''
   }
 
-  const showPanel = selectedRun && !panelCollapsed
+  const showPanel = selectedTask && !panelCollapsed
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -397,25 +412,27 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
       {/* ── Header bar ── */}
       <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
         <SidebarTrigger className="h-8 w-8 rounded-md shrink-0" />
-        <span className="text-sm font-semibold shrink-0">Runs</span>
+        <span className="text-sm font-semibold shrink-0">Tasks</span>
 
         <div className="ml-auto flex items-center gap-2">
-          {/* Status filter pills */}
-          <div className="flex items-center rounded-lg border p-0.5">
-            {STATUS_FILTERS.map(f => (
-              <button
-                key={f.value}
-                onClick={() => setStatusFilter(f.value)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  statusFilter === f.value
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+          {/* Status filter pills — hidden in board view (columns serve the same purpose) */}
+          {viewMode !== 'board' && (
+            <div className="flex items-center rounded-lg border p-0.5">
+              {STATUS_FILTERS.map(f => (
+                <button
+                  key={f.value}
+                  onClick={() => setStatusFilter(f.value)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    statusFilter === f.value
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Search */}
           <div className="relative">
@@ -433,7 +450,8 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
           {/* View switcher */}
           <div className="flex items-center rounded-lg border p-0.5">
             {([
-              { mode: 'month' as ViewMode, icon: CalendarDays,  title: 'Month' },
+              { mode: 'board' as ViewMode, icon: LayoutGrid,   title: 'Board' },
+              { mode: 'month' as ViewMode, icon: CalendarDays, title: 'Month' },
               { mode: 'week'  as ViewMode, icon: CalendarRange, title: 'Week'  },
               { mode: 'list'  as ViewMode, icon: List,          title: 'List'  },
             ] as const).map(({ mode, icon: Icon, title }) => (
@@ -448,7 +466,8 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
             ))}
           </div>
 
-          <Button size="sm" onClick={onCompose}>
+          <Button size="sm" onClick={onOpenCreateSheet}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
             Create
           </Button>
         </div>
@@ -457,9 +476,10 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
       {/* ── Body ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* Calendar / list pane */}
+        {/* Main content pane */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          {/* Calendar nav sub-header */}
+
+          {/* Calendar sub-header (month/week only) */}
           {(viewMode === 'month' || viewMode === 'week') && (
             <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0">
               <div className="flex items-center gap-1">
@@ -482,34 +502,51 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
             </div>
           )}
 
+          {viewMode === 'board' && (
+            <BoardView
+              tasks={filteredTasks}
+              selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
+              onTasksChange={updatedTasks => {
+                onTasksChange(updatedTasks)
+                if (selectedTask) {
+                  const found = updatedTasks.find(t => t.id === selectedTask.id)
+                  if (found) setSelectedTask(found)
+                }
+              }}
+              onAddTask={status => {
+                setDefaultCreateStatus(status)
+                onOpenCreateSheet()
+              }}
+            />
+          )}
           {viewMode === 'month' && (
             <MonthView
               year={currentYear} month={currentMonth}
-              runs={filteredRuns} selectedRunId={selectedRun?.id ?? null}
-              onSelectRun={handleSelectRun}
-              onMonthChange={(y, m) => { setCurrentYear(y); setCurrentMonth(m) }}
+              tasks={filteredTasks} selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
             />
           )}
           {viewMode === 'week' && (
             <WeekView
               weekStart={currentWeekStart}
-              runs={filteredRuns} selectedRunId={selectedRun?.id ?? null}
-              onSelectRun={handleSelectRun}
+              tasks={filteredTasks} selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
             />
           )}
           {viewMode === 'list' && (
             <ListView
-              runs={filteredRuns} selectedRunId={selectedRun?.id ?? null}
-              onSelectRun={handleSelectRun}
+              tasks={filteredTasks} selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
             />
           )}
         </div>
 
-        {/* Detail panel — Framer Motion slide-in */}
+        {/* Detail panel — slide in from right */}
         <AnimatePresence>
-          {selectedRun && !panelCollapsed && (
+          {showPanel && (
             <motion.div
-              key={selectedRun.id}
+              key={selectedTask.id}
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 360, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
@@ -517,14 +554,23 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
               className="shrink-0 flex flex-col border-l overflow-hidden"
               style={{ minWidth: 0 }}
             >
-              <RunDetailPanel
-                run={selectedRun}
-                onCollapse={() => { setPanelCollapsed(true); setSelectedRun(null) }}
+              <TaskDetailPanel
+                task={selectedTask}
+                onCollapse={() => { setPanelCollapsed(true); setSelectedTask(null) }}
+                onTaskChange={handleTaskChange}
               />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
+
+      {/* Create task sheet */}
+      <TaskSheet
+        open={createSheetOpen}
+        onOpenChange={open => { if (!open) onCloseCreateSheet() }}
+        onCreateTask={handleCreateTask}
+        defaultStatus={defaultCreateStatus}
+      />
     </div>
   )
 }
