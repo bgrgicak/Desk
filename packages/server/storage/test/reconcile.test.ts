@@ -47,6 +47,7 @@ describe("reconcileArtifactRefs", () => {
   it("no-op when all referenced paths exist", async () => {
     const file = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "present.txt",
       mime: "text/plain",
       stream: Readable.from(Buffer.from("hi")),
@@ -65,6 +66,7 @@ describe("reconcileArtifactRefs", () => {
     // Upload to the workspace root, then simulate moving it into a subfolder.
     const file = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "moved-me.txt",
       mime: "text/plain",
       stream: Readable.from(Buffer.from("content")),

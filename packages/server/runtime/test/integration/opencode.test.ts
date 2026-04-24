@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 
@@ -29,12 +29,14 @@ const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
 const testAgentId = "agt_opencode_int_test";
+const testWorkspaceSlug = "opencode-int-test";
 
 beforeAll(async () => {
   if (SKIP) return;
   delete process.env.DESK_SANDBOX_DRIVER;
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-opencode-int-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, testWorkspaceSlug);
   process.env.DESK_HOME = home;
 });
 
@@ -57,13 +59,14 @@ describeIf("opencode end-to-end", () => {
     // default (e.g. gpt-5.3-chat-latest) that the project may not have access
     // to, and the run fails before any model output is produced.
     const providerKeys = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "" };
-    const handle = await createOrReuse(testAgentId, home, providerKeys);
+    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, providerKeys);
     const driver = createDriver();
     const logs: LogEvent[] = [];
 
     const result = await driver.execRun(testAgentId, {
       runId: "run_ai_test_1",
       prompt: "Say exactly: HELLO_DESK_TEST",
+      workspaceSlug: testWorkspaceSlug,
       onLog: (evt) => logs.push(evt),
       providerKeys,
     });

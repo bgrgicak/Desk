@@ -1,11 +1,17 @@
 import type { HandlerContext } from "../server.js";
 import { readFile } from "@desk/storage";
+import { NotFoundError, UnauthorizedError } from "@desk/shared";
+import { queries } from "@desk/db";
 
 export async function handleFileRead(
   ctx: HandlerContext,
   req: { path: string },
 ): Promise<{ content: string; mime: string }> {
-  const { stream, file } = await readFile(ctx.storage, req.path);
+  const workspaceId = ctx.auth.session.workspaceId;
+  if (!workspaceId) throw new UnauthorizedError("Session has no workspace");
+  const ws = await queries.workspaces.findById(ctx.storage.pool, workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+  const { stream, file } = await readFile(ctx.storage, ws.path, req.path);
 
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {

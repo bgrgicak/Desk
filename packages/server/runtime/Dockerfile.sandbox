@@ -31,15 +31,21 @@ COPY sandbox-cli/skill.md /opt/desk/skills/desk-cli.md
 COPY runtime/sandbox-entrypoint.sh /usr/local/bin/desk-sandbox-entrypoint
 RUN chmod +x /usr/local/bin/desk-sandbox-entrypoint
 
-# Container runs as its namespace root (uid 0 inside). Under rootless
-# Docker that maps to the host user who owns the workspace bind-mount,
-# so writes succeed without any chown dance. Under rootful Docker it's
-# actual root, which has unconditional DAC access. Either way the
-# isolation guarantee comes from the surrounding container (CapDrop:ALL,
-# seccomp, pids-limit, memory-limit, network isolation) — the in-image
-# user identity was always nominal.
+# Unprivileged in-container user. Its uid must match the host user that
+# owns the workspace bind-mount (the VM's `desk` service user): the
+# workspace root is mounted as $HOME, so host-written files (agent .md,
+# attachments, notes) need to be writable by the in-container agent, and
+# in-container writes need to stay readable by the host service.
+#
+# Running as root here doesn't help — the container's HostConfig sets
+# CapDrop:ALL, which drops CAP_DAC_OVERRIDE, so even uid 0 obeys normal
+# DAC rules and can't write to a dir owned by a different uid.
+ARG AGENT_UID=2000
+RUN groupadd --gid "$AGENT_UID" agent \
+ && useradd --uid "$AGENT_UID" --gid "$AGENT_UID" --create-home --shell /bin/bash agent
 WORKDIR /home/agent
 ENV HOME=/home/agent
+USER agent
 
 ENTRYPOINT ["/usr/local/bin/desk-sandbox-entrypoint"]
 

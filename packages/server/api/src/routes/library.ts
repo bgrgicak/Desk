@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
-import pg from "pg";
-import { type WsEvent } from "@desk/shared";
+import { queries } from "@desk/db";
+import { NotFoundError, type WsEvent } from "@desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -16,12 +16,23 @@ import {
   type FolderRef,
 } from "@desk/storage";
 
+/**
+ * Resolves a workspace's on-disk slug. Used by every library route handler
+ * so storage helpers always see the correct per-workspace directory.
+ */
+async function resolveSlug(ctx: StorageContext, workspaceId: string): Promise<string> {
+  const ws = await queries.workspaces.findById(ctx.pool, workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+  return ws.path;
+}
+
 export async function list(
   ctx: StorageContext,
   workspaceId: string,
   opts?: { cursor?: string; limit?: number; showHidden?: boolean },
 ) {
-  return listLibrary(ctx, workspaceId, opts);
+  const slug = await resolveSlug(ctx, workspaceId);
+  return listLibrary(ctx, slug, opts);
 }
 
 /**
@@ -36,8 +47,10 @@ export async function upload(
   data: { name: string; mime: string; stream: Readable; subpath?: string },
   emit: (event: WsEvent) => void,
 ): Promise<FileRef> {
+  const slug = await resolveSlug(ctx, workspaceId);
   const file = await uploadArtifact(ctx, {
     workspaceId,
+    workspaceSlug: slug,
     name: data.name,
     mime: data.mime,
     stream: data.stream,
@@ -53,8 +66,13 @@ export async function upload(
 }
 
 /** Stat metadata lookup. */
-export async function get(ctx: StorageContext, relPath: string): Promise<FileRef> {
-  return statFile(ctx, relPath);
+export async function get(
+  ctx: StorageContext,
+  workspaceId: string,
+  relPath: string,
+): Promise<FileRef> {
+  const slug = await resolveSlug(ctx, workspaceId);
+  return statFile(ctx, slug, relPath);
 }
 
 /**
@@ -68,7 +86,8 @@ export async function saveContent(
   stream: Readable,
   emit: (event: WsEvent) => void,
 ): Promise<FileRef> {
-  const file = await overwriteFile(ctx, relPath, stream);
+  const slug = await resolveSlug(ctx, workspaceId);
+  const file = await overwriteFile(ctx, slug, relPath, stream);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "updated" },
@@ -76,8 +95,13 @@ export async function saveContent(
   return file;
 }
 
-export async function download(ctx: StorageContext, relPath: string) {
-  return downloadFile(ctx, relPath);
+export async function download(
+  ctx: StorageContext,
+  workspaceId: string,
+  relPath: string,
+) {
+  const slug = await resolveSlug(ctx, workspaceId);
+  return downloadFile(ctx, slug, relPath);
 }
 
 /**
@@ -91,7 +115,8 @@ export async function createFolder(
   subpath: string,
   emit: (event: WsEvent) => void,
 ): Promise<FolderRef> {
-  const folder = await createLibraryFolder(ctx, workspaceId, subpath);
+  const slug = await resolveSlug(ctx, workspaceId);
+  const folder = await createLibraryFolder(ctx, slug, subpath);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: folder.path, op: "added" },
@@ -111,7 +136,8 @@ export async function move(
   to: string,
   emit: (event: WsEvent) => void,
 ): Promise<{ kind: "file" | "folder"; path: string }> {
-  const result = await moveLibraryEntry(ctx, workspaceId, from, to);
+  const slug = await resolveSlug(ctx, workspaceId);
+  const result = await moveLibraryEntry(ctx, slug, from, to);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: to, op: "moved" },
@@ -129,13 +155,12 @@ export async function remove(
   relPath: string,
   emit: (event: WsEvent) => void,
 ): Promise<void> {
-  await deleteLibraryEntry(ctx, workspaceId, relPath);
+  const slug = await resolveSlug(ctx, workspaceId);
+  await deleteLibraryEntry(ctx, slug, relPath);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: relPath, op: "removed" },
   });
 }
 
-// Keep a no-op alias for legacy imports while @desk/db.pool is plumbed via ctx.
-export const _unusedPool = (_pool: pg.Pool) => undefined;
 export { readFile };

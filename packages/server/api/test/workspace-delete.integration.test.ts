@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, queries, hashPassword } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
 import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
 import { generateId } from "@desk/shared";
 import { createApp } from "../src/app.js";
@@ -142,36 +142,56 @@ afterAll(async () => {
   }
 });
 
-async function insertWorkspace(name: string): Promise<string> {
+async function insertWorkspace(name: string): Promise<{ id: string; slug: string }> {
   const id = generateId("workspace");
-  await queries.workspaces.insert(pool, { id, userId, name, description: "", icon: "" });
-  return id;
+  const slug = await queries.workspaces.reserveWorkspacePath(pool, name);
+  await ensureWorkspaceLayout(home, slug);
+  await queries.workspaces.insert(pool, {
+    id,
+    userId,
+    name,
+    path: slug,
+    description: "",
+    icon: "",
+  });
+  return { id, slug };
 }
 
 describe("DELETE /workspaces/:id — last-workspace guard", () => {
   it("refuses to delete the user's only workspace with 400", async () => {
-    const onlyId = await insertWorkspace("only");
+    const { id: onlyId, slug: onlySlug } = await insertWorkspace("only");
 
     const res = await request("DELETE", `/workspaces/${onlyId}`, token);
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "VALIDATION" });
 
-    // Row still present.
+    // Row still present and on-disk directory untouched.
     const rows = await pool.query("SELECT id FROM workspaces WHERE id = $1", [onlyId]);
     expect(rows.rowCount).toBe(1);
+    const dirStat = await fs.stat(path.join(home, "Desk", "workspaces", onlySlug));
+    expect(dirStat.isDirectory()).toBe(true);
   });
 
-  it("allows deletion once a sibling workspace exists", async () => {
-    const siblingId = await insertWorkspace("sibling");
+  it("allows deletion once a sibling workspace exists and moves its dir to trash", async () => {
+    const { id: siblingId, slug: siblingSlug } = await insertWorkspace("sibling");
 
     // "only" is still there from the previous test; now there are 2.
     const listRes = await request("GET", "/workspaces", token);
     const names = (listRes.body as Array<{ name: string }>).map(w => w.name);
     expect(names).toEqual(expect.arrayContaining(["only", "sibling"]));
 
+    const siblingDir = path.join(home, "Desk", "workspaces", siblingSlug);
+    expect((await fs.stat(siblingDir)).isDirectory()).toBe(true);
+
     const delRes = await request("DELETE", `/workspaces/${siblingId}`, token);
     expect(delRes.status).toBe(200);
     expect(delRes.body).toEqual({ ok: true });
+
+    // FS dir for the deleted workspace is gone from ~/Desk/workspaces/
+    // and present under ~/Desk/.trash/workspaces/ with a timestamped suffix.
+    await expect(fs.stat(siblingDir)).rejects.toMatchObject({ code: "ENOENT" });
+    const trashEntries = await fs.readdir(path.join(home, "Desk", ".trash", "workspaces"));
+    expect(trashEntries.some(name => name.startsWith(`${siblingSlug}-`))).toBe(true);
 
     // Back to exactly one workspace — deleting that one must again be refused.
     const onlyId = (listRes.body as Array<{ id: string; name: string }>)

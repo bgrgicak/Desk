@@ -7,26 +7,31 @@ import { resolveHostPath, workspaceRootPath } from "./layout.js";
  * Walks messages whose content is `artifactRef` and verifies the referenced
  * path exists on the filesystem. When the path is missing:
  *   - Try to repair: if a single file with the same basename exists anywhere
- *     under the workspace root, rewrite `content.path` to that new path.
+ *     under the message's workspace root, rewrite `content.path` to that new
+ *     path.
  *   - Otherwise: mark the content with `missing: true` so the UI and future
  *     callers can flag the reference as broken without losing the message.
  *
- * This closes the gap where out-of-band moves / deletes silently break
- * artifactRef references inserted into message history.
+ * The JOIN to workspaces resolves each message's workspace slug so
+ * artifactRef paths (stored workspace-relative) resolve to the correct
+ * on-disk root.
  */
 export async function reconcileArtifactRefs(
   pool: pg.Pool,
   home: string,
 ): Promise<{ checked: number; repaired: number; missing: number }> {
   const stats = { checked: 0, repaired: 0, missing: 0 };
-  const root = workspaceRootPath(home);
 
   const { rows } = await pool.query<{
     id: string;
+    workspace_path: string;
     content: { type: "artifactRef"; path?: string; name?: string; mime?: string; missing?: boolean };
   }>(
-    `SELECT id, content FROM messages
-     WHERE content->>'type' = 'artifactRef'`,
+    `SELECT m.id, w.path AS workspace_path, m.content
+     FROM messages m
+     JOIN chats c ON c.id = m.chat_id
+     JOIN workspaces w ON w.id = c.workspace_id
+     WHERE m.content->>'type' = 'artifactRef'`,
   );
 
   for (const row of rows) {
@@ -34,9 +39,11 @@ export async function reconcileArtifactRefs(
     const storedPath = row.content.path;
     if (!storedPath) continue;
 
+    const root = workspaceRootPath(home, row.workspace_path);
+
     let abs: string;
     try {
-      abs = resolveHostPath(home, storedPath);
+      abs = resolveHostPath(home, row.workspace_path, storedPath);
     } catch {
       // Traversal — mark missing and move on.
       if (!row.content.missing) {

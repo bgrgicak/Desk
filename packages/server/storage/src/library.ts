@@ -99,10 +99,10 @@ async function walk(
  */
 export async function listLibrary(
   ctx: LibraryContext,
-  _workspaceId: string,
+  slug: string,
   opts?: { cursor?: string; limit?: number; showHidden?: boolean },
 ): Promise<{ items: FileRef[]; folders: FolderRef[]; nextCursor?: string }> {
-  const root = workspaceRootPath(ctx.home);
+  const root = workspaceRootPath(ctx.home, slug);
   await fs.mkdir(root, { recursive: true });
 
   const showHidden = opts?.showHidden ?? false;
@@ -156,14 +156,14 @@ export async function listLibrary(
  */
 export async function createLibraryFolder(
   ctx: LibraryContext,
-  _workspaceId: string,
+  slug: string,
   subpath: string,
 ): Promise<FolderRef> {
   const sub = validateLibrarySubpath(subpath);
   if (!sub) {
     throw new ValidationError("Folder path must not be empty");
   }
-  const root = workspaceRootPath(ctx.home);
+  const root = workspaceRootPath(ctx.home, slug);
   const abs = path.join(root, sub);
 
   const existing = await fs.stat(abs).catch(() => null);
@@ -192,7 +192,7 @@ export async function createLibraryFolder(
  */
 export async function moveLibraryEntry(
   ctx: LibraryContext,
-  _workspaceId: string,
+  slug: string,
   fromRel: string,
   toRel: string,
 ): Promise<{ kind: "file" | "folder"; path: string }> {
@@ -203,8 +203,8 @@ export async function moveLibraryEntry(
     throw new ValidationError("Destination path must not be empty");
   }
 
-  const fromAbs = resolveHostPath(ctx.home, fromRel);
-  const toAbs = resolveHostPath(ctx.home, toRel);
+  const fromAbs = resolveHostPath(ctx.home, slug, fromRel);
+  const toAbs = resolveHostPath(ctx.home, slug, toRel);
 
   const fromStat = await fs.stat(fromAbs).catch(() => null);
   if (!fromStat) throw new NotFoundError(`Not found: ${fromRel}`);
@@ -240,7 +240,7 @@ export async function moveLibraryEntry(
  */
 export async function deleteLibraryEntry(
   ctx: LibraryContext,
-  _workspaceId: string,
+  slug: string,
   relPath: string,
 ): Promise<{ kind: "file" | "folder" }> {
   const sub = validateLibrarySubpath(relPath);
@@ -248,7 +248,7 @@ export async function deleteLibraryEntry(
     throw new ValidationError("Cannot delete the workspace root");
   }
 
-  const abs = resolveHostPath(ctx.home, relPath);
+  const abs = resolveHostPath(ctx.home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`Not found: ${relPath}`);
 

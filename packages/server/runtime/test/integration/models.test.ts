@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
@@ -30,12 +30,14 @@ const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
 const testWorkspaceId = "wks_models_int_test";
+const testWorkspaceSlug = "models-int-test";
 
 beforeAll(async () => {
   if (SKIP) return;
   delete process.env.DESK_SANDBOX_DRIVER;
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-models-int-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, testWorkspaceSlug);
   process.env.DESK_HOME = home;
 });
 
@@ -53,8 +55,8 @@ afterAll(async () => {
 
 describeIf("sandbox model listing (real Docker)", () => {
   it("execInSandbox captures stdout from a simple command", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
-    const result = await execInSandbox(testWorkspaceId, { argv: ["echo", "hi"] });
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, { argv: ["echo", "hi"] });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hi");
     expect(result.timedOut).toBe(false);
@@ -62,9 +64,9 @@ describeIf("sandbox model listing (real Docker)", () => {
   }, 60_000);
 
   it("listModels returns real provider/model pairs from opencode", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
 
-    const all = await listModels(testWorkspaceId);
+    const all = await listModels(testWorkspaceId, testWorkspaceSlug);
     expect(all.length).toBeGreaterThan(0);
     for (const m of all) {
       expect(m.provider).toMatch(/^[A-Za-z0-9_.-]+$/);
@@ -75,7 +77,7 @@ describeIf("sandbox model listing (real Docker)", () => {
     // Anthropic must be present — it's the provider Desk ships with.
     expect(all.some((m) => m.provider === "anthropic")).toBe(true);
 
-    const filtered = await listModels(testWorkspaceId, { provider: "anthropic" });
+    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, { provider: "anthropic" });
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
 

@@ -207,14 +207,15 @@ describe("POST /chats/{id}/messages with attachments", () => {
     );
     expect(res.status).toBe(201);
 
-    // POST triggers an async fireMessage; wait for the driver to see it.
+    // POST triggers an async fireMessage; wait for the driver to see THIS
+    // test's prompt specifically — prior tests' fire-and-forget fires can
+    // land in promptsSeen mid-test, so match on content, not length.
     const deadline = Date.now() + 5000;
-    while (promptsSeen.length === 0 && Date.now() < deadline) {
+    while (!promptsSeen.some((p) => p.includes("what does this file say?")) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    expect(promptsSeen.length).toBeGreaterThan(0);
-    const prompt = promptsSeen[promptsSeen.length - 1];
-    expect(prompt).toContain("what does this file say?");
+    const prompt = promptsSeen.find((p) => p.includes("what does this file say?"));
+    expect(prompt).toBeDefined();
     expect(prompt).toContain("notes.txt");
     expect(prompt).toContain(`~/.chats/${chatId}/attachments/notes.txt`);
   });

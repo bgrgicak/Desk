@@ -1,11 +1,16 @@
 export {
   ensureLayout,
+  ensureWorkspaceLayout,
+  renameWorkspaceDir,
+  trashWorkspaceDir,
   chatAttachmentsDir,
   chatsDir,
+  resolveDeskHome,
   resolveHostPath,
   tmpDir,
   trashDir,
   workspaceRootPath,
+  workspacesRoot,
 } from "./layout.js";
 export {
   uploadArtifact,

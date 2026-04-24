@@ -86,10 +86,11 @@ ${input.instructions}`;
  */
 export async function writeAgentFile(
   home: string,
+  workspaceSlug: string,
   input: AgentFileInput,
 ): Promise<void> {
   const content = renderAgentFile(input);
-  const agentDir = path.join(workspaceRootPath(home), ".opencode", "agents");
+  const agentDir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode", "agents");
   const filePath = path.join(agentDir, `${input.agentId}.md`);
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");

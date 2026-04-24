@@ -117,9 +117,9 @@ log "Building all workspace packages (nx)"
 cd "$REPO_ROOT"
 npm run build --silent || true
 
-log "Building desk/sandbox:v1 image (AGENT_UID=1000 to match bero)"
+log "Building desk/sandbox:v1 image (AGENT_UID=2000 to match the VM desk user)"
 cd "$REPO_ROOT/packages/server"
-sg docker -c "docker build --build-arg AGENT_UID=1000 -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 ." 2>&1 | tail -5
+sg docker -c "docker build --build-arg AGENT_UID=2000 -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 ." 2>&1 | tail -5
 
 log "Installing Playwright Chromium in the VM"
 cd "$REPO_ROOT" && npx playwright install --with-deps chromium

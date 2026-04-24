@@ -9,6 +9,7 @@ import type { ContextItem } from '@/data/ui-types'
 import {
   useGetAgentsQuery,
   useGetLibraryQuery,
+  useGetWorkspaceAgentsQuery,
 } from '@/store/api'
 import { toContextItem, toFolderList } from '@/store/selectors/library'
 
@@ -158,7 +159,17 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // ── Server-backed pickers ───────────────────────────────────────────────
-  const { data: serverAgents } = useGetAgentsQuery()
+  // Scope the agent picker to the chat's workspace when we have one; the
+  // global list is only used for chat surfaces that aren't bound to a
+  // workspace yet (e.g. Today inbox previews).
+  const { data: globalAgents } = useGetAgentsQuery(undefined, {
+    skip: !!_chatWorkspaceId,
+  })
+  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(
+    _chatWorkspaceId ?? '',
+    { skip: !_chatWorkspaceId },
+  )
+  const serverAgents = _chatWorkspaceId ? workspaceAgents : globalAgents
   const { data: libraryResp } = useGetLibraryQuery(
     _chatWorkspaceId ? { workspaceId: _chatWorkspaceId } : undefined,
     { skip: !_chatWorkspaceId },

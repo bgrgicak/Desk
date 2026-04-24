@@ -9,8 +9,16 @@
  */
 import * as fs from "node:fs/promises";
 import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
-import { ensureLayout, enforceLogRetention, reconcileArtifactRefs } from "@desk/storage";
+import {
+  ensureLayout,
+  ensureWorkspaceLayout,
+  enforceLogRetention,
+  reconcileArtifactRefs,
+  resolveDeskHome,
+} from "@desk/storage";
+import { queries } from "@desk/db";
 import { createRunManager, createAdapter, reconcile, sweepStaleRuns } from "@desk/scheduler";
+import { auditSandboxMounts } from "@desk/runtime";
 import { createApp } from "./app.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@desk/shared";
@@ -18,7 +26,7 @@ import type { WsEvent } from "@desk/shared";
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgresql:///desk?host=/var/run/postgresql";
-const DESK_HOME = process.env.DESK_HOME ?? process.env.HOME ?? "/var/lib/desk";
+const DESK_HOME = resolveDeskHome();
 
 async function main(): Promise<void> {
   const pool = createPool({ connectionString: DATABASE_URL });
@@ -28,8 +36,38 @@ async function main(): Promise<void> {
   await seedIfEmpty(pool);
   await seedProviderKeysFromEnv(pool);
 
+  // Boot-time visibility for the on-disk root. A silent split between this
+  // value and the bind source the runtime computes once dropped every user
+  // upload into a parallel tree.
+  // eslint-disable-next-line no-console
+  console.log(
+    `desk-server DESK_HOME=${DESK_HOME} (source=${process.env.DESK_HOME ? "env" : process.env.HOME ? "$HOME" : "fallback"})`,
+  );
+  if (!process.env.DESK_HOME) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "DESK_HOME is not set explicitly. Falling back to $HOME or /var/lib/desk; " +
+        "set DESK_HOME in /etc/desk-server/env to pin the on-disk root.",
+    );
+  }
+  const drift = await auditSandboxMounts(DESK_HOME);
+  for (const d of drift) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
+        `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
+        `Container will be recreated on next run.`,
+    );
+  }
+
   await fs.mkdir(DESK_HOME, { recursive: true });
   await ensureLayout(DESK_HOME);
+  // Ensure every existing workspace has its on-disk tree, so a server
+  // started after migration 0010 backfill still has folders for rows
+  // that were created before per-workspace dirs existed.
+  for (const ws of await queries.workspaces.list(pool)) {
+    await ensureWorkspaceLayout(DESK_HOME, ws.path);
+  }
 
   // Repair/flag artifactRef messages whose target moved or vanished while
   // the server was down.

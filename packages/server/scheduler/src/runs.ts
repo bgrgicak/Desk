@@ -10,6 +10,7 @@ import {
   type WsEvent,
 } from "@desk/shared";
 import { queries } from "@desk/db";
+import { resolveDeskHome } from "@desk/storage";
 import {
   createOrReuse,
   execRun as runtimeExecRun,
@@ -83,9 +84,9 @@ export function createRunManager(opts: RunManagerOptions) {
     return ws?.userId ?? null;
   }
 
-  async function ensureLogDir(chatId: string): Promise<string> {
-    const home = process.env.DESK_HOME ?? "/opt/desk";
-    const dir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "logs");
+  async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
+    const home = resolveDeskHome();
+    const dir = path.join(home, "Desk", "workspaces", workspaceSlug, ".chats", chatId, "logs");
     await fsp.mkdir(dir, { recursive: true });
     return dir;
   }
@@ -223,7 +224,26 @@ export function createRunManager(opts: RunManagerOptions) {
     const prompt = await derivePromptFromContent(msg.content);
     const outputKind = outputContentTypeFor(msg.content);
 
-    const logDir = await ensureLogDir(msg.chatId);
+    // Resolve the workspace slug and agent id in one JOIN'd round-trip.
+    // The slug threads through the sandbox driver (mount plan, agent file,
+    // chat attachments) and the per-chat log directory; extra findById
+    // calls add latency that makes fire-and-forget callers racy.
+    const { rows: ctxRows } = await pool.query<{
+      workspace_id: string;
+      workspace_path: string;
+      agent_id: string;
+    }>(
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id
+       FROM chats c JOIN workspaces w ON w.id = c.workspace_id
+       WHERE c.id = $1`,
+      [msg.chatId],
+    );
+    const ctxRow = ctxRows[0];
+    const workspaceIdPre = ctxRow?.workspace_id ?? (await firstWorkspaceId());
+    const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+    const chatAgentIdPre = ctxRow?.agent_id;
+
+    const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${messageId}.log`);
     const logStream = fs.createWriteStream(logFile, { flags: "a" });
 
@@ -243,9 +263,8 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
-      const chat = await queries.chats.findById(pool, msg.chatId);
-      const agentId = msg.agentId ?? chat?.agentId ?? (await getDefaultAgentId());
-      const workspaceId = chat?.workspaceId ?? (await firstWorkspaceId());
+      const agentId = msg.agentId ?? chatAgentIdPre ?? (await getDefaultAgentId());
+      const workspaceId = workspaceIdPre;
       const userId = await resolveUserIdForWorkspace(workspaceId);
       const userName = userId
         ? (await queries.users.findById(pool, userId))?.username ?? "User"
@@ -270,17 +289,19 @@ export function createRunManager(opts: RunManagerOptions) {
         result = await driver.execRun(workspaceId, {
           runId: messageId,
           prompt,
+          workspaceSlug,
           agentFileId: agentId,
           onLog,
         });
       } else {
-        const home = process.env.DESK_HOME ?? "/opt/desk";
-        const handle = await createOrReuse(workspaceId, home, providerKeys);
+        const home = resolveDeskHome();
+        const handle = await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
         result = await runtimeExecRun(pool, handle, {
           runId: messageId,
           prompt,
           home,
           workspaceId,
+          workspaceSlug,
           chatId: msg.chatId,
           agent: agentFileInput,
           onLog,
@@ -318,8 +339,8 @@ export function createRunManager(opts: RunManagerOptions) {
           if (prev.rows[0]) {
             const prevRow = prev.rows[0] as { id: string; content: { body?: string } };
             if (typeof prevRow.content.body === "string") {
-              const home = process.env.DESK_HOME ?? "/opt/desk";
-              await snapshotNote(home, msg.chatId, prevRow.id, prevRow.content.body).catch(() => { /* best-effort */ });
+              const home = resolveDeskHome();
+              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, prevRow.content.body).catch(() => { /* best-effort */ });
             }
           }
         }
@@ -339,8 +360,8 @@ export function createRunManager(opts: RunManagerOptions) {
         // source of truth.
         if (content.type === "note") {
           const { materializeNote } = await import("@desk/storage");
-          const home = process.env.DESK_HOME ?? "/opt/desk";
-          await materializeNote(home, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+          const home = resolveDeskHome();
+          await materializeNote(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child });
         return { fired: true, childIds: [child.id] };

@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { PROVIDER_KEY_VARS } from "@desk/shared";
+import { resolveDeskHome } from "@desk/storage";
 import {
   bindsFromPlan,
   buildDefaultMountPlan,
@@ -67,12 +68,20 @@ export async function ensureImage(): Promise<void> {
  * Creates or reuses a sandbox container for a workspace. One container per
  * workspace, any agent enrolled in the workspace execs through it.
  *
+ * Reuse is guarded by a drift check: if the running container's image id
+ * or bind layout no longer matches what the current code would produce,
+ * it's torn down and recreated. Silent reuse of a drifted container (from
+ * a rebuilt image or a changed MountPlan) previously masked real bugs for
+ * days — a stale agent file inside an old container kept resolving a
+ * long-removed model, while fresh host code had already moved on.
+ *
  * `providerKeys` is an optional map of AI-provider credentials to inject as
  * env vars. When omitted the function falls back to reading the host env —
  * that legacy path is what tests without DB access use.
  */
 export async function createOrReuse(
   workspaceId: string,
+  workspaceSlug: string,
   home?: string,
   providerKeys?: Record<string, string>,
   mountPlan?: MountPlan,
@@ -85,50 +94,71 @@ export async function createOrReuse(
   const docker = new Docker({ socketPath: dockerSocketPath() });
   const containerName = `desk-sandbox-${workspaceId}`;
 
+  const deskHome = home ?? resolveDeskHome();
+  const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
+  const toolSocket = process.env.DESK_TOOL_SOCKET;
+  // Only mount the tool socket when it actually exists on the host. Binding
+  // a non-existent path makes Docker create an empty directory there, which
+  // then confuses the sandbox CLI. With the socket absent, the in-sandbox
+  // CLI surfaces a clear "tool socket missing" error instead.
+  const expectedBinds = [
+    ...bindsFromPlan(plan),
+    ...(toolSocket ? [`${toolSocket}:/run/desk/tools.sock`] : []),
+  ];
+
+  // Reuse the container only if its image and binds still match the current
+  // plan; otherwise tear it down and fall through to the create path. Bind
+  // order isn't meaningful to Docker, so compare as sets.
   try {
-    const container = docker.getContainer(containerName);
-    const info = await container.inspect();
-    if (!info.State.Running) {
-      await container.start();
+    const existing = docker.getContainer(containerName);
+    const info = await existing.inspect();
+    const currentImageId = await docker
+      .getImage("desk/sandbox:v1")
+      .inspect()
+      .then((i) => i.Id)
+      .catch(() => null);
+    const imageMatches = currentImageId !== null && info.Image === currentImageId;
+    const mountsMatch = bindsEqual(info.HostConfig?.Binds, expectedBinds);
+    if (imageMatches && mountsMatch) {
+      if (!info.State.Running) await existing.start();
+      return { containerId: info.Id, workspaceId };
     }
-    return { containerId: info.Id, workspaceId };
+    await existing.remove({ force: true });
   } catch {
-    const deskHome = home ?? process.env.DESK_HOME ?? "/opt/desk";
-    const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceId);
-
-    // Pre-create every source dir in the plan so Docker doesn't auto-create
-    // them as root and break subsequent non-root writes.
-    for (const entry of plan) {
-      await fs.mkdir(entry.sourcePath, { recursive: true });
-    }
-
-    const toolSocket = process.env.DESK_TOOL_SOCKET;
-    const binds = [
-      ...bindsFromPlan(plan),
-      // Only mount the tool socket when it actually exists on the host. Binding
-      // a non-existent path makes Docker create an empty directory there,
-      // which then confuses the sandbox CLI. With the socket absent, the
-      // in-sandbox CLI surfaces a clear "tool socket missing" error instead.
-      ...(toolSocket ? [`${toolSocket}:/run/desk/tools.sock`] : []),
-    ];
-
-    const container = await docker.createContainer({
-      name: containerName,
-      Image: "desk/sandbox:v1",
-      Env: providerKeyEnv(providerKeys),
-      HostConfig: {
-        CapDrop: ["ALL"],
-        NetworkMode: "bridge",
-        PidsLimit: 256,
-        Memory: 512 * 1024 * 1024,
-        Tmpfs: { "/tmp": "" },
-        Binds: binds,
-      },
-    });
-    await container.start();
-    const info = await container.inspect();
-    return { containerId: info.Id, workspaceId };
+    // Not found — fall through to create.
   }
+
+  // Pre-create every source dir in the plan so Docker doesn't auto-create
+  // them as root and break subsequent non-root writes.
+  for (const entry of plan) {
+    await fs.mkdir(entry.sourcePath, { recursive: true });
+  }
+
+  const container = await docker.createContainer({
+    name: containerName,
+    Image: "desk/sandbox:v1",
+    Env: providerKeyEnv(providerKeys),
+    HostConfig: {
+      CapDrop: ["ALL"],
+      NetworkMode: "bridge",
+      PidsLimit: 256,
+      Memory: 512 * 1024 * 1024,
+      Tmpfs: { "/tmp": "" },
+      Binds: expectedBinds,
+    },
+  });
+  await container.start();
+  const info = await container.inspect();
+  return { containerId: info.Id, workspaceId };
+}
+
+/** Order-insensitive equality for Docker bind-mount strings. */
+function bindsEqual(actual: string[] | undefined, expected: string[]): boolean {
+  if ((actual?.length ?? 0) !== expected.length) return false;
+  const a = [...(actual ?? [])].sort();
+  const e = [...expected].sort();
+  for (let i = 0; i < a.length; i++) if (a[i] !== e[i]) return false;
+  return true;
 }
 
 /**
@@ -150,6 +180,57 @@ function providerKeyEnv(keys?: Record<string, string>): string[] {
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
   return out;
+}
+
+/**
+ * Reports running sandbox containers whose bind sources don't begin with the
+ * supplied DESK_HOME tree. Returned for boot-time logging so a regression in
+ * the home-resolution path (which once silently dropped uploads into a
+ * parallel tree) fails loud instead of corrupting state.
+ *
+ * Returns an empty array under the fake driver and on docker errors — this is
+ * a best-effort check, not a gate.
+ */
+export interface SandboxBindDrift {
+  containerName: string;
+  expectedPrefix: string;
+  actualBinds: string[];
+}
+
+export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift[]> {
+  if (process.env.DESK_SANDBOX_DRIVER === "fake") return [];
+  const Docker = (await import("dockerode")).default;
+  const docker = new Docker({ socketPath: dockerSocketPath() });
+  const expectedPrefix = `${home}/Desk/workspaces/`;
+  const drift: SandboxBindDrift[] = [];
+  try {
+    const containers = await docker.listContainers({
+      all: true,
+      filters: { name: ["desk-sandbox-"] },
+    });
+    for (const c of containers) {
+      const name = (c.Names?.[0] ?? "").replace(/^\//, "");
+      if (!name.startsWith("desk-sandbox-")) continue;
+      let binds: string[] = [];
+      try {
+        const info = await docker.getContainer(c.Id).inspect();
+        binds = info.HostConfig?.Binds ?? [];
+      } catch {
+        continue;
+      }
+      const workspaceBind = binds.find(
+        (b) => b.endsWith(":/home/agent:rw") || b.endsWith(":/home/agent"),
+      );
+      if (!workspaceBind) continue;
+      const source = workspaceBind.split(":")[0];
+      if (!source.startsWith(expectedPrefix)) {
+        drift.push({ containerName: name, expectedPrefix, actualBinds: binds });
+      }
+    }
+  } catch {
+    // Docker not reachable (dev without docker, CI, etc.) — best-effort only.
+  }
+  return drift;
 }
 
 /**

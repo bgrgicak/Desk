@@ -79,6 +79,20 @@ async function cancelSchedulerRefsForChat(
   }
 }
 
+/**
+ * Resolves the on-disk slug for a chat's workspace. Used by route handlers
+ * that need to build a filesystem path from a bare chatId. Throws if the
+ * chat is missing.
+ */
+async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<string> {
+  const { rows } = await pool.query<{ path: string }>(
+    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
+    [chatId],
+  );
+  if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
+  return rows[0].path;
+}
+
 export async function listChats(pool: pg.Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
 }
@@ -216,14 +230,18 @@ export async function patchMessage(
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "note" && typeof prev.body === "string") {
-      await snapshotNote(storage.home, chatId, messageId, prev.body);
-    }
-    // Re-materialize the notes/{id}.md file when the body changes so the
-    // agent's filesystem view stays in sync with the DB row.
-    const next = data.content as { type?: string; body?: string };
-    if (next?.type === "note" && typeof next.body === "string") {
-      await materializeNote(storage.home, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+    if (prev?.type === "note" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "note") {
+      const chat = await queries.chats.findById(pool, chatId);
+      const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
+      if (ws) {
+        if (prev?.type === "note" && typeof prev.body === "string") {
+          await snapshotNote(storage.home, ws.path, chatId, messageId, prev.body);
+        }
+        const next = data.content as { type?: string; body?: string };
+        if (next?.type === "note" && typeof next.body === "string") {
+          await materializeNote(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+        }
+      }
     }
   }
 
@@ -258,7 +276,8 @@ export async function getNoteHistory(
   chatId: string,
   messageId: string,
 ): Promise<{ versions: NoteVersion[] }> {
-  const versions = await listNoteHistory(storage.home, chatId, messageId);
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
+  const versions = await listNoteHistory(storage.home, slug, chatId, messageId);
   return { versions };
 }
 
@@ -281,15 +300,13 @@ export async function deleteMessage(
   }
 
   await cancelSchedulerRef(msg, adapter);
+  const slug = await workspaceSlugForChat(pool, chatId);
 
   await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
 
   // Move log file to trash if present.
   const logPath = path.join(
-    storage.home,
-    "Desk",
-    "workspaces",
-    "desk",
+    workspaceRootPath(storage.home, slug),
     ".chats",
     chatId,
     "logs",
@@ -311,11 +328,9 @@ export async function getMessageLogs(
   chatId: string,
   messageId: string,
 ): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
   const logPath = path.join(
-    storage.home,
-    "Desk",
-    "workspaces",
-    "desk",
+    workspaceRootPath(storage.home, slug),
     ".chats",
     chatId,
     "logs",
@@ -339,7 +354,8 @@ export async function listAttachments(
   chatId: string,
   opts?: { showHidden?: boolean },
 ): Promise<FileRef[]> {
-  const dir = await chatAttachmentsDir(storage.home, chatId);
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
+  const dir = await chatAttachmentsDir(storage.home, slug, chatId);
   const names = await fs.readdir(dir).catch(() => [] as string[]);
   const showHidden = opts?.showHidden ?? false;
   const out: FileRef[] = [];
@@ -348,7 +364,7 @@ export async function listAttachments(
     const abs = path.join(dir, name);
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isFile()) continue;
-    const rel = path.relative(workspaceRootPath(storage.home), abs).split(path.sep).join("/");
+    const rel = path.relative(workspaceRootPath(storage.home, slug), abs).split(path.sep).join("/");
     out.push({
       path: rel,
       name,
@@ -380,13 +396,16 @@ export async function deleteChat(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
   await cancelSchedulerRefsForChat(pool, chatId, adapter);
+  const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
   await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
 
-  await trashChatDirectories(storage.home, chatId).catch(() => {
-    // Best-effort; DB state is already gone.
-  });
+  if (ws) {
+    await trashChatDirectories(storage.home, ws.path, chatId).catch(() => {
+      // Best-effort; DB state is already gone.
+    });
+  }
 
   emit({
     type: "chat.deleted",
@@ -410,11 +429,14 @@ export async function uploadAttachmentToChat(
 ): Promise<FileRef> {
   const chat = await queries.chats.findById(storage.pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
   const stream = Readable.from(data.content);
 
   const file = await uploadArtifact(storage, {
     workspaceId: chat.workspaceId,
+    workspaceSlug: ws.path,
     chatId,
     name: data.name,
     mime: data.mime,

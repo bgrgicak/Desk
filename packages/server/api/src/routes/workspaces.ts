@@ -1,20 +1,32 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError } from "@desk/shared";
+import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@desk/shared";
+import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@desk/storage";
 
 export async function listWorkspaces(pool: pg.Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);
   return queries.workspaces.list(pool);
 }
 
+/**
+ * Creates a workspace with its own on-disk directory at
+ * `~/Desk/workspaces/{slug}/`. The slug is derived from `name` with a
+ * `-2`, `-3`, ... suffix on collision so two workspaces can't share a
+ * directory; the folder is created before the DB insert so every
+ * successful insert has a matching folder.
+ */
 export async function createWorkspace(
   pool: pg.Pool,
   userId: string,
+  home: string,
   data: { name: string; description?: string; icon?: string; color?: string },
 ) {
+  const path = await queries.workspaces.reserveWorkspacePath(pool, data.name);
+  await ensureWorkspaceLayout(home, path);
   return queries.workspaces.insert(pool, {
     id: generateId("workspace"),
     userId,
+    path,
     ...data,
   });
 }
@@ -25,21 +37,49 @@ export async function getWorkspace(pool: pg.Pool, id: string) {
   return ws;
 }
 
+/**
+ * Updates workspace metadata. When `name` changes, computes a new slug
+ * from the new name; if it differs from the current slug and is free,
+ * renames the on-disk directory and updates the `path` column to match.
+ * All other changes are pure metadata and skip the filesystem op.
+ */
 export async function patchWorkspace(
   pool: pg.Pool,
+  home: string,
   id: string,
   data: { name?: string; description?: string; icon?: string; color?: string },
 ) {
-  const ws = await queries.workspaces.updateMeta(pool, id, data);
+  const current = await queries.workspaces.findById(pool, id);
+  if (!current) throw new NotFoundError(`Workspace not found: ${id}`);
+
+  let newPath: string | undefined;
+  if (data.name !== undefined && data.name !== current.name) {
+    const desired = slugifyWorkspaceName(data.name);
+    if (desired !== current.path) {
+      newPath = await queries.workspaces.reserveWorkspacePath(pool, data.name, id);
+      await renameWorkspaceDir(home, current.path, newPath);
+    }
+  }
+
+  const ws = await queries.workspaces.updateMeta(pool, id, {
+    ...data,
+    ...(newPath ? { path: newPath } : {}),
+  });
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
   return ws;
 }
 
 /**
- * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents).
+ * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents)
+ * and moves its on-disk directory into `~/Desk/.trash/workspaces/`.
  * Refuses to delete the user's last workspace — the app requires at least one.
  */
-export async function deleteWorkspace(pool: pg.Pool, userId: string, id: string) {
+export async function deleteWorkspace(
+  pool: pg.Pool,
+  home: string,
+  userId: string,
+  id: string,
+) {
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
   const owned = await queries.workspaces.listByUser(pool, userId);
@@ -49,6 +89,9 @@ export async function deleteWorkspace(pool: pg.Pool, userId: string, id: string)
     );
   }
   await pool.query(`DELETE FROM workspaces WHERE id = $1`, [id]);
+  await trashWorkspaceDir(home, ws.path).catch(() => {
+    // Best-effort; DB state is already gone.
+  });
   return { ok: true };
 }
 

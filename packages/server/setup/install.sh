@@ -110,6 +110,10 @@ NODE_ENV=production
 DESK_SEED_USERNAME=desk
 DESK_SEED_PASSWORD=change-me-before-first-boot
 DESK_RUN_BIN=/opt/desk-server/node_modules/.bin/desk-run
+# Explicit on-disk root. Must match across API, scheduler, and sandbox bind
+# mounts — a silent split between $HOME and a hardcoded fallback caused user
+# uploads to land in a tree the sandbox couldn't see.
+DESK_HOME=/var/lib/desk
 ENVFILE
 
 # ---------- 8b. Internal shared secret ----------

@@ -20,8 +20,9 @@ import {
 import { ID_PREFIXES } from "@desk/shared";
 
 /**
- * v1 keeps a `pool` on the context for callers that still want a handle;
- * the filesystem path is what actually matters.
+ * Per-request storage context — carries the DB pool + Desk home root.
+ * Workspace-scoped helpers take a `slug` alongside this context so
+ * every workspace's files live under their own directory.
  */
 export interface StorageContext {
   pool: pg.Pool;
@@ -29,8 +30,10 @@ export interface StorageContext {
 }
 
 export interface UploadArtifactInput {
-  /** Retained on the type for callers; under v1 the single workspace means this field is advisory. */
+  /** Workspace whose on-disk slug this upload is destined for. */
   workspaceId: string;
+  /** The workspace's `path` column — the directory name under `~/Desk/workspaces/`. */
+  workspaceSlug: string;
   chatId?: string;
   name: string;
   mime: string;
@@ -142,9 +145,9 @@ export async function uploadArtifact(
 
   let destDir: string;
   if (input.chatId) {
-    destDir = await chatAttachmentsDir(ctx.home, input.chatId);
+    destDir = await chatAttachmentsDir(ctx.home, input.workspaceSlug, input.chatId);
   } else {
-    const root = workspaceRootPath(ctx.home);
+    const root = workspaceRootPath(ctx.home, input.workspaceSlug);
     const sub = validateLibrarySubpath(input.subpath);
     destDir = sub ? path.join(root, sub) : root;
   }
@@ -180,7 +183,7 @@ export async function uploadArtifact(
   }
 
   const stat = await fs.stat(destPath);
-  const relPath = path.relative(workspaceRootPath(ctx.home), destPath);
+  const relPath = path.relative(workspaceRootPath(ctx.home, input.workspaceSlug), destPath);
 
   return {
     path: relPath.split(path.sep).join("/"),
@@ -191,8 +194,8 @@ export async function uploadArtifact(
   };
 }
 
-async function fileRefFromDisk(home: string, relPath: string): Promise<FileRef> {
-  const abs = resolveHostPath(home, relPath);
+async function fileRefFromDisk(home: string, slug: string, relPath: string): Promise<FileRef> {
+  const abs = resolveHostPath(home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
@@ -211,10 +214,11 @@ async function fileRefFromDisk(home: string, relPath: string): Promise<FileRef> 
  */
 export async function readFile(
   ctx: StorageContext,
+  slug: string,
   relPath: string,
 ): Promise<{ stream: Readable; file: FileRef }> {
-  const file = await fileRefFromDisk(ctx.home, relPath);
-  const abs = resolveHostPath(ctx.home, relPath);
+  const file = await fileRefFromDisk(ctx.home, slug, relPath);
+  const abs = resolveHostPath(ctx.home, slug, relPath);
   const stream = createReadStream(abs);
   return { stream, file };
 }
@@ -222,16 +226,21 @@ export async function readFile(
 /** Alias — callers that want the download semantics. */
 export async function downloadFile(
   ctx: StorageContext,
+  slug: string,
   relPath: string,
 ): Promise<{ stream: Readable; file: FileRef }> {
-  return readFile(ctx, relPath);
+  return readFile(ctx, slug, relPath);
 }
 
 /**
  * Stat a file without opening a read stream. Throws NotFoundError if missing.
  */
-export async function statFile(ctx: StorageContext, relPath: string): Promise<FileRef> {
-  return fileRefFromDisk(ctx.home, relPath);
+export async function statFile(
+  ctx: StorageContext,
+  slug: string,
+  relPath: string,
+): Promise<FileRef> {
+  return fileRefFromDisk(ctx.home, slug, relPath);
 }
 
 /**
@@ -242,10 +251,11 @@ export async function statFile(ctx: StorageContext, relPath: string): Promise<Fi
  */
 export async function overwriteFile(
   ctx: StorageContext,
+  slug: string,
   relPath: string,
   stream: Readable,
 ): Promise<FileRef> {
-  const abs = resolveHostPath(ctx.home, relPath);
+  const abs = resolveHostPath(ctx.home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
@@ -275,7 +285,7 @@ export async function overwriteFile(
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
-  return fileRefFromDisk(ctx.home, relPath);
+  return fileRefFromDisk(ctx.home, slug, relPath);
 }
 
 /**
@@ -285,11 +295,12 @@ export async function overwriteFile(
  */
 export async function moveFile(
   ctx: StorageContext,
+  slug: string,
   fromRel: string,
   toRel: string,
 ): Promise<FileRef> {
-  const fromAbs = resolveHostPath(ctx.home, fromRel);
-  const toAbs = resolveHostPath(ctx.home, toRel);
+  const fromAbs = resolveHostPath(ctx.home, slug, fromRel);
+  const toAbs = resolveHostPath(ctx.home, slug, toRel);
   await fs.mkdir(path.dirname(toAbs), { recursive: true });
   await fs.rename(fromAbs, toAbs);
   // Leave a symlink at the old path pointing to the new absolute location.
@@ -297,7 +308,7 @@ export async function moveFile(
     // If the symlink can't be created (e.g. parent dir gone), swallow — the
     // move still succeeded; references to the old path will fail-fast.
   });
-  return fileRefFromDisk(ctx.home, toRel);
+  return fileRefFromDisk(ctx.home, slug, toRel);
 }
 
 /**
@@ -307,8 +318,12 @@ export async function moveFile(
  * The trash itself is not mounted into sandboxes, so the agent cannot
  * see deleted files.
  */
-export async function deleteFile(ctx: StorageContext, relPath: string): Promise<void> {
-  const abs = resolveHostPath(ctx.home, relPath);
+export async function deleteFile(
+  ctx: StorageContext,
+  slug: string,
+  relPath: string,
+): Promise<void> {
+  const abs = resolveHostPath(ctx.home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
@@ -327,12 +342,13 @@ export async function deleteFile(ctx: StorageContext, relPath: string): Promise<
  */
 export async function trashChatDirectories(
   home: string,
+  slug: string,
   chatId: string,
 ): Promise<{ moved: boolean }> {
   if (!chatId.startsWith(ID_PREFIXES.chat) || chatId.includes("/") || chatId.includes("..")) {
     throw new ValidationError(`Invalid chat id: ${chatId}`);
   }
-  const root = workspaceRootPath(home);
+  const root = workspaceRootPath(home, slug);
   const stamp = Date.now();
 
   const src = path.join(root, ".chats", chatId);
@@ -353,8 +369,9 @@ export async function trashChatDirectories(
  */
 export async function resolveForSandbox(
   ctx: StorageContext,
+  slug: string,
   relPath: string,
 ): Promise<string> {
-  await fileRefFromDisk(ctx.home, relPath);
-  return resolveHostPath(ctx.home, relPath);
+  await fileRefFromDisk(ctx.home, slug, relPath);
+  return resolveHostPath(ctx.home, slug, relPath);
 }

@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@desk/storage";
 import { createOrReuse, stopSandbox, ensureImage, dockerSocketPath } from "../../src/docker.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
 
@@ -25,6 +25,7 @@ const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
 const testWorkspaceId = "wks_int_sandbox_test";
+const testWorkspaceSlug = "int-sandbox-test";
 
 beforeAll(async () => {
   if (SKIP) return;
@@ -32,6 +33,7 @@ beforeAll(async () => {
   delete process.env.DESK_SANDBOX_DRIVER;
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-int-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, testWorkspaceSlug);
   process.env.DESK_HOME = home;
 });
 
@@ -56,26 +58,63 @@ describeIf("sandbox integration", () => {
   });
 
   it("createOrReuse creates a container and returns a handle", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     expect(handle.workspaceId).toBe(testWorkspaceId);
     expect(handle.containerId).toBeTruthy();
   });
 
   it("createOrReuse is idempotent — second call returns same container", async () => {
-    const h1 = await createOrReuse(testWorkspaceId, home);
-    const h2 = await createOrReuse(testWorkspaceId, home);
+    const h1 = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const h2 = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     expect(h1.containerId).toBe(h2.containerId);
   });
 
+  it("createOrReuse rebuilds a container whose binds drifted from the current plan", async () => {
+    const first = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+
+    // Force drift by calling with an extra bind the existing container
+    // doesn't have. Without the drift check, createOrReuse would hand back
+    // the old container and the new bind would silently go missing.
+    const extra = await fs.mkdtemp(path.join(os.tmpdir(), "desk-drift-"));
+    try {
+      const plan = [
+        {
+          sourcePath: workspaceRootPath(home, testWorkspaceSlug),
+          targetPath: SANDBOX_HOME,
+          mode: "rw" as const,
+          category: "workspace" as const,
+        },
+        {
+          sourcePath: extra,
+          targetPath: "/mnt/extra",
+          mode: "ro" as const,
+          category: "external" as const,
+        },
+      ];
+      const second = await createOrReuse(
+        testWorkspaceId, testWorkspaceSlug, home, undefined, plan,
+      );
+      expect(second.containerId).not.toBe(first.containerId);
+
+      const Docker = (await import("dockerode")).default;
+      const docker = new Docker({ socketPath: dockerSocketPath() });
+      const info = await docker.getContainer(second.containerId).inspect();
+      expect(info.HostConfig?.Binds ?? []).toContain(`${extra}:/mnt/extra:ro`);
+    } finally {
+      await fs.rm(extra, { recursive: true, force: true });
+    }
+  });
+
   it("projectMounts resolves the workspace root that gets bind-mounted at $HOME", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const mounts = await projectMounts(handle, {
       home,
       workspaceId: "wks_int_test",
+      workspaceSlug: testWorkspaceSlug,
       runId: "run_int_1",
     });
 
-    expect(mounts.workspace).toBe(workspaceRootPath(home));
+    expect(mounts.workspace).toBe(workspaceRootPath(home, testWorkspaceSlug));
 
     // The workspace root should exist on disk
     const stat = await fs.stat(mounts.workspace);
@@ -88,7 +127,7 @@ describeIf("sandbox integration", () => {
   });
 
   it("runs a no-op command inside the sandbox", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const Docker = (await import("dockerode")).default;
     const docker = new Docker({ socketPath: dockerSocketPath() });
     const container = docker.getContainer(handle.containerId);
@@ -126,7 +165,7 @@ describeIf("sandbox integration", () => {
     } catch { /* ok */ }
 
     try {
-      const handle = await createOrReuse(testWorkspaceId, home);
+      const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
       const Docker = (await import("dockerode")).default;
       const docker = new Docker({ socketPath: dockerSocketPath() });
       const container = docker.getContainer(handle.containerId);
@@ -150,7 +189,7 @@ describeIf("sandbox integration", () => {
   });
 
   it("stopSandbox stops the container", async () => {
-    const handle = await createOrReuse(testWorkspaceId, home);
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     await stopSandbox(handle);
 
     const Docker = (await import("dockerode")).default;

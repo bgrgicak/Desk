@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, tmpDir, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, tmpDir, workspaceRootPath } from "@desk/storage";
 import {
   projectMounts,
   teardownMounts,
@@ -15,11 +15,13 @@ import {
 import type { SandboxHandle } from "../src/docker.js";
 
 let home: string;
+const TEST_SLUG = "test-ws";
 const handle: SandboxHandle = { containerId: "fake-container", workspaceId: "wks_test123" };
 
 beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-mount-test-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, TEST_SLUG);
 });
 
 afterAll(async () => {
@@ -31,10 +33,11 @@ describe("mounts", () => {
     const mounts = await projectMounts(handle, {
       home,
       workspaceId: "wks_test",
+      workspaceSlug: TEST_SLUG,
       runId: "run_mount1",
     });
 
-    expect(mounts.workspace).toBe(workspaceRootPath(home));
+    expect(mounts.workspace).toBe(workspaceRootPath(home, TEST_SLUG));
     expect(mounts.attachments).toBeUndefined();
     expect(mounts.attachmentsInSandbox).toBeUndefined();
   });
@@ -43,6 +46,7 @@ describe("mounts", () => {
     const mounts = await projectMounts(handle, {
       home,
       workspaceId: "wks_test",
+      workspaceSlug: TEST_SLUG,
       chatId: "cht_test12345678901234567",
       runId: "run_mount2",
     });
@@ -60,23 +64,23 @@ describe("mounts", () => {
     const raw = await fs.readFile(manifestPath, "utf-8");
     const manifest = JSON.parse(raw);
     expect(manifest.runId).toBe("run_mount1");
-    expect(manifest.host.workspace).toBe(workspaceRootPath(home));
+    expect(manifest.host.workspace).toBe(workspaceRootPath(home, TEST_SLUG));
     expect(manifest.inSandbox.home).toBe(SANDBOX_HOME);
   });
 
   it("containerBinds binds the workspace root at /home/agent rw", () => {
-    const binds = containerBinds(home);
-    expect(binds).toEqual([`${workspaceRootPath(home)}:${SANDBOX_HOME}:rw`]);
+    const binds = containerBinds(home, TEST_SLUG);
+    expect(binds).toEqual([`${workspaceRootPath(home, TEST_SLUG)}:${SANDBOX_HOME}:rw`]);
   });
 
   it("buildDefaultMountPlan is a single workspace rw bind", () => {
-    const plan = buildDefaultMountPlan(home);
+    const plan = buildDefaultMountPlan(home, TEST_SLUG);
     expect(plan).toHaveLength(1);
     expect(plan[0].mode).toBe("rw");
     expect(plan[0].category).toBe("workspace");
     expect(plan[0].targetPath).toBe(SANDBOX_HOME);
-    expect(plan[0].sourcePath).toBe(workspaceRootPath(home));
-    expect(bindsFromPlan(plan)).toEqual(containerBinds(home));
+    expect(plan[0].sourcePath).toBe(workspaceRootPath(home, TEST_SLUG));
+    expect(bindsFromPlan(plan)).toEqual(containerBinds(home, TEST_SLUG));
   });
 
   it("custom MountPlan produces its own bind set (G5)", () => {
@@ -106,6 +110,7 @@ describe("mounts", () => {
     await projectMounts(testHandle, {
       home,
       workspaceId: "wks_count_test",
+      workspaceSlug: TEST_SLUG,
       runId: "run_count1",
     });
     expect(activeRunCount("wks_count_test")).toBe(1);
@@ -113,6 +118,7 @@ describe("mounts", () => {
     await projectMounts(testHandle, {
       home,
       workspaceId: "wks_count_test",
+      workspaceSlug: TEST_SLUG,
       runId: "run_count2",
     });
     expect(activeRunCount("wks_count_test")).toBe(2);

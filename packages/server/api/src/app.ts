@@ -303,7 +303,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (path === "/workspaces" && method === "POST") {
       const body = await parseBody(req) as { name: string; description?: string; icon?: string; color?: string };
-      const result = await workspaceRoutes.createWorkspace(pool, userId, body);
+      const result = await workspaceRoutes.createWorkspace(pool, userId, storage.home, body);
       sendJson(res, 201, result);
       return;
     }
@@ -316,13 +316,13 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "workspaces" && segments.length === 2 && method === "PATCH") {
       await requireOwnedWorkspace(pool, segments[1], userId);
       const body = await parseBody(req) as { name?: string; description?: string; icon?: string; color?: string };
-      const result = await workspaceRoutes.patchWorkspace(pool, segments[1], body);
+      const result = await workspaceRoutes.patchWorkspace(pool, storage.home, segments[1], body);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "DELETE") {
       await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.deleteWorkspace(pool, userId, segments[1]);
+      const result = await workspaceRoutes.deleteWorkspace(pool, storage.home, userId, segments[1]);
       sendJson(res, 200, result);
       return;
     }
@@ -564,7 +564,7 @@ export function createApp(opts: AppOptions): Server {
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
       requireLibraryPathInWorkspace(p, wsId);
-      const result = await libraryRoutes.get(storage, p);
+      const result = await libraryRoutes.get(storage, wsId, p);
       sendJson(res, 200, result);
       return;
     }
@@ -573,7 +573,7 @@ export function createApp(opts: AppOptions): Server {
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
       requireLibraryPathInWorkspace(p, wsId);
-      const { stream, file } = await libraryRoutes.download(storage, p);
+      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
         "Content-Disposition": `attachment; filename="${file.name}"`,
@@ -586,7 +586,7 @@ export function createApp(opts: AppOptions): Server {
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
       requireLibraryPathInWorkspace(p, wsId);
-      const { stream, file } = await libraryRoutes.download(storage, p);
+      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
         "Content-Disposition": `inline; filename="${file.name}"`,
@@ -641,7 +641,11 @@ export function createApp(opts: AppOptions): Server {
       const q = query.get("q") ?? "";
       const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
       const showHidden = query.get("showHidden") === "true";
-      const result = await searchRoutes.search(pool, storage, q, scope, { showHidden });
+      const workspaceId = query.get("workspaceId") ?? undefined;
+      const result = await searchRoutes.search(pool, storage, q, scope, {
+        showHidden,
+        workspaceId,
+      });
       sendJson(res, 200, result);
       return;
     }

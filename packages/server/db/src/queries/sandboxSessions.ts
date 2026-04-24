@@ -7,6 +7,7 @@ function rowToSandboxSession(row: Record<string, unknown>): SandboxSession {
   return SandboxSessionSchema.parse({
     id: row.id,
     agentId: row.agent_id,
+    workspaceId: row.workspace_id ?? undefined,
     tokenHash: row.token_hash,
     issuedAt: (row.issued_at as Date).toISOString(),
     revokedAt: row.revoked_at ? (row.revoked_at as Date).toISOString() : undefined,
@@ -15,13 +16,13 @@ function rowToSandboxSession(row: Record<string, unknown>): SandboxSession {
 
 export async function issue(
   db: Queryable,
-  data: { id: string; agentId: string; tokenHash: string },
+  data: { id: string; agentId: string; workspaceId?: string; tokenHash: string },
 ): Promise<SandboxSession> {
   const { rows } = await db.query(
-    `INSERT INTO sandbox_sessions (id, agent_id, token_hash)
-     VALUES ($1, $2, $3)
+    `INSERT INTO sandbox_sessions (id, agent_id, workspace_id, token_hash)
+     VALUES ($1, $2, $3, $4)
      RETURNING *`,
-    [data.id, data.agentId, data.tokenHash],
+    [data.id, data.agentId, data.workspaceId ?? null, data.tokenHash],
   );
   return rowToSandboxSession(rows[0]);
 }

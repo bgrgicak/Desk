@@ -1,8 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ID_PREFIXES, ValidationError } from "@desk/shared";
-
-const WORKSPACE_SLUG = "desk";
+import { workspaceRootPath } from "./layout.js";
 
 function validateChatId(chatId: string): void {
   if (!chatId.startsWith(ID_PREFIXES.chat) || chatId.includes("/") || chatId.includes("..")) {
@@ -17,17 +16,17 @@ function validateMessageId(messageId: string): void {
 }
 
 /** Absolute path to a chat's note-history directory. */
-export function noteHistoryDir(home: string, chatId: string): string {
+export function noteHistoryDir(home: string, slug: string, chatId: string): string {
   validateChatId(chatId);
-  return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG, ".chats", chatId, "note-history");
+  return path.join(workspaceRootPath(home, slug), ".chats", chatId, "note-history");
 }
 
 /** Absolute path to a chat's current-notes directory. Files here mirror
  * the latest body of each `note`-content message in the chat so the agent
  * can read them with ordinary file tools. */
-export function notesDir(home: string, chatId: string): string {
+export function notesDir(home: string, slug: string, chatId: string): string {
   validateChatId(chatId);
-  return path.join(home, "Desk", "workspaces", WORKSPACE_SLUG, ".chats", chatId, "notes");
+  return path.join(workspaceRootPath(home, slug), ".chats", chatId, "notes");
 }
 
 /**
@@ -38,12 +37,13 @@ export function notesDir(home: string, chatId: string): string {
  */
 export async function materializeNote(
   home: string,
+  slug: string,
   chatId: string,
   messageId: string,
   body: string,
 ): Promise<string> {
   validateMessageId(messageId);
-  const dir = notesDir(home, chatId);
+  const dir = notesDir(home, slug, chatId);
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, `${messageId}.md`);
   await fs.writeFile(file, body, "utf-8");
@@ -53,11 +53,12 @@ export async function materializeNote(
 /** Removes a materialized note file. Best-effort — missing file is OK. */
 export async function deleteMaterializedNote(
   home: string,
+  slug: string,
   chatId: string,
   messageId: string,
 ): Promise<void> {
   validateMessageId(messageId);
-  const file = path.join(notesDir(home, chatId), `${messageId}.md`);
+  const file = path.join(notesDir(home, slug, chatId), `${messageId}.md`);
   await fs.rm(file, { force: true });
 }
 
@@ -68,12 +69,13 @@ export async function deleteMaterializedNote(
  */
 export async function snapshotNote(
   home: string,
+  slug: string,
   chatId: string,
   messageId: string,
   previousBody: string,
 ): Promise<string> {
   validateMessageId(messageId);
-  const dir = noteHistoryDir(home, chatId);
+  const dir = noteHistoryDir(home, slug, chatId);
   await fs.mkdir(dir, { recursive: true });
   const iso = new Date().toISOString().replace(/:/g, "-");
   const file = path.join(dir, `${iso}-${messageId}.md`);
@@ -93,11 +95,12 @@ export interface NoteVersion {
  */
 export async function listNoteHistory(
   home: string,
+  slug: string,
   chatId: string,
   messageId: string,
 ): Promise<NoteVersion[]> {
   validateMessageId(messageId);
-  const dir = noteHistoryDir(home, chatId);
+  const dir = noteHistoryDir(home, slug, chatId);
   let entries: string[];
   try {
     entries = await fs.readdir(dir);

@@ -25,13 +25,15 @@ export async function listModels(
   // Pick any available workspace to reach a warm sandbox. Which one is an
   // implementation detail — all sandboxes see the same user-scoped keys.
   const [firstWorkspace] = await queries.workspaces.list(pool);
-  const workspaceId = firstWorkspace?.id;
-  if (!workspaceId) throw new NotFoundError("No sandbox available to query models from");
+  if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
 
   const providerKeys = await resolveProviderKeys(pool);
 
   try {
-    return await runtimeListModels(workspaceId, { provider: opts.provider, providerKeys });
+    return await runtimeListModels(firstWorkspace.id, firstWorkspace.path, {
+      provider: opts.provider,
+      providerKeys,
+    });
   } catch (err) {
     if (err instanceof SandboxExecError) {
       throw new ValidationError(

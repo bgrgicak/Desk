@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, tmpDir, workspaceRootPath } from "@desk/storage";
+import { chatAttachmentsDir, notesDir, tmpDir, workspaceRootPath } from "@desk/storage";
 
 /**
  * Mount model (workspace-as-home):
@@ -46,9 +46,9 @@ export interface MountSet {
  */
 export async function projectMounts(
   handle: SandboxHandle,
-  opts: { home: string; workspaceId: string; chatId?: string; runId: string },
+  opts: { home: string; workspaceId: string; workspaceSlug: string; chatId?: string; runId: string },
 ): Promise<MountSet> {
-  const wsRoot = workspaceRootPath(opts.home);
+  const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
   await fs.mkdir(wsRoot, { recursive: true });
 
   const mountSet: MountSet = {
@@ -56,11 +56,15 @@ export async function projectMounts(
   };
 
   if (opts.chatId) {
-    const aHost = await chatAttachmentsDir(opts.home, opts.chatId);
+    const aHost = await chatAttachmentsDir(opts.home, opts.workspaceSlug, opts.chatId);
     mountSet.attachments = aHost;
     // The workspace is bind-mounted at /home/agent, so the chat's attachments
     // surface at this path inside the container.
     mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
+    // Pre-create notes/ so the agent stops reporting "no notes dir" before
+    // the first materializeNote() call. The system prompt advertises this
+    // path in opencode.ts; matching it on disk keeps the two consistent.
+    await fs.mkdir(notesDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
 
   const manifest = {
@@ -131,10 +135,10 @@ export type MountPlan = MountPlanEntry[];
  * container's $HOME. Custom plans can be built by callers that need to
  * expose additional directories (e.g. ~/Projects) alongside.
  */
-export function buildDefaultMountPlan(home: string, _workspaceId?: string): MountPlan {
+export function buildDefaultMountPlan(home: string, workspaceSlug: string): MountPlan {
   return [
     {
-      sourcePath: workspaceRootPath(home),
+      sourcePath: workspaceRootPath(home, workspaceSlug),
       targetPath: SANDBOX_HOME,
       mode: "rw",
       category: "workspace",
@@ -159,6 +163,6 @@ export function bindsFromPlan(plan: MountPlan): string[] {
  * Legacy default bind list (kept for callers that haven't moved to a
  * MountPlan yet). Equivalent to `bindsFromPlan(buildDefaultMountPlan(...))`.
  */
-export function containerBinds(home: string, workspaceId?: string): string[] {
-  return bindsFromPlan(buildDefaultMountPlan(home, workspaceId));
+export function containerBinds(home: string, workspaceSlug: string): string[] {
+  return bindsFromPlan(buildDefaultMountPlan(home, workspaceSlug));
 }

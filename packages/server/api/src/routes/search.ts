@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
+import { queries } from "@desk/db";
 import { workspaceRootPath, type StorageContext } from "@desk/storage";
 
 export interface SearchResult {
@@ -51,19 +52,29 @@ export async function search(
   storage: StorageContext,
   query: string,
   scope: "artifacts" | "chats" | "library" | "all" = "all",
-  opts?: { showHidden?: boolean },
+  opts?: { showHidden?: boolean; workspaceId?: string },
 ): Promise<SearchResult[]> {
   const results: SearchResult[] = [];
   const needle = query.toLowerCase();
-  const root = workspaceRootPath(storage.home);
   const showHidden = opts?.showHidden ?? false;
+  const workspaceId = opts?.workspaceId;
+
+  // Filesystem scopes need a concrete workspace slug. When workspaceId is
+  // omitted we fall back to the full set so single-workspace callers (and
+  // tests) still get results — multi-workspace callers should always scope.
+  const workspaces = workspaceId
+    ? await queries.workspaces.findById(pool, workspaceId).then((w) => (w ? [w] : []))
+    : await queries.workspaces.list(pool);
 
   if (scope === "all" || scope === "library") {
-    const libFiles = await walkFiles(root, { showHidden });
-    for (const f of libFiles) {
-      if (f.name.toLowerCase().includes(needle)) {
-        const rel = path.relative(root, f.abs).split(path.sep).join("/");
-        results.push({ type: "file", id: rel, title: f.name });
+    for (const ws of workspaces) {
+      const root = workspaceRootPath(storage.home, ws.path);
+      const libFiles = await walkFiles(root, { showHidden });
+      for (const f of libFiles) {
+        if (f.name.toLowerCase().includes(needle)) {
+          const rel = path.relative(root, f.abs).split(path.sep).join("/");
+          results.push({ type: "file", id: rel, title: f.name });
+        }
       }
     }
   }
@@ -74,16 +85,19 @@ export async function search(
     // agent-generated artifacts (dot-prefixed). The split between the
     // two is a rendering concern for the chat UI; for search we surface
     // anything the agent or user parked in the chat's attachments dir.
-    const chatsRoot = path.join(root, ".chats");
-    const chatDirs = await fs.readdir(chatsRoot, { withFileTypes: true }).catch(() => []);
-    for (const entry of chatDirs) {
-      if (!entry.isDirectory()) continue;
-      const attachmentsDir = path.join(chatsRoot, entry.name, "attachments");
-      const files = await walkFiles(attachmentsDir, { showHidden: true });
-      for (const f of files) {
-        if (f.name.toLowerCase().includes(needle)) {
-          const rel = path.relative(root, f.abs).split(path.sep).join("/");
-          results.push({ type: "file", id: rel, title: f.name });
+    for (const ws of workspaces) {
+      const root = workspaceRootPath(storage.home, ws.path);
+      const chatsRoot = path.join(root, ".chats");
+      const chatDirs = await fs.readdir(chatsRoot, { withFileTypes: true }).catch(() => []);
+      for (const entry of chatDirs) {
+        if (!entry.isDirectory()) continue;
+        const attachmentsDir = path.join(chatsRoot, entry.name, "attachments");
+        const files = await walkFiles(attachmentsDir, { showHidden: true });
+        for (const f of files) {
+          if (f.name.toLowerCase().includes(needle)) {
+            const rel = path.relative(root, f.abs).split(path.sep).join("/");
+            results.push({ type: "file", id: rel, title: f.name });
+          }
         }
       }
     }
@@ -91,10 +105,11 @@ export async function search(
 
   if (scope === "all" || scope === "chats") {
     const pattern = `%${query}%`;
-    const { rows } = await pool.query(
-      `SELECT id, title FROM chats WHERE title ILIKE $1 ORDER BY updated_at DESC LIMIT 20`,
-      [pattern],
-    );
+    const sql = workspaceId
+      ? `SELECT id, title FROM chats WHERE workspace_id = $2 AND title ILIKE $1 ORDER BY updated_at DESC LIMIT 20`
+      : `SELECT id, title FROM chats WHERE title ILIKE $1 ORDER BY updated_at DESC LIMIT 20`;
+    const params = workspaceId ? [pattern, workspaceId] : [pattern];
+    const { rows } = await pool.query(sql, params);
     for (const row of rows) {
       results.push({ type: "chat", id: row.id as string, title: row.title as string });
     }

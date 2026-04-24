@@ -12,6 +12,7 @@ export interface ExecRunOptions {
   chatContext?: string;
   home: string;
   workspaceId: string;
+  workspaceSlug: string;
   chatId?: string;
   agent: AgentFileInput;
   onLog: (event: LogEvent) => void;
@@ -27,13 +28,18 @@ export async function execRun(
   opts: ExecRunOptions,
 ): Promise<ExecResult> {
   // Session identifies the agent (not the workspace) so tool auth knows
-  // which agent is asking.
-  const { session } = await mintToken(pool, opts.agent.agentId, { runId: opts.runId });
+  // which agent is asking. Workspace is recorded alongside so tool handlers
+  // route filesystem ops to the right on-disk slug.
+  const { session } = await mintToken(pool, opts.agent.agentId, {
+    runId: opts.runId,
+    workspaceId: opts.workspaceId,
+  });
 
   // Track the run + write a manifest for operator debugging.
   const mounts = await projectMounts(handle, {
     home: opts.home,
     workspaceId: opts.workspaceId,
+    workspaceSlug: opts.workspaceSlug,
     chatId: opts.chatId,
     runId: opts.runId,
   });
@@ -41,7 +47,7 @@ export async function execRun(
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
   // single-bind workspace mount.
-  await writeAgentFile(opts.home, opts.agent);
+  await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
 
   // Tell the agent which chat it's in. The per-chat workbench path is
   // encoded in the system prompt as a template; here we anchor it and
@@ -62,6 +68,7 @@ export async function execRun(
       runId: opts.runId,
       prompt: opts.prompt,
       chatContext,
+      workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       onLog: opts.onLog,
     });

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { generateId } from "@desk/shared";
-import { ensureLayout } from "../../src/layout.js";
+import { ensureLayout, ensureWorkspaceLayout } from "../../src/layout.js";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_storage_test_${workerId}`;
@@ -35,6 +35,7 @@ export interface TestStorageContext {
   pool: pg.Pool;
   home: string;
   workspaceId: string;
+  workspaceSlug: string;
   chatId: string;
 }
 
@@ -68,16 +69,17 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
   await seedIfEmpty(pool);
 
   // Get workspace and create a chat for tests
-  const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
+  const { rows: wsRows } = await pool.query("SELECT id, path FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;
+  const workspaceSlug = wsRows[0].path as string;
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
 
   // Ensure the seeded agent is enrolled in the workspace (M3 invariant)
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-     VALUES ($1, $2, true)
+    `INSERT INTO workspace_agents (workspace_id, agent_id)
+     VALUES ($1, $2)
      ON CONFLICT (workspace_id, agent_id) DO NOTHING`,
     [workspaceId, agentId],
   );
@@ -91,8 +93,9 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
   // Create temp home directory
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-test-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, workspaceSlug);
 
-  return { pool, home, workspaceId, chatId };
+  return { pool, home, workspaceId, workspaceSlug, chatId };
 }
 
 export async function teardownTestStorage(ctx: TestStorageContext): Promise<void> {

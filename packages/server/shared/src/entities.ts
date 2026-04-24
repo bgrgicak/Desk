@@ -37,6 +37,9 @@ export const WorkspaceSchema = z.object({
   description: z.string(),
   icon: z.string(),
   color: z.string(),
+  /** On-disk directory name under `~/Desk/workspaces/`. Derived from `name`
+   * at create time, renamed in lock-step when the workspace is renamed. */
+  path: z.string(),
   createdAt: z.string(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
@@ -218,6 +221,9 @@ export type File = z.infer<typeof FileSchema>;
 export const SandboxSessionSchema = z.object({
   id: z.string(),
   agentId: z.string(),
+  /** Workspace whose sandbox container this token was minted for.
+   * Optional for historical sessions from before the multi-workspace split. */
+  workspaceId: z.string().optional(),
   tokenHash: z.string(),
   issuedAt: z.string(),
   revokedAt: z.string().optional(),

@@ -62,7 +62,7 @@ describe("AgentSchema", () => {
 });
 
 describe("WorkspaceSchema", () => {
-  const valid = { id: "wks_abc", userId: "usr_abc", name: "My WS", description: "desc", icon: "star", color: "#fce7f3", createdAt: now };
+  const valid = { id: "wks_abc", userId: "usr_abc", name: "My WS", description: "desc", icon: "star", color: "#fce7f3", path: "my-ws", createdAt: now };
 
   it("parses a valid workspace", () => {
     expect(WorkspaceSchema.parse(valid)).toEqual(valid);

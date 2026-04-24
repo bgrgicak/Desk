@@ -5,6 +5,8 @@ export interface RunOptions {
   prompt: string;
   chatContext?: string;
   agentFileId?: string;
+  /** On-disk slug for the workspace this run belongs to — feeds the mount plan + container name. */
+  workspaceSlug: string;
   /**
    * Called once per stdout/stderr/event log line. May be sync or async — the
    * driver tracks any returned promise and awaits all of them before
@@ -96,7 +98,7 @@ function createRealDriver(): SandboxDriver {
       const docker = new Docker({ socketPath: dockerSocketPath() });
 
       // Use createOrReuse which includes containerBinds (project mounts)
-      const handle = await createOrReuse(workspaceId, undefined, opts.providerKeys);
+      const handle = await createOrReuse(workspaceId, opts.workspaceSlug, undefined, opts.providerKeys);
       const container = docker.getContainer(handle.containerId);
 
       // Build the full prompt including chat context if provided.
