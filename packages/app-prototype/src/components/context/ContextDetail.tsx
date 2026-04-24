@@ -384,7 +384,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
           {item.type === 'note' ? (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="mx-auto w-full max-w-[720px] px-4 pt-6 pb-2 shrink-0">
+              <div className="w-full px-4 pt-6 pb-2 shrink-0">
                 <textarea
                   ref={titleRef}
                   value={noteTitle}
@@ -394,7 +394,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                   className="w-full resize-none overflow-hidden bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/30 outline-none leading-tight"
                 />
               </div>
-              <div className="flex-1 min-h-0 mx-auto w-full max-w-[720px] px-2 pb-6">
+              <div className="flex-1 min-h-0 w-full">
                 {editorValue !== null ? (
                   <TextFileEditor
                     value={editorValue}
@@ -413,11 +413,12 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
             </div>
           ) : item.type === 'link' ? (
             (() => {
-              // text/uri-list: first non-empty, non-comment line is the URL.
-              const linkUrl = previewText
-                ?.split('\n')
-                .map(l => l.trim())
-                .find(l => l.length > 0 && !l.startsWith('#')) ?? ''
+              // Link entries are stored in the host OS's native shortcut
+              // format (.url INI on Windows, .webloc plist on macOS,
+              // .desktop on Linux). All three embed an http(s) URL —
+              // pull the first such substring out as the target.
+              const linkUrl =
+                previewText?.match(/https?:\/\/\S+?(?=[\s<"']|$)/)?.[0] ?? ''
               return (
                 <div className="flex flex-col h-full">
                   {/* Link preview bar */}
@@ -439,17 +440,13 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                       </span>
                     )}
                   </div>
-                  {/* Embedded preview placeholder */}
                   <div className="flex-1 flex items-center justify-center">
                     <div className="text-center">
                       <div className="mb-4 flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-blue-500/10">
                         <Link2 className="h-8 w-8 text-blue-500/40" />
                       </div>
                       <h3 className="text-base font-semibold mb-1">{item.name}</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Web preview would load here
-                      </p>
-                      {linkUrl && (
+                      {linkUrl ? (
                         <a
                           href={linkUrl}
                           target="_blank"
@@ -459,6 +456,10 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                           Open in browser
                           <ExternalLink className="h-3.5 w-3.5" />
                         </a>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {previewError ? `Failed to load link: ${previewError}` : 'Loading…'}
+                        </p>
                       )}
                     </div>
                   </div>

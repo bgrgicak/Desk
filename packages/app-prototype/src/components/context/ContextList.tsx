@@ -4,6 +4,7 @@ import {
   Upload,
   ClipboardPaste,
   PenLine,
+  FilePlus,
   FolderOpen,
   Folder as FolderIcon,
   FolderPlus,
@@ -66,6 +67,7 @@ import {
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   useCreateLibraryFolderMutation,
+  useCreateLibraryLinkMutation,
   useDeleteLibraryFileMutation,
   useGetLibraryQuery,
   useMoveLibraryEntryMutation,
@@ -110,6 +112,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
   const [deleteLibraryFile] = useDeleteLibraryFileMutation()
   const [createLibraryFolder] = useCreateLibraryFolderMutation()
+  const [createLibraryLink] = useCreateLibraryLinkMutation()
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
   const { data: libraryResp } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
@@ -271,21 +274,61 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
     clearSelection()
   }
 
-  const createBlankNote = (): ContextItem => ({
-    id: `note-new-${Date.now()}`,
-    type: 'note',
-    name: '',
-    content: '',
-    folderId: currentFolderId,
-    addedAt: new Date(),
-    usedBy: [],
-    uploadedBy: 'user',
-    relatedArtifactIds: [],
-  })
-
   // New folder dialog
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+
+  // Create blank file dialog
+  const [createFileDialogOpen, setCreateFileDialogOpen] = useState(false)
+  const [newFileName, setNewFileName] = useState('')
+
+  // Paste link dialog — name is optional; falls back to the URL hostname.
+  const [pasteLinkDialogOpen, setPasteLinkDialogOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkName, setLinkName] = useState('')
+
+  const handleCreateLink = async () => {
+    const url = linkUrl.trim()
+    if (!url || !activeWorkspaceId) return
+    const subpath = subpathFromFolderId(currentFolderId)
+    try {
+      await createLibraryLink({
+        workspaceId: activeWorkspaceId,
+        url,
+        name: linkName.trim() || undefined,
+        subpath: subpath || undefined,
+      }).unwrap()
+      toast.success(`Link added`)
+      setPasteLinkDialogOpen(false)
+      setLinkUrl('')
+      setLinkName('')
+    } catch (err) {
+      toast.error(`Failed to add link`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  const handleCreateFile = async () => {
+    const name = newFileName.trim()
+    if (!name || !activeWorkspaceId) return
+    const subpath = subpathFromFolderId(currentFolderId)
+    const blob = new File([''], name, { type: 'application/octet-stream' })
+    try {
+      await uploadLibraryFile({
+        workspaceId: activeWorkspaceId,
+        file: blob,
+        subpath: subpath || undefined,
+      }).unwrap()
+      toast.success(`Created ${name}`)
+    } catch (err) {
+      toast.error(`Failed to create file`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+    setCreateFileDialogOpen(false)
+    setNewFileName('')
+  }
 
   // Folders come from the server's recursive library listing; the
   // selector maps each FolderRef to a UI Folder whose `id` is the
@@ -491,8 +534,8 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
             <DropdownMenuContent align="end" className="w-44">
               <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
               <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-              <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -525,8 +568,8 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                 <DropdownMenuContent>
                   <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
                   <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-                  <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -976,6 +1019,110 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               onClick={handleCreateFolder}
             >
               Create folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create blank file dialog */}
+      <Dialog
+        open={createFileDialogOpen}
+        onOpenChange={(open) => {
+          setCreateFileDialogOpen(open)
+          if (!open) setNewFileName('')
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create file</DialogTitle>
+            <DialogDescription>
+              {currentFolder
+                ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
+                : 'Create a new blank file. Include the extension in the name.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm font-medium text-foreground">File name</label>
+            <Input
+              placeholder="e.g., notes.md"
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!newFileName.trim()}
+              onClick={handleCreateFile}
+            >
+              Create file
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Paste link dialog */}
+      <Dialog
+        open={pasteLinkDialogOpen}
+        onOpenChange={(open) => {
+          setPasteLinkDialogOpen(open)
+          if (!open) { setLinkUrl(''); setLinkName('') }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Paste link</DialogTitle>
+            <DialogDescription>
+              {currentFolder
+                ? `Save a URL to "${currentFolder.name}".`
+                : 'Save a URL to your library.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">URL</label>
+              <Input
+                placeholder="https://example.com"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Name <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <Input
+                placeholder="Defaults to the URL hostname"
+                value={linkName}
+                onChange={(e) => setLinkName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
+            >
+              Cancel
+            </Button>
+            <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
+              Save link
             </Button>
           </DialogFooter>
         </DialogContent>

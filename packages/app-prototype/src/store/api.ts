@@ -445,6 +445,17 @@ export const api = createApi({
       }),
       invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
+    createLibraryLink: build.mutation<
+      ServerFile,
+      { workspaceId: string; url: string; name?: string; subpath?: string }
+    >({
+      query: ({ workspaceId, url, name, subpath }) => ({
+        url: `/library/link?workspaceId=${encodeURIComponent(workspaceId)}`,
+        method: "POST",
+        body: { url, name, subpath },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
     moveLibraryEntry: build.mutation<
       { kind: "file" | "folder"; path: string },
       { workspaceId: string; from: string; to: string }
@@ -544,6 +555,7 @@ export const {
   useUploadLibraryFileMutation,
   useSaveLibraryContentMutation,
   useCreateLibraryFolderMutation,
+  useCreateLibraryLinkMutation,
   useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
   useUploadChatArtifactMutation,

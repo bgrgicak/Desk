@@ -551,6 +551,20 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 201, result);
       return;
     }
+    if (path === "/library/link" && method === "POST") {
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      const body = await parseBody(req) as { url?: unknown; name?: unknown; subpath?: unknown };
+      if (typeof body.url !== "string" || body.url === "") {
+        throw new ValidationError("Body must include { url: string, name?: string, subpath?: string }");
+      }
+      const name = typeof body.name === "string" && body.name.trim() !== ""
+        ? body.name
+        : new URL(body.url).hostname || body.url;
+      const subpath = typeof body.subpath === "string" && body.subpath !== "" ? body.subpath : undefined;
+      const result = await libraryRoutes.createLink(storage, wsId, { url: body.url, name, subpath }, emitEvent);
+      sendJson(res, 201, result);
+      return;
+    }
     if (path === "/library/meta" && method === "GET") {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");

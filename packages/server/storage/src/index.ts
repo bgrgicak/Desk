@@ -28,10 +28,11 @@ export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";
 export {
   listLibrary,
   createLibraryFolder,
+  createLibraryLink,
   moveLibraryEntry,
   deleteLibraryEntry,
 } from "./library.js";
-export type { LibraryContext, FolderRef } from "./library.js";
+export type { LibraryContext, FolderRef, CreateLinkInput } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
 export {
   snapshotNote,

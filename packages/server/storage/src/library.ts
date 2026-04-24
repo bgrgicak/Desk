@@ -1,9 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import pg from "pg";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { workspaceRootPath, trashDir, resolveHostPath } from "./layout.js";
-import { validateLibrarySubpath, type FileRef } from "./files.js";
+import {
+  uploadArtifact,
+  validateLibrarySubpath,
+  type FileRef,
+  type StorageContext,
+} from "./files.js";
 
 export interface LibraryContext {
   pool: pg.Pool;
@@ -35,6 +41,12 @@ function guessMime(name: string): string {
     case ".pdf": return "application/pdf";
     case ".png": return "image/png";
     case ".jpg": case ".jpeg": return "image/jpeg";
+    // URL-shortcut formats. `.url` (Windows INI) and `.webloc` (macOS
+    // plist) are unambiguous link formats. `.desktop` is ambiguous on
+    // Linux (also used for app launchers), but inside a user library
+    // the overwhelming case is a paste-link entry, so we tag it as a
+    // link and accept the rare misclassification.
+    case ".url": case ".webloc": case ".desktop": return "text/uri-list";
     default: return "application/octet-stream";
   }
 }
@@ -230,6 +242,115 @@ export async function moveLibraryEntry(
     kind: fromStat.isDirectory() ? "folder" : "file",
     path: toRel,
   };
+}
+
+/**
+ * Builds the on-disk shortcut body in the host OS's native format so
+ * the file behaves like a real link when the user opens the workspace
+ * directly in their file manager:
+ *   - macOS: `.webloc` (plist XML)
+ *   - Windows: `.url` (INI)
+ *   - Linux + other: `.desktop` with `Type=Link`
+ *
+ * All formats include the URL on a `URL=...` or `<string>...</string>`
+ * line; the UI extracts it with a format-agnostic regex when previewing.
+ */
+function formatLinkForHost(displayName: string, url: string): { ext: string; body: string } {
+  const platform = process.platform;
+  if (platform === "darwin") {
+    const escaped = url
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const body =
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n` +
+      `<plist version="1.0">\n` +
+      `<dict>\n` +
+      `\t<key>URL</key>\n` +
+      `\t<string>${escaped}</string>\n` +
+      `</dict>\n` +
+      `</plist>\n`;
+    return { ext: ".webloc", body };
+  }
+  if (platform === "win32") {
+    return {
+      ext: ".url",
+      body: `[InternetShortcut]\r\nURL=${url}\r\n`,
+    };
+  }
+  // freedesktop .desktop with Type=Link — the standard for Linux
+  // desktops (GNOME, KDE) when launching opens the URL in the default
+  // browser. Name is required by the spec; fall back to the URL.
+  const safeName = displayName.replace(/[\r\n]/g, " ").trim() || url;
+  return {
+    ext: ".desktop",
+    body: `[Desktop Entry]\nVersion=1.0\nType=Link\nName=${safeName}\nURL=${url}\n`,
+  };
+}
+
+/**
+ * Strips characters that are illegal in filenames on common host
+ * filesystems, plus leading dots (which are reserved for hidden /
+ * agent-origin entries). Empty results fall back to "link" so we
+ * always have a writable basename.
+ */
+function sanitizeLinkBaseName(name: string): string {
+  const cleaned = name
+    // eslint-disable-next-line no-control-regex
+    .replace(/[ -<>:"/\\|?*]/g, "")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 100);
+  return cleaned || "link";
+}
+
+function validateLinkUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ValidationError(`Invalid URL: ${raw}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ValidationError(`URL must be http or https: ${raw}`);
+  }
+  return parsed.toString();
+}
+
+export interface CreateLinkInput {
+  workspaceId: string;
+  workspaceSlug: string;
+  /** User-facing label; becomes the filename stem and (on Linux) the
+   * `.desktop` Name= field. */
+  name: string;
+  /** http or https URL. */
+  url: string;
+  /** Workspace-root-relative subdirectory; same rules as upload. */
+  subpath?: string;
+}
+
+/**
+ * Writes a URL shortcut to the workspace library in the host OS's
+ * native format. Reuses `uploadArtifact` so the entry inherits the
+ * usual safeguards (subpath validation, hidden-name rejection, atomic
+ * temp+rename, collision-safe filename).
+ */
+export async function createLibraryLink(
+  ctx: StorageContext,
+  input: CreateLinkInput,
+): Promise<FileRef> {
+  const url = validateLinkUrl(input.url);
+  const stem = sanitizeLinkBaseName(input.name);
+  const { ext, body } = formatLinkForHost(stem, url);
+  return uploadArtifact(ctx, {
+    workspaceId: input.workspaceId,
+    workspaceSlug: input.workspaceSlug,
+    name: `${stem}${ext}`,
+    mime: "text/uri-list",
+    stream: Readable.from(Buffer.from(body, "utf-8")),
+    subpath: input.subpath,
+  });
 }
 
 /**

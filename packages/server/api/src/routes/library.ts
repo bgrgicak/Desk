@@ -4,6 +4,7 @@ import { NotFoundError, type WsEvent } from "@desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
+  createLibraryLink,
   moveLibraryEntry,
   deleteLibraryEntry,
   uploadArtifact,
@@ -102,6 +103,33 @@ export async function download(
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
   return downloadFile(ctx, slug, relPath);
+}
+
+/**
+ * Creates a URL-shortcut entry in the workspace's library. The on-disk
+ * format is chosen for the host OS (.url / .webloc / .desktop) so the
+ * file is openable from the host file manager too. `subpath` is
+ * workspace-root-relative (e.g. "Bookmarks/Work").
+ */
+export async function createLink(
+  ctx: StorageContext,
+  workspaceId: string,
+  input: { url: string; name: string; subpath?: string },
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const slug = await resolveSlug(ctx, workspaceId);
+  const file = await createLibraryLink(ctx, {
+    workspaceId,
+    workspaceSlug: slug,
+    name: input.name,
+    url: input.url,
+    subpath: input.subpath,
+  });
+  emit({
+    type: "library.changed",
+    payload: { workspaceId, path: file.path, op: "added" },
+  });
+  return file;
 }
 
 /**

@@ -224,6 +224,7 @@ in prod, the UI is the only way to populate them.
 |--------|--------------------------------|-------------------------------------------------|
 | GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
 | DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
 | GET    | /library/download?path=&workspaceId= | Stream a library file                     |
@@ -234,6 +235,21 @@ directory and skips dot-prefixed entries (the universal hidden-file
 convention — `.chats/`, `.opencode/`, etc. are never shown). File
 identifiers are workspace-root-relative paths (`foo.pdf`,
 `notes/bar.md`). The `path` query parameter is url-encoded.
+
+### Links (`POST /library/link`)
+
+Body: `{ url: string, name?: string, subpath?: string }`. The URL must
+be `http(s)`. The on-disk format is chosen for the host OS so the file
+is openable directly from the user's file manager:
+
+- macOS → `.webloc` (Apple plist XML)
+- Windows → `.url` (INI: `[InternetShortcut]` + `URL=`)
+- Linux + others → `.desktop` with `Type=Link`
+
+Listings tag these extensions with mime `text/uri-list`; the UI maps
+that mime to a link entry. The URL is recovered from the file body via
+a format-agnostic `https?://` regex, since each format embeds the URL
+on a different syntactic line.
 
 ### Workspace scoping
 
