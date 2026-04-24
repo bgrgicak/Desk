@@ -56,7 +56,7 @@ export type View = 'today' | 'desk' | 'runs' | 'chats' | 'context' | 'compose'
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
 const NAV_ITEMS: { view: View; icon: LucideIcon; label: string }[] = [
   { view: 'desk',    icon: LayoutGrid,  label: 'Desk'    },
-  { view: 'runs',    icon: Zap,         label: 'Runs'    },
+  { view: 'runs',    icon: Zap,         label: 'Tasks'   },
   { view: 'context', icon: FolderOpen,  label: 'Library' },
 ]
 

@@ -160,7 +160,7 @@ export function ConversationPanel({
                   value={artifactNotes}
                   onChange={e => setArtifactNotes(e.target.value)}
                   placeholder="e.g., Always keep the tone formal."
-                  className="w-full min-h-[80px] rounded-lg border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
+                  className="w-full min-h-[80px] rounded-lg border bg-background shadow-xs px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
                 />
               </div>
             )}

@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { InboxItem } from '@/data/mock-data'
-import { getRelativeTime, getArtifactIcon, MOCK_ARTIFACTS, MOCK_RUNS } from '@/data/mock-data'
+import { getRelativeTime, getArtifactIcon, MOCK_ARTIFACTS, MOCK_TASKS } from '@/data/mock-data'
 
 interface InboxCardProps {
   item: InboxItem
@@ -21,7 +21,7 @@ interface InboxCardProps {
 
 export function InboxCard({ item, onClick, onSomethingElse, index = 0, isSelected = false }: InboxCardProps) {
   const artifact = item.artifactId ? MOCK_ARTIFACTS.find(a => a.id === item.artifactId) : null
-  const run      = item.runId      ? MOCK_RUNS.find(r => r.id === item.runId)           : null
+  const run      = item.runId      ? MOCK_TASKS.find(r => r.id === item.runId)           : null
   const contextName = artifact?.name ?? run?.name ?? 'Ask'
   const ContextIcon = artifact ? getArtifactIcon(artifact.type) : run ? Zap : Bot
 

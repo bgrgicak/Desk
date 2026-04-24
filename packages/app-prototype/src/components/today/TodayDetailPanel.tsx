@@ -16,7 +16,7 @@ import { useMockChat } from '@/hooks/use-mock-chat'
 import { InboxUICard } from './InboxUICard'
 import {
   MOCK_ARTIFACTS,
-  MOCK_RUNS,
+  MOCK_TASKS,
   getArtifactIcon,
   type InboxItem,
 } from '@/data/mock-data'
@@ -35,7 +35,7 @@ export function TodayDetailPanel({ item, onClose, onOpenArtifact, onOpenRun, foc
   const inputFocusRef = useRef<(() => void) | null>(null)
 
   const artifact = item.artifactId ? (MOCK_ARTIFACTS.find(a => a.id === item.artifactId) ?? null) : null
-  const run      = item.runId      ? (MOCK_RUNS.find(r => r.id === item.runId) ?? null)           : null
+  const run      = item.runId      ? (MOCK_TASKS.find(r => r.id === item.runId) ?? null)           : null
 
   const initialMessages = [{
     id: `${item.id}-ctx`,
