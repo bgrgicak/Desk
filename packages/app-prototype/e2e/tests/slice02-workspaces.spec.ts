@@ -11,6 +11,57 @@ test("seeded workspace is visible in the bar", async ({ loggedInPage }) => {
   await expect(loggedInPage.getByRole("button", { name: /Desk/ }).first()).toBeVisible();
 });
 
+test("editing workspace name + description from the Customize modal persists", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  // Seeded workspace is "Desk" (see packages/server/db/src/seed.ts).
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+  await expect(loggedInPage.getByRole("button", { name: /Desk/ }).first()).toBeVisible();
+
+  // Open the settings modal.
+  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+
+  // The Workspace section is active by default — it shows the name input and the icon grid.
+  const nameInput = loggedInPage.getByPlaceholder("Workspace name");
+  await expect(nameInput).toBeVisible();
+  await expect(nameInput).toHaveValue("Desk");
+
+  await nameInput.fill("Updated Desk");
+  await loggedInPage.getByPlaceholder("What's this workspace for?").fill("new description");
+  // Pick a non-default emoji so we also verify icon roundtrip.
+  await loggedInPage.getByRole("button", { name: "🚀" }).click();
+
+  await loggedInPage.getByRole("button", { name: /Save changes/ }).click();
+
+  // Bar re-renders with the new name after the mutation invalidates the list.
+  await expect(
+    loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
+  ).toBeVisible({ timeout: 5_000 });
+
+  // Confirm the server actually stored it.
+  const res = await fetch(`${serverUrl}/workspaces`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const list = (await res.json()) as Array<{
+    name: string;
+    description: string;
+    icon: string;
+  }>;
+  expect(list[0]).toMatchObject({
+    name: "Updated Desk",
+    description: "new description",
+    icon: "🚀",
+  });
+
+  // Reload and confirm the change sticks through a fresh boot.
+  await loggedInPage.reload();
+  await expect(
+    loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
+  ).toBeVisible({ timeout: 10_000 });
+});
+
 test("creating a workspace adds it to the bar on reload", async ({
   loggedInPage,
   serverUrl,
