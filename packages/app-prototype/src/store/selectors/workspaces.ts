@@ -2,8 +2,9 @@ import type { WorkspaceInfo } from "@/components/layout/WorkspaceBar";
 import type { ServerWorkspace } from "../types";
 
 /**
- * Client-side palette used to give workspaces a stable tab color until the
- * server grows a `color`/`bg` field.
+ * Client-side palette used as a fallback for workspaces with no stored
+ * color (empty string). Once a user picks a color in the Customize modal
+ * it is persisted server-side and overrides this palette.
  */
 const BG_PALETTE = [
   "#fef3c7",
@@ -22,14 +23,12 @@ function hashCode(s: string): number {
   return Math.abs(h);
 }
 
-/**
- * Map a server Workspace to the client-side WorkspaceInfo the existing
- * WorkspaceBar component expects. Shape is preserved (emoji/bg/description/…)
- * so no component render changes are needed.
- */
 export function toWorkspaceInfo(w: ServerWorkspace): WorkspaceInfo {
   const emoji = w.icon && w.icon.length > 0 ? w.icon : "🏷️";
-  const bg = BG_PALETTE[hashCode(w.id) % BG_PALETTE.length];
+  const bg =
+    w.color && w.color.length > 0
+      ? w.color
+      : BG_PALETTE[hashCode(w.id) % BG_PALETTE.length];
   return {
     id: w.id,
     name: w.name,

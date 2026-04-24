@@ -10,7 +10,7 @@ export async function listWorkspaces(pool: pg.Pool, userId?: string) {
 export async function createWorkspace(
   pool: pg.Pool,
   userId: string,
-  data: { name: string; description?: string; icon?: string },
+  data: { name: string; description?: string; icon?: string; color?: string },
 ) {
   return queries.workspaces.insert(pool, {
     id: generateId("workspace"),
@@ -28,7 +28,7 @@ export async function getWorkspace(pool: pg.Pool, id: string) {
 export async function patchWorkspace(
   pool: pg.Pool,
   id: string,
-  data: { name?: string; description?: string; icon?: string },
+  data: { name?: string; description?: string; icon?: string; color?: string },
 ) {
   const ws = await queries.workspaces.updateMeta(pool, id, data);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
@@ -36,14 +36,18 @@ export async function patchWorkspace(
 }
 
 /**
- * Soft-delete a workspace. v1: marks it deleted but doesn't purge data.
+ * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents).
+ * Refuses to delete the user's last workspace — the app requires at least one.
  */
-export async function deleteWorkspace(pool: pg.Pool, id: string) {
+export async function deleteWorkspace(pool: pg.Pool, userId: string, id: string) {
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
-  // Soft-delete: just mark updated. A real impl would set a deleted_at flag.
-  // For v1, we remove it from the list by actually deleting the row.
-  // The cascade will clean up chats/files.
+  const owned = await queries.workspaces.listByUser(pool, userId);
+  if (owned.length <= 1) {
+    throw new ValidationError(
+      "Cannot delete the last workspace; create another one first.",
+    );
+  }
   await pool.query(`DELETE FROM workspaces WHERE id = $1`, [id]);
   return { ok: true };
 }

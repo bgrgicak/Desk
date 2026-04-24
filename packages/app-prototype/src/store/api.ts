@@ -150,14 +150,14 @@ export const api = createApi({
     }),
     createWorkspace: build.mutation<
       ServerWorkspace,
-      { name: string; description?: string; icon?: string }
+      { name: string; description?: string; icon?: string; color?: string }
     >({
       query: (body) => ({ url: "/workspaces", method: "POST", body }),
       invalidatesTags: [{ type: "Workspace", id: "LIST" }],
     }),
     patchWorkspace: build.mutation<
       ServerWorkspace,
-      { id: string; patch: Partial<Pick<ServerWorkspace, "name" | "description" | "icon">> }
+      { id: string; patch: Partial<Pick<ServerWorkspace, "name" | "description" | "icon" | "color">> }
     >({
       query: ({ id, patch }) => ({
         url: `/workspaces/${id}`,

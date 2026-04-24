@@ -39,8 +39,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import { useGetMeQuery } from '@/store/api'
-import { logout } from '@/auth/login-prompt'
+import { useCreateWorkspaceMutation, useGetMeQuery } from '@/store/api'
+import { logout } from '@/auth/auto-login'
 import type { View } from './AppShell'
 
 function initialsOf(name: string): string {
@@ -127,6 +127,8 @@ export function WorkspaceBar({
   // Current user — fetched once on mount via RTK Query. Falls back to a
   // placeholder while in-flight so the initial render is stable.
   const { data: me } = useGetMeQuery()
+  const [createWorkspaceMutation, { isLoading: isCreating }] =
+    useCreateWorkspaceMutation()
   const account = me
     ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
     : ACCOUNT_PLACEHOLDER
@@ -468,18 +470,35 @@ export function WorkspaceBar({
               Cancel
             </Button>
             <Button
-              disabled={!newName.trim()}
-              onClick={() => {
+              disabled={!newName.trim() || isCreating}
+              onClick={async () => {
                 if (editingWorkspace) {
+                  // TODO: editing from this dialog is still client-state only;
+                  // use the Customize modal for persistent edits.
                   setOrderedWorkspaces(prev =>
                     prev.map(w => w.id === editingWorkspace.id
                       ? { ...w, name: newName.trim(), emoji: newEmoji, bg: newColor, description: newDescription }
                       : w
                     )
                   )
+                  setCreateOpen(false)
+                  resetForm()
+                  return
                 }
-                setCreateOpen(false)
-                resetForm()
+                try {
+                  const created = await createWorkspaceMutation({
+                    name: newName.trim(),
+                    description: newDescription,
+                    icon: newEmoji,
+                    color: newColor,
+                  }).unwrap()
+                  setCreateOpen(false)
+                  resetForm()
+                  onSelectWorkspace(created.id)
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.error('create workspace failed:', err)
+                }
               }}
             >
               {editingWorkspace ? 'Save changes' : 'Create workspace'}

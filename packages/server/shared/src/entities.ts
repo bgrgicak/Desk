@@ -36,6 +36,7 @@ export const WorkspaceSchema = z.object({
   name: z.string(),
   description: z.string(),
   icon: z.string(),
+  color: z.string(),
   createdAt: z.string(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
