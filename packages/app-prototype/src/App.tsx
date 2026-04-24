@@ -3,6 +3,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell, type View } from '@/components/layout/AppShell'
 import type { WorkspaceNavView } from '@/components/layout/WorkspaceBar'
+import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
 import { ContextList } from '@/components/context/ContextList'
@@ -34,6 +35,7 @@ const NEW_CHAT_STUB: Chat = {
 }
 
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [activeView, setActiveView]               = useState<View>('desk')
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('general')
   const [selectedChatId, setSelectedChatId]       = useState<string | null>(null)
@@ -186,6 +188,15 @@ function App() {
   const chatArtifacts = (selectedChat?.artifactIds ?? []).map(id => artifacts.find(a => a.id === id)).filter(Boolean) as typeof artifacts
   const chatShowNewBadge = !!(selectedChat?.unread && readChatIds.has(selectedChat.id))
 
+  if (!isLoggedIn) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <LoginScreen onLogin={() => setIsLoggedIn(true)} />
+      </TooltipProvider>
+    )
+  }
+
   return (
     <TooltipProvider>
       <Toaster position="bottom-right" />
@@ -209,6 +220,7 @@ function App() {
         onNavigateWorkspace={handleNavigateWorkspace}
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => setTodaySheetOpen(false)}
+        onSignOut={() => setIsLoggedIn(false)}
       >
         {/* Artifact detail — takes over main area when an artifact is open */}
         {selectedArtifact && (() => {

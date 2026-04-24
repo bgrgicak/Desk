@@ -111,6 +111,7 @@ interface AppShellProps {
   // ── Today sheet ──
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
+  onSignOut?: () => void
 }
 
 export function AppShell({
@@ -134,6 +135,7 @@ export function AppShell({
   onNavigateWorkspace,
   todaySheetOpen = false,
   onTodaySheetClose,
+  onSignOut,
 }: AppShellProps) {
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
@@ -161,6 +163,7 @@ export function AppShell({
         onSelectWorkspace={onSelectWorkspace}
         onNavigate={onNavigateWorkspace}
         onCompose={onCompose}
+        onSignOut={onSignOut}
       />
 
       {/* ── Today sheet (slides in from left) ── */}

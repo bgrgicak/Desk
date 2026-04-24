@@ -102,6 +102,7 @@ interface WorkspaceBarProps {
   onSelectWorkspace: (id: string) => void
   onNavigate: (id: string, view: WorkspaceNavView) => void
   onCompose?: () => void
+  onSignOut?: () => void
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ export function WorkspaceBar({
   onSelectWorkspace,
   onNavigate,
   onCompose,
+  onSignOut,
 }: WorkspaceBarProps) {
   // Command palette
   const [commandOpen, setCommandOpen] = useState(false)
@@ -311,7 +313,7 @@ export function WorkspaceBar({
               <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
               <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-muted-foreground">
+              <DropdownMenuItem onSelect={onSignOut}>
                 <LogOut className="h-4 w-4" />Sign out
               </DropdownMenuItem>
             </DropdownMenuContent>
