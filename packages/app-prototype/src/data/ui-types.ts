@@ -141,7 +141,7 @@ export interface RunOccurrence {
   id: string
   startedAt: Date
   endedAt: Date
-  status: 'completed' | 'failed' | 'active'
+  status: 'completed' | 'failed' | 'active' | 'scheduled' | 'paused'
   statusText?: string
 }
 

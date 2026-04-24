@@ -40,7 +40,11 @@ function statusTextFor(m: ServerMessage): string {
   if (m.state === "succeeded") return "Completed";
   if (m.state === "failed") return "Failed";
   if (m.state === "cancelled") return "Cancelled";
-  if (m.executeAt) return `Scheduled for ${new Date(m.executeAt).toLocaleString()}`;
+  if (m.executeAt) {
+    const when = new Date(m.executeAt);
+    const label = when.toLocaleString();
+    return when.getTime() < Date.now() ? `Overdue since ${label}` : `Scheduled for ${label}`;
+  }
   if (m.cron) return `Cron: ${m.cron}`;
   return "Pending";
 }
@@ -62,9 +66,15 @@ export function toUiRun(m: ServerMessage, agents: ServerAgent[]): Run {
   const status = statusFor(m);
   // Derive a single occurrence from the server's state/timestamps so the
   // Runs calendar has something to place. Recurring cron runs will need
-  // server-side history to render multiple rows.
+  // server-side history to render multiple rows. We map straight off the
+  // message state so the calendar can distinguish pending ("scheduled",
+  // clock icon) from running ("active", spinner) and cancelled ("paused").
   const occStatus: RunOccurrence["status"] =
-    status === "completed" || status === "failed" ? status : "active";
+    m.state === "running" ? "active"
+    : m.state === "succeeded" ? "completed"
+    : m.state === "failed" ? "failed"
+    : m.state === "cancelled" ? "paused"
+    : "scheduled";
   const history: RunOccurrence[] = [
     {
       id: `${m.id}-occ`,

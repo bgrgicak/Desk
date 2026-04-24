@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertCircle,
   PauseCircle,
+  Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
@@ -84,7 +85,8 @@ function getOccurrencesForDay(day: Date, runs: Run[]): { run: Run; occ: RunOccur
 function RunStatusIconSmall({ status, isFailed }: { status: Run['status'] | RunOccurrence['status']; isFailed?: boolean }) {
   const cls = isFailed ? 'text-red-500' : ''
   switch (status) {
-    case 'active':    return <Loader2    className={`h-3 w-3 shrink-0 animate-spin text-blue-500`} />
+    case 'active':    return <Loader2     className={`h-3 w-3 shrink-0 animate-spin text-blue-500`} />
+    case 'scheduled': return <Clock        className={`h-3 w-3 shrink-0 text-muted-foreground`} />
     case 'completed': return <CheckCircle2 className={`h-3 w-3 shrink-0 text-emerald-500`} />
     case 'failed':    return <AlertCircle  className={`h-3 w-3 shrink-0 text-red-500`} />
     case 'paused':    return <PauseCircle  className={`h-3 w-3 shrink-0 text-amber-500 ${cls}`} />
@@ -123,7 +125,7 @@ function MonthView({ year, month, runs, selectedRunId, onSelectRun }: {
   year: number; month: number; runs: Run[]
   selectedRunId: string | null; onSelectRun: (run: Run) => void
 }) {
-  const today = new Date('2026-04-16T10:00:00')
+  const today = useMemo(() => new Date(), [])
   const weeks = useMemo(() => getCalendarWeeks(year, month), [year, month])
   const DOW   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -206,7 +208,7 @@ function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
   weekStart: Date; runs: Run[]
   selectedRunId: string | null; onSelectRun: (run: Run) => void
 }) {
-  const today = new Date('2026-04-16T10:00:00')
+  const today = useMemo(() => new Date(), [])
   const week: Date[] = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d
   })
@@ -259,8 +261,8 @@ function WeekView({ weekStart, runs, selectedRunId, onSelectRun }: {
 function ListView({ runs, selectedRunId, onSelectRun }: {
   runs: Run[]; selectedRunId: string | null; onSelectRun: (run: Run) => void
 }) {
-  const today     = new Date('2026-04-16T10:00:00')
-  const todayDate = dateOnly(today)
+  const today     = useMemo(() => new Date(), [])
+  const todayDate = useMemo(() => dateOnly(today), [today])
 
   const allOccs = runs.flatMap(run =>
     (run.history ?? []).map(occ => ({ run, occ, date: dateOnly(occ.startedAt) }))
@@ -323,7 +325,7 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
 // ─── Main RunsPage ────────────────────────────────────────────────────────────
 
 export function RunsPage({ runs, onCompose }: RunsPageProps) {
-  const today = new Date('2026-04-16T10:00:00')
+  const today = useMemo(() => new Date(), [])
   const [viewMode, setViewMode]         = useState<ViewMode>('month')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [currentYear, setCurrentYear]   = useState(today.getFullYear())
