@@ -25,6 +25,7 @@ import {
   useGetChatMessagesQuery,
   useGetLibraryQuery,
   usePostChatMessageMutation,
+  useUploadChatArtifactMutation,
   useUploadLibraryFileMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
@@ -459,6 +460,45 @@ export function ChatView({
   )
   const [postMessageMutation] = usePostChatMessageMutation()
 
+  // Upload ownership lives at ChatView so the entire chat screen (not
+  // just the small input strip) can be a drop target.
+  const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
+  const [uploadLibraryFile, libraryUploadState] = useUploadLibraryFileMutation()
+  const isUploading = chatUploadState.isLoading || libraryUploadState.isLoading
+  const hasRealChatId = !chat.id.startsWith('chat-new-')
+  const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([])
+
+  const handleUpload = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      try {
+        if (hasRealChatId) {
+          const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
+          setPendingUploads(prev => [
+            ...prev,
+            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name },
+          ])
+        } else if (chat.workspaceId) {
+          const serverFile = await uploadLibraryFile({ workspaceId: chat.workspaceId, file }).unwrap()
+          setPendingUploads(prev => [
+            ...prev,
+            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name },
+          ])
+        } else {
+          toast.error('Cannot upload: no chat or workspace context')
+          return
+        }
+        toast.success(`Uploaded ${file.name}`)
+      } catch (err) {
+        toast.error(`Upload failed: ${file.name}`, {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
+  }, [hasRealChatId, chat.id, chat.workspaceId, uploadChatArtifact, uploadLibraryFile])
+
+  const removePendingUpload = (id: string) =>
+    setPendingUploads(prev => prev.filter(u => u.id !== id))
+
   // Library items for the workspace backing this chat. Used as the pool
   // for the "Add files to chat" picker in the right panel. If the chat
   // doesn't carry a workspaceId yet (new-chat stub) we skip the query.
@@ -538,6 +578,21 @@ export function ChatView({
     <div className="flex flex-1 min-h-0 overflow-hidden">
 
       {/* ── Left column: header + messages + input ── */}
+      <FileDropZone
+        onFiles={handleUpload}
+        disabled={isUploading}
+        overlayLabel={
+          isUploading
+            ? 'Uploading…'
+            : hasRealChatId
+              ? 'Drop to attach to chat'
+              : chat.workspaceId
+                ? 'Drop to add to Library'
+                : 'Pick a workspace first'
+        }
+        className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden"
+      >
+        {({ openPicker }) => (
       <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
 
         {/* Header — Compose-style compact bar */}
@@ -665,6 +720,7 @@ export function ChatView({
                 if (uploads.length > 0) {
                   setUploadsByIndex(prev => new Map([...prev, [messages.length, uploads]]))
                 }
+                setPendingUploads([])
                 // For real chats, persist the user message so it's there
                 // on reload and so other clients see it. New-chat flow
                 // delegates to onFirstMessage (which creates the chat).
@@ -682,10 +738,16 @@ export function ChatView({
               chatAgentId={chat.agentId}
               chatWorkspaceId={chat.workspaceId}
               chatId={chat.id}
+              onOpenUploadPicker={openPicker}
+              extraUploads={pendingUploads}
+              onRemoveExtraUpload={removePendingUpload}
+              uploadInProgress={isUploading}
             />
           </div>
         </div>
       </div>
+        )}
+      </FileDropZone>
 
       {/* ── Right panel: full-height, parallel to the entire left column ── */}
       {panelOpen && (

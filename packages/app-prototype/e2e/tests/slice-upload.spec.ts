@@ -84,10 +84,10 @@ test("chat Files-tab upload goes through POST /library via the workspace fallbac
   // Switch to the Files right panel. Tabs are plain <button>s with text.
   await page.getByRole("button", { name: "Files", exact: true }).click();
 
-  // The FilesPanel has its own FileDropZone. The last hidden input on the
-  // page is the one inside FilesPanel (ContextList is not rendered here).
+  // The FilesPanel has its own FileDropZone, and ChatView wraps its left
+  // column in another one. On this tab (Files selected), both are mounted.
   const inputs = page.locator('[data-testid="dropzone-file-input"]');
-  await expect(inputs).toHaveCount(2); // ChatInput + FilesPanel
+  await expect(inputs).toHaveCount(2); // ChatView column + FilesPanel
   const filesTabInput = inputs.last();
   await filesTabInput.setInputFiles({
     name: "files-tab-upload.md",

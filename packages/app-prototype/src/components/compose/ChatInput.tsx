@@ -9,14 +9,10 @@ import type { ContextItem } from '@/data/ui-types'
 import {
   useGetAgentsQuery,
   useGetLibraryQuery,
-  useUploadChatArtifactMutation,
-  useUploadLibraryFileMutation,
 } from '@/store/api'
 import { useAppSelector } from '@/store/hooks'
 import { selectFolders } from '@/store/slices/derivedSlice'
 import { toContextItem } from '@/store/selectors/library'
-import { FileDropZone } from '@/components/upload/FileDropZone'
-import { toast } from 'sonner'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -85,12 +81,17 @@ interface ChatInputProps {
   chatAgentId?: string
   chatWorkspaceId?: string
   /**
-   * When set, "Upload a file…" and drag-and-drop persist to the chat
-   * via POST /chats/:id/artifacts. When absent but chatWorkspaceId is
-   * set (compose flow before the chat exists), uploads go to the
-   * workspace library instead.
+   * The parent (typically ChatView) owns the upload flow so the entire
+   * chat screen can be a drop target, not just this input strip. When
+   * these are set the "Upload a file…" button delegates to
+   * onOpenUploadPicker, and any files already uploaded appear as chips
+   * alongside library-item mentions.
    */
   chatId?: string
+  onOpenUploadPicker?: () => void
+  extraUploads?: UploadedFile[]
+  onRemoveExtraUpload?: (id: string) => void
+  uploadInProgress?: boolean
 }
 
 // Calculate fixed position above a trigger button
@@ -116,8 +117,12 @@ export function ChatInput({
   prefillValue,
   focusRef,
   chatAgentId,
-  chatWorkspaceId,
-  chatId,
+  chatWorkspaceId: _chatWorkspaceId,
+  chatId: _chatId,
+  onOpenUploadPicker,
+  extraUploads = [],
+  onRemoveExtraUpload,
+  uploadInProgress = false,
 }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
@@ -126,8 +131,8 @@ export function ChatInput({
   // ── Server-backed pickers ───────────────────────────────────────────────
   const { data: serverAgents } = useGetAgentsQuery()
   const { data: libraryResp } = useGetLibraryQuery(
-    chatWorkspaceId ? { workspaceId: chatWorkspaceId } : undefined,
-    { skip: !chatWorkspaceId },
+    _chatWorkspaceId ? { workspaceId: _chatWorkspaceId } : undefined,
+    { skip: !_chatWorkspaceId },
   )
   const folders = useAppSelector(selectFolders)
   const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
@@ -333,56 +338,15 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
-  // Real upload paths — chat-scoped when the chat already exists,
-  // workspace-scoped library otherwise (compose before first message).
-  const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
-  const [uploadLibraryFile, libraryUploadState] = useUploadLibraryFileMutation()
-  const isUploading = chatUploadState.isLoading || libraryUploadState.isLoading
-  const uploadEnabled = Boolean(chatId) || Boolean(chatWorkspaceId)
-  const hasRealChatId = Boolean(chatId) && !chatId!.startsWith('chat-new-')
-
-  const handleFilesUpload = async (files: File[]) => {
-    for (const file of files) {
-      try {
-        if (hasRealChatId) {
-          const serverFile = await uploadChatArtifact({
-            chatId: chatId!,
-            file,
-          }).unwrap()
-          setAttachedItems(prev => [
-            ...prev,
-            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name, kind: 'item', type: 'file' },
-          ])
-        } else if (chatWorkspaceId) {
-          const serverFile = await uploadLibraryFile({
-            workspaceId: chatWorkspaceId,
-            file,
-          }).unwrap()
-          setAttachedItems(prev => [
-            ...prev,
-            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name, kind: 'item', type: 'file' },
-          ])
-        } else {
-          toast.error('Cannot upload: no chat or workspace context')
-          return
-        }
-        toast.success(`Uploaded ${file.name}`)
-      } catch (err) {
-        toast.error(`Upload failed: ${file.name}`, {
-          description: err instanceof Error ? err.message : undefined,
-        })
-      }
-    }
-    setAttachOpen(false)
-  }
+  const uploadEnabled = Boolean(onOpenUploadPicker)
 
   const handleSubmit = () => {
     const trimmed = value.trim()
-    if ((!trimmed && attachedItems.length === 0) || disabled) return
-    const uploads: UploadedFile[] = attachedItems
+    if ((!trimmed && attachedItems.length === 0 && extraUploads.length === 0) || disabled) return
+    const localUploads: UploadedFile[] = attachedItems
       .filter(i => i.id.startsWith('upload-'))
       .map(i => ({ id: i.id, name: i.name }))
-    onSend(trimmed, uploads)
+    onSend(trimmed, [...extraUploads, ...localUploads])
     setValue('')
     setAttachedItems([])
     setGoalOverride(undefined)
@@ -393,32 +357,36 @@ export function ChatInput({
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
-  const canSubmit = (value.trim().length > 0 || attachedItems.length > 0) && !disabled
+  const canSubmit = (value.trim().length > 0 || attachedItems.length > 0 || extraUploads.length > 0) && !disabled
   const pickerBtnClass = 'flex items-center gap-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors px-2 h-6 text-xs font-medium shrink-0'
   const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
   return (
-    <FileDropZone
-      onFiles={handleFilesUpload}
-      disabled={!uploadEnabled || isUploading}
-      overlayLabel={
-        isUploading
-          ? 'Uploading…'
-          : hasRealChatId
-            ? 'Drop to attach to chat'
-            : chatWorkspaceId
-              ? 'Drop to add to Library'
-              : 'Pick a workspace first'
-      }
-      className="w-full"
-    >
-      {({ openPicker }) => (
     <div className="w-full">
       {/* Input card */}
       <div className="rounded-lg border bg-background">
-        {/* Chips — only when attachments exist */}
-        {attachedItems.length > 0 && (
+        {/* Chips — only when attachments / uploads exist */}
+        {(attachedItems.length > 0 || extraUploads.length > 0) && (
           <div className={`flex flex-wrap gap-1.5 px-3 ${compact ? 'pt-2' : 'pt-3'}`}>
+            {extraUploads.map(upload => (
+              <span
+                key={upload.id}
+                className="inline-flex items-center gap-1 rounded-md bg-secondary text-secondary-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
+              >
+                <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{upload.name}</span>
+                {onRemoveExtraUpload && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveExtraUpload(upload.id)}
+                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    aria-label={`Remove ${upload.name}`}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </span>
+            ))}
             {attachedItems.map(item => {
               const Icon = item.kind === 'folder' ? Folder : ITEM_ICON[item.type ?? 'file'] ?? FileText
               return (
@@ -658,14 +626,14 @@ export function ChatInput({
                 <button
                   onClick={() => {
                     setAttachOpen(false)
-                    openPicker()
+                    onOpenUploadPicker?.()
                   }}
-                  disabled={!uploadEnabled || isUploading}
+                  disabled={!uploadEnabled || uploadInProgress}
                   data-testid="chat-upload-a-file"
                   className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>{isUploading ? 'Uploading…' : 'Upload a file…'}</span>
+                  <span>{uploadInProgress ? 'Uploading…' : 'Upload a file…'}</span>
                 </button>
               </div>
             </div>,
@@ -675,7 +643,5 @@ export function ChatInput({
 
       </div>
     </div>
-      )}
-    </FileDropZone>
   )
 }
