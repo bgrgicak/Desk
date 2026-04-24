@@ -214,6 +214,7 @@ export function TodayDetailPanel({
           compact
           showGoalPicker={false}
           focusRef={inputFocusRef}
+          draftKey={`today-detail:${item.id}`}
         />
       </div>
     </motion.div>

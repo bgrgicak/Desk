@@ -276,7 +276,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(updated.content.body).toBe("User-edited summary.");
   });
 
-  it("PATCH rejects arbitrary state values (only cancelled/pending allowed)", async () => {
+  it("PATCH rejects arbitrary state values (only cancelled/paused/pending allowed)", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "x" });
     const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "running" });
     expect(res.status).toBe(400);

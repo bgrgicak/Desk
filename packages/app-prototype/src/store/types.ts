@@ -114,6 +114,17 @@ export interface ServerFile {
   createdAt: string;
 }
 
+/**
+ * Minimal metadata for a folder in a workspace library. Returned from
+ * `GET /library` alongside files so the client can render empty folders
+ * (which wouldn't show up through path-prefix derivation alone).
+ */
+export interface ServerFolder {
+  path: string;
+  name: string;
+  createdAt: string;
+}
+
 export interface Cursor {
   cursor?: string;
 }
@@ -124,6 +135,7 @@ export interface ListMessagesResponse extends Cursor {
 
 export interface ListLibraryResponse extends Cursor {
   items: ServerFile[];
+  folders: ServerFolder[];
 }
 
 /** Cross-chat message listing query (/messages). */

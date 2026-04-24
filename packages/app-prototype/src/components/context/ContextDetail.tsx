@@ -1,12 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import {
-  FileText,
-  FileImage,
   Link2,
-  StickyNote,
   Download,
-  FolderPlus,
   Trash2,
   MoreHorizontal,
   Bot,
@@ -16,12 +12,10 @@ import {
   Plus,
   PanelRightClose,
   PanelRight,
+  Save,
   User,
   ChevronDown,
   ChevronRight,
-  FileSpreadsheet,
-  FileAudio,
-  File,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
@@ -50,39 +44,40 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { ImagePreview } from '@/components/ImagePreview'
 import type { ContextItem, Artifact } from '@/data/ui-types'
 import { getRelativeTime, getArtifactIcon, getFolderPath } from '@/data/ui-types'
-import { useAppSelector } from '@/store/hooks'
-import { selectFolders } from '@/store/slices/derivedSlice'
-import { useGetLibraryQuery } from '@/store/api'
+import { fileKindForItem, fileKindFrom, iconForItem } from '@/data/file-kind'
+import {
+  useDeleteLibraryFileMutation,
+  useGetLibraryQuery,
+  useSaveLibraryContentMutation,
+} from '@/store/api'
+import { toFolderList } from '@/store/selectors/library'
+import { downloadLibraryFile, fetchLibraryContent } from '@/store/library-download'
+import { TextFileEditor } from './TextFileEditor'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
+import { useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 interface ContextDetailProps {
   item: ContextItem
   onBack: () => void
   onCompose: (items: ContextItem[]) => void
   onArtifactClick?: (artifact: Artifact) => void
-}
-
-function getFileIcon(mimeType?: string) {
-  if (!mimeType) return FileText
-  if (mimeType.startsWith('image/')) return FileImage
-  if (mimeType.startsWith('audio/')) return FileAudio
-  if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return FileSpreadsheet
-  if (mimeType === 'application/pdf') return FileText
-  return File
+  /** Jump back to the Library view with the given folder open.
+   * Pass `null` to land on the Library root. */
+  onNavigateToFolder: (folderId: string | null) => void
 }
 
 function canPreview(item: ContextItem): boolean {
-  if (item.type === 'note') return true
-  if (item.type === 'link') return true
-  if (item.mimeType === 'application/pdf') return true
-  if (item.mimeType?.startsWith('image/')) return true
-  return false
+  if (item.type === 'note' || item.type === 'link') return true
+  return fileKindForItem(item) !== 'unknown'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder }: ContextDetailProps) {
+  const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
+  const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
+
   // Pre-populate notes with file description for files that can't be previewed
   const defaultNotes = (item.type === 'file' && !canPreview(item)) ? item.content : ''
   const [notes, setNotes] = useState(defaultNotes)
@@ -93,44 +88,159 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
   const [notesExpanded, setNotesExpanded] = useState(true)
   const [detailsExpanded, setDetailsExpanded] = useState(true)
 
+  // File content fetched on demand for preview. Text files (notes, uri-list
+  // links, csv/json/code, …) arrive as `previewText`; binary previews (images,
+  // PDFs, video, audio) arrive as an object URL we can hand to <img>/<iframe>/
+  // <video>/<audio>. Both are keyed by the item's path so switching items drops
+  // any stale blob. `mediaLoadFailed` catches formats the browser advertises it
+  // might render but can't (e.g. HEIC in non-Safari browsers) so we fall back
+  // to the download prompt.
+  const [previewText, setPreviewText] = useState<string | null>(null)
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [mediaLoadFailed, setMediaLoadFailed] = useState(false)
+
+  const kind = fileKindForItem(item)
+
+  useEffect(() => {
+    setPreviewText(null)
+    setPreviewBlobUrl(null)
+    setPreviewError(null)
+    setMediaLoadFailed(false)
+    setEditorValue(null)
+    editorInitFor.current = null
+    if (!activeWorkspaceId) return
+    if (!canPreview(item)) return
+    let cancelled = false
+    let createdUrl: string | null = null
+    void fetchLibraryContent({ workspaceId: activeWorkspaceId, path: item.id })
+      .then(async (blob) => {
+        if (cancelled) return
+        const effectiveKind = fileKindFrom(item.name, blob.type || item.mimeType)
+        if (effectiveKind === 'docx') {
+          // Convert docx → HTML in-browser via mammoth, then hand the
+          // rendered HTML to the iframe as a blob URL. Lazy-imported so
+          // users who never open a .docx don't pay the bundle cost.
+          const mammoth = await import('mammoth/mammoth.browser')
+          const arrayBuffer = await blob.arrayBuffer()
+          const { value: html } = await mammoth.convertToHtml({ arrayBuffer })
+          if (cancelled) return
+          const htmlDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;max-width:780px;margin:0 auto;padding:2.5rem 1.5rem;line-height:1.6;color:#111}img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}</style></head><body>${html}</body></html>`
+          const htmlBlob = new Blob([htmlDoc], { type: 'text/html' })
+          createdUrl = URL.createObjectURL(htmlBlob)
+          setPreviewBlobUrl(createdUrl)
+        } else if (effectiveKind === 'text' || item.type === 'link' || item.type === 'note') {
+          const text = await blob.text()
+          if (!cancelled) setPreviewText(text)
+        } else {
+          createdUrl = URL.createObjectURL(blob)
+          setPreviewBlobUrl(createdUrl)
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setPreviewError(err instanceof Error ? err.message : 'Preview failed')
+      })
+    return () => {
+      cancelled = true
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [activeWorkspaceId, item.id, item.type, item.mimeType, item.name])
+
+  const handleDownload = async () => {
+    if (!activeWorkspaceId) return
+    try {
+      await downloadLibraryFile({
+        workspaceId: activeWorkspaceId,
+        path: item.id,
+        filename: item.name,
+      })
+    } catch (err) {
+      toast.error(`Download failed: ${item.name}`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!activeWorkspaceId) return
+    try {
+      await deleteLibraryFile({ workspaceId: activeWorkspaceId, path: item.id }).unwrap()
+      setDeleteDialogOpen(false)
+      toast.success(`Deleted ${item.name}`)
+      onBack()
+    } catch (err) {
+      toast.error(`Delete failed: ${item.name}`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
   // Editable name (for file / link items — notes use the inline title editor)
   const [itemName, setItemName] = useState(item.name)
   const [isEditingItemName, setIsEditingItemName] = useState(false)
 
-  // Note editor state
+  // Note title textarea (for display in the note editor header). Editing
+  // it doesn't rename the underlying file — renaming goes through the
+  // separate move endpoint, not the content PUT.
   const [noteTitle, setNoteTitle] = useState(item.name)
-  const [noteBody, setNoteBody] = useState(item.type === 'note' ? item.content : '')
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved'>('idle')
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const titleRef = useRef<HTMLTextAreaElement>(null)
-  const bodyRef = useRef<HTMLTextAreaElement>(null)
-
-  // Auto-resize a textarea to fit its content
   const autoResize = (el: HTMLTextAreaElement | null) => {
     if (!el) return
     el.style.height = 'auto'
     el.style.height = el.scrollHeight + 'px'
   }
-
   useEffect(() => { autoResize(titleRef.current) }, [noteTitle])
-  useEffect(() => { autoResize(bodyRef.current) }, [noteBody])
 
-  const triggerSave = useCallback(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => setSaveStatus('saved'), 800)
-    setSaveStatus('idle')
-  }, [])
+  // Editable text content for text-kind files and notes. `editorValue`
+  // is the working copy; when it diverges from `previewText` (the last
+  // server-known content for this item) the Save button enables.
+  const [editorValue, setEditorValue] = useState<string | null>(null)
+  const editorInitFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (previewText == null) return
+    if (editorInitFor.current === item.id) return
+    setEditorValue(previewText)
+    editorInitFor.current = item.id
+  }, [previewText, item.id])
+
+  const isTextEditable =
+    (kind === 'text' && item.type === 'file') || item.type === 'note'
+  const isDirty = isTextEditable && editorValue != null && editorValue !== previewText
+
+  const [saveLibraryContent, saveState] = useSaveLibraryContentMutation()
+  const handleSave = useCallback(async () => {
+    if (!activeWorkspaceId || !isDirty || editorValue == null) return
+    try {
+      await saveLibraryContent({
+        workspaceId: activeWorkspaceId,
+        path: item.id,
+        content: editorValue,
+        contentType: item.mimeType || 'text/plain',
+      }).unwrap()
+      setPreviewText(editorValue)
+    } catch (err) {
+      toast.error(`Save failed: ${item.name}`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, saveLibraryContent])
 
   // "Related artifacts" — the server has no explicit artifact-to-context
   // relation yet. We hydrate against the library and filter by the ids
   // the UI already tracks on the item; it's empty for server-backed
   // items today. TODO(api-gap): replace with a first-class relation in
   // matrix §4.2.5 once the server exposes it.
-  const folders = useAppSelector(selectFolders)
-  const { data: libraryResp } = useGetLibraryQuery()
+  const { data: libraryResp } = useGetLibraryQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    { skip: !activeWorkspaceId },
+  )
+  const folders = activeWorkspaceId
+    ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+    : []
   const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
   const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
-  const FileIcon = item.type === 'note' ? StickyNote : item.type === 'link' ? Link2 : getFileIcon(item.mimeType)
+  const FileIcon = iconForItem(item)
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -149,7 +259,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
                   <BreadcrumbItem>
                     <BreadcrumbLink asChild>
                       <button
-                        onClick={onBack}
+                        onClick={() => onNavigateToFolder(null)}
                         className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
                       >
                         Library
@@ -164,7 +274,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
                       <BreadcrumbItem>
                         <BreadcrumbLink asChild>
                           <button
-                            onClick={onBack}
+                            onClick={() => onNavigateToFolder(folder.id)}
                             className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
                           >
                             {folder.name}
@@ -180,12 +290,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
                     <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
                       <FileIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       {item.type === 'note' ? (
-                        <>
-                          <span className="truncate">{noteTitle || 'Untitled'}</span>
-                          <span className={`text-[11px] font-medium text-foreground bg-muted rounded-full px-2 py-0.5 shrink-0 transition-opacity duration-300 ${saveStatus === 'saved' ? 'opacity-100' : 'opacity-0'}`}>
-                            Saved
-                          </span>
-                        </>
+                        <span className="truncate">{noteTitle || 'Untitled'}</span>
                       ) : isEditingItemName ? (
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
                           <input
@@ -220,6 +325,19 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
           })()}
 
           <div className="flex items-center gap-2 shrink-0">
+            {isTextEditable && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs"
+                onClick={handleSave}
+                disabled={!isDirty || saveState.isLoading}
+              >
+                <Save className="h-3.5 w-3.5 mr-1.5" />
+                {saveState.isLoading ? 'Saving…' : 'Save'}
+              </Button>
+            )}
+
             <Button
               size="sm"
               className="text-xs"
@@ -229,7 +347,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
             </Button>
 
             {item.type === 'file' && (
-              <Button variant="outline" size="sm" className="text-xs">
+              <Button variant="outline" size="sm" className="text-xs" onClick={handleDownload}>
                 Download
               </Button>
             )}
@@ -241,11 +359,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem>
-                  <FolderPlus className="h-4 w-4 mr-2" />
-                  Move to folder
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete
@@ -270,103 +383,201 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
           {item.type === 'note' ? (
-            <div className="flex-1 flex flex-col">
-              {/* Editor */}
-              <div className="mx-auto w-full max-w-[490px] px-2 pt-8 pb-16">
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="mx-auto w-full max-w-[720px] px-4 pt-6 pb-2 shrink-0">
                 <textarea
                   ref={titleRef}
                   value={noteTitle}
-                  onChange={(e) => { setNoteTitle(e.target.value); triggerSave() }}
+                  onChange={(e) => setNoteTitle(e.target.value)}
                   placeholder="Untitled"
                   rows={1}
-                  className="w-full resize-none overflow-hidden bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/30 outline-none leading-tight mb-4"
+                  className="w-full resize-none overflow-hidden bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/30 outline-none leading-tight"
                 />
-                <textarea
-                  ref={bodyRef}
-                  value={noteBody}
-                  onChange={(e) => { setNoteBody(e.target.value); triggerSave() }}
-                  placeholder="Start writing…"
-                  rows={1}
-                  className="w-full resize-none overflow-hidden bg-transparent text-sm text-foreground/80 placeholder:text-muted-foreground/30 outline-none leading-relaxed"
-                />
+              </div>
+              <div className="flex-1 min-h-0 mx-auto w-full max-w-[720px] px-2 pb-6">
+                {editorValue !== null ? (
+                  <TextFileEditor
+                    value={editorValue}
+                    onChange={setEditorValue}
+                    filename={item.name}
+                    mimeType={item.mimeType}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center py-12">
+                    <p className="text-sm text-muted-foreground">
+                      {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           ) : item.type === 'link' ? (
-            <div className="flex flex-col h-full">
-              {/* Link preview bar */}
-              <div className="flex items-center gap-2 border-b bg-background px-4 py-2">
-                <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
-                <a
-                  href={item.content}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:underline flex items-center gap-1 truncate"
-                >
-                  {item.content}
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              </div>
-              {/* Embedded preview placeholder */}
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="mb-4 flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-blue-500/10">
-                    <Link2 className="h-8 w-8 text-blue-500/40" />
+            (() => {
+              // text/uri-list: first non-empty, non-comment line is the URL.
+              const linkUrl = previewText
+                ?.split('\n')
+                .map(l => l.trim())
+                .find(l => l.length > 0 && !l.startsWith('#')) ?? ''
+              return (
+                <div className="flex flex-col h-full">
+                  {/* Link preview bar */}
+                  <div className="flex items-center gap-2 border-b bg-background px-4 py-2">
+                    <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    {linkUrl ? (
+                      <a
+                        href={linkUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 hover:underline flex items-center gap-1 truncate"
+                      >
+                        {linkUrl}
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        {previewError ? `Failed to load link: ${previewError}` : 'Loading…'}
+                      </span>
+                    )}
                   </div>
-                  <h3 className="text-base font-semibold mb-1">{item.name}</h3>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Web preview would load here
-                  </p>
-                  <a
-                    href={item.content}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
-                  >
-                    Open in browser
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
+                  {/* Embedded preview placeholder */}
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="mb-4 flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-blue-500/10">
+                        <Link2 className="h-8 w-8 text-blue-500/40" />
+                      </div>
+                      <h3 className="text-base font-semibold mb-1">{item.name}</h3>
+                      <p className="text-sm text-muted-foreground mb-4">
+                        Web preview would load here
+                      </p>
+                      {linkUrl && (
+                        <a
+                          href={linkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
+                        >
+                          Open in browser
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          ) : item.mimeType === 'application/pdf' ? (
-            /* PDF preview — fills entire container */
+              )
+            })()
+          ) : kind === 'pdf' ? (
             <div className="flex-1 flex flex-col bg-muted/30">
-              <div className="flex-1 bg-white mx-0">
-                {/* Mock PDF content filling the page */}
-                <div className="max-w-3xl mx-auto px-12 py-10 space-y-4">
-                  <div className="h-7 w-72 rounded bg-muted/80" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-4/5 rounded bg-muted/50" />
-                  <div className="mt-8 h-48 w-full rounded bg-muted/20" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-5/6 rounded bg-muted/50" />
-                  <div className="mt-6 h-5 w-56 rounded bg-muted/70" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-2/3 rounded bg-muted/50" />
-                  <div className="mt-6 h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-full rounded bg-muted/50" />
-                  <div className="h-3 w-3/4 rounded bg-muted/50" />
+              {previewBlobUrl ? (
+                <iframe
+                  title={item.name}
+                  src={previewBlobUrl}
+                  className="flex-1 w-full border-0 bg-white"
+                />
+              ) : (
+                <div className="flex-1 flex items-center justify-center">
+                  <p className="text-sm text-muted-foreground">
+                    {previewError ? `Failed to load PDF: ${previewError}` : 'Loading PDF…'}
+                  </p>
                 </div>
-              </div>
-              <div className="border-t px-4 py-1.5 bg-background flex items-center justify-center shrink-0">
-                <span className="text-xs text-muted-foreground">Page 1 of 12</span>
-              </div>
+              )}
             </div>
-          ) : item.mimeType?.startsWith('image/') ? (
-            <ImagePreview />
+          ) : kind === 'html' || kind === 'docx' ? (
+            <div className="flex-1 flex flex-col bg-white">
+              {previewBlobUrl ? (
+                <iframe
+                  title={item.name}
+                  src={previewBlobUrl}
+                  sandbox="allow-same-origin"
+                  className="flex-1 w-full border-0 bg-white"
+                />
+              ) : (
+                <div className="flex-1 flex items-center justify-center">
+                  <p className="text-sm text-muted-foreground">
+                    {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : kind === 'image' && !mediaLoadFailed ? (
+            <div className="flex-1 flex items-center justify-center bg-zinc-800 overflow-auto">
+              {previewBlobUrl ? (
+                <img
+                  src={previewBlobUrl}
+                  alt={item.name}
+                  className="max-w-full max-h-full object-contain"
+                  onError={() => setMediaLoadFailed(true)}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {previewError ? `Failed to load image: ${previewError}` : 'Loading image…'}
+                </p>
+              )}
+            </div>
+          ) : kind === 'video' && !mediaLoadFailed ? (
+            <div className="flex-1 flex items-center justify-center bg-zinc-900 overflow-auto">
+              {previewBlobUrl ? (
+                <video
+                  src={previewBlobUrl}
+                  controls
+                  className="max-w-full max-h-full"
+                  onError={() => setMediaLoadFailed(true)}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {previewError ? `Failed to load video: ${previewError}` : 'Loading video…'}
+                </p>
+              )}
+            </div>
+          ) : kind === 'audio' && !mediaLoadFailed ? (
+            <div className="flex-1 flex items-center justify-center px-6">
+              {previewBlobUrl ? (
+                <audio
+                  src={previewBlobUrl}
+                  controls
+                  className="w-full max-w-lg"
+                  onError={() => setMediaLoadFailed(true)}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {previewError ? `Failed to load audio: ${previewError}` : 'Loading audio…'}
+                </p>
+              )}
+            </div>
+          ) : kind === 'text' && item.type === 'file' ? (
+            <div className="flex-1 min-h-0 bg-background">
+              {editorValue !== null ? (
+                <TextFileEditor
+                  value={editorValue}
+                  onChange={setEditorValue}
+                  filename={item.name}
+                  mimeType={item.mimeType}
+                />
+              ) : (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-sm text-muted-foreground">
+                    {previewError ? `Failed to load file: ${previewError}` : 'Loading…'}
+                  </p>
+                </div>
+              )}
+            </div>
           ) : (
-            /* No preview available */
+            /* No in-app preview — offer a download instead. */
             <div className="flex-1 flex items-center justify-center min-h-0">
               <div className="text-center max-w-xs px-4">
                 <div className="mb-5 flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-muted/50">
                   <FileIcon className="h-8 w-8 text-muted-foreground/40" />
                 </div>
-                <p className="text-sm font-medium text-muted-foreground">
-                  Preview not available for this file type
+                <p className="text-sm font-medium text-muted-foreground mb-4">
+                  {mediaLoadFailed
+                    ? "Your browser can't display this file inline"
+                    : 'Preview not available for this file type'}
                 </p>
+                {item.type === 'file' && (
+                  <Button size="sm" variant="outline" className="text-xs" onClick={handleDownload}>
+                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                    Download
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -584,7 +795,8 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={onBack}
+              disabled={deleteState.isLoading}
+              onClick={(e) => { e.preventDefault(); void handleDelete() }}
             >
               Delete
             </AlertDialogAction>

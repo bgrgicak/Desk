@@ -15,23 +15,25 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SidebarTrigger } from '@/components/ui/sidebar'
-import { ChatMessage } from '@/components/compose/ChatMessage'
+import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
-import { useMockChat } from '@/hooks/use-mock-chat'
-import type { Chat, Artifact, ChatMessage as ChatMessageType, ComposeScenario, ContextItem } from '@/data/ui-types'
+import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 import {
+  useGetAgentsQuery,
   useGetChatMessagesQuery,
   useGetLibraryQuery,
+  usePatchChatMutation,
   usePostChatMessageMutation,
   useUploadChatArtifactMutation,
   useUploadLibraryFileMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
-import type { AgentLogEntry, ServerMessage } from '@/store/types'
+import { NEW_CHAT_ID } from '@/router/nav'
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
-import { FileDropZone } from '@/components/upload/FileDropZone'
+import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -55,8 +57,16 @@ interface ChatViewProps {
   showNewBadge?: boolean
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
-  onFirstMessage?: (message: string) => void
-  onArtifactAdded?: (artifact: Artifact) => void
+  /**
+   * Fires for the "new chat" case on first message. Optional second
+   * arg is the agent id picked in the bottom toggle before sending —
+   * parent should use it when POST /chats'ing the new chat.
+   */
+  onFirstMessage?: (message: string, agentId?: string) => void
+  /** When set and the id matches a rendered message, scroll that row
+   * into view instead of the default scroll-to-bottom. Drives the
+   * "open in chat" affordance from the Run detail panel. */
+  highlightMessageId?: string
 }
 
 // ── Icon helpers ───────────────────────────────────────────────────────────────
@@ -69,42 +79,6 @@ const CONTEXT_ICON: Record<ContextItem['type'], typeof FileText> = {
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
-}
-
-function renderableTextFromLog(log: AgentLogEntry[]): string {
-  const parts: string[] = []
-  let sawEvent = false
-  for (const e of log) {
-    if (e.kind === 'event') {
-      sawEvent = true
-      if (e.event.type === 'text') {
-        const t = e.event.part?.text
-        if (typeof t === 'string') parts.push(t)
-      }
-    }
-  }
-  if (sawEvent) return parts.join('').trim()
-  return log
-    .filter((e) => e.kind === 'unparsed')
-    .map((e) => (e as { line: string }).line)
-    .join('\n')
-    .trim()
-}
-
-function toUiChatMessage(m: ServerMessage): ChatMessageType {
-  const role: ChatMessageType['role'] = m.role === 'agent' ? 'assistant' : 'user'
-  let content = ''
-  if (m.content.type === 'text') content = m.content.text
-  else if (m.content.type === 'note') content = m.content.body
-  else if (m.content.type === 'artifactRef') content = `(artifact) ${m.content.name ?? m.content.path}`
-  else if (m.content.type === 'events') content = renderableTextFromLog(m.content.log)
-  else content = `(${m.content.type})`
-  return {
-    id: m.id,
-    role,
-    content,
-    timestamp: new Date(m.createdAt),
-  }
 }
 
 // ── Right panel: Artifacts tab ─────────────────────────────────────────────────
@@ -246,18 +220,25 @@ function FilesPanel({
   const [pickerSearch, setPickerSearch] = useState('')
   const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
 
-  const handleUpload = async (files: File[]) => {
+  const handleUpload = async (entries: UploadEntry[]) => {
     if (!workspaceId) {
       toast.error('Cannot upload: no workspace context')
       return
     }
-    for (const file of files) {
+    for (const { file, relativePath } of entries) {
+      const relDir = relativePath.includes('/')
+        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
+        : ''
       try {
-        const serverFile = await uploadLibraryFile({ workspaceId, file }).unwrap()
+        const serverFile = await uploadLibraryFile({
+          workspaceId,
+          file,
+          subpath: relDir || undefined,
+        }).unwrap()
         setRefs(prev => [
           ...prev,
           {
-            id: serverFile.id ?? serverFile.path ?? `upload-${Date.now()}`,
+            id: serverFile.path ?? `upload-${Date.now()}`,
             type: 'file',
             name: serverFile.name ?? file.name,
             content: '',
@@ -416,37 +397,6 @@ function FilesPanel({
   )
 }
 
-// ── Uploaded file card (shown above user message) ─────────────────────────────
-
-function UploadedFileCard({ file }: { file: UploadedFile }) {
-  const [saved, setSaved] = useState(false)
-  return (
-    <div className="flex items-center gap-3 rounded-lg border bg-background px-3 py-2.5 mb-1.5 w-80">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-        <FileText className="h-3.5 w-3.5 text-muted-foreground/70" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium truncate">{file.name}</p>
-        <p className="text-[11px] text-muted-foreground">Uploaded file</p>
-      </div>
-      {saved ? (
-        <button disabled className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-md px-2.5 py-1 cursor-default shrink-0">
-          <Check className="h-3 w-3" />
-          Saved
-        </button>
-      ) : (
-        <button
-          onClick={() => setSaved(true)}
-          className="flex items-center gap-1.5 text-xs font-medium border border-border rounded-md px-2.5 py-1 hover:bg-muted/50 transition-colors shrink-0"
-        >
-          <BookmarkPlus className="h-3 w-3" />
-          Save to library
-        </button>
-      )}
-    </div>
-  )
-}
-
 // ── Main ChatView ──────────────────────────────────────────────────────────────
 
 export function ChatView({
@@ -458,51 +408,91 @@ export function ChatView({
   savedArtifactIds = new Set(),
   onSaveArtifact,
   onFirstMessage,
-  onArtifactAdded,
+  highlightMessageId,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [rightTab, setRightTab] = useState<RightTab>('artifacts')
   const [panelOpen, setPanelOpen] = useState(true)
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
-  // Map from message index → uploaded files for that message
-  const [uploadsByIndex, setUploadsByIndex] = useState<Map<number, UploadedFile[]>>(new Map())
-  // Artifacts created by the compose flow in this session, keyed by the assistant
-  // message id they were produced for. Rendered inline under that message.
-  const [composeArtifacts, setComposeArtifacts] = useState<Map<string, Artifact>>(new Map())
 
-  const isNewChat = chat.id === '__new__'
+  const isNewChat = chat.id === NEW_CHAT_ID
 
   // Fetch persisted messages for this chat from the server. Skipped for
-  // the "new chat" placeholder (not yet created) and until we have a
-  // real server id.
+  // the "new chat" placeholder (not yet created).
   const { data: serverMsgs } = useGetChatMessagesQuery(
     { chatId: chat.id },
-    { skip: isNewChat || chat.id.startsWith('chat-new-') },
+    { skip: isNewChat },
   )
-  const [postMessageMutation] = usePostChatMessageMutation()
+  const [postMessageMutation, postMessageState] = usePostChatMessageMutation()
+  const [patchChatMutation] = usePatchChatMutation()
+
+  // Pre-creation agent pick for the "new chat" case. Once the chat
+  // exists, re-binding flows through PATCH /chats/:id instead.
+  const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null)
+
+  const handleAgentChange = useCallback(
+    (agentId: string) => {
+      if (isNewChat) {
+        setNewChatAgentId(agentId)
+        return
+      }
+      if (agentId === chat.agentId) return
+      patchChatMutation({ id: chat.id, patch: { agentId } })
+        .unwrap()
+        .catch(err => {
+          toast.error('Could not switch agent', {
+            description: err instanceof Error ? err.message : undefined,
+          })
+        })
+    },
+    [isNewChat, chat.id, chat.agentId, patchChatMutation],
+  )
 
   // Upload ownership lives at ChatView so the entire chat screen (not
   // just the small input strip) can be a drop target.
   const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
   const [uploadLibraryFile, libraryUploadState] = useUploadLibraryFileMutation()
   const isUploading = chatUploadState.isLoading || libraryUploadState.isLoading
-  const hasRealChatId = !chat.id.startsWith('chat-new-')
+  const hasRealChatId = !isNewChat
   const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([])
 
-  const handleUpload = useCallback(async (files: File[]) => {
-    for (const file of files) {
+  const handleUpload = useCallback(async (entries: UploadEntry[]) => {
+    for (const { file, relativePath } of entries) {
+      // For library uploads of dropped folders, preserve the directory
+      // structure via `subpath`. Chat artifact uploads live in a flat
+      // per-chat folder, so we ignore the subpath there.
+      const relDir = relativePath.includes('/')
+        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
+        : ''
       try {
         if (hasRealChatId) {
           const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
           setPendingUploads(prev => [
             ...prev,
-            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name },
+            {
+              id: `upload-${serverFile.path ?? Date.now()}`,
+              name: serverFile.name ?? file.name,
+              path: serverFile.path,
+              mime: serverFile.mime,
+              size: serverFile.size,
+            },
           ])
         } else if (chat.workspaceId) {
-          const serverFile = await uploadLibraryFile({ workspaceId: chat.workspaceId, file }).unwrap()
+          const serverFile = await uploadLibraryFile({
+            workspaceId: chat.workspaceId,
+            file,
+            subpath: relDir || undefined,
+          }).unwrap()
           setPendingUploads(prev => [
             ...prev,
-            { id: `upload-${serverFile.id ?? serverFile.path ?? Date.now()}`, name: serverFile.name ?? file.name },
+            {
+              id: `upload-${serverFile.path ?? Date.now()}`,
+              name: serverFile.name ?? file.name,
+              path: serverFile.path,
+              mime: serverFile.mime,
+              size: serverFile.size,
+            },
           ])
         } else {
           toast.error('Cannot upload: no chat or workspace context')
@@ -527,73 +517,61 @@ export function ChatView({
     chat.workspaceId ? { workspaceId: chat.workspaceId } : undefined,
     { skip: !chat.workspaceId },
   )
-  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
+  const libraryItems: ContextItem[] = chat.workspaceId
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, chat.workspaceId!))
+    : []
 
-  // Map the server's message shape onto what the existing compose UI
-  // expects. Non-text content types (toolCall, events, notes, …) are
-  // currently squashed to a text label — the full renderer is slice 12.
-  const serverInitialMessages: ChatMessageType[] = (serverMsgs?.items ?? [])
-    .filter(m => m.role === 'user' || m.role === 'agent')
-    .map(toUiChatMessage)
-
-  // Prioritise the chat's own messages (server-loaded if present);
-  // fall back to the linked artifact's conversation for mocked rows.
-  const initialMessages: ChatMessageType[] =
-    serverInitialMessages.length > 0
-      ? serverInitialMessages
-      : chat.messages ?? artifacts[0]?.conversation ?? []
+  // Filter server messages to what the bubble stream renders. System trigger
+  // rows (agent_turn / ai_note_request) are hidden — they drive the typing
+  // indicator via `hasPendingTrigger` below, not bubbles.
+  const messages: ServerMessage[] = useMemo(
+    () => (serverMsgs?.items ?? []).filter(m => m.role === 'user' || m.role === 'agent'),
+    [serverMsgs],
+  )
 
   const lastInitialAssistantId = useMemo(() => {
-    for (let i = initialMessages.length - 1; i >= 0; i--) {
-      if (initialMessages[i].role === 'assistant') return initialMessages[i].id
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent') return messages[i].id
     }
     return null
-  }, [initialMessages])
+  }, [messages])
 
-  // Keep a ref to the live message list so the artifact-created callback (fired
-  // from a setTimeout inside useMockChat) can read the most recent assistant id.
-  const messagesRef = useRef<ChatMessageType[]>([])
-
-  const handleArtifactCreated = useCallback((scenario: ComposeScenario) => {
-    const artifact: Artifact = {
-      id: `art-new-${Date.now()}`,
-      ...scenario.resultArtifact,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      conversation: messagesRef.current.map(m => ({ ...m })),
-    }
-    const msgs = messagesRef.current
-    let anchorId: string | null = null
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') { anchorId = msgs[i].id; break }
-    }
-    if (anchorId) {
-      setComposeArtifacts(prev => {
-        const next = new Map(prev)
-        next.set(anchorId!, artifact)
-        return next
-      })
-    }
-    onArtifactAdded?.(artifact)
-  }, [onArtifactAdded])
-
-  const chatMode = isNewChat ? 'compose' : 'conversation'
-
-  const { messages, isTyping, statusText, sendMessage } = useMockChat({
-    initialMessages,
-    mode: chatMode,
-    onArtifactCreated: isNewChat ? handleArtifactCreated : undefined,
-  })
-
-  messagesRef.current = messages
+  // Agent is considered "typing" while the agent_turn trigger for this
+  // chat is pending or running, or while the user's POST is in flight.
+  // ai_note_request triggers (scheduled ~30 min out) are excluded — those
+  // aren't responses to the user's last message.
+  const hasPendingTrigger = (serverMsgs?.items ?? []).some(
+    m =>
+      m.role === 'system' &&
+      m.content.type === 'agent_turn' &&
+      (m.state === 'pending' || m.state === 'running'),
+  )
+  const isTyping = hasPendingTrigger || postMessageState.isLoading
 
   useEffect(() => {
+    // Highlight target wins over scroll-to-bottom — only when it
+    // matches a rendered message. System messages (agent_turn /
+    // ai_note_request) are filtered out of `messages`, so opening a
+    // chat via a run that's never fired falls through to normal
+    // scroll-to-bottom behaviour.
+    if (highlightMessageId) {
+      const el = messageRefs.current.get(highlightMessageId)
+      if (el) {
+        el.scrollIntoView({ block: 'center' })
+        return
+      }
+    }
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, isTyping, highlightMessageId])
 
-  const agentModel = artifacts[0]?.agentModel ?? 'Claude Sonnet 4'
+  // Fallback model label for assistant rows predating per-message model
+  // stamping: look up the chat's agent and use its configured model.
+  // Post-stamp rows carry their own `model` field and don't hit this path.
+  const { data: agents } = useGetAgentsQuery()
+  const fallbackModel =
+    agents?.find(a => a.id === chat.agentId)?.model ?? 'Agent'
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -656,7 +634,7 @@ export function ChatView({
           <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
 
             {/* Empty state — shown before any message is sent */}
-            {messages.length === 0 && initialMessages.length === 0 && (
+            {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center py-24 text-center">
                 <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
                 <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
@@ -668,8 +646,8 @@ export function ChatView({
                     <button
                       key={chip}
                       onClick={() => {
-                        onFirstMessage?.(chip)
-                        sendMessage(chip)
+                        if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
+                        else void postMessageMutation({ chatId: chat.id, content: chip })
                       }}
                       className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
                     >
@@ -680,53 +658,38 @@ export function ChatView({
               </div>
             )}
 
-            {messages.map((msg, i) => {
-              const composeArtifact = composeArtifacts.get(msg.id)
-              return (
-                <div key={msg.id}>
-                  {/* Uploaded file cards above this user message */}
-                  {msg.role === 'user' && uploadsByIndex.has(i) && (
-                    <div className="mb-2 flex flex-col items-end">
-                      {uploadsByIndex.get(i)!.map(file => (
-                        <UploadedFileCard key={file.id} file={file} />
-                      ))}
-                    </div>
-                  )}
-                  <ChatMessage
-                    message={msg}
-                    agentModel={agentModel}
-                    isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                    isNew={showNewBadge && msg.id === lastInitialAssistantId}
-                  />
-                  {/* Inline artifact card for a compose scenario produced after this assistant message */}
-                  {composeArtifact && (
-                    <div className="mt-4">
+            {messages.map((msg, i) => (
+              <div
+                key={msg.id}
+                data-message-id={msg.id}
+                ref={(el) => {
+                  if (el) messageRefs.current.set(msg.id, el)
+                  else messageRefs.current.delete(msg.id)
+                }}
+              >
+                <MessageBubble
+                  message={msg}
+                  fallbackModel={fallbackModel}
+                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
+                  isNew={showNewBadge && msg.id === lastInitialAssistantId}
+                />
+                {/* Inline artifact cards after the last initial assistant message */}
+                {artifacts.length > 0 && msg.id === lastInitialAssistantId && (
+                  <div className="mt-4 flex flex-col gap-2">
+                    {artifacts.map(artifact => (
                       <ArtifactInlineCard
-                        artifact={composeArtifact}
-                        isSaved={savedArtifactIds.has(composeArtifact.id)}
-                        onOpen={() => onArtifactClick?.(composeArtifact)}
-                        onSave={() => onSaveArtifact?.(composeArtifact.id)}
+                        key={artifact.id}
+                        artifact={artifact}
+                        isSaved={savedArtifactIds.has(artifact.id)}
+                        onOpen={() => onArtifactClick?.(artifact)}
+                        onSave={() => onSaveArtifact?.(artifact.id)}
                       />
-                    </div>
-                  )}
-                  {/* Inline artifact cards after the last initial assistant message */}
-                  {artifacts.length > 0 && msg.id === lastInitialAssistantId && (
-                    <div className="mt-4 flex flex-col gap-2">
-                      {artifacts.map(artifact => (
-                        <ArtifactInlineCard
-                          key={artifact.id}
-                          artifact={artifact}
-                          isSaved={savedArtifactIds.has(artifact.id)}
-                          onOpen={() => onArtifactClick?.(artifact)}
-                          onSave={() => onSaveArtifact?.(artifact.id)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            <StatusIndicator text={statusText} isTyping={isTyping && !statusText} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            <StatusIndicator text={null} isTyping={isTyping} />
           </div>
         </div>
 
@@ -735,30 +698,42 @@ export function ChatView({
           <div className="max-w-2xl mx-auto px-6 py-4">
             <ChatInput
               onSend={(msg, uploads) => {
-                if (messages.length === 0 && initialMessages.length === 0) {
-                  onFirstMessage?.(msg)
-                }
-                if (uploads.length > 0) {
-                  setUploadsByIndex(prev => new Map([...prev, [messages.length, uploads]]))
-                }
+                const attachments: AttachmentRef[] = uploads
+                  .filter(u => typeof u.path === 'string')
+                  .map(u => ({
+                    path: u.path!,
+                    name: u.name,
+                    mime: u.mime,
+                    size: u.size,
+                  }))
                 setPendingUploads([])
-                // For real chats, persist the user message so it's there
-                // on reload and so other clients see it. New-chat flow
-                // delegates to onFirstMessage (which creates the chat).
-                if (!isNewChat && !chat.id.startsWith('chat-new-')) {
-                  void postMessageMutation({ chatId: chat.id, content: msg })
+                if (isNewChat) {
+                  onFirstMessage?.(msg, newChatAgentId ?? undefined)
+                } else {
+                  postMessageMutation({
+                    chatId: chat.id,
+                    content: msg,
+                    attachments: attachments.length > 0 ? attachments : undefined,
+                  })
+                    .unwrap()
+                    .catch(err => {
+                      toast.error('Failed to send message', {
+                        description: err instanceof Error ? err.message : undefined,
+                      })
+                    })
                 }
-                sendMessage(msg)
                 setPrefillText(undefined)
               }}
               disabled={isTyping}
-              placeholder={initialMessages.length === 0 ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
+              placeholder={messages.length === 0 ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
               compact={true}
               showGoalPicker={true}
               prefillValue={prefillText}
-              chatAgentId={chat.agentId}
+              chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
               chatWorkspaceId={chat.workspaceId}
               chatId={chat.id}
+              onAgentChange={handleAgentChange}
+              draftKey={`chat:${chat.id}`}
               onOpenUploadPicker={openPicker}
               extraUploads={pendingUploads}
               onRemoveExtraUpload={removePendingUpload}

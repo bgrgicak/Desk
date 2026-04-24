@@ -93,11 +93,25 @@ export async function removeAgentFromWorkspace(
   return { ok: true };
 }
 
+/**
+ * Sets the workspace default agent. Auto-enrolls the agent in the workspace
+ * first if it isn't already a member — clicking "make default" on a globally-
+ * listed agent should not 404 just because the user hasn't separately enrolled
+ * it. Owner mismatch is still rejected by addAgentToWorkspace.
+ */
 export async function setWorkspaceDefaultAgent(
   pool: pg.Pool,
   workspaceId: string,
   agentId: string,
 ) {
+  const enrolled = await queries.workspaceAgents.findForWorkspace(
+    pool,
+    workspaceId,
+    agentId,
+  );
+  if (!enrolled) {
+    await addAgentToWorkspace(pool, workspaceId, agentId);
+  }
   await queries.workspaceAgents.setDefault(pool, workspaceId, agentId);
   return { ok: true };
 }

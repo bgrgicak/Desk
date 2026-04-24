@@ -278,7 +278,7 @@ export const api = createApi({
       ServerChat,
       {
         id: string;
-        patch: Partial<Pick<ServerChat, "title" | "goal">>;
+        patch: Partial<Pick<ServerChat, "title" | "goal" | "agentId">>;
       }
     >({
       query: ({ id, patch }) => ({
@@ -334,7 +334,7 @@ export const api = createApi({
         messageId: string;
         patch: Partial<{
           content: unknown;
-          state: "cancelled" | "pending";
+          state: "cancelled" | "pending" | "paused";
           executeAt: string | null;
           cron: string | null;
         }>;
@@ -385,20 +385,24 @@ export const api = createApi({
       },
       providesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
-    deleteLibraryFile: build.mutation<{ ok: true }, { path: string }>({
-      query: ({ path }) => ({
-        url: `/library?path=${encodeURIComponent(path)}`,
+    deleteLibraryFile: build.mutation<
+      { ok: true },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/library?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
         method: "DELETE",
       }),
       invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
     uploadLibraryFile: build.mutation<
       ServerFile,
-      { workspaceId?: string; file: File }
+      { workspaceId?: string; file: File; subpath?: string }
     >({
-      query: ({ workspaceId, file }) => {
+      query: ({ workspaceId, file, subpath }) => {
         const fd = new FormData();
         fd.append("file", file, file.name);
+        if (subpath) fd.append("subpath", subpath);
         const url = workspaceId
           ? `/library?workspaceId=${encodeURIComponent(workspaceId)}`
           : "/library";
@@ -406,11 +410,51 @@ export const api = createApi({
       },
       invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
+    saveLibraryContent: build.mutation<
+      ServerFile,
+      { workspaceId: string; path: string; content: string; contentType?: string }
+    >({
+      query: ({ workspaceId, path, content, contentType }) => ({
+        url: `/library/content?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
+        method: "PUT",
+        headers: { "Content-Type": contentType ?? "application/octet-stream" },
+        body: content,
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
+    createLibraryFolder: build.mutation<
+      { path: string; name: string; createdAt: string },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/library/folder?workspaceId=${encodeURIComponent(workspaceId)}`,
+        method: "POST",
+        body: { path },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
+    moveLibraryEntry: build.mutation<
+      { kind: "file" | "folder"; path: string },
+      { workspaceId: string; from: string; to: string }
+    >({
+      query: ({ workspaceId, from, to }) => ({
+        url: `/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+        method: "PATCH",
+        body: { from, to },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
 
-    // ── Chat artifacts ────────────────────────────────────────────────
-    getChatArtifacts: build.query<ServerFile[], string>({
-      query: (chatId) => `/chats/${chatId}/artifacts`,
-      providesTags: (_r, _e, chatId) => [
+    // ── Chat attachments ──────────────────────────────────────────────
+    // "attachments" covers both user-visible chat files (non-dot) and
+    // agent-generated artifacts (dot-prefixed). Pass showHidden=true to
+    // include the artifact set for the chat's Artifacts panel.
+    getChatArtifacts: build.query<ServerFile[], { chatId: string; showHidden?: boolean }>({
+      query: ({ chatId, showHidden }) =>
+        showHidden
+          ? `/chats/${chatId}/attachments?showHidden=true`
+          : `/chats/${chatId}/attachments`,
+      providesTags: (_r, _e, { chatId }) => [
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
@@ -422,7 +466,7 @@ export const api = createApi({
         const fd = new FormData();
         fd.append("file", file, file.name);
         return {
-          url: `/chats/${chatId}/artifacts`,
+          url: `/chats/${chatId}/attachments`,
           method: "POST",
           body: fd,
         };
@@ -485,6 +529,9 @@ export const {
   useGetLibraryQuery,
   useDeleteLibraryFileMutation,
   useUploadLibraryFileMutation,
+  useSaveLibraryContentMutation,
+  useCreateLibraryFolderMutation,
+  useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
   useUploadChatArtifactMutation,
   useSearchQuery,

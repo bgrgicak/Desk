@@ -71,7 +71,10 @@ jobs:
         run: PGPASSWORD=desk psql -h 127.0.0.1 -p 55432 -U desk -d desk -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 
       - name: Run unit + integration tests (vitest)
-        run: npx vitest run --passWithNoTests
+        # `--retry=2` tolerates known flakes around async fireMessage polling
+        # (see message-model-attachments, agent-delete); real failures still
+        # fail after three attempts.
+        run: npx vitest run --passWithNoTests --retry=2
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

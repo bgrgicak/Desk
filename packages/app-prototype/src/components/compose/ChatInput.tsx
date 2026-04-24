@@ -10,9 +10,7 @@ import {
   useGetAgentsQuery,
   useGetLibraryQuery,
 } from '@/store/api'
-import { useAppSelector } from '@/store/hooks'
-import { selectFolders } from '@/store/slices/derivedSlice'
-import { toContextItem } from '@/store/selectors/library'
+import { toContextItem, toFolderList } from '@/store/selectors/library'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -62,6 +60,11 @@ type AttachedItem = {
 export interface UploadedFile {
   id: string
   name: string
+  /** Workspace-relative path on disk; present for chat artifact uploads
+   * so the caller can build an AttachmentRef when the message is sent. */
+  path?: string
+  mime?: string
+  size?: number
 }
 
 interface ChatInputProps {
@@ -81,6 +84,13 @@ interface ChatInputProps {
   chatAgentId?: string
   chatWorkspaceId?: string
   /**
+   * Fired when the user picks a different agent from the bottom toggle.
+   * Parent decides what to do — for an existing chat, patch the chat
+   * (re-binds chat.agentId server-side); for a new chat, seed the id
+   * into the pending createChat call.
+   */
+  onAgentChange?: (agentId: string) => void
+  /**
    * The parent (typically ChatView) owns the upload flow so the entire
    * chat screen can be a drop target, not just this input strip. When
    * these are set the "Upload a file…" button delegates to
@@ -92,7 +102,14 @@ interface ChatInputProps {
   extraUploads?: UploadedFile[]
   onRemoveExtraUpload?: (id: string) => void
   uploadInProgress?: boolean
+  /**
+   * When set, the typed draft is persisted to localStorage under this key
+   * so the text survives navigation and reloads. Cleared on submit.
+   */
+  draftKey?: string
 }
+
+const DRAFT_STORAGE_PREFIX = 'chatDraft:'
 
 // Calculate fixed position above a trigger button
 function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
@@ -119,12 +136,24 @@ export function ChatInput({
   chatAgentId,
   chatWorkspaceId: _chatWorkspaceId,
   chatId: _chatId,
+  onAgentChange,
   onOpenUploadPicker,
   extraUploads = [],
   onRemoveExtraUpload,
   uploadInProgress = false,
+  draftKey,
 }: ChatInputProps) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState<string>(() =>
+    draftKey ? localStorage.getItem(DRAFT_STORAGE_PREFIX + draftKey) ?? '' : ''
+  )
+
+  // Persist the draft while typing; remove the entry once empty or submitted.
+  useEffect(() => {
+    if (!draftKey) return
+    const storageKey = DRAFT_STORAGE_PREFIX + draftKey
+    if (value) localStorage.setItem(storageKey, value)
+    else localStorage.removeItem(storageKey)
+  }, [draftKey, value])
   const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -134,8 +163,12 @@ export function ChatInput({
     _chatWorkspaceId ? { workspaceId: _chatWorkspaceId } : undefined,
     { skip: !_chatWorkspaceId },
   )
-  const folders = useAppSelector(selectFolders)
-  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
+  const folders = _chatWorkspaceId
+    ? toFolderList(libraryResp?.folders ?? [], _chatWorkspaceId)
+    : []
+  const libraryItems: ContextItem[] = _chatWorkspaceId
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, _chatWorkspaceId))
+    : []
 
   // Register imperative focus handle
   useEffect(() => {
@@ -170,14 +203,14 @@ export function ChatInput({
 
   // Selections
   // The picker surface is "pick the agent for this chat" now that the
-  // server enforces one agent per chat (see plan §6, row 3). When we
-  // know the chat's agentId, hydrate from it; otherwise fall back to
-  // the first agent returned by /agents.
+  // server enforces one agent per chat (see plan §6, row 3). Hydrate
+  // from chatAgentId when present; otherwise fall back to the first
+  // agent returned by /agents (used before the chat has been created).
   //
-  // TODO(api-gap): PATCH /chats/:id doesn't yet accept agentId, so
-  // clicking another agent for an existing chat is a display-only
-  // preview that resets on reload — matrix §4.3.4. The selection will
-  // be persisted server-side once the endpoint carries it.
+  // A local `previewAgentId` covers the pre-creation case: parent can
+  // pass a new chatAgentId anytime (e.g. after PATCH /chats/:id
+  // responds), and `previewAgentId` stays as the optimistic hint until
+  // the server-backed value catches up.
   const serverActiveAgent =
     (chatAgentId ? serverAgents?.find(a => a.id === chatAgentId) : undefined)
     ?? serverAgents?.[0]
@@ -539,6 +572,7 @@ export function ChatInput({
                     onClick={() => {
                       setPreviewAgentId(agent.id)
                       setAgentOpen(false)
+                      onAgentChange?.(agent.id)
                     }}
                     className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
                   >

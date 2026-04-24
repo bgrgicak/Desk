@@ -491,6 +491,7 @@ function TodayItemDetail({
           placeholder="Ask about this…"
           compact
           showGoalPicker={false}
+          draftKey={`today-inbox:${item.id}`}
         />
       </div>
     </motion.div>

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, Check, ChevronDown, X,
+  Trash2, Plus, Check, ChevronDown, X, Pencil, Star,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { useGetAgentsQuery, usePatchAgentMutation } from '@/store/api'
+import {
+  useGetAgentsQuery,
+  useCreateAgentMutation,
+  usePatchAgentMutation,
+  useDeleteAgentMutation,
+  useGetWorkspaceAgentsQuery,
+  useSetWorkspaceDefaultAgentMutation,
+  useGetModelsQuery,
+  type ModelRef,
+} from '@/store/api'
+import type { ServerAgent } from '@/store/types'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
 // ── Color + emoji options (mirrored from WorkspaceBar) ──────────────────────
@@ -69,10 +79,12 @@ const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
 
 function WorkspaceSection({
   workspace,
+  canDelete,
   onUpdate,
   onDelete,
 }: {
   workspace: WorkspaceInfo
+  canDelete: boolean
   onUpdate: (ws: WorkspaceInfo) => void
   onDelete: () => void
 }) {
@@ -162,9 +174,19 @@ function WorkspaceSection({
       {/* Actions */}
       <div className="flex items-center justify-between pt-2 border-t">
         {/* Delete with popover confirm */}
-        <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <Popover open={deleteOpen} onOpenChange={o => canDelete && setDeleteOpen(o)}>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!canDelete}
+              title={
+                canDelete
+                  ? undefined
+                  : "You need at least one workspace. Create another before deleting this one."
+              }
+              className="text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground"
+            >
               <Trash2 className="h-3.5 w-3.5" />
               Delete workspace
             </Button>
@@ -202,36 +224,317 @@ function WorkspaceSection({
   )
 }
 
-// ── Agent row ────────────────────────────────────────────────────────────────
+// ── Agents ───────────────────────────────────────────────────────────────────
 
-interface AgentConfig {
-  id: string
-  name: string
-  model: string
-  enabled: boolean
+const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+
+/** Groups ModelRef[] by provider for the picker. */
+function groupModels(models: ModelRef[]): { provider: string; models: ModelRef[] }[] {
+  const by = new Map<string, ModelRef[]>()
+  for (const m of models) {
+    const list = by.get(m.provider) ?? []
+    list.push(m)
+    by.set(m.provider, list)
+  }
+  return [...by.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([provider, ms]) => ({
+      provider,
+      models: [...ms].sort((a, b) => a.id.localeCompare(b.id)),
+    }))
 }
 
-function AgentsSection() {
-  const { data: serverAgents } = useGetAgentsQuery()
-  const [patchAgent] = usePatchAgentMutation()
-  const agents: AgentConfig[] = (serverAgents ?? []).map(a => ({
-    id: a.id,
-    name: a.name,
-    model: a.model,
-    enabled: true,
-  }))
-  const [modelPickerOpen, setModelPickerOpen] = useState<string | null>(null)
+function ModelPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (modelId: string) => void
+  disabled?: boolean
+}) {
+  const { data: models, isLoading, isError } = useGetModelsQuery()
+  const [open, setOpen] = useState(false)
+  const groups = useMemo(() => groupModels(models ?? []), [models])
+  const hasModels = groups.length > 0
 
-  const MODELS = ['Claude Opus 4', 'Claude Sonnet 4', 'Claude Haiku 3.5', 'GPT-4o', 'GPT-4o mini']
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-0.5 disabled:opacity-60 disabled:pointer-events-none"
+        >
+          {value || 'Pick a model'}
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-1 max-h-80 overflow-y-auto" align="start">
+        {isLoading && (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">Loading models…</p>
+        )}
+        {!isLoading && isError && (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">
+            Couldn't reach the model catalog. Add a provider key in Preferences, then reopen.
+          </p>
+        )}
+        {!isLoading && !isError && !hasModels && (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">
+            No models available. Configure a provider key in Preferences.
+          </p>
+        )}
+        {hasModels &&
+          groups.map(({ provider, models: ms }) => (
+            <div key={provider} className="mb-1 last:mb-0">
+              <p className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {provider}
+              </p>
+              {ms.map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(m.id)
+                    setOpen(false)
+                  }}
+                  className="flex items-center gap-2 w-full px-2.5 py-1.5 text-sm rounded-md hover:bg-muted/60 transition-colors text-left"
+                >
+                  {m.id === value
+                    ? <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    : <span className="w-3.5 shrink-0" />}
+                  <span className="truncate">{m.label ?? m.id}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+      </PopoverContent>
+    </Popover>
+  )
+}
 
-  const toggle = (_name: string) => {
-    // TODO(api-gap): server has no "enabled" field on agents; wire once
-    // workspace_agents exposes it (matrix §4).
+function AgentEditor({
+  initial,
+  submitLabel,
+  onSubmit,
+  onCancel,
+  busy,
+}: {
+  initial: { name: string; model: string; instructions: string }
+  submitLabel: string
+  onSubmit: (v: { name: string; model: string; instructions: string }) => void
+  onCancel: () => void
+  busy?: boolean
+}) {
+  const [name, setName]                 = useState(initial.name)
+  const [model, setModel]               = useState(initial.model)
+  const [instructions, setInstructions] = useState(initial.instructions)
+
+  const canSave = name.trim().length > 0 && model.trim().length > 0
+
+  return (
+    <div className="border rounded-lg p-3 space-y-3 bg-muted/20">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+          <Bot className="h-4 w-4 text-muted-foreground/70" />
+        </div>
+        <Input
+          placeholder="Agent name"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          className="flex-1"
+          aria-label="Agent name"
+        />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1">
+          Model
+        </p>
+        <ModelPicker value={model} onChange={setModel} />
+      </div>
+
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1">
+          Instructions
+        </p>
+        <Textarea
+          placeholder="How should this agent behave? (system prompt)"
+          value={instructions}
+          onChange={e => setInstructions(e.target.value)}
+          rows={4}
+          className="resize-none text-sm"
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={!canSave || busy}
+          onClick={() => onSubmit({ name: name.trim(), model: model.trim(), instructions })}
+        >
+          {submitLabel}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function AgentRow({
+  agent,
+  isDefault,
+  canDelete,
+  onMakeDefault,
+  onEdit,
+  onDelete,
+  onModelChange,
+}: {
+  agent: ServerAgent
+  isDefault: boolean
+  canDelete: boolean
+  onMakeDefault: () => void
+  onEdit: () => void
+  onDelete: () => void
+  onModelChange: (modelId: string) => void
+}) {
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors group">
+      <button
+        type="button"
+        onClick={isDefault ? undefined : onMakeDefault}
+        disabled={isDefault}
+        aria-label={
+          isDefault
+            ? `${agent.name} is the default agent for this workspace`
+            : `Make ${agent.name} the default agent for this workspace`
+        }
+        aria-pressed={isDefault}
+        title={
+          isDefault
+            ? 'Default agent for this workspace'
+            : 'Make default for this workspace'
+        }
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 hover:text-amber-500 disabled:text-amber-500 disabled:cursor-default transition-colors"
+      >
+        <Star
+          className="h-4 w-4"
+          fill={isDefault ? 'currentColor' : 'none'}
+          strokeWidth={isDefault ? 0 : 1.75}
+        />
+      </button>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+        <Bot className="h-4 w-4 text-muted-foreground/70" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">
+          {agent.name}
+          {isDefault && (
+            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wider text-amber-600">
+              Default
+            </span>
+          )}
+        </p>
+        <ModelPicker value={agent.model} onChange={onModelChange} />
+      </div>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+        onClick={onEdit}
+        aria-label={`Edit ${agent.name}`}
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
+
+      <Popover open={deleteOpen} onOpenChange={o => canDelete && setDeleteOpen(o)}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={!canDelete}
+            title={
+              canDelete
+                ? undefined
+                : "You need at least one agent. Create another before deleting this one."
+            }
+            className="h-7 w-7 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity disabled:hover:text-muted-foreground"
+            aria-label={`Delete ${agent.name}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-64 p-4" align="end">
+          <p className="text-sm font-medium mb-1">Delete "{agent.name}"?</p>
+          <p className="text-xs text-muted-foreground mb-3">
+            Chats that used this agent will also be deleted. This can't be undone.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="destructive"
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                setDeleteOpen(false)
+                onDelete()
+              }}
+            >
+              Delete
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+function AgentsSection({ workspaceId }: { workspaceId: string }) {
+  const { data: serverAgents, isLoading } = useGetAgentsQuery()
+  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(workspaceId)
+  const { data: models } = useGetModelsQuery()
+  const [createAgent, { isLoading: creating }] = useCreateAgentMutation()
+  const [patchAgent]  = usePatchAgentMutation()
+  const [deleteAgent] = useDeleteAgentMutation()
+  const [setDefault]  = useSetWorkspaceDefaultAgentMutation()
+
+  // null = none; 'NEW' = create form; otherwise = agent id being edited.
+  const [editing, setEditing] = useState<'NEW' | string | null>(null)
+
+  const agents = serverAgents ?? []
+  const firstAvailableModel = models?.[0]?.id ?? DEFAULT_MODEL
+  const defaultAgentId =
+    workspaceAgents?.find(m => m.isDefault)?.id ?? null
+
+  const handleCreate = async (v: { name: string; model: string; instructions: string }) => {
+    await createAgent({
+      name: v.name,
+      model: v.model,
+      instructions: v.instructions,
+    }).unwrap()
+    setEditing(null)
   }
 
-  const setModel = (agent: AgentConfig, model: string) => {
-    void patchAgent({ id: agent.id, patch: { model } })
-    setModelPickerOpen(null)
+  const handlePatch = async (
+    agent: ServerAgent,
+    v: { name: string; model: string; instructions: string },
+  ) => {
+    await patchAgent({
+      id: agent.id,
+      patch: { name: v.name, model: v.model, instructions: v.instructions },
+    }).unwrap()
+    setEditing(null)
+  }
+
+  const handleDelete = async (id: string) => {
+    await deleteAgent(id).unwrap()
   }
 
   return (
@@ -239,59 +542,62 @@ function AgentsSection() {
       <div>
         <h3 className="text-sm font-semibold mb-0.5">Agents</h3>
         <p className="text-xs text-muted-foreground">
-          Manage which agents are available in this workspace and configure their models.
+          Agents you can start chats with. Tap the star to set the default
+          agent for this workspace — new chats open with it selected.
         </p>
       </div>
 
       <div className="space-y-1">
-        {agents.map(agent => (
-          <div
-            key={agent.name}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors"
-          >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-              <Bot className="h-4 w-4 text-muted-foreground/70" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">{agent.name}</p>
-              {/* Model picker */}
-              <Popover
-                open={modelPickerOpen === agent.name}
-                onOpenChange={open => setModelPickerOpen(open ? agent.name : null)}
-              >
-                <PopoverTrigger asChild>
-                  <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-0.5">
-                    {agent.model}
-                    <ChevronDown className="h-3 w-3 opacity-60" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-48 p-1" align="start">
-                  {MODELS.map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setModel(agent, m)}
-                      className="flex items-center gap-2 w-full px-2.5 py-1.5 text-sm rounded-md hover:bg-muted/60 transition-colors text-left"
-                    >
-                      {m === agent.model && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-                      {m !== agent.model && <span className="w-3.5 shrink-0" />}
-                      {m}
-                    </button>
-                  ))}
-                </PopoverContent>
-              </Popover>
-            </div>
-            <Switch
-              checked={agent.enabled}
-              onCheckedChange={() => toggle(agent.name)}
+        {isLoading && agents.length === 0 && (
+          <p className="text-xs text-muted-foreground px-3 py-2">Loading agents…</p>
+        )}
+        {agents.map(agent =>
+          editing === agent.id ? (
+            <AgentEditor
+              key={agent.id}
+              initial={{
+                name: agent.name,
+                model: agent.model,
+                instructions: agent.instructions,
+              }}
+              submitLabel="Save"
+              onCancel={() => setEditing(null)}
+              onSubmit={v => handlePatch(agent, v)}
             />
-          </div>
-        ))}
+          ) : (
+            <AgentRow
+              key={agent.id}
+              agent={agent}
+              isDefault={agent.id === defaultAgentId}
+              canDelete={agents.length > 1}
+              onMakeDefault={() => setDefault({ workspaceId, agentId: agent.id })}
+              onEdit={() => setEditing(agent.id)}
+              onDelete={() => handleDelete(agent.id)}
+              onModelChange={model => patchAgent({ id: agent.id, patch: { model } })}
+            />
+          ),
+        )}
       </div>
 
-      <Button variant="outline" size="sm" className="gap-1.5">
-        <Plus className="h-3.5 w-3.5" />
-        Add custom agent
-      </Button>
+      {editing === 'NEW' ? (
+        <AgentEditor
+          initial={{ name: '', model: firstAvailableModel, instructions: '' }}
+          submitLabel={creating ? 'Creating…' : 'Create agent'}
+          onCancel={() => setEditing(null)}
+          onSubmit={handleCreate}
+          busy={creating}
+        />
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => setEditing('NEW')}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add custom agent
+        </Button>
+      )}
     </div>
   )
 }
@@ -428,6 +734,8 @@ interface SettingsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   workspace: WorkspaceInfo
+  /** Whether the workspace can be deleted (false when it's the caller's last). */
+  canDeleteWorkspace: boolean
   onUpdateWorkspace: (ws: WorkspaceInfo) => void
   onDeleteWorkspace: () => void
 }
@@ -436,6 +744,7 @@ export function SettingsModal({
   open,
   onOpenChange,
   workspace,
+  canDeleteWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
 }: SettingsModalProps) {
@@ -513,11 +822,12 @@ export function SettingsModal({
               {activeSection === 'workspace' && (
                 <WorkspaceSection
                   workspace={workspace}
+                  canDelete={canDeleteWorkspace}
                   onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
                   onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
                 />
               )}
-              {activeSection === 'agents' && <AgentsSection />}
+              {activeSection === 'agents' && <AgentsSection workspaceId={workspace.id} />}
               {activeSection === 'connections' && <ConnectionsSection />}
               {activeSection === 'preferences' && <PreferencesSection />}
             </div>

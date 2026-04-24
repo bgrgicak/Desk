@@ -162,7 +162,16 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/workspaces/{id}": {
         get: { summary: "Get workspace", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Workspace" } } },
         patch: { summary: "Update workspace", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Updated workspace" } } },
-        delete: { summary: "Soft-delete workspace", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "OK" } } },
+        delete: {
+          summary: "Delete workspace (cascades chats, messages, memberships)",
+          description: "Hard-deletes the workspace row. Refuses with 400 when the caller has only one workspace — every user must retain at least one.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "OK" },
+            "400": { description: "Cannot delete the caller's last workspace" },
+            "404": { description: "Workspace not found" },
+          },
+        },
       },
       "/workspaces/{id}/agents": {
         get: {
@@ -190,9 +199,14 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/workspaces/{id}/default-agent": {
         post: {
           summary: "Set the workspace default agent",
+          description: "Auto-enrolls the agent in the workspace first if it isn't already a member (idempotent), then flips the per-workspace `is_default` flag. Owner-mismatch (agent belongs to another user) is rejected by the underlying enroll step.",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { agentId: { type: "string" } }, required: ["agentId"] } } } },
-          responses: { "200": { description: "OK" }, "404": { description: "Agent not enrolled in workspace" } },
+          responses: {
+            "200": { description: "OK" },
+            "400": { description: "Owner mismatch" },
+            "404": { description: "Workspace or agent not found" },
+          },
         },
       },
       "/agents": {
@@ -205,7 +219,22 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/agents/{id}": {
         get: { summary: "Get agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Agent" } } },
-        patch: { summary: "Update agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Updated agent" } } },
+        patch: {
+          summary: "Update agent (name, instructions, model)",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, instructions: { type: "string" }, model: { type: "string" } } } } } },
+          responses: { "200": { description: "Updated agent" } },
+        },
+        delete: {
+          summary: "Delete agent (cascades chats, messages, workspace memberships)",
+          description: "Hard-deletes the agent row. `ON DELETE CASCADE` removes the agent's chats (and their messages) plus any workspace_agents rows. Chat on-disk directories are not cleaned up; revisit if agent deletion becomes user-visible in production. Refuses with 400 when the caller has only one agent — every user must retain at least one.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "400": { description: "Cannot delete the caller's last agent" },
+            "404": { description: "Agent not found" },
+          },
+        },
       },
       "/chats": {
         get: {
@@ -224,7 +253,26 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/chats/{id}": {
         get: { summary: "Get chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Chat" } } },
-        patch: { summary: "Update chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Updated chat" } } },
+        patch: {
+          summary: "Update chat",
+          description: "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and instructions.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    goal: { type: "string" },
+                    agentId: { type: "string", description: "Must be an agent enabled in this chat's workspace." },
+                  },
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Updated chat" } },
+        },
         delete: {
           summary: "Delete chat (cascades messages + on-disk dirs)",
           description: "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Desk/.trash/`. Emits a `chat.deleted` WS event.",
@@ -240,7 +288,33 @@ export function generateOpenApiSpec(): OpenApiSpec {
         post: {
           summary: "Send message",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { content: { type: "string" } }, required: ["content"] } } } },
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    content: { type: "string" },
+                    attachments: {
+                      type: "array",
+                      description: "Files the user attached to this message. Each item references a file already uploaded via POST /chats/{id}/attachments — the path is workspace-relative, forward-slash separated.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          path: { type: "string" },
+                          name: { type: "string" },
+                          mime: { type: "string" },
+                          size: { type: "integer", minimum: 0 },
+                        },
+                        required: ["path", "name"],
+                      },
+                    },
+                  },
+                  required: ["content"],
+                },
+              },
+            },
+          },
           responses: { "201": { description: "Created message" } },
         },
       },
@@ -336,11 +410,19 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
-      "/chats/{id}/artifacts": {
-        get: { summary: "List chat artifacts", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "File array" } } },
+      "/chats/{id}/attachments": {
+        get: {
+          summary: "List chat attachments",
+          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "showHidden", in: "query", schema: { type: "boolean" } },
+          ],
+          responses: { "200": { description: "File array" } },
+        },
         post: {
-          summary: "Upload artifact to chat",
-          description: "Accepts multipart/form-data with a single 'file' part. The part's filename and Content-Type become the artifact's name and MIME.",
+          summary: "Upload attachment to chat",
+          description: "Accepts multipart/form-data with a single 'file' part. The part's filename and Content-Type become the attachment's name and MIME. Filenames starting with '.' are rejected (reserved for agent artifacts).",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: {
             required: true,
@@ -361,8 +443,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/library": {
         get: {
-          summary: "List library files",
-          description: "Reads the workspace library directory; returns FileRef entries (path, name, mime, size, createdAt). Files with a leading dot are hidden. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
+          summary: "List library files and folders",
+          description: "Recursively reads the workspace library directory; returns `items` (FileRef entries) and `folders` (FolderRef entries) describing the full tree. Files/folders with a leading dot are hidden. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: [], folders: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
             { name: "cursor", in: "query", schema: { type: "string" } },
@@ -372,7 +454,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
         },
         post: {
           summary: "Upload a file to the workspace library",
-          description: "Accepts multipart/form-data with a single 'file' part. Filename becomes the library entry's name; collisions get suffixed with -1, -2, ... Destination workspace comes from `workspaceId` (falls back to the caller's first workspace).",
+          description: "Accepts multipart/form-data with a single 'file' part and an optional 'subpath' text field naming a library-relative subdirectory (e.g. `Photos/2024`). Missing subdirectories are created recursively. Filename becomes the library entry's name; filename collisions get suffixed with -1, -2, ... Destination workspace comes from `workspaceId` (falls back to the caller's first workspace). 400 on invalid `subpath` (traversal, dotfile segments, backslashes).",
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
@@ -380,19 +462,72 @@ export function generateOpenApiSpec(): OpenApiSpec {
             required: true,
             content: {
               "multipart/form-data": {
-                schema: { type: "object", properties: { file: { type: "string", format: "binary" } }, required: ["file"] },
+                schema: {
+                  type: "object",
+                  properties: {
+                    file: { type: "string", format: "binary" },
+                    subpath: { type: "string", description: "Library-relative subdirectory to place the file in." },
+                  },
+                  required: ["file"],
+                },
               },
             },
           },
-          responses: { "201": { description: "Created file ref" }, "400": { description: "Malformed workspaceId" }, "404": { description: "Workspace not found / no workspace available" } },
+          responses: { "201": { description: "Created file ref" }, "400": { description: "Malformed workspaceId or subpath" }, "404": { description: "Workspace not found / no workspace available" } },
+        },
+        patch: {
+          summary: "Move or rename a library file or folder",
+          description: "Renames or moves an entry within the workspace. Both `from` and `to` are workspace-root-relative paths (e.g. `Photos/2024/beach.jpg`); traversal and dot-prefixed segments are rejected. The destination must not already exist. For folders, the entire subtree moves.",
+          parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    from: { type: "string" },
+                    to: { type: "string" },
+                  },
+                  required: ["from", "to"],
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "Moved" }, "400": { description: "Invalid body or destination exists" }, "404": { description: "Source not in workspace or not found" } },
         },
         delete: {
-          summary: "Delete a library file (moves it to ~/Desk/.trash/)",
+          summary: "Delete a library entry (moves it to ~/Desk/.trash/)",
+          description: "Works for both files and folders. Folders are recursively moved to the trash.",
           parameters: [
             { name: "path", in: "query", required: true, schema: { type: "string" } },
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
           responses: { "200": { description: "OK" }, "404": { description: "No such path in the resolved workspace" } },
+        },
+      },
+      "/library/folder": {
+        post: {
+          summary: "Create an empty library folder",
+          description: "Creates an empty directory at the workspace-root-relative `path`. The `path` is validated against traversal, dotfile segments, and backslashes. Intermediate parents are created automatically.",
+          parameters: [
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { path: { type: "string" } },
+                  required: ["path"],
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "Created FolderRef" }, "400": { description: "Invalid or empty path" }, "404": { description: "Workspace not found" } },
         },
       },
       "/library/meta": {
@@ -413,6 +548,33 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
           responses: { "200": { description: "File content" }, "404": { description: "No such path in the resolved workspace" } },
+        },
+      },
+      "/library/content": {
+        get: {
+          summary: "Stream a library file's bytes inline (for in-app preview)",
+          parameters: [
+            { name: "path", in: "query", required: true, schema: { type: "string" } },
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          responses: { "200": { description: "File content (Content-Disposition: inline)" }, "404": { description: "No such path in the resolved workspace" } },
+        },
+        put: {
+          summary: "Overwrite an existing library file's contents",
+          description: "Replaces the file at `path` with the request body. Fails with 404 if the file doesn't exist — use POST /library to create.",
+          parameters: [
+            { name: "path", in: "query", required: true, schema: { type: "string" } },
+            { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+          },
+          responses: {
+            "200": { description: "Updated FileRef" },
+            "404": { description: "No such path in the resolved workspace" },
+            "413": { description: "File exceeds maximum size" },
+          },
         },
       },
       // Runs / scheduled-jobs endpoints are gone — execution state lives

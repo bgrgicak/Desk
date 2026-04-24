@@ -446,6 +446,7 @@ export function AppShell({
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         workspace={activeWorkspace}
+        canDeleteWorkspace={workspaces.length > 1}
         onUpdateWorkspace={updated => {
           void patchWorkspaceMutation({
             id: updated.id,
@@ -453,6 +454,7 @@ export function AppShell({
               name: updated.name,
               description: updated.description,
               icon: updated.emoji,
+              color: updated.bg,
             },
           })
         }}

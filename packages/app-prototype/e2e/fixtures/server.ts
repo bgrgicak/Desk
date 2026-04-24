@@ -83,6 +83,11 @@ export async function startDeskServer(
     DESK_HOME: home,
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
+    // Host e2e runs without at/cron binaries (those live in the VM
+    // path). Use the in-process adapter so scheduler-touching flows
+    // (pause, resume, cancel) are exercised by the same test lane that
+    // drives the UI.
+    DESK_SCHEDULE_ADAPTER: "memory",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {

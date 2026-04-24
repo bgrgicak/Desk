@@ -409,7 +409,7 @@ describe("API e2e (real Postgres)", () => {
     // Upload artifact to chat via multipart/form-data
     const uploadRes = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/artifacts`,
+      `/chats/${chat.id}/attachments`,
       token,
       [
         {
@@ -422,12 +422,12 @@ describe("API e2e (real Postgres)", () => {
     );
     expect(uploadRes.status).toBe(201);
     const chatFile = uploadRes.body as { id: string; name: string; class: string; mime: string };
-    expect(chatFile.path).toMatch(/^chats\//);
+    expect(chatFile.path).toMatch(/^\.chats\//);
     expect(chatFile.name).toBe("round-trip.txt");
     expect(chatFile.mime).toBe("text/plain");
 
     // Chat artifact appears in chat artifacts list
-    const chatArtRes = await request("GET", `/chats/${chat.id}/artifacts`, token);
+    const chatArtRes = await request("GET", `/chats/${chat.id}/attachments`, token);
     expect(chatArtRes.status).toBe(200);
     const chatArts = chatArtRes.body as Array<{ path: string }>;
     expect(chatArts.some((a) => a.path === chatFile.path)).toBe(true);
@@ -441,7 +441,8 @@ describe("API e2e (real Postgres)", () => {
     );
     expect(libUploadRes.status).toBe(201);
     const libFile = libUploadRes.body as { path: string; name: string };
-    expect(libFile.path).toMatch(/^library\//);
+    // Workspace root is the library — uploads land directly at the root.
+    expect(libFile.path).toBe(libFile.name);
 
     // GET /library returns the library file
     const libRes = await request("GET", "/library", token);
@@ -470,6 +471,34 @@ describe("API e2e (real Postgres)", () => {
     });
     expect(dlBytes.toString()).toBe(content);
 
+    // GET /library/content?path= returns identical bytes with inline disposition
+    // (used by the in-app preview panel instead of triggering a browser download).
+    const previewResult = await new Promise<{ bytes: Buffer; disposition: string; contentType: string }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve({
+            bytes: Buffer.concat(chunks),
+            disposition: String(res.headers["content-disposition"] ?? ""),
+            contentType: String(res.headers["content-type"] ?? ""),
+          }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(previewResult.bytes.toString()).toBe(content);
+    expect(previewResult.disposition.startsWith("inline")).toBe(true);
+    expect(previewResult.contentType).toBe("text/plain");
+
     // Verify stat metadata via /library/meta
     const metaRes = await request(
       "GET",
@@ -479,9 +508,197 @@ describe("API e2e (real Postgres)", () => {
     expect(metaRes.status).toBe(200);
     const meta = metaRes.body as { path: string; name: string };
     expect(meta.path).toBe(libFile.path);
+
+    // PUT /library/content overwrites the file in place and subsequent
+    // reads return the new bytes. A second PUT to a non-existent path
+    // yields 404 (no upsert — use POST to create).
+    const newBody = "overwritten";
+    const putResult = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const payload = Buffer.from(newBody);
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "text/plain",
+            "Content-Length": String(payload.length),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString();
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    });
+    expect(putResult.status).toBe(200);
+    const updatedRef = putResult.body as { path: string; size: number };
+    expect(updatedRef.path).toBe(libFile.path);
+    expect(updatedRef.size).toBe(newBody.length);
+
+    const afterPut = await new Promise<Buffer>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(afterPut.toString()).toBe(newBody);
+
+    const missingPut = await new Promise<{ status: number }>((resolve, reject) => {
+      const payload = Buffer.from("x");
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: `/library/content?path=${encodeURIComponent("does-not-exist.txt")}`,
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "text/plain",
+            "Content-Length": String(payload.length),
+          },
+        },
+        (res) => {
+          res.on("data", () => {});
+          res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    });
+    expect(missingPut.status).toBe(404);
   });
 
-  it("POST /chats/:id/artifacts rejects JSON body with 400", async () => {
+  it("library directory flow: subpath upload, create/rename/move/delete folders, recursive listing", async () => {
+    const wsRes = await request("GET", "/workspaces", token);
+    const wsId = (wsRes.body as Array<{ id: string }>)[0].id;
+    const wsQuery = `workspaceId=${encodeURIComponent(wsId)}`;
+
+    // Upload two files into nested subdirectories — as a directory upload
+    // would, one file per request with its relative subpath attached.
+    for (const [relDir, filename, body] of [
+      ["DirUpload/docs", "intro.md", "# Intro"],
+      ["DirUpload", "root.txt", "root-body"],
+    ] as Array<[string, string, string]>) {
+      const up = await requestMultipart(
+        "POST",
+        `/library?${wsQuery}`,
+        token,
+        [
+          { name: "subpath", body: Buffer.from(relDir) },
+          { name: "file", filename, contentType: "text/plain", body: Buffer.from(body) },
+        ],
+      );
+      expect(up.status).toBe(201);
+      const file = up.body as { path: string };
+      expect(file.path).toBe(`${relDir}/${filename}`);
+    }
+
+    // Rejects traversal in the subpath.
+    const bad = await requestMultipart(
+      "POST",
+      `/library?${wsQuery}`,
+      token,
+      [
+        { name: "subpath", body: Buffer.from("../escape") },
+        { name: "file", filename: "x.txt", contentType: "text/plain", body: Buffer.from("nope") },
+      ],
+    );
+    expect(bad.status).toBe(400);
+
+    // Listing recurses and returns both files and folders.
+    const listRes = await request("GET", `/library?${wsQuery}`, token);
+    expect(listRes.status).toBe(200);
+    const listing = listRes.body as {
+      items: Array<{ path: string }>;
+      folders: Array<{ path: string; name: string }>;
+    };
+    const filePaths = listing.items.map((i) => i.path);
+    expect(filePaths).toContain("DirUpload/docs/intro.md");
+    expect(filePaths).toContain("DirUpload/root.txt");
+    const folderPaths = listing.folders.map((f) => f.path);
+    expect(folderPaths).toContain("DirUpload");
+    expect(folderPaths).toContain("DirUpload/docs");
+
+    // Create an empty folder and verify it appears.
+    const mkRes = await request(
+      "POST",
+      `/library/folder?${wsQuery}`,
+      token,
+      { path: "DirUpload/Empty" },
+    );
+    expect(mkRes.status).toBe(201);
+    const mk = mkRes.body as { path: string };
+    expect(mk.path).toBe("DirUpload/Empty");
+
+    // Rename a folder (PATCH /library with from/to).
+    const renameRes = await request(
+      "PATCH",
+      `/library?${wsQuery}`,
+      token,
+      { from: "DirUpload/Empty", to: "DirUpload/Renamed" },
+    );
+    expect(renameRes.status).toBe(200);
+
+    // Move a file from one folder to another.
+    const mvFile = await request(
+      "PATCH",
+      `/library?${wsQuery}`,
+      token,
+      { from: "DirUpload/root.txt", to: "DirUpload/Renamed/root.txt" },
+    );
+    expect(mvFile.status).toBe(200);
+
+    // Refuses traversal on either side.
+    const escRes = await request(
+      "PATCH",
+      `/library?${wsQuery}`,
+      token,
+      { from: "DirUpload/docs/intro.md", to: "../hijack.md" },
+    );
+    expect(escRes.status).toBe(404);
+
+    // Delete a folder recursively.
+    const delRes = await request(
+      "DELETE",
+      `/library?path=${encodeURIComponent("DirUpload/docs")}&${wsQuery}`,
+      token,
+    );
+    expect(delRes.status).toBe(200);
+
+    const finalList = await request("GET", `/library?${wsQuery}`, token);
+    const finalFolders = (finalList.body as { folders: Array<{ path: string }> }).folders.map((f) => f.path);
+    expect(finalFolders).not.toContain("DirUpload/docs");
+    const finalFiles = (finalList.body as { items: Array<{ path: string }> }).items.map((i) => i.path);
+    expect(finalFiles).not.toContain("DirUpload/docs/intro.md");
+    expect(finalFiles).toContain("DirUpload/Renamed/root.txt");
+  });
+
+  it("POST /chats/:id/attachments rejects JSON body with 400", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -494,7 +711,7 @@ describe("API e2e (real Postgres)", () => {
     });
     const chat = chatRes.body as { id: string };
 
-    const res = await request("POST", `/chats/${chat.id}/artifacts`, token, {
+    const res = await request("POST", `/chats/${chat.id}/attachments`, token, {
       name: "x.txt",
       mime: "text/plain",
       contentBase64: Buffer.from("hi").toString("base64"),
@@ -502,7 +719,7 @@ describe("API e2e (real Postgres)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("POST /chats/:id/artifacts returns 400 when 'file' part is missing", async () => {
+  it("POST /chats/:id/attachments returns 400 when 'file' part is missing", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -517,7 +734,7 @@ describe("API e2e (real Postgres)", () => {
 
     const res = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/artifacts`,
+      `/chats/${chat.id}/attachments`,
       token,
       [{ name: "notfile", body: Buffer.from("oops") }],
     );
@@ -540,7 +757,7 @@ describe("API e2e (real Postgres)", () => {
 
     const uploadRes = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/artifacts`,
+      `/chats/${chat.id}/attachments`,
       token,
       [
         {
@@ -895,16 +1112,45 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
     expect(msgRes.status).toBe(201);
 
     // Poll chat messages for an agent reply carrying the sentinel.
+    // Agent output is persisted as { type: "events", log: [...] } — each entry
+    // is either a structured agent event, a stderr line, or an unparsed stdout
+    // line. The test driver emits a single plain-text stdout, which lands as
+    // an "unparsed" entry; real opencode runs emit structured "text" events.
+    type LogEntry =
+      | { kind: "event"; event: { type: string; part?: { text?: string } } }
+      | { kind: "stderr"; line: string }
+      | { kind: "unparsed"; line: string };
+    type AgentContent =
+      | { type: "text"; text?: string }
+      | { type: "events"; log?: LogEntry[] }
+      | { type: string };
+    const extractText = (content: AgentContent): string => {
+      if (content.type === "text") return (content as { text?: string }).text ?? "";
+      if (content.type === "events") {
+        const log = (content as { log?: LogEntry[] }).log ?? [];
+        const eventText = log
+          .filter((e): e is Extract<LogEntry, { kind: "event" }> => e.kind === "event" && e.event.type === "text")
+          .map((e) => e.event.part?.text ?? "")
+          .join("");
+        if (eventText) return eventText;
+        return log
+          .filter((e): e is Extract<LogEntry, { kind: "unparsed" }> => e.kind === "unparsed")
+          .map((e) => e.line)
+          .join("\n");
+      }
+      return "";
+    };
+
     let agentText = "";
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
       if (msgsRes.status !== 200) continue;
-      const messages = msgsRes.body as { items: Array<{ role: string; content: { type: string; text?: string } }> };
+      const messages = msgsRes.body as { items: Array<{ role: string; content: AgentContent }> };
       const agentMsgs = messages.items.filter((m) => m.role === "agent");
       if (agentMsgs.length === 0) continue;
       const last = agentMsgs[agentMsgs.length - 1];
-      agentText = last.content.type === "text" ? last.content.text ?? "" : "";
+      agentText = extractText(last.content);
       if (agentText.includes("CORSAIR_SENTINEL")) break;
     }
     expect(agentText).toContain("CORSAIR_SENTINEL");

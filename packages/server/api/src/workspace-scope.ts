@@ -1,6 +1,7 @@
 import pg from "pg";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
+import { validateLibrarySubpath } from "@desk/storage";
 import { requireOwnedWorkspace } from "./auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
@@ -49,16 +50,21 @@ export async function requireWorkspaceId(
 }
 
 /**
- * Confirms that a workspace-relative library path (`library/{wsId}/...`)
- * belongs to the given workspace. Returns the path unchanged when it
- * matches; throws 404 when the prefix is wrong. Used by /library/meta,
- * /library/download, and DELETE /library to make sure `?path=` can't reach
- * into another workspace's subtree even if the caller owns that other
- * workspace too.
+ * Validates a user-supplied library path at the API boundary.
+ *
+ * Under the workspace-as-home model the workspace root IS the library —
+ * all user-visible content lives under it without a per-workspace
+ * prefix. This check rejects traversal (`..`), absolute paths, and
+ * dot-prefixed (infrastructure) segments so endpoints that accept a
+ * `?path=` cannot reach into `.chats/` or escape the workspace.
+ *
+ * Still takes `workspaceId` for forward-compatibility with a future
+ * multi-workspace layout; it is not used today.
  */
-export function requireLibraryPathInWorkspace(relPath: string, workspaceId: string): void {
-  const expected = `library/${workspaceId}/`;
-  if (!relPath.startsWith(expected)) {
+export function requireLibraryPathInWorkspace(relPath: string, _workspaceId: string): void {
+  try {
+    validateLibrarySubpath(relPath);
+  } catch {
     throw new NotFoundError(`File not found: ${relPath}`);
   }
 }

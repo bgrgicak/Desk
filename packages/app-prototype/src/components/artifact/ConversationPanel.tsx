@@ -132,6 +132,7 @@ export function ConversationPanel({
               placeholder="Ask to make changes..."
               compact={true}
               showGoalPicker={true}
+              draftKey={artifact ? `artifact:${artifact.id}` : undefined}
             />
           </div>
         </>

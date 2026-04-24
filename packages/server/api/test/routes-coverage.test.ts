@@ -584,8 +584,61 @@ describe("Routes coverage (real Postgres)", () => {
     const body = getRes.body as { title: string; goal: string };
     expect(body.title).toBe("PatchedTitle");
     expect(body.goal).toBe("PatchedGoal");
+  });
 
-    // NOTE: agentId is NOT patchable via PATCH /chats/:id (spec says it should be).
+  it("PATCH /chats/:id — agentId re-binds the chat when the new agent is enrolled", async () => {
+    // Create a second agent and enroll it in the workspace.
+    const createAgent = await request("POST", "/agents", token, {
+      name: "Switcher",
+      instructions: "Assist",
+      model: "anthropic/claude-opus-4-7",
+    });
+    const otherAgentId = (createAgent.body as { id: string }).id;
+    const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
+      agentId: otherAgentId,
+    });
+    expect(enroll.status).toBe(201);
+
+    // Create a chat bound to the default agent.
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "BindOrig",
+    });
+    const chat = createRes.body as { id: string; agentId: string };
+    expect(chat.agentId).toBe(agentId);
+
+    // Re-bind to the other agent.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      agentId: otherAgentId,
+    });
+    expect(patchRes.status).toBe(200);
+    expect((patchRes.body as { agentId: string }).agentId).toBe(otherAgentId);
+
+    const getRes = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes.body as { agentId: string }).agentId).toBe(otherAgentId);
+  });
+
+  it("PATCH /chats/:id — rejects an agent not enrolled in the chat's workspace", async () => {
+    // Create an agent but skip the workspace enrollment step.
+    const createAgent = await request("POST", "/agents", token, {
+      name: "Stranger",
+      instructions: "",
+      model: "anthropic/claude-opus-4-7",
+    });
+    const strangerId = (createAgent.body as { id: string }).id;
+
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "BindReject",
+    });
+    const chat = createRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      agentId: strangerId,
+    });
+    expect(patchRes.status).toBe(400);
   });
 
   // ── 7. DELETE /library + multipart upload ────────────────────────
@@ -598,7 +651,7 @@ describe("Routes coverage (real Postgres)", () => {
       [{ name: "file", filename: "to-delete.txt", contentType: "text/plain", body: Buffer.from(content) }],
     );
     const file = uploadRes.body as { path: string; name: string };
-    expect(file.path).toMatch(/^library\//);
+    expect(file.path).toBe(file.name);
 
     // Delete moves the file to the trash.
     const delRes = await request(

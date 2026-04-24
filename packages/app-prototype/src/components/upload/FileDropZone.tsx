@@ -3,19 +3,35 @@ import { Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
+ * An entry produced by dropping or picking files. `relativePath` is the
+ * file's path relative to the top-level drop/selection root — for a
+ * plain file it equals `file.name`; for files from a directory pick
+ * (or dropped folder) it includes the intermediate subdirectories,
+ * e.g. `Photos/2024/beach.jpg`.
+ */
+export interface UploadEntry {
+  file: File;
+  relativePath: string;
+}
+
+/**
  * Thin wrapper that attaches drag-and-drop + hidden-file-input behavior to a
  * region. Callers render their existing layout as children and separately
  * render an optional trigger (button, menu item) that calls `openPicker()`.
  *
  * The overlay is purely visual feedback during a drag; files dispatched via
- * either path end up in a single `onFiles(files)` callback.
+ * either path end up in a single `onFiles(entries)` callback.
+ *
+ * When `directory` is true, the file picker is switched to directory mode
+ * (`webkitdirectory`) and dropped folders are walked recursively so the
+ * caller receives every descendant file with its relative path.
  */
 export interface FileDropZoneHandle {
-  openPicker(): void;
+  openPicker(directory?: boolean): void;
 }
 
 interface Props {
-  onFiles: (files: File[]) => void;
+  onFiles: (entries: UploadEntry[]) => void;
   disabled?: boolean;
   multiple?: boolean;
   accept?: string;
@@ -23,7 +39,13 @@ interface Props {
   overlayLabel?: string;
   /** Opt-out of the visual drop overlay (e.g. when the parent renders its own). */
   quiet?: boolean;
-  children: (api: { openPicker: () => void; isDragging: boolean }) => ReactNode;
+  /** Enable directory-mode picker and recursive folder traversal on drop. */
+  directory?: boolean;
+  children: (api: {
+    openPicker: () => void;
+    openDirectoryPicker: () => void;
+    isDragging: boolean;
+  }) => ReactNode;
 }
 
 /**
@@ -73,6 +95,109 @@ function useDragCounter(disabled: boolean) {
   return { isDragging, onDragEnter, onDragOver, onDragLeave, reset };
 }
 
+/**
+ * Minimal `FileSystemEntry` types — not in the DOM lib because the API
+ * lives behind `webkitGetAsEntry()` and is still considered proprietary.
+ * Walking these in-order rather than via a DataTransferItemList lets us
+ * preserve the relative path that the browser exposes per entry.
+ */
+interface FSEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  fullPath: string;
+}
+interface FSFileEntry extends FSEntry {
+  file(onSuccess: (f: File) => void, onError?: (e: unknown) => void): void;
+}
+interface FSDirectoryEntry extends FSEntry {
+  createReader(): {
+    readEntries(onSuccess: (entries: FSEntry[]) => void, onError?: (e: unknown) => void): void;
+  };
+}
+
+function readAllEntries(
+  reader: ReturnType<FSDirectoryEntry["createReader"]>,
+): Promise<FSEntry[]> {
+  return new Promise((resolve, reject) => {
+    const all: FSEntry[] = [];
+    const pump = () =>
+      reader.readEntries((batch) => {
+        if (batch.length === 0) {
+          resolve(all);
+        } else {
+          all.push(...batch);
+          pump();
+        }
+      }, reject);
+    pump();
+  });
+}
+
+async function walkEntry(
+  entry: FSEntry,
+  dropRootName: string,
+): Promise<UploadEntry[]> {
+  if (entry.isFile) {
+    const file: File = await new Promise((resolve, reject) =>
+      (entry as FSFileEntry).file(resolve, reject),
+    );
+    // `fullPath` starts with "/". The drop root itself is the user's
+    // mental "folder I dragged" — keep its name in the relative path so
+    // the server recreates it. For files dropped at the top level,
+    // this degrades to just the filename.
+    const full = entry.fullPath.replace(/^\/+/, "");
+    const relativePath = dropRootName
+      ? full
+      : file.name;
+    return [{ file, relativePath }];
+  }
+  if (entry.isDirectory) {
+    const reader = (entry as FSDirectoryEntry).createReader();
+    const children = await readAllEntries(reader);
+    const out: UploadEntry[] = [];
+    for (const c of children) {
+      out.push(...(await walkEntry(c, dropRootName || entry.name)));
+    }
+    return out;
+  }
+  return [];
+}
+
+async function collectFromDataTransfer(
+  dt: DataTransfer,
+): Promise<UploadEntry[]> {
+  const items = Array.from(dt.items);
+  const out: UploadEntry[] = [];
+  for (const item of items) {
+    if (item.kind !== "file") continue;
+    // `webkitGetAsEntry` is how browsers expose folder entries. Without
+    // it we only see the top-level dropped items (folders become empty
+    // File-like objects), which is why directory uploads need this path.
+    const maybeEntry = (item as unknown as { webkitGetAsEntry?: () => FSEntry | null })
+      .webkitGetAsEntry?.();
+    if (maybeEntry) {
+      out.push(...(await walkEntry(maybeEntry, "")));
+    } else {
+      const f = item.getAsFile();
+      if (f) out.push({ file: f, relativePath: f.name });
+    }
+  }
+  return out;
+}
+
+function collectFromFileList(list: FileList | null): UploadEntry[] {
+  if (!list) return [];
+  const out: UploadEntry[] = [];
+  for (const file of Array.from(list)) {
+    // Directory-mode picker sets `webkitRelativePath` on each File so
+    // we can reconstruct the tree client-side.
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+    out.push({ file, relativePath: rel && rel !== "" ? rel : file.name });
+  }
+  return out;
+}
+
 export function FileDropZone({
   onFiles,
   disabled = false,
@@ -81,34 +206,45 @@ export function FileDropZone({
   className,
   overlayLabel = "Drop to upload",
   quiet = false,
+  directory = false,
   children,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const dirInputRef = useRef<HTMLInputElement>(null);
   const { isDragging, onDragEnter, onDragOver, onDragLeave, reset } =
     useDragCounter(disabled);
 
   const handleFiles = useCallback(
-    (fileList: FileList | null) => {
-      if (!fileList || fileList.length === 0) return;
-      const files = Array.from(fileList);
-      onFiles(multiple ? files : files.slice(0, 1));
+    (entries: UploadEntry[]) => {
+      if (entries.length === 0) return;
+      onFiles(multiple ? entries : entries.slice(0, 1));
     },
     [onFiles, multiple],
   );
 
   const onDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       if (disabled) return;
       e.preventDefault();
       reset();
-      handleFiles(e.dataTransfer.files);
+      if (directory) {
+        const entries = await collectFromDataTransfer(e.dataTransfer);
+        handleFiles(entries);
+      } else {
+        handleFiles(collectFromFileList(e.dataTransfer.files));
+      }
     },
-    [disabled, handleFiles, reset],
+    [disabled, handleFiles, reset, directory],
   );
 
   const openPicker = useCallback(() => {
     if (disabled) return;
     inputRef.current?.click();
+  }, [disabled]);
+
+  const openDirectoryPicker = useCallback(() => {
+    if (disabled) return;
+    dirInputRef.current?.click();
   }, [disabled]);
 
   return (
@@ -121,7 +257,7 @@ export function FileDropZone({
       data-dropzone
       data-dragging={isDragging || undefined}
     >
-      {children({ openPicker, isDragging })}
+      {children({ openPicker, openDirectoryPicker, isDragging })}
       <input
         ref={inputRef}
         type="file"
@@ -129,12 +265,28 @@ export function FileDropZone({
         multiple={multiple}
         accept={accept}
         onChange={(e) => {
-          handleFiles(e.target.files);
+          handleFiles(collectFromFileList(e.target.files));
           // Reset so selecting the same file twice still fires onChange.
           e.target.value = "";
         }}
         data-testid="dropzone-file-input"
       />
+      {directory && (
+        <input
+          ref={dirInputRef}
+          type="file"
+          className="hidden"
+          multiple
+          // Non-standard attributes for directory-mode pickers; both are
+          // needed for cross-browser coverage.
+          {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+          onChange={(e) => {
+            handleFiles(collectFromFileList(e.target.files));
+            e.target.value = "";
+          }}
+          data-testid="dropzone-directory-input"
+        />
+      )}
       {isDragging && !quiet && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 backdrop-blur-[1px]">
           <div className="flex items-center gap-2 rounded-md bg-background/90 px-3 py-2 text-sm font-medium shadow-sm">

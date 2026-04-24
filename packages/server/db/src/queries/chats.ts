@@ -72,8 +72,29 @@ export async function insert(
 export async function updateMeta(
   db: Queryable,
   id: string,
-  data: { title?: string; goal?: string },
+  data: { title?: string; goal?: string; agentId?: string },
 ): Promise<Chat | null> {
+  if (data.agentId !== undefined) {
+    // Preserve the M3 invariant enforced by insert(): a chat's agent must
+    // be enabled in the chat's workspace. Look up the workspace via the
+    // chat row so callers don't have to pass it.
+    const { rows: chatRows } = await db.query(
+      "SELECT workspace_id FROM chats WHERE id = $1",
+      [id],
+    );
+    if (chatRows.length === 0) return null;
+    const workspaceId = chatRows[0].workspace_id as string;
+    const { rows: enabledRows } = await db.query(
+      "SELECT 1 FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+      [workspaceId, data.agentId],
+    );
+    if (enabledRows.length === 0) {
+      throw new ValidationError(
+        `Agent ${data.agentId} is not enabled in workspace ${workspaceId}`,
+      );
+    }
+  }
+
   const sets: string[] = [];
   const params: unknown[] = [];
   let idx = 1;
@@ -85,6 +106,10 @@ export async function updateMeta(
   if (data.goal !== undefined) {
     sets.push(`goal = $${idx++}`);
     params.push(data.goal);
+  }
+  if (data.agentId !== undefined) {
+    sets.push(`agent_id = $${idx++}`);
+    params.push(data.agentId);
   }
 
   sets.push(`updated_at = now()`);

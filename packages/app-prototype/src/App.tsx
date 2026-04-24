@@ -7,6 +7,7 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom'
+import { toast } from 'sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
@@ -26,6 +27,7 @@ import {
   useGetLibraryQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
+  usePostChatMessageMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
@@ -90,6 +92,7 @@ function AppInner() {
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
+  const selectedMessageId = searchParams.get('message')
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
@@ -103,15 +106,19 @@ function AppInner() {
   const readUpdateIds = new Set(readUpdateIdList)
   const readChatIds = new Set(readChatIdList)
 
-  const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: serverAgents } = useGetAgentsQuery()
 
   // If the wsId in the URL isn't one the user has, bounce to the first.
+  // Skip while the list is refetching — otherwise navigating to a
+  // just-created workspace races the invalidation refetch and we'd bounce
+  // back to workspaces[0] before the new id lands in the cache.
   useEffect(() => {
+    if (wsFetching) return
     if (!serverWorkspaces || serverWorkspaces.length === 0) return
     if (serverWorkspaces.some(w => w.id === activeWorkspaceId)) return
     navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
-  }, [serverWorkspaces, activeWorkspaceId, activeView, navigate])
+  }, [serverWorkspaces, wsFetching, activeWorkspaceId, activeView, navigate])
 
   // One-shot artifact-open animation hint: cleared once the artifact pane closes.
   useEffect(() => {
@@ -127,6 +134,7 @@ function AppInner() {
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
+  const [postMessageMutation] = usePostChatMessageMutation()
 
   const { data: runsResp } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, scheduled: true },
@@ -168,6 +176,8 @@ function AppInner() {
       chat?: string | null
       artifact?: string | null
       item?: string | null
+      folder?: string | null
+      message?: string | null
     } = {},
   ) => {
     const ws = opts.wsId ?? activeWorkspaceId
@@ -196,12 +206,6 @@ function AppInner() {
     goTo({ wsId: id, view })
   }, [goTo])
 
-  const handleArtifactAdded = useCallback((_artifact: Artifact) => {
-    // Compose-generated artifacts land server-side via the message POST;
-    // we wait for the library refetch (triggered by cache invalidation or
-    // the `artifact.created` WS event) to pick them up. No local cache.
-  }, [])
-
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat') => {
     dispatch(setArtifactTransitionSource(source ?? null))
     goTo({ artifact: artifact.id })
@@ -220,15 +224,25 @@ function AppInner() {
     goTo({ chat: chat.id })
   }, [dispatch, goTo])
 
-  const handleNewChatFirstMessage = useCallback((message: string) => {
-    if (!activeWorkspaceId || !serverAgents?.[0]) return
+  const handleNewChatFirstMessage = useCallback(async (message: string, agentId?: string) => {
+    if (!activeWorkspaceId) return
+    const pickedAgentId = agentId ?? serverAgents?.[0]?.id
+    if (!pickedAgentId) return
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
-    void createChatMutation({
-      workspaceId: activeWorkspaceId,
-      agentId: serverAgents[0].id,
-      title,
-    })
-  }, [activeWorkspaceId, serverAgents, createChatMutation])
+    try {
+      const newChat = await createChatMutation({
+        workspaceId: activeWorkspaceId,
+        agentId: pickedAgentId,
+        title,
+      }).unwrap()
+      goTo({ chat: newChat.id })
+      await postMessageMutation({ chatId: newChat.id, content: message }).unwrap()
+    } catch (err) {
+      toast.error('Failed to start chat', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }, [activeWorkspaceId, serverAgents, createChatMutation, postMessageMutation, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
@@ -244,7 +258,9 @@ function AppInner() {
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },
   )
-  const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
+  const libraryItems: ContextItem[] = activeWorkspaceId
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId))
+    : []
   const artifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
 
   useEffect(() => {
@@ -323,6 +339,7 @@ function AppInner() {
             onArtifactClick={(artifact) => {
               goTo({ view: 'desk', artifact: artifact.id })
             }}
+            onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
           />
         )}
 
@@ -334,10 +351,10 @@ function AppInner() {
             onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat')}
             onDeleteChat={isNewChat ? () => goTo({ chat: null }) : handleDeleteChat}
             onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
-            onArtifactAdded={isNewChat ? handleArtifactAdded : undefined}
             showNewBadge={!isNewChat && chatShowNewBadge}
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
+            highlightMessageId={selectedMessageId ?? undefined}
           />
         )}
 
