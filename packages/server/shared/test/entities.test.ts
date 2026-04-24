@@ -178,7 +178,7 @@ describe("MessageSchema execution metadata", () => {
 
   it("rejects invalid state", () => {
     expect(() =>
-      MessageSchema.parse({ ...base, state: "paused" }),
+      MessageSchema.parse({ ...base, state: "bogus" }),
     ).toThrow();
   });
 

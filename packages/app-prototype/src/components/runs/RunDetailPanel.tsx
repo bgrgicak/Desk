@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   X,
   Loader2,
@@ -8,15 +9,16 @@ import {
   ChevronDown,
   ChevronRight,
   Calendar,
+  Clock,
+  MessageSquare,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
-import { ChatMessage } from '@/components/compose/ChatMessage'
-import { ChatInput } from '@/components/compose/ChatInput'
-import { StatusIndicator } from '@/components/compose/StatusIndicator'
-import { useMockChat } from '@/hooks/use-mock-chat'
 import type { Run, RunOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
+import { usePatchMessageMutation } from '@/store/api'
+import { buildPath } from '@/router/nav'
 
 type PanelTab = 'chat' | 'details'
 
@@ -25,15 +27,22 @@ interface RunDetailPanelProps {
   onCollapse: () => void
 }
 
-const STATUS_COLORS: Record<Run['status'], string> = {
-  active:    'bg-blue-500',
-  completed: 'bg-emerald-500',
-  paused:    'bg-amber-500',
-  failed:    'bg-red-500',
+// RTK Query rejects with `{ status, data }`, not an Error. The server
+// writes `{ code, message }` into `data` (see app.ts sendJson), so pull
+// the readable message out of there first.
+function describeApiError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { data?: { message?: unknown }; error?: unknown }
+    if (typeof e.data?.message === 'string') return e.data.message
+    if (typeof e.error === 'string') return e.error
+  }
+  if (err instanceof Error) return err.message
+  return 'Unknown error'
 }
 
 const STATUS_LABELS: Record<Run['status'], string> = {
   active:    'Active',
+  scheduled: 'Scheduled',
   completed: 'Completed',
   paused:    'Paused',
   failed:    'Failed',
@@ -43,82 +52,61 @@ function OccurrenceStatusIcon({ status }: { status: RunOccurrence['status'] }) {
   switch (status) {
     case 'active':
       return <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
+    case 'scheduled':
+      return <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
     case 'completed':
       return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
     case 'failed':
       return <AlertCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+    case 'paused':
+      return <PauseCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
   }
 }
 
-const INITIAL_MESSAGES_BY_RUN: Record<string, Array<{ role: 'user' | 'assistant'; content: string; msOffset: number }>> = {
-  'run-1': [
-    { role: 'user', content: 'Set up a daily email digest at 8 am that reads my inbox and sorts messages by priority.', msOffset: -3600000 },
-    { role: 'assistant', content: "I'll set that up for you. Every weekday at 8 am I'll scan your inbox, categorize emails by urgency, and give you a prioritised summary so you can tackle the most important things first.", msOffset: -3598000 },
-    { role: 'assistant', content: "The run is now scheduled and will start tomorrow morning. You can adjust the priority rules anytime by sending me a message here.", msOffset: -3597000 },
-  ],
-  'run-2': [
-    { role: 'user', content: 'Every Thursday morning, summarise all the updates the team posted that week across Slack and Linear.', msOffset: -7200000 },
-    { role: 'assistant', content: "Great idea. I'll pull together everything from your connected Slack channels and Linear project, then generate a concise weekly summary every Thursday at 7 am.", msOffset: -7198000 },
-    { role: 'user', content: 'Include a section on blockers if any are mentioned.', msOffset: -7100000 },
-    { role: 'assistant', content: "Done — I'll add a 'Blockers & risks' section whenever team members mention anything stuck or at risk. The first run is set for this Thursday.", msOffset: -7098000 },
-  ],
-  'run-3': [
-    { role: 'user', content: 'Keep my calendar synced with Google Calendar every day at 6 am.', msOffset: -86400000 },
-    { role: 'assistant', content: "I'll run a calendar sync every morning at 6 am, pulling in new events and resolving any conflicts. The first sync will happen tomorrow.", msOffset: -86398000 },
-  ],
-  'run-4': [
-    { role: 'user', content: "Every Wednesday evening, compile my expense report from this week's receipts and flag anything missing.", msOffset: -172800000 },
-    { role: 'assistant', content: "I'll check your connected email and cloud storage for receipts, compile them into a report, and flag any transactions without matching receipts. Running every Wednesday at 10 pm.", msOffset: -172798000 },
-  ],
-  'run-5': [
-    { role: 'user', content: 'Deploy the latest changes to the landing page.', msOffset: -10000000 },
-    { role: 'assistant', content: "I'll trigger the build and deploy pipeline for the landing page now.", msOffset: -9999000 },
-    { role: 'assistant', content: "Deployment complete. All changes are live. Build time was 4 minutes 32 seconds.", msOffset: -9990000 },
-  ],
-  'run-6': [
-    { role: 'user', content: 'Migrate all records from the legacy PostgreSQL database to the new schema. This will take a couple of days.', msOffset: -200000000 },
-    { role: 'assistant', content: "Understood. I'll run the migration in batches to avoid downtime, validate each batch before committing, and log any rows that fail validation for manual review.", msOffset: -199998000 },
-    { role: 'user', content: 'Pause if the error rate goes above 0.1%', msOffset: -199900000 },
-    { role: 'assistant', content: "Set. I'll monitor the error rate continuously and pause automatically if it exceeds 0.1%. You'll get a notification here if that happens.", msOffset: -199898000 },
-  ],
-}
-
 export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState<PanelTab>('details')
   const [historyOpen, setHistoryOpen] = useState(true)
   const [showAllHistory, setShowAllHistory] = useState(false)
-  const [isPaused, setIsPaused] = useState(run.status === 'paused')
+  const navigate = useNavigate()
+  const { wsId = '' } = useParams<{ wsId: string }>()
 
-  const baseMessages = (INITIAL_MESSAGES_BY_RUN[run.id] ?? []).map((m, i) => ({
-    id: `${run.id}-init-${i}`,
-    role: m.role,
-    content: m.content,
-    timestamp: new Date(Date.now() + m.msOffset),
-  }))
-
-  const { messages, isTyping, sendMessage } = useMockChat({
-    initialMessages: baseMessages,
-    mode: 'conversation',
-  })
+  const [patchMessage, patchState] = usePatchMessageMutation()
 
   useEffect(() => {
-    if (scrollRef.current && activeTab === 'chat') {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages, activeTab])
-
-  // Reset paused state when run changes
-  useEffect(() => {
-    setIsPaused(run.status === 'paused')
     setShowAllHistory(false)
     setActiveTab('details')
-  }, [run.id, run.status])
+  }, [run.id])
 
-  const history = run.history ?? []
+  // "History" is past-only — filter out the synthesized upcoming/paused
+  // preview occurrences that the calendar uses to place scheduled runs
+  // on their future date.
+  const history = (run.history ?? []).filter(
+    occ => occ.status !== 'scheduled' && occ.status !== 'paused',
+  )
   const visibleHistory = showAllHistory ? history : history.slice(0, 5)
 
-  const canPauseResume = run.status === 'active' || run.status === 'paused'
+  async function transition(nextState: 'paused' | 'pending' | 'cancelled') {
+    if (!run.chatId || !run.messageId) {
+      toast.error('This run is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: run.chatId,
+        messageId: run.messageId,
+        patch: { state: nextState },
+      }).unwrap()
+    } catch (err) {
+      toast.error('Action failed', { description: describeApiError(err) })
+    }
+  }
+
+  const openInChat = () => {
+    if (!run.chatId || !wsId) return
+    navigate(buildPath(wsId, 'desk', { chat: run.chatId, message: run.messageId ?? null }))
+  }
+
+  const busy = patchState.isLoading
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-background">
@@ -150,32 +138,29 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
         </Button>
       </div>
 
-      {/* Chat tab */}
+      {/* Chat tab — deep-link to originating conversation. The scheduled
+          trigger message is usually filtered from the chat timeline, so
+          the tab doesn't try to render its own transcript. */}
       {activeTab === 'chat' && (
-        <>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto">
-            <div className="space-y-6 p-4">
-              {messages.map((msg, i) => (
-                <ChatMessage
-                  key={msg.id}
-                  message={msg}
-                  agentModel={run.agentName}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                />
-              ))}
-              <StatusIndicator text={null} isTyping={isTyping} />
-            </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="rounded-lg border bg-muted/20 p-4">
+            <p className="text-sm text-foreground font-medium">Originating chat</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              This run was created in a chat. Open it to see the full conversation and jump to the scheduled message.
+            </p>
+            <Button
+              className="mt-3"
+              variant="outline"
+              size="sm"
+              data-testid="open-in-chat"
+              disabled={!run.chatId}
+              onClick={openInChat}
+            >
+              <MessageSquare className="mr-2 h-3.5 w-3.5" />
+              Open in chat
+            </Button>
           </div>
-          <div className="border-t p-3 shrink-0">
-            <ChatInput
-              onSend={(msg) => sendMessage(msg)}
-              disabled={isTyping}
-              placeholder="Ask about this run..."
-              compact={true}
-              showGoalPicker={false}
-            />
-          </div>
-        </>
+        </div>
       )}
 
       {/* Details tab */}
@@ -191,8 +176,19 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                 <AlertTitle>{STATUS_LABELS['active']}</AlertTitle>
                 {run.statusText && <AlertDescription>{run.statusText}</AlertDescription>}
                 <div className="col-start-2 flex gap-2 mt-3">
-                  <Button variant="outline" size="sm" onClick={() => setIsPaused(v => !v)}>Pause</Button>
-                  <Button variant="outline" size="sm">Cancel</Button>
+                  <Button variant="outline" size="sm" data-testid="run-pause" disabled={busy} onClick={() => transition('paused')}>Pause</Button>
+                  <Button variant="outline" size="sm" data-testid="run-cancel" disabled={busy} onClick={() => transition('cancelled')}>Cancel</Button>
+                </div>
+              </Alert>
+            )}
+            {run.status === 'scheduled' && (
+              <Alert>
+                <Clock className="text-muted-foreground" />
+                <AlertTitle>{STATUS_LABELS['scheduled']}</AlertTitle>
+                {run.statusText && <AlertDescription>{run.statusText}</AlertDescription>}
+                <div className="col-start-2 flex gap-2 mt-3">
+                  <Button variant="outline" size="sm" data-testid="run-pause" disabled={busy} onClick={() => transition('paused')}>Pause</Button>
+                  <Button variant="outline" size="sm" data-testid="run-cancel" disabled={busy} onClick={() => transition('cancelled')}>Cancel</Button>
                 </div>
               </Alert>
             )}
@@ -201,9 +197,6 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                 <CheckCircle2 className="text-emerald-500" />
                 <AlertTitle>{STATUS_LABELS['completed']}</AlertTitle>
                 {run.statusText && <AlertDescription>{run.statusText}</AlertDescription>}
-                <div className="col-start-2 mt-3">
-                  <Button variant="outline" size="sm">Cancel</Button>
-                </div>
               </Alert>
             )}
             {run.status === 'paused' && (
@@ -212,8 +205,8 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                 <AlertTitle>{STATUS_LABELS['paused']}</AlertTitle>
                 {run.statusText && <AlertDescription className="text-amber-700 dark:text-amber-300">{run.statusText}</AlertDescription>}
                 <div className="col-start-2 flex gap-2 mt-3">
-                  <Button variant="outline" size="sm" onClick={() => setIsPaused(v => !v)}>Resume</Button>
-                  <Button variant="outline" size="sm">Cancel</Button>
+                  <Button variant="outline" size="sm" data-testid="run-resume" disabled={busy} onClick={() => transition('pending')}>Resume</Button>
+                  <Button variant="outline" size="sm" data-testid="run-cancel" disabled={busy} onClick={() => transition('cancelled')}>Cancel</Button>
                 </div>
               </Alert>
             )}
@@ -222,9 +215,6 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
                 <AlertCircle />
                 <AlertTitle>{STATUS_LABELS['failed']}</AlertTitle>
                 {run.statusText && <AlertDescription>{run.statusText}</AlertDescription>}
-                <div className="col-start-2 mt-3">
-                  <Button variant="outline" size="sm">Cancel</Button>
-                </div>
               </Alert>
             )}
           </div>
@@ -252,10 +242,12 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
               </div>
             )}
 
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Last run</span>
-              <span className="text-xs text-foreground">{getRelativeTime(run.startedAt)}</span>
-            </div>
+            {run.hasRealStartedAt && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Last run</span>
+                <span className="text-xs text-foreground">{getRelativeTime(run.startedAt)}</span>
+              </div>
+            )}
 
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Agent</span>
@@ -278,7 +270,7 @@ export function RunDetailPanel({ run, onCollapse }: RunDetailPanelProps) {
             {historyOpen && (
               <div className="pb-2">
                 {history.length === 0 ? (
-                  <p className="px-4 py-2 text-xs text-muted-foreground">No history yet.</p>
+                  <p className="px-4 py-2 text-xs text-muted-foreground" data-testid="run-history-empty">No history yet.</p>
                 ) : (
                   <>
                     {visibleHistory.map(occ => (

@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronLeft,
@@ -23,7 +23,7 @@ import type { Run, RunOccurrence } from '@/data/ui-types'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ViewMode   = 'month' | 'week' | 'list'
-type StatusFilter = 'all' | 'active' | 'completed' | 'cancelled' | 'failed'
+type StatusFilter = 'all' | 'active' | 'scheduled' | 'completed' | 'cancelled' | 'failed'
 
 interface RunsPageProps {
   runs: Run[]
@@ -33,6 +33,7 @@ interface RunsPageProps {
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'all',       label: 'All'       },
   { value: 'active',    label: 'Active'    },
+  { value: 'scheduled', label: 'Scheduled' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'failed',    label: 'Failed'    },
@@ -265,8 +266,8 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
   const todayDate = useMemo(() => dateOnly(today), [today])
 
   const allOccs = runs.flatMap(run =>
-    (run.history ?? []).map(occ => ({ run, occ, date: dateOnly(occ.startedAt) }))
-  ).sort((a, b) => b.date.getTime() - a.date.getTime())
+    (run.history ?? []).map(occ => ({ run, occ, date: dateOnly(occ.startedAt), ts: occ.startedAt.getTime() }))
+  ).sort((a, b) => a.ts - b.ts)
 
   const getSection = (date: Date): string => {
     const diff = Math.round((todayDate.getTime() - date.getTime()) / 86400000)
@@ -276,7 +277,7 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
     return 'Earlier this month'
   }
 
-  const sectionOrder = ['Today', 'This week', 'Earlier this month', 'Upcoming']
+  const sectionOrder = ['Earlier this month', 'This week', 'Today', 'Upcoming']
   const grouped = new Map<string, typeof allOccs>()
   for (const item of allOccs) {
     const s = getSection(item.date)
@@ -299,6 +300,7 @@ function ListView({ runs, selectedRunId, onSelectRun }: {
                   return (
                     <button
                       key={`${run.id}-${occ.id}`}
+                      data-testid={`run-row-${run.id}`}
                       onClick={() => onSelectRun(run)}
                       className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors text-left ${selectedRunId === run.id ? 'bg-muted/50' : ''}`}
                     >
@@ -338,6 +340,18 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
   const [searchQuery, setSearchQuery]     = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // Keep the selected run in sync with the underlying list: after a
+  // lifecycle PATCH (pause/resume/cancel) invalidates the messages
+  // query, the incoming `runs` array carries the updated row. Without
+  // this, the detail panel keeps showing the stale snapshot taken at
+  // click time and its action buttons stop matching the real status.
+  useEffect(() => {
+    if (!selectedRun) return
+    const fresh = runs.find(r => r.id === selectedRun.id)
+    if (!fresh) return
+    if (fresh !== selectedRun) setSelectedRun(fresh)
+  }, [runs, selectedRun])
+
   const filteredRuns = useMemo(() => {
     let result = runs
     if (searchQuery.trim()) {
@@ -347,6 +361,7 @@ export function RunsPage({ runs, onCompose }: RunsPageProps) {
     if (statusFilter !== 'all') {
       result = result.filter(r => {
         if (statusFilter === 'active')    return r.status === 'active'
+        if (statusFilter === 'scheduled') return r.status === 'scheduled'
         if (statusFilter === 'completed') return r.status === 'completed'
         if (statusFilter === 'cancelled') return r.status === 'paused'
         if (statusFilter === 'failed')    return r.status === 'failed'

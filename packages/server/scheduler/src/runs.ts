@@ -168,8 +168,17 @@ export function createRunManager(opts: RunManagerOptions) {
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
       const inner = userMsg?.content as { type?: string; text?: string } | undefined;
-      if (inner?.type === "text" && typeof inner.text === "string") return inner.text;
-      return "";
+      const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
+      // Surface any files the user attached alongside this message by
+      // basename + full sandbox path so the agent doesn't have to scan
+      // the attachments directory to notice them.
+      const attachments = userMsg?.attachments ?? [];
+      if (attachments.length === 0) return text;
+      const hint = attachments
+        .map((a) => `- ${a.name} (~/.chats/${userMsg!.chatId}/attachments/${a.name})`)
+        .join("\n");
+      const header = "The user attached the following files to this message:";
+      return text ? `${text}\n\n${header}\n${hint}` : `${header}\n${hint}`;
     }
     return JSON.stringify(content);
   }
@@ -322,7 +331,17 @@ export function createRunManager(opts: RunManagerOptions) {
           content,
           parentId: messageId,
           agentId,
+          model: agentFileInput.model,
         });
+        // Note-kind output: also write the body to the notes/ dir so the
+        // agent (and any other filesystem consumer) can see the latest
+        // note alongside its own files. Best-effort — the DB row is the
+        // source of truth.
+        if (content.type === "note") {
+          const { materializeNote } = await import("@desk/storage");
+          const home = process.env.DESK_HOME ?? "/opt/desk";
+          await materializeNote(home, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+        }
         emit({ type: "message.appended", payload: child });
         return { fired: true, childIds: [child.id] };
       }
@@ -414,10 +433,103 @@ export function createRunManager(opts: RunManagerOptions) {
     if (msg) emit({ type: "message.updated", payload: msg });
   }
 
+  /**
+   * Pauses a pending scheduled message: removes its at/cron entry from the
+   * OS scheduler, clears scheduler_ref, and transitions state to 'paused'.
+   * The message row is kept so the schedule's metadata (executeAt / cron)
+   * can be restored by resumeMessage. No-op if the message isn't currently
+   * pending or is missing.
+   */
+  async function pauseMessage(messageId: string): Promise<Message | null> {
+    const msg = await queries.messages.findById(pool, messageId);
+    if (!msg) return null;
+    if (msg.state !== "pending") return msg;
+    const ref = msg.schedulerRef;
+    if (ref) {
+      try {
+        if (ref.kind === "at") await adapter.removeAt(ref.id);
+        else if (ref.kind === "cron") await adapter.removeCron(ref.id);
+      } catch {
+        // Best-effort: the OS-level entry may already be gone.
+      }
+    }
+    const updated = await queries.messages.updateMessage(pool, messageId, {
+      state: "paused",
+      schedulerRef: null,
+    });
+    if (updated) emit({ type: "message.updated", payload: updated });
+    return updated;
+  }
+
+  /**
+   * Resumes a paused scheduled message: re-installs the at/cron entry
+   * using the message's stored executeAt/cron, writes the new
+   * scheduler_ref back, and transitions state to 'pending'. For an
+   * overdue at-message, the new at-job uses `now` so it fires
+   * immediately on resume. No-op if the message isn't paused.
+   */
+  async function resumeMessage(messageId: string): Promise<Message | null> {
+    const msg = await queries.messages.findById(pool, messageId);
+    if (!msg) return null;
+    if (msg.state !== "paused") return msg;
+    const cmd = buildMessageFireCmd(messageId);
+    let newRef: { kind: "at" | "cron"; id: string } | null = null;
+    if (msg.cron) {
+      // One cron job per message — use the message id as the stable job id
+      // so re-pauses/re-resumes don't leak stray crontab lines.
+      const jobId = messageId;
+      await adapter.installCron(jobId, msg.cron, cmd);
+      newRef = { kind: "cron", id: jobId };
+    } else if (msg.executeAt) {
+      const whenMs = new Date(msg.executeAt).getTime();
+      const atTime = whenMs > Date.now()
+        ? new Date(whenMs).toISOString()
+        : "now";
+      const atJobId = await adapter.scheduleAt(cmd, atTime);
+      newRef = { kind: "at", id: atJobId };
+    }
+    const updated = await queries.messages.updateMessage(pool, messageId, {
+      state: "pending",
+      schedulerRef: newRef ?? undefined,
+    });
+    if (updated) emit({ type: "message.updated", payload: updated });
+    return updated;
+  }
+
+  /**
+   * Cancels a pending scheduled message without deleting it: removes the
+   * at/cron entry, clears scheduler_ref, and transitions state to
+   * 'cancelled'. Used by the PATCH path so the row stays visible in the
+   * chat timeline. For already-running messages this is a no-op at the
+   * scheduler level but still flips the DB row.
+   */
+  async function cancelScheduledMessage(messageId: string): Promise<Message | null> {
+    const msg = await queries.messages.findById(pool, messageId);
+    if (!msg) return null;
+    const ref = msg.schedulerRef;
+    if (ref) {
+      try {
+        if (ref.kind === "at") await adapter.removeAt(ref.id);
+        else if (ref.kind === "cron") await adapter.removeCron(ref.id);
+      } catch {
+        // Best-effort.
+      }
+    }
+    const updated = await queries.messages.updateMessage(pool, messageId, {
+      state: "cancelled",
+      schedulerRef: null,
+    });
+    if (updated) emit({ type: "message.updated", payload: updated });
+    return updated;
+  }
+
   return {
     fireMessage,
     cancelMessage,
     cancelRun,
+    pauseMessage,
+    resumeMessage,
+    cancelScheduledMessage,
     scheduleAiNote,
     cancelAiNote,
     cancelAiNoteForChat,

@@ -149,10 +149,20 @@ export interface Run {
   id: string
   name: string
   agentName: string
-  status: 'active' | 'completed' | 'paused' | 'failed'
+  status: 'active' | 'scheduled' | 'completed' | 'paused' | 'failed'
   statusText: string
+  /** startedAt falls back to createdAt for scheduled-but-never-fired runs
+   * so the Run still has a sortable timestamp. Use `hasRealStartedAt` to
+   * decide whether "Last run" should display this value. */
   startedAt: Date
+  hasRealStartedAt?: boolean
   completedAt?: Date
+  /** Chat the backing message lives in — used to deep-link from the Run
+   * panel's Chat tab to the originating conversation. */
+  chatId?: string
+  /** Server message id for lifecycle PATCHes (pause/resume/cancel) and
+   * for scrolling the chat view to the originating message. */
+  messageId?: string
   artifactIds: string[]
   scheduled?: boolean
   nextRun?: Date

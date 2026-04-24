@@ -164,7 +164,7 @@ export const AttachmentRefSchema = z.object({
 });
 export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
 
-export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
+export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled", "paused"] as const;
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
 export const SchedulerRefSchema = z.object({
