@@ -29,7 +29,7 @@ import {
   useUploadLibraryFileMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
-import type { ServerMessage } from '@/store/types'
+import type { AgentLogEntry, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone } from '@/components/upload/FileDropZone'
 
@@ -71,12 +71,33 @@ const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
 }
 
+function renderableTextFromLog(log: AgentLogEntry[]): string {
+  const parts: string[] = []
+  let sawEvent = false
+  for (const e of log) {
+    if (e.kind === 'event') {
+      sawEvent = true
+      if (e.event.type === 'text') {
+        const t = e.event.part?.text
+        if (typeof t === 'string') parts.push(t)
+      }
+    }
+  }
+  if (sawEvent) return parts.join('').trim()
+  return log
+    .filter((e) => e.kind === 'unparsed')
+    .map((e) => (e as { line: string }).line)
+    .join('\n')
+    .trim()
+}
+
 function toUiChatMessage(m: ServerMessage): ChatMessageType {
   const role: ChatMessageType['role'] = m.role === 'agent' ? 'assistant' : 'user'
   let content = ''
   if (m.content.type === 'text') content = m.content.text
   else if (m.content.type === 'note') content = m.content.body
   else if (m.content.type === 'artifactRef') content = `(artifact) ${m.content.name ?? m.content.path}`
+  else if (m.content.type === 'events') content = renderableTextFromLog(m.content.log)
   else content = `(${m.content.type})`
   return {
     id: m.id,

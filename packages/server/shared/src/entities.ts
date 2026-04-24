@@ -78,18 +78,31 @@ export const MessageContentArtifactRefSchema = z.object({
   mime: z.string().optional(),
 });
 
-/** A single event from the OpenCode JSON event stream. */
-export const OpenCodeEventSchema = z.object({
+/** A single event from the agent's JSON event stream. */
+export const AgentEventSchema = z.object({
   type: z.string(),
   timestamp: z.number().optional(),
   sessionID: z.string().optional(),
   part: z.record(z.unknown()).optional(),
 }).passthrough();
-export type OpenCodeEvent = z.infer<typeof OpenCodeEventSchema>;
+export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+/**
+ * Tagged entry from a single agent run's log. `event` wraps a validated
+ * JSON event emitted by the agent on stdout; `stderr` is a raw stderr
+ * line; `unparsed` is a stdout line that didn't parse as JSON (kept so
+ * nothing is silently dropped).
+ */
+export const AgentLogEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), event: AgentEventSchema }),
+  z.object({ kind: z.literal("stderr"), line: z.string() }),
+  z.object({ kind: z.literal("unparsed"), line: z.string() }),
+]);
+export type AgentLogEntry = z.infer<typeof AgentLogEntrySchema>;
 
 export const MessageContentEventsSchema = z.object({
   type: z.literal("events"),
-  events: z.array(OpenCodeEventSchema),
+  log: z.array(AgentLogEntrySchema),
 });
 
 /**

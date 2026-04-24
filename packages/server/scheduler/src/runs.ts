@@ -4,6 +4,8 @@ import * as path from "node:path";
 import pg from "pg";
 import {
   generateId,
+  AgentEventSchema,
+  type AgentLogEntry,
   type Message,
   type WsEvent,
 } from "@desk/shared";
@@ -88,19 +90,73 @@ export function createRunManager(opts: RunManagerOptions) {
     return dir;
   }
 
-  async function readLogFileBody(p: string): Promise<string> {
+  /**
+   * Parses a per-message log file (`{kind}\t{payload}\n` per onLog call)
+   * into the tagged AgentLogEntry stream used by `events`-content
+   * messages. Each payload may itself contain embedded newlines (a single
+   * stdout write can cover multiple JSON events), so we split inside
+   * each payload before parsing.
+   */
+  async function readLogEntries(p: string): Promise<AgentLogEntry[]> {
+    let buf: string;
     try {
-      const buf = await fsp.readFile(p, "utf8");
-      return buf
-        .split("\n")
-        .map((line) => {
-          const tab = line.indexOf("\t");
-          return tab > 0 ? line.slice(tab + 1) : line;
-        })
-        .join("\n");
+      buf = await fsp.readFile(p, "utf8");
     } catch {
-      return "";
+      return [];
     }
+    const entries: AgentLogEntry[] = [];
+    for (const rawLine of buf.split("\n")) {
+      if (!rawLine) continue;
+      const tab = rawLine.indexOf("\t");
+      if (tab <= 0) continue;
+      const kind = rawLine.slice(0, tab);
+      const payload = rawLine.slice(tab + 1);
+      for (const line of payload.split("\n")) {
+        if (line === "") continue;
+        if (kind === "stderr") {
+          entries.push({ kind: "stderr", line });
+          continue;
+        }
+        // stdout / event: attempt to parse as JSON and validate.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          entries.push({ kind: "unparsed", line });
+          continue;
+        }
+        const validated = AgentEventSchema.safeParse(parsed);
+        if (validated.success) {
+          entries.push({ kind: "event", event: validated.data });
+        } else {
+          entries.push({ kind: "unparsed", line });
+        }
+      }
+    }
+    return entries;
+  }
+
+  /** Concatenates text from `text`-type agent events; falls back to any
+   * `unparsed` lines so plain-string test drivers still produce output. */
+  function deriveTextFromLog(entries: AgentLogEntry[]): string {
+    const parts: string[] = [];
+    let sawEvent = false;
+    for (const e of entries) {
+      if (e.kind === "event") {
+        sawEvent = true;
+        if (e.event.type === "text") {
+          const t = e.event.part?.text;
+          if (typeof t === "string") parts.push(t);
+        }
+      }
+    }
+    if (sawEvent) return parts.join("").trim();
+    // No structured events — fall back to unparsed stdout lines.
+    return entries
+      .filter((e) => e.kind === "unparsed")
+      .map((e) => (e as { line: string }).line)
+      .join("\n")
+      .trim();
   }
 
   async function derivePromptFromContent(content: unknown): Promise<string> {
@@ -123,10 +179,17 @@ export function createRunManager(opts: RunManagerOptions) {
     return c?.type === "ai_note_request" ? "note" : "text";
   }
 
-  function buildOutputContent(kind: "note" | "text", body: string): Message["content"] {
-    return kind === "note"
-      ? { type: "note", body }
-      : { type: "text", text: body };
+  function buildOutputContent(
+    kind: "note" | "text",
+    entries: AgentLogEntry[],
+  ): Message["content"] | null {
+    if (kind === "note") {
+      const body = deriveTextFromLog(entries);
+      if (!body) return null;
+      return { type: "note", body };
+    }
+    if (entries.length === 0) return null;
+    return { type: "events", log: entries };
   }
 
   /**
@@ -156,7 +219,14 @@ export function createRunManager(opts: RunManagerOptions) {
     const logStream = fs.createWriteStream(logFile, { flags: "a" });
 
     const onLog = async (evt: LogEvent) => {
-      logStream.write(`${evt.kind}\t${evt.payload}\n`);
+      // Split on internal newlines so each log file line is exactly one
+      // `kind\tpayload\n` record. A single onLog call may carry several
+      // events concatenated by the driver (a stdout chunk covering
+      // multiple lines); without splitting, the \n framing breaks and
+      // readLogEntries can't associate continuation lines with a kind.
+      for (const line of evt.payload.split("\n")) {
+        logStream.write(`${evt.kind}\t${line}\n`);
+      }
       emit({
         type: "message.log_appended",
         payload: { messageId, kind: evt.kind, line: evt.payload },
@@ -208,7 +278,14 @@ export function createRunManager(opts: RunManagerOptions) {
         });
       }
 
-      logStream.end();
+      // Wait for pending writes to flush before reading the file back.
+      // Each onLog call now splits multi-line payloads into multiple
+      // writes, so relying on end()'s synchronous return lets readLogEntries
+      // race ahead and see only the first flushed line.
+      await new Promise<void>((resolve) => {
+        logStream.once("finish", resolve);
+        logStream.end();
+      });
       const terminal = result.exitCode === 0 ? "succeeded" : "failed";
       await queries.messages.finalizeExecution(pool, messageId, terminal);
       emit({
@@ -216,8 +293,9 @@ export function createRunManager(opts: RunManagerOptions) {
         payload: (await queries.messages.findById(pool, messageId))!,
       });
 
-      const body = (await readLogFileBody(logFile)).trim();
-      if (body) {
+      const entries = await readLogEntries(logFile);
+      const content = buildOutputContent(outputKind, entries);
+      if (content) {
         // When the run produced a new note, snapshot the previous note
         // (if any) so a bad rewrite doesn't silently erase user edits.
         if (outputKind === "note") {
@@ -241,7 +319,7 @@ export function createRunManager(opts: RunManagerOptions) {
           id: generateId("message"),
           chatId: msg.chatId,
           role: "agent",
-          content: buildOutputContent(outputKind, body),
+          content,
           parentId: messageId,
           agentId,
         });

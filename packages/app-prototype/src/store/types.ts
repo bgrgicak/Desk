@@ -12,12 +12,25 @@ export type MessageState =
   | "failed"
   | "cancelled";
 
+export interface AgentEvent {
+  type: string;
+  timestamp?: number;
+  sessionID?: string;
+  part?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export type AgentLogEntry =
+  | { kind: "event"; event: AgentEvent }
+  | { kind: "stderr"; line: string }
+  | { kind: "unparsed"; line: string };
+
 export type MessageContent =
   | { type: "text"; text: string }
   | { type: "toolCall"; toolName: string; args: Record<string, unknown> }
   | { type: "toolResult"; toolName: string; result: unknown }
   | { type: "artifactRef"; path: string; name?: string; mime?: string }
-  | { type: "events"; events: unknown[] }
+  | { type: "events"; log: AgentLogEntry[] }
   | { type: "note"; body: string }
   | { type: "ai_note_request" }
   | { type: "agent_turn"; userMessageId: string };

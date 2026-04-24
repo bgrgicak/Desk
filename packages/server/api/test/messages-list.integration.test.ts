@@ -283,7 +283,7 @@ beforeAll(async () => {
   await insertMessage(alpha, {
     chatId: alpha.chatA2,
     role: "agent",
-    content: { type: "events", events: [] },
+    content: { type: "events", log: [] },
     state: "failed",
   });
   //   8. agent toolResult cancelled (unscheduled)

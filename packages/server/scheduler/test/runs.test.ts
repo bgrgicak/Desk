@@ -107,7 +107,7 @@ async function insertPendingMessage(content: unknown): Promise<string> {
 }
 
 describe("fireMessage", () => {
-  it("claims pending → running, runs the agent, produces a text child, succeeds", async () => {
+  it("claims pending → running, runs the agent, produces an events child, succeeds", async () => {
     const events: WsEvent[] = [];
     const fakeExec = async (
       messageId: string,
@@ -115,7 +115,10 @@ describe("fireMessage", () => {
       _prompt: string,
       onLog: (evt: LogEvent) => void,
     ) => {
-      onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "hello from agent" });
+      onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "step_start", sessionID: "s1" }) });
+      onLog({ runId: messageId, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "hello from agent" } }) });
+      onLog({ runId: messageId, seq: 2, kind: "stderr", payload: "diagnostic noise" });
+      onLog({ runId: messageId, seq: 3, kind: "stdout", payload: JSON.stringify({ type: "step_finish" }) });
       return { exitCode: 0 };
     };
 
@@ -137,7 +140,17 @@ describe("fireMessage", () => {
     expect(parent?.startedAt).toBeDefined();
     expect(parent?.endedAt).toBeDefined();
 
-    // Emitted events include message.updated and message.appended
+    // Child content is structured events, with stderr interleaved.
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as {
+      type: string;
+      log: Array<{ kind: string; event?: { type: string }; line?: string }>;
+    };
+    expect(content.type).toBe("events");
+    expect(content.log.map((e) => e.kind)).toEqual(["event", "event", "stderr", "event"]);
+    expect(content.log[0].event?.type).toBe("step_start");
+    expect(content.log[2].line).toBe("diagnostic noise");
+
     const updated = events.filter((e) => e.type === "message.updated");
     expect(updated.length).toBeGreaterThanOrEqual(2);
     const appended = events.filter((e) => e.type === "message.appended");

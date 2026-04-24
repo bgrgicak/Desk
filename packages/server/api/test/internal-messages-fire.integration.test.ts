@@ -163,7 +163,7 @@ describe("POST /internal/messages/fire", () => {
     expect(res.status).toBe(400);
   });
 
-  it("fires a pending text message, runs the agent, produces a text child", async () => {
+  it("fires a pending text message, runs the agent, produces an events child", async () => {
     const messageId = await insertPendingMessage({ type: "text", text: "Summarize X." });
 
     const res = await postInternal("/internal/messages/fire", { messageId }, token);
@@ -178,13 +178,23 @@ describe("POST /internal/messages/fire", () => {
     expect(parent?.startedAt).toBeDefined();
     expect(parent?.endedAt).toBeDefined();
 
-    // Child message attributed to parent, with text content.
+    // Child message attributed to parent, with structured events content.
+    // The fake driver in this suite emits plain text (no JSON events), so
+    // the log captures it as `unparsed` entries — still reachable via the
+    // UI's text-derivation fallback.
     const child = await queries.messages.findById(pool, body.childIds[0]);
     expect(child?.parentId).toBe(messageId);
     expect(child?.role).toBe("agent");
-    const content = child!.content as { type: "text"; text: string };
-    expect(content.type).toBe("text");
-    expect(content.text).toContain("vacation plans");
+    const content = child!.content as {
+      type: "events";
+      log: Array<{ kind: string; line?: string }>;
+    };
+    expect(content.type).toBe("events");
+    const joined = content.log
+      .filter((e) => e.kind === "unparsed")
+      .map((e) => e.line ?? "")
+      .join("\n");
+    expect(joined).toContain("vacation plans");
   });
 
   it("fires an ai_note_request message, producing a note-content child", async () => {
