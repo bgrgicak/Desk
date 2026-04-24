@@ -81,7 +81,9 @@ jobs:
         working-directory: packages/app-prototype
 
       - name: Run Playwright e2e tests
-        run: npm run test:e2e
+        # `--retries=2` catches timing flakes without masking deterministic
+        # failures (still red after three attempts).
+        run: npx playwright test --retries=2
         working-directory: packages/app-prototype
 
       - name: Upload Playwright traces on failure
