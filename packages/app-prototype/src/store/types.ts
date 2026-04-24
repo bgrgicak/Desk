@@ -52,6 +52,12 @@ export interface ServerAgent {
   toolAllowlist: string[];
 }
 
+/** Membership row from `GET /workspaces/:id/agents`: agent + per-workspace flags. */
+export interface ServerWorkspaceAgent extends ServerAgent {
+  isDefault: boolean;
+  addedAt: string;
+}
+
 export interface ServerWorkspace {
   id: string;
   userId: string;
@@ -73,12 +79,23 @@ export interface ServerChat {
   unread: boolean;
 }
 
+export interface AttachmentRef {
+  path: string;
+  name: string;
+  mime?: string;
+  size?: number;
+}
+
 export interface ServerMessage {
   id: string;
   chatId: string;
   role: MessageRole;
   content: MessageContent;
   createdAt: string;
+  /** Files attached to this message (user uploads sent alongside the text). */
+  attachments?: AttachmentRef[];
+  /** Model that produced this message — stamped at insert time on agent rows. */
+  model?: string;
   executeAt?: string;
   cron?: string;
   state?: MessageState;

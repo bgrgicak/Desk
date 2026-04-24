@@ -187,6 +187,38 @@ describe("MessageSchema execution metadata", () => {
       MessageSchema.parse({ ...base, schedulerRef: { kind: "bogus", id: "x" } }),
     ).toThrow();
   });
+
+  it("accepts attachments on the envelope", () => {
+    const msg = {
+      ...base,
+      role: "user",
+      content: { type: "text", text: "see attached" },
+      attachments: [
+        { path: ".chats/cht_abc/attachments/spec.md", name: "spec.md", mime: "text/markdown", size: 1234 },
+        { path: ".chats/cht_abc/attachments/photo.png", name: "photo.png" },
+      ],
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
+
+  it("rejects attachments with negative size", () => {
+    expect(() =>
+      MessageSchema.parse({
+        ...base,
+        attachments: [{ path: "a", name: "a", size: -1 }],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a model label on the envelope", () => {
+    const msg = {
+      ...base,
+      role: "agent",
+      content: { type: "text", text: "hello" },
+      model: "anthropic/claude-sonnet-4-5",
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
 });
 
 describe("MessageContent note / ai_note_request", () => {

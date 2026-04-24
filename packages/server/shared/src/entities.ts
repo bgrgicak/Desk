@@ -150,6 +150,20 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
+/**
+ * Reference to a file that was attached to a specific message. Lives on
+ * the Message envelope (not MessageContent) so the text-plus-files shape
+ * of a user message stays a single row. Paths are workspace-relative,
+ * forward-slash separated.
+ */
+export const AttachmentRefSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  mime: z.string().optional(),
+  size: z.number().int().nonnegative().optional(),
+});
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
 export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
@@ -165,6 +179,13 @@ export const MessageSchema = z.object({
   role: z.enum(MESSAGE_ROLES),
   content: MessageContentSchema,
   createdAt: z.string(),
+
+  /** Files attached to this message. User messages: files the user sent
+   * alongside the text. Agent messages: reserved for future use. */
+  attachments: z.array(AttachmentRefSchema).optional(),
+  /** Model identifier that produced this message. Stamped at insert time
+   * on assistant rows so history survives agent reconfiguration. */
+  model: z.string().optional(),
 
   /** Execution metadata (nullable — present for scheduled/executing messages only). */
   executeAt: z.string().optional(),

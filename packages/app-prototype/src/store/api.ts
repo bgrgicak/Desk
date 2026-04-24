@@ -5,6 +5,7 @@ import {
 } from "@reduxjs/toolkit/query/react";
 import { getSessionToken } from "@/auth/session";
 import type {
+  AttachmentRef,
   ListLibraryResponse,
   ListMessagesResponse,
   MessagesFilter,
@@ -275,12 +276,12 @@ export const api = createApi({
     }),
     postChatMessage: build.mutation<
       ServerMessage,
-      { chatId: string; content: string }
+      { chatId: string; content: string; attachments?: AttachmentRef[] }
     >({
-      query: ({ chatId, content }) => ({
+      query: ({ chatId, content, attachments }) => ({
         url: `/chats/${chatId}/messages`,
         method: "POST",
-        body: { content },
+        body: attachments && attachments.length > 0 ? { content, attachments } : { content },
       }),
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
