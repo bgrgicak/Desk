@@ -5,7 +5,7 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { store } from './store/store'
-import { ensureSession } from './auth/login-prompt'
+import { ensureSession } from './auth/auto-login'
 import { wsConnect } from './store/ws/middleware'
 
 async function boot(): Promise<void> {
