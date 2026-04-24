@@ -1,20 +1,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 
-export type AppView =
-  | "desk"
-  | "runs"
-  | "context"
-  | "today"
-  | "chats"
-  | "compose";
-
 export interface UiState {
-  activeView: AppView;
-  activeWorkspaceId: string | null;
-  selectedChatId: string | null;
-  selectedArtifactPath: string | null;
   artifactTransitionSource: "compose" | "chat" | null;
-  selectedContextPath: string | null;
   savedArtifactIds: string[];
   readUpdateIds: string[];
   readChatIds: string[];
@@ -23,12 +10,7 @@ export interface UiState {
 }
 
 const initialState: UiState = {
-  activeView: "desk",
-  activeWorkspaceId: null,
-  selectedChatId: null,
-  selectedArtifactPath: null,
   artifactTransitionSource: null,
-  selectedContextPath: null,
   savedArtifactIds: [],
   readUpdateIds: [],
   readChatIds: [],
@@ -40,27 +22,11 @@ const slice = createSlice({
   name: "ui",
   initialState,
   reducers: {
-    setActiveView(state, action: PayloadAction<AppView>) {
-      state.activeView = action.payload;
-    },
-    setActiveWorkspaceId(state, action: PayloadAction<string | null>) {
-      state.activeWorkspaceId = action.payload;
-    },
-    setSelectedChatId(state, action: PayloadAction<string | null>) {
-      state.selectedChatId = action.payload;
-    },
-    setSelectedArtifact(
+    setArtifactTransitionSource(
       state,
-      action: PayloadAction<{
-        path: string | null;
-        source?: "compose" | "chat" | null;
-      }>,
+      action: PayloadAction<"compose" | "chat" | null>,
     ) {
-      state.selectedArtifactPath = action.payload.path;
-      state.artifactTransitionSource = action.payload.source ?? null;
-    },
-    setSelectedContext(state, action: PayloadAction<string | null>) {
-      state.selectedContextPath = action.payload;
+      state.artifactTransitionSource = action.payload;
     },
     markArtifactSaved(state, action: PayloadAction<string>) {
       if (!state.savedArtifactIds.includes(action.payload))
@@ -80,27 +46,16 @@ const slice = createSlice({
     setAgentationVisible(state, action: PayloadAction<boolean>) {
       state.agentationVisible = action.payload;
     },
-    /** Clear artifact + context detail selections (view transitions). */
-    clearDetailViews(state) {
-      state.selectedArtifactPath = null;
-      state.artifactTransitionSource = null;
-      state.selectedContextPath = null;
-    },
   },
 });
 
 export const {
-  setActiveView,
-  setActiveWorkspaceId,
-  setSelectedChatId,
-  setSelectedArtifact,
-  setSelectedContext,
+  setArtifactTransitionSource,
   markArtifactSaved,
   markUpdateRead,
   markChatRead,
   setTodaySheetOpen,
   setAgentationVisible,
-  clearDetailViews,
 } = slice.actions;
 
 export default slice.reducer;

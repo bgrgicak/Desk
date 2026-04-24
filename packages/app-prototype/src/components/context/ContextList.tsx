@@ -57,6 +57,7 @@ import {
   getItemsInFolder,
   countItemsRecursive,
 } from '@/data/ui-types'
+import { useParams } from 'react-router-dom'
 import { useAppSelector } from '@/store/hooks'
 import { selectFolders } from '@/store/slices/derivedSlice'
 import { useUploadLibraryFileMutation } from '@/store/api'
@@ -93,7 +94,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
 
-  const activeWorkspaceId = useAppSelector(s => s.ui.activeWorkspaceId) ?? undefined
+  const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
 
   const handleUpload = async (files: File[]) => {

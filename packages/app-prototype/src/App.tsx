@@ -1,7 +1,15 @@
 import { useCallback, useEffect } from 'react'
+import {
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
-import { AppShell, type View } from '@/components/layout/AppShell'
+import { AppShell } from '@/components/layout/AppShell'
 import type { WorkspaceNavView } from '@/components/layout/WorkspaceBar'
 import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
@@ -21,26 +29,22 @@ import {
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
-  setActiveView,
-  setActiveWorkspaceId,
-  setSelectedChatId,
-  setSelectedArtifact,
-  setSelectedContext,
+  setArtifactTransitionSource,
   setTodaySheetOpen,
   setAgentationVisible,
   markArtifactSaved,
   markUpdateRead,
   markChatRead,
-  clearDetailViews,
 } from '@/store/slices/uiSlice'
 import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiRun } from '@/store/selectors/runs'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
+import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 
 const NEW_CHAT_STUB: Chat = {
-  id: '__new__',
+  id: NEW_CHAT_ID,
   title: 'New chat',
   lastMessage: '',
   updatedAt: new Date(),
@@ -51,14 +55,43 @@ const NEW_CHAT_STUB: Chat = {
   referenceIds: [],
 }
 
-function App() {
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/w/:wsId/:view" element={<AppInner />} />
+      <Route path="*" element={<AppBoot />} />
+    </Routes>
+  )
+}
+
+// Landing route — waits for the workspace list, then redirects into the
+// first workspace's Desk. Anything unrecognised also lands here.
+function AppBoot() {
+  const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  if (!serverWorkspaces || serverWorkspaces.length === 0) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <div className="h-dvh" />
+      </TooltipProvider>
+    )
+  }
+  return <Navigate to={buildPath(serverWorkspaces[0].id, 'desk')} replace />
+}
+
+function AppInner() {
+  const { wsId = '', view: viewParam } = useParams<{ wsId: string; view: string }>()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const dispatch = useAppDispatch()
-  const activeView = useAppSelector(s => s.ui.activeView)
-  const activeWorkspaceId = useAppSelector(s => s.ui.activeWorkspaceId) ?? ''
-  const selectedChatId = useAppSelector(s => s.ui.selectedChatId)
-  const selectedArtifactPath = useAppSelector(s => s.ui.selectedArtifactPath)
+
+  const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'desk'
+  const activeWorkspaceId = wsId
+  const selectedChatId = searchParams.get('chat')
+  const selectedArtifactPath = searchParams.get('artifact')
+  const selectedContextPath = searchParams.get('item')
+
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
-  const selectedContextPath = useAppSelector(s => s.ui.selectedContextPath)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
   const readUpdateIdList = useAppSelector(s => s.ui.readUpdateIds)
   const readChatIdList = useAppSelector(s => s.ui.readChatIds)
@@ -73,17 +106,20 @@ function App() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
   const { data: serverAgents } = useGetAgentsQuery()
 
-  // Once workspaces arrive, default to the first one. Re-runs only if the
-  // active id isn't present (user deleted it, etc.).
+  // If the wsId in the URL isn't one the user has, bounce to the first.
   useEffect(() => {
     if (!serverWorkspaces || serverWorkspaces.length === 0) return
-    const exists = serverWorkspaces.some(w => w.id === activeWorkspaceId)
-    if (!exists) dispatch(setActiveWorkspaceId(serverWorkspaces[0].id))
-  }, [serverWorkspaces, activeWorkspaceId, dispatch])
+    if (serverWorkspaces.some(w => w.id === activeWorkspaceId)) return
+    navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
+  }, [serverWorkspaces, activeWorkspaceId, activeView, navigate])
 
-  // Server-backed chats for the active workspace. Sidebar + selectors
-  // consume the same Chat shape the UI expected before; the mapper
-  // preserves that so no downstream component changes are needed.
+  // One-shot artifact-open animation hint: cleared once the artifact pane closes.
+  useEffect(() => {
+    if (!selectedArtifactPath && artifactTransitionSource !== null) {
+      dispatch(setArtifactTransitionSource(null))
+    }
+  }, [selectedArtifactPath, artifactTransitionSource, dispatch])
+
   const { data: serverChats } = useGetChatsQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },
@@ -92,8 +128,6 @@ function App() {
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
 
-  // Scheduled / executing messages, scoped to the active workspace.
-  // Drives the Runs page.
   const { data: runsResp } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, scheduled: true },
     { skip: !activeWorkspaceId },
@@ -126,42 +160,41 @@ function App() {
     return () => clearTimeout(t)
   }, [agentationVisible])
 
+  // ── Nav actions (URL is the source of truth) ─────────────────────────────
+  const goTo = useCallback((
+    opts: {
+      wsId?: string
+      view?: RouteView
+      chat?: string | null
+      artifact?: string | null
+      item?: string | null
+    } = {},
+  ) => {
+    const ws = opts.wsId ?? activeWorkspaceId
+    if (!ws) return
+    navigate(buildPath(ws, opts.view ?? activeView, opts))
+  }, [activeWorkspaceId, activeView, navigate])
+
   const enterCompose = useCallback(() => {
-    dispatch(setSelectedChatId('__new__'))
-    if (activeView === 'today') dispatch(setActiveView('desk'))
-  }, [activeView, dispatch])
+    goTo({ chat: NEW_CHAT_ID })
+  }, [goTo])
 
-  // When switching nav views, clear the selected chat and any open detail view
-  const handleViewChange = useCallback((view: View) => {
-    dispatch(setActiveView(view))
-    dispatch(setSelectedChatId(null))
-    dispatch(clearDetailViews())
-  }, [dispatch])
+  const handleViewChange = useCallback((view: RouteView) => {
+    goTo({ view })
+  }, [goTo])
 
-  // Global Today (from workspace bar) — toggles the left sheet
   const handleGlobalToday = useCallback(() => {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
 
-  // Switch workspace, preserving current view unless it's unavailable
   const handleSelectWorkspace = useCallback((id: string) => {
-    dispatch(setActiveWorkspaceId(id))
     dispatch(setTodaySheetOpen(false))
-    dispatch(clearDetailViews())
-    // chats are scoped per-workspace → drop the selected chat
-    if (selectedChatId) {
-      dispatch(setActiveView('desk'))
-      dispatch(setSelectedChatId(null))
-    }
-  }, [selectedChatId, dispatch])
+    goTo({ wsId: id })
+  }, [goTo, dispatch])
 
-  // Navigate to a specific area within a workspace (from hover dropdown)
   const handleNavigateWorkspace = useCallback((id: string, view: WorkspaceNavView) => {
-    dispatch(setActiveWorkspaceId(id))
-    dispatch(setActiveView(view))
-    dispatch(setSelectedChatId(null))
-    dispatch(clearDetailViews())
-  }, [dispatch])
+    goTo({ wsId: id, view })
+  }, [goTo])
 
   const handleArtifactAdded = useCallback((_artifact: Artifact) => {
     // Compose-generated artifacts land server-side via the message POST;
@@ -170,8 +203,9 @@ function App() {
   }, [])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat') => {
-    dispatch(setSelectedArtifact({ path: artifact.id, source: source ?? null }))
-  }, [dispatch])
+    dispatch(setArtifactTransitionSource(source ?? null))
+    goTo({ artifact: artifact.id })
+  }, [dispatch, goTo])
 
   const handleSaveArtifact = useCallback((artifactId: string) => {
     dispatch(markArtifactSaved(artifactId))
@@ -181,16 +215,11 @@ function App() {
     enterCompose()
   }, [enterCompose])
 
-  // Sidebar chat click → open as full-page chat view; mark as read so dot disappears
   const handleSidebarChatClick = useCallback((chat: { id: string }) => {
-    dispatch(setSelectedChatId(chat.id))
     dispatch(markChatRead(chat.id))
-    dispatch(clearDetailViews())
-  }, [dispatch])
+    goTo({ chat: chat.id })
+  }, [dispatch, goTo])
 
-  // First message sent in a new chat → create it server-side. The
-  // chat list is cache-tagged so it re-renders as soon as the mutation
-  // resolves; no local append needed.
   const handleNewChatFirstMessage = useCallback((message: string) => {
     if (!activeWorkspaceId || !serverAgents?.[0]) return
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
@@ -201,33 +230,23 @@ function App() {
     })
   }, [activeWorkspaceId, serverAgents, createChatMutation])
 
-  // Delete a chat — delete server-side; cache invalidation removes it
-  // from the list. Deselect if it was open.
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
-    if (selectedChatId === chatId) dispatch(setSelectedChatId(null))
-  }, [deleteChatMutation, selectedChatId, dispatch])
+    if (selectedChatId === chatId) goTo({ chat: null })
+  }, [deleteChatMutation, selectedChatId, goTo])
 
   // Inbox badge count = server-reported awaiting-user messages.
   // Don't filter by workspace — the inbox is global.
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
   const unreadCount = awaitingResp?.items.length ?? 0
 
-  // Library (aka Context) — files stored under the workspace's
-  // library/ tree. Folders/links/notes stay client-derived.
   const { data: libraryResp } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },
   )
   const libraryItems: ContextItem[] = (libraryResp?.items ?? []).map(toContextItem)
-
-  // Desk grid / chat artifact lookups read from the same library query
-  // (which is where the server persists artifact files).
   const artifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
 
-  // Auto-register server-backed artifacts as "saved to desk" once they
-  // arrive. User-created compose artifacts stay unsaved until the user
-  // explicitly saves them via the detail view.
   useEffect(() => {
     if (!libraryResp?.items) return
     for (const f of libraryResp.items) dispatch(markArtifactSaved(f.path))
@@ -239,8 +258,7 @@ function App() {
     dispatch(markUpdateRead(id))
   }, [dispatch])
 
-  // ── Main shell ────────────────────────────────────────────────────────────
-  const isNewChat = selectedChatId === '__new__'
+  const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
   const activeChat = isNewChat ? NEW_CHAT_STUB : selectedChat
   const chatArtifacts = (selectedChat?.artifactIds ?? [])
@@ -279,14 +297,13 @@ function App() {
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
       >
-        {/* Artifact detail — takes over main area when an artifact is open */}
         {selectedArtifact && (() => {
           const selectedArtifactUpdate = artifactUpdates.find(u => u.artifactId === selectedArtifact.id) ?? null
           return (
             <ArtifactDetail
               key={selectedArtifact.id}
               artifact={selectedArtifact}
-              onBack={() => dispatch(setSelectedArtifact({ path: null, source: null }))}
+              onBack={() => goTo({ artifact: null })}
               update={selectedArtifactUpdate}
               isUpdateRead={selectedArtifactUpdate ? readUpdateIds.has(selectedArtifactUpdate.id) : true}
               onDismissUpdate={handleDismissUpdate}
@@ -297,29 +314,25 @@ function App() {
           )
         })()}
 
-        {/* Context (library) detail — takes over when a context item is open */}
         {!selectedArtifact && selectedContextItem && (
           <ContextDetail
             key={selectedContextItem.id}
             item={selectedContextItem}
-            onBack={() => dispatch(setSelectedContext(null))}
-            onCompose={(items) => { dispatch(setSelectedContext(null)); handleComposeWithContext(items) }}
+            onBack={() => goTo({ item: null })}
+            onCompose={(items) => { goTo({ item: null }); handleComposeWithContext(items) }}
             onArtifactClick={(artifact) => {
-              dispatch(setSelectedContext(null))
-              dispatch(setSelectedArtifact({ path: artifact.id, source: null }))
-              dispatch(setActiveView('desk'))
+              goTo({ view: 'desk', artifact: artifact.id })
             }}
           />
         )}
 
-        {/* Chat view — takes over main area when a chat is selected or composing */}
         {!selectedArtifact && !selectedContextItem && activeChat && (
           <ChatView
             key={activeChat.id}
             chat={activeChat}
             artifacts={isNewChat ? [] : chatArtifacts}
             onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat')}
-            onDeleteChat={isNewChat ? () => dispatch(setSelectedChatId(null)) : handleDeleteChat}
+            onDeleteChat={isNewChat ? () => goTo({ chat: null }) : handleDeleteChat}
             onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
             onArtifactAdded={isNewChat ? handleArtifactAdded : undefined}
             showNewBadge={!isNewChat && chatShowNewBadge}
@@ -328,11 +341,10 @@ function App() {
           />
         )}
 
-        {/* Normal page views */}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'desk' && (
           <DeskGrid
             artifacts={artifacts.filter(a => savedArtifactIds.has(a.id))}
-            onArtifactClick={(artifact) => dispatch(setSelectedArtifact({ path: artifact.id, source: null }))}
+            onArtifactClick={(artifact) => goTo({ artifact: artifact.id })}
             onCompose={enterCompose}
             updates={artifactUpdates}
             readUpdateIds={readUpdateIds}
@@ -345,7 +357,7 @@ function App() {
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList
             items={libraryItems}
-            onItemClick={(item) => dispatch(setSelectedContext(item.id))}
+            onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
           />
         )}
@@ -353,5 +365,3 @@ function App() {
     </TooltipProvider>
   )
 }
-
-export default App
