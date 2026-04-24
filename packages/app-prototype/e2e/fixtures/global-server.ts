@@ -73,7 +73,12 @@ async function startVite(
   await killListenersOnPort(port);
   // Build once (inherits DESK_API_URL so the config closure captures it),
   // then run preview. Keep stderr/stdout piped so we can surface issues.
-  const env = { ...process.env, DESK_API_URL: apiUrl } as NodeJS.ProcessEnv;
+  // DESK_APP_PORT overrides the default 5173 baked into vite.config.ts.
+  const env = {
+    ...process.env,
+    DESK_API_URL: apiUrl,
+    DESK_APP_PORT: String(port),
+  } as NodeJS.ProcessEnv;
 
   await new Promise<void>((resolve, reject) => {
     const build = spawn(
@@ -96,14 +101,7 @@ async function startVite(
   const viteBin = path.join(APP_ROOT, "node_modules", ".bin", "vite");
   const preview = spawn(
     viteBin,
-    [
-      "preview",
-      "--port",
-      String(port),
-      "--strictPort",
-      "--logLevel",
-      "warn",
-    ],
+    ["preview", "--logLevel", "warn"],
     { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
   );
   preview.stderr?.on("data", (b) => process.stderr.write(`[vite-err] ${b}`));

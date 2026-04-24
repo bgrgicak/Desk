@@ -3,12 +3,15 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-// In dev, everything flows through the Vite port (5173/5174) so VS Code
-// Remote only needs one tunnel. Calls the app makes under /api/* get
-// stripped of that prefix and proxied to the desk-server. WebSocket calls
-// to /ws are proxied verbatim with WS upgrade support.
+// In dev, everything flows through the Vite port (5173 by default, or
+// whatever DESK_APP_PORT is set to — e2e uses that to pick an isolated
+// port) so VS Code Remote only needs one tunnel. Calls the app makes
+// under /api/* get stripped of that prefix and proxied to the
+// desk-server. WebSocket calls to /ws are proxied verbatim with WS
+// upgrade support.
 const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:3013'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
+const APP_PORT = Number(process.env.DESK_APP_PORT ?? 5173)
 
 // The dev and preview commands each have their own proxy section —
 // `vite preview` doesn't honour `server.proxy`, so the tests (which run
@@ -33,6 +36,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: { proxy },
-  preview: { proxy },
+  server: { port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
+  preview: { port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
 })
