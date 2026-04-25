@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 
@@ -79,4 +79,38 @@ describeIf("opencode end-to-end", () => {
 
     await stopSandbox(handle);
   }, 120_000); // 2 minute timeout for AI call
+
+  it("execRun forwards attachments to opencode via --file so the model sees their contents", async () => {
+    // The full attachment story (workspace-relative path → /home/agent/<rel>
+    // → opencode --file → model sees content) only works if every seam is
+    // right. A sentinel string is the simplest end-to-end probe: if the
+    // model quotes it, all the wiring held; if not, we don't have to guess
+    // which seam broke — every other test in the suite will narrow it.
+    const sentinel = "PINEAPPLE-42-DESK-ATTACHMENT-PROBE";
+    const wsRoot = workspaceRootPath(home, testWorkspaceSlug);
+    await fs.writeFile(
+      path.join(wsRoot, "sentinel.txt"),
+      `The secret word is ${sentinel}.\n`,
+    );
+
+    const providerKeys = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "" };
+    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, providerKeys);
+    const driver = createDriver();
+    const logs: LogEvent[] = [];
+
+    const result = await driver.execRun(testAgentId, {
+      runId: "run_attach_probe_1",
+      prompt: "Quote the secret word from the attached file verbatim.",
+      workspaceSlug: testWorkspaceSlug,
+      attachments: ["sentinel.txt"],
+      onLog: (evt) => logs.push(evt),
+      providerKeys,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const combined = logs.map((l) => l.payload).join("\n");
+    expect(combined).toContain(sentinel);
+
+    await stopSandbox(handle);
+  }, 120_000);
 });

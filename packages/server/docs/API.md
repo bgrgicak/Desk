@@ -147,16 +147,19 @@ Messages grow optional execution fields (added M6a):
 | `agentId` | agent outputs | which agent produced it |
 | `schedulerRef` | scheduled messages | `{ kind: 'at'|'cron', id }` — the at/cron entry this message owns |
 | `startedAt` / `endedAt` | running/completed | execution timing |
-| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files the user attached to *this* message; paths reference files in `.chats/{chatId}/attachments/` and are surfaced in the agent prompt when the trigger fires |
+| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to opencode as `--file` flags when the trigger fires |
 | `model` | agent outputs | model id that produced the row, stamped at insert time; historical rows keep their original model even if the agent is later reconfigured |
 
 ### POST /chats/{id}/messages
 
-Body: `{ content: string, attachments?: AttachmentRef[] }`. `attachments[]`
-items must point at files already uploaded via
-`POST /chats/{id}/attachments`; the server persists them on the user
-message envelope and `fireMessage` includes the filenames in the prompt so
-the agent knows which files travelled with this message.
+Body: `{ content: string, attachments?: AttachmentRef[] }`. Each
+`AttachmentRef` is a workspace-relative `path` that resolves to either a
+file or a directory — chat uploads (`POST /chats/{id}/attachments`),
+library files, and library folders all share the same wire shape. The
+server persists them on the user message envelope and `fireMessage`
+forwards each path to opencode via a `--file` flag (opencode accepts
+both files and directories), so the agent sees the contents of every
+attached path when the trigger fires.
 
 ### PATCH /chats/{id}/messages/{messageId}
 

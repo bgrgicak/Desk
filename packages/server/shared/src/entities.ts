@@ -153,14 +153,17 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
 /**
- * Reference to a file that was attached to a specific message. Lives on
- * the Message envelope (not MessageContent) so the text-plus-files shape
- * of a user message stays a single row. Paths are workspace-relative,
- * forward-slash separated.
+ * Reference to a file or directory that was attached to a specific
+ * message. Lives on the Message envelope (not MessageContent) so the
+ * text-plus-files shape of a user message stays a single row. Paths are
+ * workspace-relative, forward-slash separated. `kind` defaults to
+ * `"file"` when omitted; directories opt in explicitly so the UI can
+ * render a folder icon and route clicks to the folder view.
  */
 export const AttachmentRefSchema = z.object({
   path: z.string(),
   name: z.string(),
+  kind: z.enum(["file", "directory"]).optional(),
   mime: z.string().optional(),
   size: z.number().int().nonnegative().optional(),
 });

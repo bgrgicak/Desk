@@ -53,8 +53,8 @@ let userToken: string;
 let internalToken: string;
 let chatId: string;
 let agentModel: string;
-/** Captures the prompt seen by the fake driver on each fireMessage call. */
-const promptsSeen: string[] = [];
+/** Captures the prompt + forwarded attachments seen by the fake driver on each fireMessage call. */
+const promptsSeen: { prompt: string; attachments?: string[] }[] = [];
 
 beforeAll(async () => {
   const admin = new pg.Pool({ connectionString: adminConn() });
@@ -86,8 +86,8 @@ beforeAll(async () => {
   const runManager = createRunManager({
     pool,
     adapter: createMemoryAdapter(),
-    execRunFn: async (runId, _a, prompt, onLog) => {
-      promptsSeen.push(prompt);
+    execRunFn: async (runId, _a, prompt, onLog, runOpts) => {
+      promptsSeen.push({ prompt, attachments: runOpts?.attachments });
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed the attached file." });
       return { exitCode: 0 };
     },
@@ -194,7 +194,7 @@ describe("POST /chats/{id}/messages with attachments", () => {
     ]);
   });
 
-  it("surfaces attachment filenames in the agent prompt", async () => {
+  it("forwards attachment paths to the runtime so opencode receives them as --file flags", async () => {
     promptsSeen.length = 0;
     const res = await request(
       "POST",
@@ -211,13 +211,56 @@ describe("POST /chats/{id}/messages with attachments", () => {
     // test's prompt specifically — prior tests' fire-and-forget fires can
     // land in promptsSeen mid-test, so match on content, not length.
     const deadline = Date.now() + 5000;
-    while (!promptsSeen.some((p) => p.includes("what does this file say?")) && Date.now() < deadline) {
+    while (!promptsSeen.some((p) => p.prompt.includes("what does this file say?")) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    const prompt = promptsSeen.find((p) => p.includes("what does this file say?"));
-    expect(prompt).toBeDefined();
-    expect(prompt).toContain("notes.txt");
-    expect(prompt).toContain(`~/.chats/${chatId}/attachments/notes.txt`);
+    const seen = promptsSeen.find((p) => p.prompt.includes("what does this file say?"));
+    expect(seen).toBeDefined();
+    // The prompt is just the user's text — paths are no longer inlined.
+    expect(seen!.prompt).not.toContain("attachments/notes.txt");
+    // The workspace-relative path is forwarded as-is; the runtime translates
+    // it to a sandbox-absolute path when building the opencode command.
+    expect(seen!.attachments).toEqual([`.chats/${chatId}/attachments/notes.txt`]);
+  });
+
+  it("forwards a directory attachment as a workspace-relative path so opencode receives it via --file", async () => {
+    // Folders ride the same AttachmentRef wire as files; opencode's `--file`
+    // flag accepts directory paths and lists contents to the model. The path
+    // has no extension and points at a folder under the workspace root.
+    promptsSeen.length = 0;
+    const folderPath = "Photos/2024";
+    const res = await request(
+      "POST",
+      `/chats/${chatId}/messages`,
+      {
+        content: "summarise the photos in this folder",
+        attachments: [{ path: folderPath, name: "2024", kind: "directory" }],
+      },
+      userToken,
+    );
+    expect(res.status).toBe(201);
+
+    const deadline = Date.now() + 5000;
+    while (
+      !promptsSeen.some((p) => p.prompt.includes("summarise the photos in this folder")) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const seen = promptsSeen.find((p) =>
+      p.prompt.includes("summarise the photos in this folder"),
+    );
+    expect(seen).toBeDefined();
+    expect(seen!.attachments).toEqual([folderPath]);
+
+    // Round-trip the persisted row to confirm the directory survived the
+    // wire — including the `kind` discriminator the UI relies on for
+    // icon + click-handler routing.
+    const body = res.body as { id: string };
+    const row = await queries.messages.findById(pool, body.id);
+    expect(row?.attachments).toEqual([
+      { path: folderPath, name: "2024", kind: "directory" },
+    ]);
   });
 
   it("rejects attachments[] with a bad shape (negative size)", async () => {

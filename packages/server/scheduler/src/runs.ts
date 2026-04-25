@@ -37,7 +37,7 @@ export interface RunManagerOptions {
     agentId: string,
     prompt: string,
     onLog: (evt: LogEvent) => void | Promise<void>,
-    opts?: { agentFileInput: AgentFileInput },
+    opts?: { agentFileInput: AgentFileInput; attachments?: string[] },
   ) => Promise<{ exitCode: number }>;
 }
 
@@ -160,28 +160,30 @@ export function createRunManager(opts: RunManagerOptions) {
       .trim();
   }
 
-  async function derivePromptFromContent(content: unknown): Promise<string> {
+  /**
+   * Returns the prompt the agent will receive plus any workspace-relative
+   * attachment paths to forward to opencode via `--file`. We don't inline
+   * paths into the prompt: opencode surfaces the file content directly,
+   * and the picker-side path may live anywhere in the workspace, not just
+   * `~/.chats/.../attachments/`.
+   */
+  async function derivePromptInputs(
+    content: unknown,
+  ): Promise<{ prompt: string; attachments?: string[] }> {
     const c = content as { type?: string; text?: string; body?: string; userMessageId?: string };
-    if (c?.type === "text" && typeof c.text === "string") return c.text;
+    if (c?.type === "text" && typeof c.text === "string") return { prompt: c.text };
     if (c?.type === "ai_note_request") {
-      return "Produce a coherent running summary of this chat, in markdown.";
+      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
       const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
-      // Surface any files the user attached alongside this message by
-      // basename + full sandbox path so the agent doesn't have to scan
-      // the attachments directory to notice them.
-      const attachments = userMsg?.attachments ?? [];
-      if (attachments.length === 0) return text;
-      const hint = attachments
-        .map((a) => `- ${a.name} (~/.chats/${userMsg!.chatId}/attachments/${a.name})`)
-        .join("\n");
-      const header = "The user attached the following files to this message:";
-      return text ? `${text}\n\n${header}\n${hint}` : `${header}\n${hint}`;
+      const refs = userMsg?.attachments ?? [];
+      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
+      return { prompt: text, attachments };
     }
-    return JSON.stringify(content);
+    return { prompt: JSON.stringify(content) };
   }
 
   function outputContentTypeFor(triggerContent: unknown): "note" | "text" {
@@ -221,7 +223,7 @@ export function createRunManager(opts: RunManagerOptions) {
       payload: (await queries.messages.findById(pool, messageId))!,
     });
 
-    const prompt = await derivePromptFromContent(msg.content);
+    const { prompt, attachments } = await derivePromptInputs(msg.content);
     const outputKind = outputContentTypeFor(msg.content);
 
     // Resolve the workspace slug and agent id in one JOIN'd round-trip.
@@ -283,7 +285,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
       let result: { exitCode: number };
       if (opts.execRunFn) {
-        result = await opts.execRunFn(messageId, agentId, prompt, onLog, { agentFileInput });
+        result = await opts.execRunFn(messageId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else if (process.env.DESK_SANDBOX_DRIVER === "fake") {
         const driver = createDriver();
         result = await driver.execRun(workspaceId, {
@@ -291,6 +293,7 @@ export function createRunManager(opts: RunManagerOptions) {
           prompt,
           workspaceSlug,
           agentFileId: agentId,
+          attachments,
           onLog,
         });
       } else {
@@ -304,6 +307,7 @@ export function createRunManager(opts: RunManagerOptions) {
           workspaceSlug,
           chatId: msg.chatId,
           agent: agentFileInput,
+          attachments,
           onLog,
         });
       }

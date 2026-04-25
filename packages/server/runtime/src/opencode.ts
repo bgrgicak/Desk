@@ -15,6 +15,8 @@ export interface ExecRunOptions {
   workspaceSlug: string;
   chatId?: string;
   agent: AgentFileInput;
+  /** Workspace-relative paths to forward to opencode as `--file` flags. */
+  attachments?: string[];
   onLog: (event: LogEvent) => void;
 }
 
@@ -70,6 +72,7 @@ export async function execRun(
       chatContext,
       workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
+      attachments: opts.attachments,
       onLog: opts.onLog,
     });
     return result;

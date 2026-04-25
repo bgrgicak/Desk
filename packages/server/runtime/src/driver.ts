@@ -1,10 +1,18 @@
 import { PassThrough } from "node:stream";
+import { SANDBOX_HOME } from "./mounts.js";
 
 export interface RunOptions {
   runId: string;
   prompt: string;
   chatContext?: string;
   agentFileId?: string;
+  /**
+   * Workspace-relative paths the user attached to this message. The driver
+   * translates each to its sandbox-absolute form (`${SANDBOX_HOME}/<rel>`)
+   * and passes it to opencode via `--file`, so the model sees the actual
+   * attached files instead of having to fetch them through tools.
+   */
+  attachments?: string[];
   /** On-disk slug for the workspace this run belongs to — feeds the mount plan + container name. */
   workspaceSlug: string;
   /**
@@ -87,6 +95,41 @@ function createFakeDriver(): SandboxDriver {
   };
 }
 
+/**
+ * Maps a workspace-relative attachment path to the matching sandbox path.
+ * The whole workspace is bind-mounted at SANDBOX_HOME, so the rule is just
+ * to prepend the home and strip any leading slash so a stray absolute-style
+ * input doesn't double up.
+ */
+export function toSandboxPath(rel: string): string {
+  return `${SANDBOX_HOME}/${rel.replace(/^\/+/, "")}`;
+}
+
+/** POSIX single-quote escape: wrap in `'...'`, embedded `'` becomes `'\''`. */
+export function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Builds the `sh -c` invocation that runs opencode inside the sandbox.
+ * The prompt itself is passed via `$DESK_PROMPT` (set in the exec env) to
+ * dodge arg-length limits; this function only wires the flags. Exported so
+ * the command synthesis is unit-testable without Docker.
+ */
+export function buildOpencodeCommand(opts: {
+  agentFileId?: string;
+  attachments?: string[];
+}): string[] {
+  const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
+  const fileFlags = (opts.attachments ?? [])
+    .map((p) => ` --file ${shSingleQuote(toSandboxPath(p))}`)
+    .join("");
+  return [
+    "sh", "-c",
+    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags} --dangerously-skip-permissions --format json`,
+  ];
+}
+
 /** Tracks active docker exec instances by runId for cancellation. */
 const activeExecs = new Map<string, { containerId: string; execId: string }>();
 
@@ -107,13 +150,10 @@ function createRealDriver(): SandboxDriver {
         .filter(Boolean)
         .join("\n\n");
 
-      // opencode run reads the prompt as a positional arg; pass it via env to
-      // avoid arg-length limits, then `exec opencode run "$DESK_PROMPT" ...`.
-      const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
-      const cmd = [
-        "sh", "-c",
-        `exec opencode run "$DESK_PROMPT"${agentFlag} --dangerously-skip-permissions --format json`,
-      ];
+      const cmd = buildOpencodeCommand({
+        agentFileId: opts.agentFileId,
+        attachments: opts.attachments,
+      });
 
       const exec = await container.exec({
         Cmd: cmd,
