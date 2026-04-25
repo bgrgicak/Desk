@@ -81,6 +81,58 @@ describe("listLibrary", () => {
     expect(folderPaths).toContain("Work/Plans");
   });
 
+  it("returns the full tree when no limit is given, even if a subtree dominates mtime", async () => {
+    // Simulate the node_modules problem: a freshly-written subtree whose mtimes
+    // sort above an older root file. Without a limit, the older root file must
+    // still be present so the frontend's tree reconstruction stays accurate.
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "older-root.txt",
+      mime: "text/plain",
+      stream: makeStream("older root"),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 60; i++) {
+      await uploadArtifact(ctx, {
+        workspaceId: ctx.workspaceId,
+        workspaceSlug: ctx.workspaceSlug,
+        name: `pkg-${i}.json`,
+        mime: "application/json",
+        stream: makeStream("{}"),
+        subpath: "deps/node_modules/pkg",
+      });
+    }
+
+    const { items, nextCursor } = await listLibrary(ctx, ctx.workspaceSlug);
+    expect(nextCursor).toBeUndefined();
+    expect(items.map((i) => i.path)).toContain("older-root.txt");
+  });
+
+  it("surfaces symlinks as their resolved kind without recursing through them", async () => {
+    // npm-style workspace links: node_modules/@scope/pkg → ../../packages/pkg.
+    // The linked target is already part of the listing, so following the link
+    // would duplicate the subtree (and risk cycles on self-referential links).
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.mkdir(path.join(root, "linkpkg/inner"), { recursive: true });
+    await fs.writeFile(path.join(root, "linkpkg/inner/payload.txt"), "x");
+    await fs.mkdir(path.join(root, "node_modules/@scope"), { recursive: true });
+    await fs.symlink("../../linkpkg", path.join(root, "node_modules/@scope/pkg"));
+    await fs.writeFile(path.join(root, "loose-link-target.txt"), "leaf");
+    await fs.symlink("../loose-link-target.txt", path.join(root, "node_modules/loose-link"));
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
+    const folderPaths = folders.map((f) => f.path);
+    const itemPaths = items.map((i) => i.path);
+
+    expect(folderPaths).toContain("node_modules/@scope/pkg");
+    // No recursion through the symlinked directory.
+    expect(folderPaths).not.toContain("node_modules/@scope/pkg/inner");
+    expect(itemPaths).not.toContain("node_modules/@scope/pkg/inner/payload.txt");
+
+    expect(itemPaths).toContain("node_modules/loose-link");
+  });
+
   it("paginates by mtime cursor", async () => {
     for (let i = 0; i < 4; i++) {
       await uploadArtifact(ctx, {

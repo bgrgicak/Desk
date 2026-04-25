@@ -59,6 +59,12 @@ function guessMime(name: string): string {
  * Dotfile visibility rule applies uniformly: when `showHidden` is false
  * (default), dot-prefixed entries are skipped at every level — including
  * their subtrees, so `.chats/` contents stay invisible to listings.
+ *
+ * Symlinks are listed as their resolved kind (file or folder) but never
+ * recursed through. That matches `ls` semantics, surfaces npm-style
+ * workspace links (`node_modules/@scope/pkg → ../../packages/pkg`), and
+ * avoids both cycles and duplicate entries when the link target already
+ * sits inside the walked tree.
  */
 async function walk(
   dir: string,
@@ -70,25 +76,25 @@ async function walk(
 
   while (stack.length > 0) {
     const current = stack.pop()!;
-    let entries: Array<{ name: string; isFile: boolean; isDirectory: boolean }>;
+    let entries: fs.Dirent[];
     try {
-      const raw = await fs.readdir(current, { withFileTypes: true });
-      entries = raw.map((e) => ({
-        name: e.name,
-        isFile: e.isFile(),
-        isDirectory: e.isDirectory(),
-      }));
+      entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
       continue;
     }
     for (const e of entries) {
       if (!opts.showHidden && e.name.startsWith(".")) continue;
       const abs = path.join(current, e.name);
-      if (e.isDirectory) {
+      if (e.isDirectory()) {
         folders.push(abs);
         stack.push(abs);
-      } else if (e.isFile) {
+      } else if (e.isFile()) {
         files.push(abs);
+      } else if (e.isSymbolicLink()) {
+        const target = await fs.stat(abs).catch(() => null);
+        if (!target) continue;
+        if (target.isDirectory()) folders.push(abs);
+        else if (target.isFile()) files.push(abs);
       }
     }
   }
@@ -98,12 +104,14 @@ async function walk(
 
 /**
  * Lists the workspace's library files and folders, recursing through
- * subdirectories. Sort is by mtime DESC for both lists; cursor / limit
- * paginate the file list only (folders are cheap and small enough to
- * return whole).
+ * subdirectories. The frontend reconstructs the folder tree from the full
+ * result, so partial responses break item counts and hide top-level files
+ * when subtrees like `node_modules/` dominate by mtime — the listing must
+ * mirror the filesystem exactly.
  *
- * Cursor is the serialized mtime of the last returned file; only files
- * with mtime strictly less than the cursor appear in the next page.
+ * `limit` is opt-in: passing it caps the file list and emits a `nextCursor`
+ * for clients that want to page; omitting it returns everything. Cursor is
+ * the serialized mtime of the last returned file (strict less-than).
  *
  * Under the workspace-as-home model the workspace root is the library —
  * there is no per-workspace subdirectory. The `workspaceId` argument is
@@ -150,9 +158,12 @@ export async function listLibrary(
   const filtered = cursor
     ? fileItems.filter((e) => e.createdAt < cursor)
     : fileItems;
-  const limit = opts?.limit ?? 50;
-  const items = filtered.slice(0, limit);
-  const nextCursor = items.length === limit ? items[items.length - 1].createdAt : undefined;
+  const limit = opts?.limit;
+  const items = limit !== undefined ? filtered.slice(0, limit) : filtered;
+  const nextCursor =
+    limit !== undefined && items.length === limit
+      ? items[items.length - 1].createdAt
+      : undefined;
 
   return { items, folders: folderItems, nextCursor };
 }
