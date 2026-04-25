@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import {
-  LayoutGrid, Zap, FolderOpen, Plus, Search, X,
+  LayoutGrid, Zap, FolderOpen, Plus, Search,
   SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
   FileText, ImageIcon, Table, Globe, Play,
@@ -19,7 +19,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -52,19 +51,18 @@ import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
 import {
   useGetWorkspacesQuery,
-  useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
   useSearchQuery,
 } from '@/store/api'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 
-export type View = 'today' | 'desk' | 'runs' | 'chats' | 'context' | 'compose'
+export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
-const NAV_ITEMS: { view: View; icon: LucideIcon; label: string }[] = [
+const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
   { view: 'desk',    icon: LayoutGrid,  label: 'Desk'    },
-  { view: 'runs',    icon: Zap,         label: 'Runs'    },
+  { view: 'tasks',   icon: Zap,         label: 'Tasks'   },
   { view: 'context', icon: FolderOpen,  label: 'Library' },
 ]
 
@@ -103,7 +101,7 @@ function getChatIcon(chat: Chat, artifacts: Artifact[]): LucideIcon {
 interface AppShellProps {
   children: ReactNode
   activeView: View
-  onViewChange: (view: View) => void
+  onViewChange: (view: WorkspaceNavView) => void
   onCompose: () => void
   chats: Chat[]
   artifacts: Artifact[]
@@ -123,6 +121,7 @@ interface AppShellProps {
   // ── Today sheet ──
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
+  onSignOut?: () => void
 }
 
 export function AppShell({
@@ -146,6 +145,7 @@ export function AppShell({
   onNavigateWorkspace,
   todaySheetOpen = false,
   onTodaySheetClose,
+  onSignOut,
 }: AppShellProps) {
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
@@ -191,6 +191,7 @@ export function AppShell({
         onSelectWorkspace={onSelectWorkspace}
         onNavigate={onNavigateWorkspace}
         onCompose={onCompose}
+        onSignOut={onSignOut}
       />
 
       {/* ── Today sheet (slides in from left) ── */}

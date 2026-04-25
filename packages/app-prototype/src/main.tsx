@@ -9,12 +9,12 @@ import { ensureSession } from './auth/auto-login'
 import { wsConnect } from './store/ws/middleware'
 
 async function boot(): Promise<void> {
-  await ensureSession()
+  const token = await ensureSession()
 
-  // Connect the WS middleware. It manages its own socket lifecycle +
-  // exponential-backoff reconnect, dispatches ws/event actions, and
-  // patches RTK Query caches for server-pushed events.
-  store.dispatch(wsConnect())
+  // Connect the WS middleware once we actually have a token. After an
+  // explicit sign-out `ensureSession()` returns null and we render the
+  // LoginScreen instead — re-trying the WS would just 1008-close.
+  if (token) store.dispatch(wsConnect())
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

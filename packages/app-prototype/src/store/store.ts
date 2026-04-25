@@ -18,7 +18,7 @@ export const store = configureStore({
     actionSanitizer: (action) => {
       const a = action as { type?: string; meta?: unknown };
       if (typeof a.type === "string" && a.type.includes("/executeMutation")) {
-        return { ...(action as object), meta: "[redacted]" } as typeof action;
+        return { ...(action as object), meta: "[redacted]" } as unknown as typeof action;
       }
       return action;
     },

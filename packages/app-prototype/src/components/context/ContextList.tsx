@@ -353,7 +353,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
 
   const filteredItems = folderItems
     .filter(i => typeFilter === 'all' || typeFilter === i.type)
-    .filter(i => typeFilter !== 'folder')
+    .filter(() => typeFilter !== 'folder')
     .filter(i => !searchQuery || i.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime())
 

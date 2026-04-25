@@ -1,7 +1,7 @@
-export type RouteView = "desk" | "runs" | "context";
+export type RouteView = "desk" | "tasks" | "context";
 
 export function isRouteView(v: string | undefined): v is RouteView {
-  return v === "desk" || v === "runs" || v === "context";
+  return v === "desk" || v === "tasks" || v === "context";
 }
 
 export interface NavQuery {

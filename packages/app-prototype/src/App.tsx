@@ -12,11 +12,12 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import type { WorkspaceNavView } from '@/components/layout/WorkspaceBar'
+import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
-import { RunsPage } from '@/components/runs/RunsPage'
+import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
 import {
@@ -30,6 +31,7 @@ import {
   useCreateChatMutation,
   useDeleteChatMutation,
   usePostChatMessageMutation,
+  usePatchMessageMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
@@ -42,10 +44,12 @@ import {
 } from '@/store/slices/uiSlice'
 import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
 import { toUiChat } from '@/store/selectors/chats'
-import { toUiRun } from '@/store/selectors/runs'
+import { toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
+import { logout } from '@/auth/auto-login'
+import { getSessionToken } from '@/auth/session'
 
 const NEW_CHAT_STUB: Chat = {
   id: NEW_CHAT_ID,
@@ -59,6 +63,17 @@ const NEW_CHAT_STUB: Chat = {
 }
 
 export default function App() {
+  // Sign-out clears the token before reload. Render the LoginScreen at
+  // the App root so AppInner's data hooks don't fire 401-storms during
+  // the logged-out state.
+  if (!getSessionToken()) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <LoginScreen onLogin={() => undefined} />
+      </TooltipProvider>
+    )
+  }
   return (
     <Routes>
       <Route path="/w/:wsId/:view" element={<AppInner />} />
@@ -141,11 +156,12 @@ function AppInner() {
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
 
-  const { data: runsResp } = useGetMessagesQuery(
+  const { data: tasksResp } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, scheduled: true },
     { skip: !activeWorkspaceId },
   )
-  const runs = (runsResp?.items ?? []).map(m => toUiRun(m, serverAgents ?? []))
+  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, serverAgents ?? []))
+  const [patchMessageMutation] = usePatchMessageMutation()
 
   // Agentation widget (Option+A)
   useEffect(() => {
@@ -318,6 +334,7 @@ function AppInner() {
       ? toContextItem(fallbackFile, activeWorkspaceId)
       : null)
 
+
   return (
     <TooltipProvider>
       <Toaster position="bottom-right" />
@@ -341,6 +358,7 @@ function AppInner() {
         onNavigateWorkspace={handleNavigateWorkspace}
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
+        onSignOut={() => void logout()}
       >
         {selectedArtifact && (() => {
           const selectedArtifactUpdate = artifactUpdates.find(u => u.artifactId === selectedArtifact.id) ?? null
@@ -402,8 +420,65 @@ function AppInner() {
             onDismissUpdate={handleDismissUpdate}
           />
         )}
-        {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'runs' && (
-          <RunsPage runs={runs} onCompose={enterCompose} />
+        {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'tasks' && (
+          <TasksPage
+            tasks={tasks}
+            onTaskMove={async (task, newStatus) => {
+              if (!task.chatId || !task.messageId) return
+              // UI status → server message PATCH:
+              //   todo       → state: 'pending', executeAt: null   (queued, not scheduled)
+              //   active     → server-only state, ignore drops onto Active
+              //   complete   → state: 'cancelled' (we collapse done into the same column;
+              //                                    server has no 'complete', and 'succeeded'
+              //                                    is reserved for real terminal output)
+              //   scheduled  → state: 'pending', leave executeAt alone
+              try {
+                if (newStatus === 'active') {
+                  toast.message('"Active" is set by the server when the task fires.')
+                  return
+                }
+                const patch: { state?: 'pending' | 'cancelled'; executeAt?: string | null } = {}
+                if (newStatus === 'todo') { patch.state = 'pending'; patch.executeAt = null }
+                else if (newStatus === 'complete') { patch.state = 'cancelled' }
+                else if (newStatus === 'scheduled') { patch.state = 'pending' }
+                await patchMessageMutation({ chatId: task.chatId, messageId: task.messageId, patch }).unwrap()
+              } catch (err) {
+                toast.error('Move failed', { description: err instanceof Error ? err.message : undefined })
+              }
+            }}
+            onCreateTask={async (input) => {
+              if (!activeWorkspaceId) return
+              const pickedAgentId = workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
+              if (!pickedAgentId) {
+                toast.error('No agent enabled in this workspace', {
+                  description: 'Open Settings → Agents to enable one.',
+                })
+                return
+              }
+              try {
+                const newChat = await createChatMutation({
+                  workspaceId: activeWorkspaceId,
+                  agentId: pickedAgentId,
+                  title: input.name.length > 50 ? input.name.slice(0, 50) + '…' : input.name,
+                }).unwrap()
+                const message = await postMessageMutation({
+                  chatId: newChat.id,
+                  content: input.description?.trim() ? `${input.name}\n\n${input.description}` : input.name,
+                }).unwrap()
+                if (input.status === 'scheduled' && input.scheduledFor) {
+                  await patchMessageMutation({
+                    chatId: newChat.id,
+                    messageId: message.id,
+                    patch: { executeAt: input.scheduledFor.toISOString() },
+                  }).unwrap()
+                }
+              } catch (err) {
+                toast.error('Failed to create task', {
+                  description: err instanceof Error ? err.message : undefined,
+                })
+              }
+            }}
+          />
         )}
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList

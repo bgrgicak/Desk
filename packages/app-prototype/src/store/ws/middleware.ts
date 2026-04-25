@@ -48,7 +48,7 @@ export const wsMiddleware: Middleware = (storeApi) => {
       try {
         const event = JSON.parse(String(ev.data)) as WsEvent;
         storeApi.dispatch(wsEvent(event));
-        applyEventToCache(storeApi.dispatch, event);
+        applyEventToCache(storeApi.dispatch as (a: unknown) => unknown, event);
       } catch {
         /* malformed — drop */
       }

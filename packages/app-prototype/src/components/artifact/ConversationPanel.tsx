@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { MessageSquare, PanelRightClose, ChevronDown, ChevronRight } from 'lucide-react'
+import { PanelRightClose, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -20,7 +20,7 @@ interface ConversationPanelProps {
   update?: ArtifactUpdate | null
   isUpdateRead?: boolean
   onDismissUpdate?: (id: string) => void
-  transitionFrom?: 'compose'
+  transitionFrom?: 'compose' | 'chat'
 }
 
 export function ConversationPanel({
@@ -30,8 +30,6 @@ export function ConversationPanel({
   collapsed = false,
   artifact,
   update,
-  isUpdateRead,
-  onDismissUpdate,
   transitionFrom,
 }: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -160,7 +158,7 @@ export function ConversationPanel({
                   value={artifactNotes}
                   onChange={e => setArtifactNotes(e.target.value)}
                   placeholder="e.g., Always keep the tone formal."
-                  className="w-full min-h-[80px] rounded-lg border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
+                  className="w-full min-h-[80px] rounded-lg border bg-background shadow-xs px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
                 />
               </div>
             )}

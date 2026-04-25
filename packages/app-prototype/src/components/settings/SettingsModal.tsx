@@ -23,6 +23,8 @@ import {
   useAddWorkspaceAgentMutation,
   useRemoveWorkspaceAgentMutation,
   useGetModelsQuery,
+  useGetProviderKeysQuery,
+  usePutProviderKeysMutation,
   type ModelRef,
 } from '@/store/api'
 
@@ -618,6 +620,82 @@ function AgentsSection({ workspaceId }: { workspaceId: string }) {
           Add custom agent
         </Button>
       )}
+
+      {/* Provider keys — feeds the model picker via /tools/models. */}
+      <ProvidersPanel />
+    </div>
+  )
+}
+
+// ── Providers ────────────────────────────────────────────────────────────────
+
+function ProvidersPanel() {
+  const { data: keys, isLoading } = useGetProviderKeysQuery()
+  const [putKeys, putState] = usePutProviderKeysMutation()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+
+  const PROVIDERS: { id: string; label: string; placeholder: string }[] = [
+    { id: 'ANTHROPIC_API_KEY', label: 'Anthropic (Claude)', placeholder: 'sk-ant-…' },
+    { id: 'OPENAI_API_KEY',    label: 'OpenAI (ChatGPT)',   placeholder: 'sk-…' },
+  ]
+
+  // Server returns masked echoes like `sk-ant-...1f4a` for stored keys.
+  const isMaskedKey = (v: string | null | undefined) => !!v && v.includes('...')
+
+  return (
+    <div className="space-y-3 pt-4 border-t">
+      <div>
+        <h3 className="text-sm font-semibold mb-0.5">Providers</h3>
+        <p className="text-xs text-muted-foreground">
+          API keys are stored encrypted on the server. Saved keys appear masked
+          on reload — submit a fresh value to overwrite.
+        </p>
+      </div>
+      {isLoading && (
+        <p className="text-xs text-muted-foreground px-3 py-2">Loading providers…</p>
+      )}
+      <div className="space-y-2">
+        {PROVIDERS.map(p => {
+          const stored = keys?.[p.id] ?? null
+          const draft = drafts[p.id]
+          const value = draft ?? (isMaskedKey(stored) ? stored ?? '' : (stored ?? ''))
+          return (
+            <div key={p.id} className="flex items-center gap-2">
+              <label className="text-xs font-medium text-muted-foreground w-44 shrink-0">
+                {p.label}
+              </label>
+              <Input
+                type="password"
+                placeholder={p.placeholder}
+                value={value}
+                data-testid={`provider-key-${p.id}`}
+                onChange={(e) => setDrafts(prev => ({ ...prev, [p.id]: e.target.value }))}
+                className="flex-1"
+              />
+              <Button
+                size="sm"
+                disabled={draft === undefined || putState.isLoading}
+                data-testid={`provider-save-${p.id}`}
+                onClick={async () => {
+                  if (draft === undefined) return
+                  try {
+                    await putKeys({ [p.id]: draft }).unwrap()
+                    setDrafts(prev => {
+                      const next = { ...prev }
+                      delete next[p.id]
+                      return next
+                    })
+                  } catch (err) {
+                    toast.error('Could not save provider key', { description: describeApiError(err) })
+                  }
+                }}
+              >
+                Apply
+              </Button>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -639,9 +717,18 @@ function ConnectionsSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold mb-0.5">Connections</h3>
+        <div className="flex items-center gap-2 mb-0.5">
+          <h3 className="text-sm font-semibold">Connections</h3>
+          <span
+            data-testid="connections-coming-soon"
+            className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+          >
+            Coming soon
+          </span>
+        </div>
         <p className="text-xs text-muted-foreground">
-          Connected sources appear in this workspace's library and can be referenced in chats.
+          Preview of the connections surface. Toggles are local to your browser
+          until the server connections backend ships.
         </p>
       </div>
 
@@ -687,8 +774,19 @@ function PreferencesSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold mb-0.5">Preferences</h3>
-        <p className="text-xs text-muted-foreground">Behaviour settings for this workspace.</p>
+        <div className="flex items-center gap-2 mb-0.5">
+          <h3 className="text-sm font-semibold">Preferences</h3>
+          <span
+            data-testid="preferences-coming-soon"
+            className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+          >
+            Coming soon
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Behaviour settings for this workspace. Saved to your browser only —
+          server-side persistence ships in a follow-up.
+        </p>
       </div>
 
       <div className="space-y-4">

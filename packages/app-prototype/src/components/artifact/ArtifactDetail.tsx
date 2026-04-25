@@ -48,7 +48,7 @@ import {
 import { ArtifactPreview } from './ArtifactPreview'
 import { ConversationPanel } from './ConversationPanel'
 import type { Artifact, ArtifactUpdate } from '@/data/ui-types'
-import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
 import { fetchLibraryContent } from '@/store/library-download'
 
 interface ArtifactDetailProps {

@@ -135,6 +135,46 @@ export interface Folder {
   createdAt: Date
 }
 
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+export interface TaskOccurrence {
+  id: string
+  startedAt: Date
+  endedAt: Date
+  status: 'completed' | 'failed' | 'active'
+  statusText?: string
+}
+
+export interface Task {
+  id: string
+  name: string
+  description?: string
+  agentName: string
+  status: 'todo' | 'active' | 'complete' | 'scheduled'
+  statusText: string
+  priority?: 'low' | 'medium' | 'high' | 'highest'
+  assigneeId?: string
+  startedAt: Date
+  completedAt?: Date
+  /** Server message id for lifecycle PATCHes (pause/resume/cancel) and
+   * for scrolling the chat view to the originating message. */
+  messageId?: string
+  /** Chat the backing message lives in. */
+  chatId?: string
+  /** True when the task has actually fired at least once. */
+  hasRealStartedAt?: boolean
+  artifactIds: string[]
+  scheduledFor?: Date
+  scheduleEndDate?: Date
+  scheduleRepeat?: boolean
+  /** Next scheduled fire time (server `executeAt` or next cron tick). */
+  nextRun?: Date
+  color: 'blue' | 'emerald' | 'amber' | 'violet' | 'slate' | 'rose' | 'orange'
+  /** Free-form schedule label (cron string, "Every Tuesday", etc.). */
+  schedule?: string
+  history: TaskOccurrence[]
+}
+
 // ── Runs ──────────────────────────────────────────────────────────────────────
 
 export interface RunOccurrence {
@@ -184,6 +224,40 @@ export interface Chat {
   unread?: boolean
   workspaceId?: string
   agentId?: string
+}
+
+// ── Settings / Connections (catalog of integrations the UI can render) ───────
+
+export type ConnectionKind =
+  | 'claude' | 'chatgpt'
+  | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+
+export interface ConnectionMeta {
+  name: string
+  description: string
+  /** Emoji used when no brand mark applies. */
+  icon: string
+}
+
+export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
+  'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API', icon: '🅰️' },
+  'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',    icon: '🅶' },
+  'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',             icon: '📁' },
+  'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
+  'github':       { name: 'GitHub',       description: 'Repositories and issues',              icon: '🐙' },
+  'slack':        { name: 'Slack',        description: 'Messages and channels',                icon: '💬' },
+  'figma':        { name: 'Figma',        description: 'Design files and prototypes',          icon: '🎨' },
+  'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',          icon: '🔷' },
+  'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
+}
+
+export interface Connection {
+  id: string
+  kind: ConnectionKind
+  name: string
+  apiKey?: string
+  baseUrl?: string
+  enabled: boolean
 }
 
 // ── Settings / Providers ──────────────────────────────────────────────────────

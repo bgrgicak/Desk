@@ -100,7 +100,7 @@ export interface WorkspaceInfo {
   unreadCount: number
 }
 
-export type WorkspaceNavView = Extract<View, 'desk' | 'runs' | 'context'>
+export type WorkspaceNavView = Extract<View, 'desk' | 'tasks' | 'context'>
 
 interface WorkspaceBarProps {
   workspaces: WorkspaceInfo[]
@@ -111,6 +111,7 @@ interface WorkspaceBarProps {
   onSelectWorkspace: (id: string) => void
   onNavigate: (id: string, view: WorkspaceNavView) => void
   onCompose?: () => void
+  onSignOut?: () => void
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ export function WorkspaceBar({
   onSelectWorkspace,
   onNavigate,
   onCompose,
+  onSignOut,
 }: WorkspaceBarProps) {
   // Current user — fetched once on mount via RTK Query. Falls back to a
   // placeholder while in-flight so the initial render is stable.
@@ -346,7 +348,10 @@ export function WorkspaceBar({
               <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
               <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-muted-foreground" onClick={() => void logout()}>
+              <DropdownMenuItem
+                onSelect={onSignOut ?? (() => void logout())}
+                data-testid="sign-out-button"
+              >
                 <LogOut className="h-4 w-4" />Sign out
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -373,7 +378,7 @@ export function WorkspaceBar({
           <CommandSeparator />
           <CommandGroup heading="Views">
             <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'desk');    setCommandOpen(false) }}><LayoutGrid />Desk</CommandItem>
-            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'runs');    setCommandOpen(false) }}><Zap />Runs</CommandItem>
+            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'tasks');   setCommandOpen(false) }}><Zap />Tasks</CommandItem>
             <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'context'); setCommandOpen(false) }}><FolderOpen />Library</CommandItem>
           </CommandGroup>
           {onCompose && (

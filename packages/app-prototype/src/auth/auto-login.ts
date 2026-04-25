@@ -12,6 +12,28 @@ import {
 const DEV_USERNAME = "desk";
 const DEV_PASSWORD = "change-me-before-first-boot";
 
+// Persistent flag set by `logout()`. When present, ensureSession()
+// short-circuits and does NOT auto-login — so the LoginScreen renders
+// after an explicit sign-out instead of immediately re-authenticating.
+const SIGNED_OUT_KEY = "desk.session.signed_out";
+
+function readSignedOut(): boolean {
+  try {
+    return localStorage.getItem(SIGNED_OUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setSignedOut(value: boolean): void {
+  try {
+    if (value) localStorage.setItem(SIGNED_OUT_KEY, "1");
+    else localStorage.removeItem(SIGNED_OUT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function login(
   username: string,
   password: string,
@@ -42,10 +64,18 @@ async function tokenStillAccepted(token: string): Promise<boolean> {
   }
 }
 
-export async function ensureSession(): Promise<string> {
+export async function ensureSession(): Promise<string | null> {
   const existing = getSessionToken();
-  if (existing && (await tokenStillAccepted(existing))) return existing;
-
+  if (existing && (await tokenStillAccepted(existing))) {
+    setSignedOut(false);
+    return existing;
+  }
+  if (readSignedOut()) {
+    // The user explicitly signed out; surface the LoginScreen instead of
+    // silently re-authenticating with the dev creds.
+    clearSessionToken();
+    return null;
+  }
   clearSessionToken();
   const token = await login(DEV_USERNAME, DEV_PASSWORD);
   setSessionToken(token);
@@ -62,5 +92,12 @@ export async function logout(): Promise<void> {
     }).catch(() => undefined);
   }
   clearSessionToken();
+  setSignedOut(true);
   window.location.reload();
+}
+
+/** Called from LoginScreen on a successful login to clear the signed-out
+ * sticky flag so the next boot can auto-resume the session. */
+export function markSignedIn(): void {
+  setSignedOut(false);
 }

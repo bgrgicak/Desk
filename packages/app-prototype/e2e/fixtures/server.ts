@@ -81,6 +81,10 @@ export async function startDeskServer(
     PORT: String(port),
     DATABASE_URL: testDbUrl(dbName),
     DESK_HOME: home,
+    // The encryption module's default secret-key path is /home/desk/secret.key,
+    // which the host user can't write to. Pin it inside DESK_HOME so the
+    // /me/providers PUT path (encrypts keys) actually works under e2e.
+    DESK_SECRET_KEY_PATH: path.join(home, "secret.key"),
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
     // Host e2e runs without at/cron binaries (those live in the VM

@@ -10,7 +10,8 @@ export type MessageState =
   | "running"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "paused";
 
 export interface AgentEvent {
   type: string;

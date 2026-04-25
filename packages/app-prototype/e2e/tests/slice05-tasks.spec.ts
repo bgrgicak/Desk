@@ -1,12 +1,14 @@
 /**
- * Slice 5 — Runs page shows scheduled messages.
+ * Slice 5 — Tasks page shows scheduled messages.
  *
- * Creates a chat + a scheduled message (via POST /chats/:id/messages
- * followed by PATCH to set executeAt). The Runs view should render it.
+ * Creates a chat + a scheduled message (POST /chats/:id/messages then
+ * PATCH executeAt). The Tasks view should render it. (Renamed from
+ * slice05-runs in lockstep with the trunk runs → tasks rename; same
+ * underlying coverage.)
  */
 import { test, expect } from "../fixtures";
 
-test("runs page shows scheduled server messages", async ({
+test("tasks page shows scheduled server messages", async ({
   loggedInPage,
   serverUrl,
   token,
@@ -31,18 +33,15 @@ test("runs page shows scheduled server messages", async ({
       body: JSON.stringify({
         workspaceId: wsList[0].id,
         agentId: agents[0].id,
-        title: "Slice5 runs container",
+        title: "Slice5 tasks container",
       }),
     })
   ).json()) as { id: string };
 
-  // POST initial user message — the server pairs it with an agent_turn
-  // slot which becomes the scheduled row. We PATCH executeAt on the
-  // message the API returns so it surfaces as a pending run.
   const postRes = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ content: "Slice5 run placeholder" }),
+    body: JSON.stringify({ content: "Slice5 task placeholder" }),
   });
   expect(postRes.status).toBeGreaterThanOrEqual(200);
   expect(postRes.status).toBeLessThan(300);
@@ -61,17 +60,11 @@ test("runs page shows scheduled server messages", async ({
     test.skip(true, "server rejected executeAt on user message — feature not available");
   }
 
-  // Verify the cross-chat /messages endpoint actually returns the row
-  // as scheduled — otherwise the UI can't show it either.
   const crossRes = await fetch(
     `${serverUrl}/messages?scheduled=true&workspaceId=${wsList[0].id}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
   const cross = (await crossRes.json()) as { items: Array<{ id: string; state?: string }> };
-  console.log(
-    `[slice5] cross-chat scheduled rows: ${cross.items.length}, our user msg id: ${userMsg.id}, rows:`,
-    JSON.stringify(cross.items, null, 2),
-  );
   if (!cross.items.some((m) => m.id === userMsg.id)) {
     test.skip(
       true,
@@ -80,15 +73,15 @@ test("runs page shows scheduled server messages", async ({
   }
 
   await loggedInPage.reload();
-  // Navigate to runs view — click the "Runs" sidebar item.
-  await loggedInPage.getByRole("button", { name: /^Runs$/ }).first().click();
+  // Navigate to tasks view — click the "Tasks" sidebar item.
+  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
 
-  // Switch to list view — the default calendar view doesn't surface
-  // names directly on the event tiles at small widths.
-  await loggedInPage.getByRole("button", { name: /List/i }).first().click();
+  // Switch to list view — the default board / calendar views don't
+  // render the message text inline at small widths.
+  await loggedInPage.getByTestId("tasks-view-list").click();
 
-  // The run's name is derived from the first line of content.
+  // The task's name is derived from the first line of content.
   await expect(
-    loggedInPage.getByText("Slice5 run placeholder").first(),
+    loggedInPage.getByText("Slice5 task placeholder").first(),
   ).toBeVisible({ timeout: 10_000 });
 });
