@@ -81,6 +81,8 @@ export interface ServerChat {
 export interface AttachmentRef {
   path: string;
   name: string;
+  /** "directory" when the path points at a folder; defaults to "file" when omitted. */
+  kind?: "file" | "directory";
   mime?: string;
   size?: number;
 }
@@ -111,6 +113,12 @@ export interface ServerFile {
   mime: string;
   size: number;
   createdAt: string;
+  /**
+   * Set on `GET /chats/{id}/attachments` items only — `attachment` is a
+   * user upload from `.chats/{id}/attachments/`, `note` is a materialized
+   * note from `.chats/{id}/notes/`. Library responses omit it.
+   */
+  kind?: "attachment" | "note";
 }
 
 /**

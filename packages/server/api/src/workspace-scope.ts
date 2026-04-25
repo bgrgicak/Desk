@@ -2,7 +2,7 @@ import pg from "pg";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
 import { validateLibrarySubpath } from "@desk/storage";
-import { requireOwnedWorkspace } from "./auth/ownership.js";
+import { requireOwnedChat, requireOwnedWorkspace } from "./auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
 
@@ -67,4 +67,29 @@ export function requireLibraryPathInWorkspace(relPath: string, _workspaceId: str
   } catch {
     throw new NotFoundError(`File not found: ${relPath}`);
   }
+}
+
+/**
+ * Path validator for read endpoints that should also serve user-uploaded
+ * chat attachments. Accepts strict library paths (delegates to
+ * `requireLibraryPathInWorkspace`) AND `.chats/<chatId>/attachments/<filename>`
+ * shapes after verifying the caller owns the chat. Other dot-prefixed
+ * paths remain blocked so this can't be used to traverse agent
+ * infrastructure (`.chats/<id>/notes/`, `.chats/<id>/logs/`, etc.).
+ */
+const CHAT_ATTACHMENT_PATTERN =
+  /^\.chats\/(cht_[A-Za-z0-9_-]+)\/attachments\/([^/]+)$/;
+
+export async function requireReadablePathInWorkspace(
+  pool: pg.Pool,
+  userId: string,
+  relPath: string,
+  workspaceId: string,
+): Promise<void> {
+  const m = relPath.match(CHAT_ATTACHMENT_PATTERN);
+  if (m) {
+    await requireOwnedChat(pool, m[1], userId);
+    return;
+  }
+  requireLibraryPathInWorkspace(relPath, workspaceId);
 }

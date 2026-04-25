@@ -397,6 +397,14 @@ export const api = createApi({
       },
       providesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
+    getLibraryFile: build.query<
+      ServerFile,
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) =>
+        `/library/meta?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
+      providesTags: (_r, _e, { path }) => [{ type: "LibraryFile", id: path }],
+    }),
     deleteLibraryFile: build.mutation<
       { ok: true },
       { workspaceId: string; path: string }
@@ -471,12 +479,22 @@ export const api = createApi({
     // ── Chat attachments ──────────────────────────────────────────────
     // "attachments" covers both user-visible chat files (non-dot) and
     // agent-generated artifacts (dot-prefixed). Pass showHidden=true to
-    // include the artifact set for the chat's Artifacts panel.
-    getChatArtifacts: build.query<ServerFile[], { chatId: string; showHidden?: boolean }>({
-      query: ({ chatId, showHidden }) =>
-        showHidden
-          ? `/chats/${chatId}/attachments?showHidden=true`
-          : `/chats/${chatId}/attachments`,
+    // include the artifact set for the chat's Artifacts panel. Pass
+    // includeNotes=true to also include the chat's materialized note
+    // mirrors (.chats/{id}/notes/) — used by the Files panel.
+    getChatArtifacts: build.query<
+      ServerFile[],
+      { chatId: string; showHidden?: boolean; includeNotes?: boolean }
+    >({
+      query: ({ chatId, showHidden, includeNotes }) => {
+        const params = new URLSearchParams()
+        if (showHidden) params.set("showHidden", "true")
+        if (includeNotes) params.set("includeNotes", "true")
+        const qs = params.toString()
+        return qs
+          ? `/chats/${chatId}/attachments?${qs}`
+          : `/chats/${chatId}/attachments`
+      },
       providesTags: (_r, _e, { chatId }) => [
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
@@ -551,6 +569,7 @@ export const {
   useDeleteMessageMutation,
   useGetMessagesQuery,
   useGetLibraryQuery,
+  useGetLibraryFileQuery,
   useDeleteLibraryFileMutation,
   useUploadLibraryFileMutation,
   useSaveLibraryContentMutation,

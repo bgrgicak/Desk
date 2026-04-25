@@ -28,6 +28,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import {
   requireLibraryPathInWorkspace,
+  requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
 } from "./workspace-scope.js";
@@ -474,7 +475,11 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const showHidden = query.get("showHidden") === "true";
-      const result = await chatRoutes.listAttachments(storage, segments[1], { showHidden });
+      const includeNotes = query.get("includeNotes") === "true";
+      const result = await chatRoutes.listAttachments(storage, segments[1], {
+        showHidden,
+        includeNotes,
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -569,7 +574,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
       sendJson(res, 200, result);
       return;
@@ -578,7 +583,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -591,7 +596,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,

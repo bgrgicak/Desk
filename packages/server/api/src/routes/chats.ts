@@ -10,6 +10,7 @@ import {
   chatAttachmentsDir,
   listNoteHistory,
   materializeNote,
+  notesDir,
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
@@ -343,36 +344,73 @@ export async function getMessageLogs(
 }
 
 /**
+ * `attachment`: a user-uploaded file under `.chats/{id}/attachments/`.
+ * `note`: a materialized mirror of a `note`-content message, written by
+ * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
+ * read-only from the client's perspective — they're owned by the DB row.
+ */
+export type ChatFileRef = FileRef & {
+  kind: "attachment" | "note";
+};
+
+/**
  * Lists a chat's attachments from the filesystem. By default returns only
  * visible (non-dot) entries — the user-uploaded chat files plus any
  * agent-finalized output. Passing `showHidden: true` includes agent
  * artifacts (dot-prefixed drafts / scratch) for the chat Artifacts panel
- * or a diagnostic view.
+ * or a diagnostic view. Passing `includeNotes: true` also walks
+ * `.chats/{id}/notes/` so the chat Files panel can show note mirrors
+ * alongside uploads — each item is tagged with `kind` so the UI can
+ * render them differently.
  */
 export async function listAttachments(
   storage: StorageContext,
   chatId: string,
-  opts?: { showHidden?: boolean },
-): Promise<FileRef[]> {
+  opts?: { showHidden?: boolean; includeNotes?: boolean },
+): Promise<ChatFileRef[]> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
-  const dir = await chatAttachmentsDir(storage.home, slug, chatId);
-  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  const root = workspaceRootPath(storage.home, slug);
   const showHidden = opts?.showHidden ?? false;
-  const out: FileRef[] = [];
-  for (const name of names) {
+  const out: ChatFileRef[] = [];
+
+  const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
+  const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
+  for (const name of attNames) {
     if (!showHidden && name.startsWith(".")) continue;
-    const abs = path.join(dir, name);
+    const abs = path.join(attDir, name);
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isFile()) continue;
-    const rel = path.relative(workspaceRootPath(storage.home, slug), abs).split(path.sep).join("/");
     out.push({
-      path: rel,
+      path: path.relative(root, abs).split(path.sep).join("/"),
       name,
       mime: "application/octet-stream",
       size: stat.size,
       createdAt: stat.birthtime.toISOString(),
+      kind: "attachment",
     });
   }
+
+  if (opts?.includeNotes) {
+    const nDir = notesDir(storage.home, slug, chatId);
+    const noteNames = await fs.readdir(nDir).catch(() => [] as string[]);
+    for (const name of noteNames) {
+      // Notes are always materialized as `{messageId}.md`; skip anything
+      // that doesn't match so a stray dotfile doesn't show up.
+      if (!name.endsWith(".md")) continue;
+      const abs = path.join(nDir, name);
+      const stat = await fs.stat(abs).catch(() => null);
+      if (!stat || !stat.isFile()) continue;
+      out.push({
+        path: path.relative(root, abs).split(path.sep).join("/"),
+        name,
+        mime: "text/markdown",
+        size: stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        kind: "note",
+      });
+    }
+  }
+
   out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   return out;
 }

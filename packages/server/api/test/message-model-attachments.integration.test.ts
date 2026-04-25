@@ -277,6 +277,85 @@ describe("POST /chats/{id}/messages with attachments", () => {
   });
 });
 
+describe("GET /library/content for chat attachments", () => {
+  // The chat-attachment path lives under `.chats/<chatId>/attachments/<file>`.
+  // The library read endpoints (used by the in-app file detail view) need to
+  // accept that shape so clicking an attachment chip can open the same
+  // ContextDetail UI as a library file. Other dot-prefixed paths must stay
+  // blocked so this isn't a backdoor into agent infrastructure.
+  const filename = "open-me.txt";
+  const fileBody = "attachment open-in-library content";
+  let attachmentPath: string;
+
+  beforeAll(async () => {
+    attachmentPath = `.chats/${chatId}/attachments/${filename}`;
+    const dir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "attachments");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, filename), fileBody);
+  });
+
+  it("serves a chat-owned attachment file as inline content", async () => {
+    const res = await fetchPath(`/library/content?path=${encodeURIComponent(attachmentPath)}`, userToken);
+    expect(res.status).toBe(200);
+    expect(res.body.toString()).toBe(fileBody);
+    expect(res.headers["content-disposition"]).toMatch(/^inline/);
+  });
+
+  it("returns metadata for a chat-owned attachment via /library/meta", async () => {
+    const res = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(attachmentPath)}`,
+      undefined,
+      userToken,
+    );
+    expect(res.status).toBe(200);
+    const meta = res.body as { path: string; name: string; size: number };
+    expect(meta.path).toBe(attachmentPath);
+    expect(meta.name).toBe(filename);
+    expect(meta.size).toBe(fileBody.length);
+  });
+
+  it("rejects other dot-prefixed paths (e.g. .chats/<id>/notes/) with 404", async () => {
+    const noteRes = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/notes/anything.md`)}`,
+      undefined,
+      userToken,
+    );
+    expect(noteRes.status).toBe(404);
+  });
+});
+
+async function fetchPath(
+  urlPath: string,
+  bearer: string,
+): Promise<{ status: number; body: Buffer; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: urlPath,
+        method: "GET",
+        headers: { Authorization: `Bearer ${bearer}` },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks),
+            headers: res.headers,
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 describe("fireMessage stamps model on the assistant row", () => {
   it("the child message carries the agent's configured model", async () => {
     const res = await request(
