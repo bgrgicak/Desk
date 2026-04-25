@@ -10,7 +10,7 @@ const TAG_BYTES = 16;
 let cachedKey: Buffer | null = null;
 
 function keyPath(): string {
-  return process.env.DESK_SECRET_KEY_PATH ?? "/var/lib/desk/secret.key";
+  return process.env.DESK_SECRET_KEY_PATH ?? "/home/desk/secret.key";
 }
 
 /**

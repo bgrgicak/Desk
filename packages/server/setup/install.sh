@@ -45,7 +45,7 @@ systemctl enable --now atd cron
 # ---------- 5. desk system user ----------
 if ! id desk &>/dev/null; then
   log "Creating desk user (UID 2000)"
-  useradd --system --uid 2000 --create-home --shell /usr/sbin/nologin desk
+  useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
 fi
 
 # ---------- 6. Postgres role + database ----------
@@ -113,7 +113,7 @@ DESK_RUN_BIN=/opt/desk-server/node_modules/.bin/desk-run
 # Explicit on-disk root. Must match across API, scheduler, and sandbox bind
 # mounts — a silent split between $HOME and a hardcoded fallback caused user
 # uploads to land in a tree the sandbox couldn't see.
-DESK_HOME=/var/lib/desk
+DESK_HOME=/home/desk
 ENVFILE
 
 # ---------- 8b. Internal shared secret ----------

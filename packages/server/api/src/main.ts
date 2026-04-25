@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   if (!process.env.DESK_HOME) {
     // eslint-disable-next-line no-console
     console.warn(
-      "DESK_HOME is not set explicitly. Falling back to $HOME or /var/lib/desk; " +
+      "DESK_HOME is not set explicitly. Falling back to $HOME or /home/desk; " +
         "set DESK_HOME in /etc/desk-server/env to pin the on-disk root.",
     );
   }

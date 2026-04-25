@@ -206,7 +206,7 @@ Returns every known AI provider key name with its value either masked
 (first 6 + last 4 characters) or `null` when unset. Keys are encrypted
 at rest in the `user_settings` table using AES-256-GCM; the encryption
 key lives on disk at `DESK_SECRET_KEY_PATH` (default
-`/var/lib/desk/secret.key`).
+`/home/desk/secret.key`).
 
 ### PUT /me/providers
 

@@ -11,11 +11,11 @@ import { ValidationError, ID_PREFIXES } from "@desk/shared";
  * — caused user uploads to vanish from inside sandboxes.
  *
  * Resolution order: explicit `DESK_HOME` env var → `HOME` (the running
- * service account's home) → `/var/lib/desk` (the `desk` system user's home,
- * matches `useradd --system --create-home desk`).
+ * service account's home) → `/home/desk` (the `desk` system user's home,
+ * pinned by `useradd --home-dir /home/desk` in install.sh).
  */
 export function resolveDeskHome(): string {
-  return process.env.DESK_HOME ?? process.env.HOME ?? "/var/lib/desk";
+  return process.env.DESK_HOME ?? process.env.HOME ?? "/home/desk";
 }
 
 /**
