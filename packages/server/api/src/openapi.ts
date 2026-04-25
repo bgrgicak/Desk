@@ -431,11 +431,12 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/library": {
         get: {
           summary: "List library files and folders",
-          description: "Recursively reads the workspace library directory; returns `items` (FileRef entries) and `folders` (FolderRef entries) describing the full tree. Files/folders with a leading dot are hidden. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: [], folders: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
+          description: "Recursively reads the workspace library directory; returns `items` (FileRef entries) and `folders` (FolderRef entries) describing the full tree. Hidden by default: dot-prefixed entries AND entries matched by any `.gitignore` in the subtree (root and nested gitignores compose like git itself). Pass `?showHidden=true` to include both. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: [], folders: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
             { name: "cursor", in: "query", schema: { type: "string" } },
             { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "showHidden", in: "query", schema: { type: "boolean" } },
           ],
           responses: { "200": { description: "Library listing" } },
         },

@@ -2,7 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
 import { queries } from "@desk/db";
-import { workspaceRootPath, type StorageContext } from "@desk/storage";
+import {
+  workspaceRootPath,
+  loadGitignoreFrame,
+  isGitIgnored,
+  type IgnoreFrame,
+  type StorageContext,
+} from "@desk/storage";
 
 export interface SearchResult {
   type: "file" | "chat" | "message";
@@ -13,21 +19,37 @@ export interface SearchResult {
 
 /**
  * Recursively walks a directory, collecting files. By default dot-prefixed
- * entries (files and directories) are skipped at every level — the
- * universal dotfile rule keeps agent artifacts and hidden infrastructure
- * out of user-facing search. Pass `showHidden: true` to include them.
+ * entries (files and directories) and gitignored entries are skipped at
+ * every level — the universal hidden rule keeps agent artifacts, hidden
+ * infrastructure, and build output (`node_modules/`, `dist/`, ...) out of
+ * user-facing search. Pass `showHidden: true` to include them.
+ *
+ * Gitignore composition only kicks in when `showHidden` is false; nested
+ * `.gitignore` files are layered onto ancestors as the walk descends, so
+ * each subtree sees git's exact filtering.
  */
 async function walkFiles(
   root: string,
   opts: { showHidden: boolean },
+  frames: IgnoreFrame[] = [],
   out: Array<{ abs: string; name: string }> = [],
 ): Promise<Array<{ abs: string; name: string }>> {
+  const respectGitignore = !opts.showHidden;
+  // Top-level call seeds the frame stack from the caller's `root`.
+  const seeded = frames.length > 0
+    ? frames
+    : (respectGitignore ? await loadGitignoreFrame(root).then((f) => (f ? [f] : [])) : []);
+
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   for (const e of entries) {
     if (!opts.showHidden && e.name.startsWith(".")) continue;
     const abs = path.join(root, e.name);
-    if (e.isDirectory()) {
-      await walkFiles(abs, opts, out);
+    const isDir = e.isDirectory();
+    if (respectGitignore && isGitIgnored(abs, isDir, seeded)) continue;
+    if (isDir) {
+      const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
+      const childFrames = childFrame ? [...seeded, childFrame] : seeded;
+      await walkFiles(abs, opts, childFrames, out);
     } else if (e.isFile()) {
       out.push({ abs, name: e.name });
     }

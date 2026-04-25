@@ -17,6 +17,7 @@
   "dependencies": {
     "@desk/shared": "*",
     "@desk/db": "*",
+    "ignore": "^7.0.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {

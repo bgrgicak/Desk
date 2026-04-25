@@ -163,6 +163,56 @@ describe("listLibrary", () => {
   });
 });
 
+describe("listLibrary gitignore", () => {
+  // These tests share the workspace root with the suites above. They
+  // write `.gitignore` files into dedicated subtrees so prior listings
+  // (which already populated `node_modules/`, `older-root.txt`, etc.)
+  // remain visible when `showHidden` is true.
+
+  it("hides gitignored entries by default and surfaces them with showHidden", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const sub = path.join(root, "gi-basic");
+    await fs.mkdir(path.join(sub, "build"), { recursive: true });
+    await fs.writeFile(path.join(sub, "build/output.bin"), "out");
+    await fs.writeFile(path.join(sub, "keep.txt"), "k");
+    await fs.writeFile(path.join(sub, ".gitignore"), "build/\n");
+
+    const hidden = await listLibrary(ctx, ctx.workspaceSlug);
+    expect(hidden.folders.map((f) => f.path)).not.toContain("gi-basic/build");
+    expect(hidden.items.map((i) => i.path)).not.toContain("gi-basic/build/output.bin");
+    expect(hidden.items.map((i) => i.path)).toContain("gi-basic/keep.txt");
+
+    const shown = await listLibrary(ctx, ctx.workspaceSlug, { showHidden: true });
+    expect(shown.folders.map((f) => f.path)).toContain("gi-basic/build");
+    expect(shown.items.map((i) => i.path)).toContain("gi-basic/build/output.bin");
+  });
+
+  it("composes nested .gitignore files with their ancestors", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const top = path.join(root, "gi-nested");
+    await fs.mkdir(path.join(top, "child", "deep"), { recursive: true });
+    await fs.mkdir(path.join(top, "child", "private"), { recursive: true });
+
+    // Root rule fires for any *.log at any depth in the subtree.
+    await fs.writeFile(path.join(top, ".gitignore"), "*.log\n");
+    // Nested rule only hides this branch's `private/` dir; doesn't escape.
+    await fs.writeFile(path.join(top, "child", ".gitignore"), "private/\n");
+
+    await fs.writeFile(path.join(top, "child", "private", "secret.md"), "s");
+    await fs.writeFile(path.join(top, "child", "deep", "trace.log"), "x");
+    await fs.writeFile(path.join(top, "child", "deep", "notes.md"), "ok");
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
+    const itemPaths = items.map((i) => i.path);
+    const folderPaths = folders.map((f) => f.path);
+
+    expect(itemPaths).not.toContain("gi-nested/child/deep/trace.log");
+    expect(itemPaths).toContain("gi-nested/child/deep/notes.md");
+    expect(folderPaths).not.toContain("gi-nested/child/private");
+    expect(itemPaths).not.toContain("gi-nested/child/private/secret.md");
+  });
+});
+
 describe("validateLibrarySubpath", () => {
   it("accepts simple and nested paths and normalizes leading/trailing slashes", () => {
     expect(validateLibrarySubpath(undefined)).toBe("");

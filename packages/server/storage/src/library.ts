@@ -1,7 +1,9 @@
 import * as fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import pg from "pg";
+import ignore, { type Ignore } from "ignore";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { workspaceRootPath, trashDir, resolveHostPath } from "./layout.js";
 import {
@@ -51,14 +53,50 @@ function guessMime(name: string): string {
   }
 }
 
+export interface IgnoreFrame {
+  /** Absolute directory the gitignore rules are anchored to. */
+  dir: string;
+  ig: Ignore;
+}
+
+/**
+ * Reads `dir/.gitignore` if present and returns a frame anchoring its
+ * rules to `dir`. Returns null when the file doesn't exist — the caller
+ * just inherits ancestor frames in that case.
+ */
+export async function loadGitignoreFrame(dir: string): Promise<IgnoreFrame | null> {
+  const body = await fs.readFile(path.join(dir, ".gitignore"), "utf-8").catch(() => null);
+  if (body === null) return null;
+  return { dir, ig: ignore().add(body) };
+}
+
+/**
+ * Returns true if any ancestor `.gitignore` ignores this entry. Each
+ * frame's rules are tested with the path *relative to that frame's
+ * directory* (and a trailing slash for directories), matching how git
+ * itself scopes nested gitignores.
+ */
+export function isGitIgnored(entryAbs: string, isDir: boolean, frames: IgnoreFrame[]): boolean {
+  for (const frame of frames) {
+    const rel = path.relative(frame.dir, entryAbs).split(path.sep).join("/");
+    if (!rel || rel.startsWith("../")) continue;
+    if (frame.ig.ignores(isDir ? `${rel}/` : rel)) return true;
+  }
+  return false;
+}
+
 /**
  * Recursively walks `dir`, collecting files and subdirectories. Both lists
  * are returned as absolute paths for the caller to project into
  * workspace-relative form.
  *
- * Dotfile visibility rule applies uniformly: when `showHidden` is false
- * (default), dot-prefixed entries are skipped at every level — including
- * their subtrees, so `.chats/` contents stay invisible to listings.
+ * Visibility rules — both apply only when `showHidden` is false (default):
+ *   1. Dot-prefixed entries are skipped at every level so agent
+ *      infrastructure like `.chats/` stays invisible.
+ *   2. `.gitignore` rules are honoured. Each directory's gitignore is
+ *      composed with its ancestors', so a root-level `node_modules/` rule
+ *      hides the whole subtree and a nested `build/` rule only hides that
+ *      subtree's build dir — exactly mirroring git's own scoping.
  *
  * Symlinks are listed as their resolved kind (file or folder) but never
  * recursed through. That matches `ls` semantics, surfaces npm-style
@@ -72,11 +110,16 @@ async function walk(
 ): Promise<{ files: string[]; folders: string[] }> {
   const files: string[] = [];
   const folders: string[] = [];
-  const stack: string[] = [dir];
+  const respectGitignore = !opts.showHidden;
+
+  const rootFrame = respectGitignore ? await loadGitignoreFrame(dir) : null;
+  const stack: Array<{ abs: string; frames: IgnoreFrame[] }> = [
+    { abs: dir, frames: rootFrame ? [rootFrame] : [] },
+  ];
 
   while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries: fs.Dirent[];
+    const { abs: current, frames } = stack.pop()!;
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
@@ -85,16 +128,34 @@ async function walk(
     for (const e of entries) {
       if (!opts.showHidden && e.name.startsWith(".")) continue;
       const abs = path.join(current, e.name);
+
+      let kind: "dir" | "file" | null = null;
+      let recurse = false;
       if (e.isDirectory()) {
-        folders.push(abs);
-        stack.push(abs);
+        kind = "dir";
+        recurse = true;
       } else if (e.isFile()) {
-        files.push(abs);
+        kind = "file";
       } else if (e.isSymbolicLink()) {
         const target = await fs.stat(abs).catch(() => null);
         if (!target) continue;
-        if (target.isDirectory()) folders.push(abs);
-        else if (target.isFile()) files.push(abs);
+        if (target.isDirectory()) kind = "dir";
+        else if (target.isFile()) kind = "file";
+        else continue;
+      }
+      if (!kind) continue;
+
+      if (respectGitignore && isGitIgnored(abs, kind === "dir", frames)) continue;
+
+      if (kind === "dir") {
+        folders.push(abs);
+        if (recurse) {
+          const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
+          const childFrames = childFrame ? [...frames, childFrame] : frames;
+          stack.push({ abs, frames: childFrames });
+        }
+      } else {
+        files.push(abs);
       }
     }
   }
@@ -104,10 +165,13 @@ async function walk(
 
 /**
  * Lists the workspace's library files and folders, recursing through
- * subdirectories. The frontend reconstructs the folder tree from the full
- * result, so partial responses break item counts and hide top-level files
- * when subtrees like `node_modules/` dominate by mtime — the listing must
- * mirror the filesystem exactly.
+ * subdirectories.
+ *
+ * Hidden by default and surfaced together when `showHidden` is set:
+ *   - dot-prefixed entries (agent infrastructure, OS/editor cruft);
+ *   - entries matched by any `.gitignore` in the subtree, with nested
+ *     gitignores composed onto their ancestors' rules — so root-level
+ *     `node_modules/` hides the whole tree without polluting the listing.
  *
  * `limit` is opt-in: passing it caps the file list and emits a `nextCursor`
  * for clients that want to page; omitting it returns everything. Cursor is

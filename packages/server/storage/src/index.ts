@@ -31,8 +31,10 @@ export {
   createLibraryLink,
   moveLibraryEntry,
   deleteLibraryEntry,
+  loadGitignoreFrame,
+  isGitIgnored,
 } from "./library.js";
-export type { LibraryContext, FolderRef, CreateLinkInput } from "./library.js";
+export type { LibraryContext, FolderRef, CreateLinkInput, IgnoreFrame } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
 export {
   snapshotNote,
