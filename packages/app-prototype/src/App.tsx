@@ -23,8 +23,10 @@ import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
   useGetAgentsQuery,
+  useGetWorkspaceAgentsQuery,
   useGetMessagesQuery,
   useGetLibraryQuery,
+  useGetLibraryFileQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
   usePostChatMessageMutation,
@@ -54,7 +56,6 @@ const NEW_CHAT_STUB: Chat = {
   artifactIds: [],
   messages: [],
   unread: false,
-  referenceIds: [],
 }
 
 export default function App() {
@@ -108,6 +109,10 @@ function AppInner() {
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: serverAgents } = useGetAgentsQuery()
+  const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
+    activeWorkspaceId ?? '',
+    { skip: !activeWorkspaceId },
+  )
 
   // If the wsId in the URL isn't one the user has, bounce to the first.
   // Skip while the list is refetching — otherwise navigating to a
@@ -226,8 +231,16 @@ function AppInner() {
 
   const handleNewChatFirstMessage = useCallback(async (message: string, agentId?: string) => {
     if (!activeWorkspaceId) return
-    const pickedAgentId = agentId ?? serverAgents?.[0]?.id
-    if (!pickedAgentId) return
+    // Default to an agent that's actually enrolled in this workspace —
+    // the global agents list can include agents the user disabled here,
+    // and POST /chats 400s if the agent isn't a workspace member.
+    const pickedAgentId = agentId ?? workspaceServerAgents?.[0]?.id
+    if (!pickedAgentId) {
+      toast.error('No agent enabled in this workspace', {
+        description: 'Open Settings → Agents to enable one.',
+      })
+      return
+    }
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
     try {
       const newChat = await createChatMutation({
@@ -242,7 +255,7 @@ function AppInner() {
         description: err instanceof Error ? err.message : undefined,
       })
     }
-  }, [activeWorkspaceId, serverAgents, createChatMutation, postMessageMutation, goTo])
+  }, [activeWorkspaceId, workspaceServerAgents, createChatMutation, postMessageMutation, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
@@ -276,7 +289,9 @@ function AppInner() {
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
-  const activeChat = isNewChat ? NEW_CHAT_STUB : selectedChat
+  const activeChat = isNewChat
+    ? { ...NEW_CHAT_STUB, workspaceId: activeWorkspaceId || undefined }
+    : selectedChat
   const chatArtifacts = (selectedChat?.artifactIds ?? [])
     .map(id => artifacts.find(a => a.id === id))
     .filter(Boolean) as Artifact[]
@@ -285,9 +300,23 @@ function AppInner() {
   const selectedArtifact = selectedArtifactPath
     ? artifacts.find(a => a.id === selectedArtifactPath) ?? null
     : null
-  const selectedContextItem = selectedContextPath
+  const libraryItem = selectedContextPath
     ? libraryItems.find(c => c.id === selectedContextPath) ?? null
     : null
+  // Fallback path: chat attachments live under `.chats/{id}/attachments/`
+  // and don't appear in the default library listing. Fetch their metadata
+  // by path so we can render the same ContextDetail view for them.
+  const needsMetaFallback =
+    !!selectedContextPath && !libraryItem && !!activeWorkspaceId
+  const { data: fallbackFile } = useGetLibraryFileQuery(
+    { workspaceId: activeWorkspaceId ?? '', path: selectedContextPath ?? '' },
+    { skip: !needsMetaFallback },
+  )
+  const selectedContextItem: ContextItem | null =
+    libraryItem ??
+    (needsMetaFallback && fallbackFile && activeWorkspaceId
+      ? toContextItem(fallbackFile, activeWorkspaceId)
+      : null)
 
   return (
     <TooltipProvider>
@@ -355,6 +384,11 @@ function AppInner() {
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
             highlightMessageId={selectedMessageId ?? undefined}
+            onAttachmentClick={(att) =>
+              att.kind === 'directory'
+                ? goTo({ view: 'context', item: null, folder: att.path })
+                : goTo({ item: att.path })
+            }
           />
         )}
 

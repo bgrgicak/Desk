@@ -128,7 +128,6 @@ export function ConversationPanel({
             <p className="text-[10px] text-muted-foreground/60 mb-2 leading-none">Changes in this conversation won't affect other chats.</p>
             <ChatInput
               onSend={(msg) => sendMessage(msg)}
-              disabled={isTyping}
               placeholder="Ask to make changes..."
               compact={true}
               showGoalPicker={true}

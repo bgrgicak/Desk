@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CornerDownLeft, ChevronDown, Folder, FileText, StickyNote, Link2, Bot, Search, Paperclip, X,
@@ -12,6 +12,7 @@ import {
   useGetWorkspaceAgentsQuery,
 } from '@/store/api'
 import { toContextItem, toFolderList } from '@/store/selectors/library'
+import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -64,6 +65,10 @@ export interface UploadedFile {
   /** Workspace-relative path on disk; present for chat artifact uploads
    * so the caller can build an AttachmentRef when the message is sent. */
   path?: string
+  /** "directory" when the path is a folder; the caller stamps this onto
+   * the AttachmentRef so the UI can render a folder icon and route
+   * clicks to the folder view. Omitted means "file". */
+  kind?: 'file' | 'directory'
   mime?: string
   size?: number
 }
@@ -382,21 +387,49 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
+  const handleAgentSelect = useCallback((agent: { id: string }) => {
+    setPreviewAgentId(agent.id)
+    setAgentOpen(false)
+    onAgentChange?.(agent.id)
+  }, [onAgentChange])
+
+  const agentNav = useListKeyboardNav({
+    items: filteredAgents,
+    enabled: agentOpen,
+    onSelect: handleAgentSelect,
+  })
+
+  const attachNav = useListKeyboardNav({
+    items: filteredAttachments,
+    enabled: attachOpen,
+    onSelect: insertMention,
+  })
+
   const uploadEnabled = Boolean(onOpenUploadPicker)
 
   const handleSubmit = () => {
     const trimmed = value.trim()
     if ((!trimmed && attachedItems.length === 0 && extraUploads.length === 0) || disabled) return
-    const localUploads: UploadedFile[] = attachedItems
-      .filter(i => i.id.startsWith('upload-'))
-      .map(i => ({ id: i.id, name: i.name }))
-    onSend(trimmed, [...extraUploads, ...localUploads])
+    // Library items and folders mentioned via @ or the attach picker have
+    // id === workspace-relative path (see toContextItem / toFolderList).
+    // Forward both as UploadedFile entries with `path` set so the parent's
+    // onSend can build AttachmentRefs — opencode's `--file` flag accepts a
+    // directory path and surfaces its contents to the model, so folders ride
+    // the same wire as files.
+    const mentionedFiles: UploadedFile[] = attachedItems.map(i => ({
+      id: i.id,
+      name: i.name,
+      path: i.id,
+      kind: i.kind === 'folder' ? 'directory' : 'file',
+    }))
+    onSend(trimmed, [...extraUploads, ...mentionedFiles])
     setValue('')
     setAttachedItems([])
     setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (attachOpen && atMentionStart !== null && attachNav.handleKeyDown(e)) return
     if (e.key === 'Escape') { setAttachOpen(false); setAgentOpen(false); setGoalOpen(false); setAtMentionStart(null) }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
@@ -569,6 +602,7 @@ export function ChatInput({
                   autoFocus
                   value={agentSearch}
                   onChange={e => setAgentSearch(e.target.value)}
+                  onKeyDown={agentNav.handleKeyDown}
                   placeholder="Search agents…"
                   className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
                 />
@@ -577,20 +611,20 @@ export function ChatInput({
                 {filteredAgents.length === 0 && (
                   <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
                 )}
-                {filteredAgents.map(agent => (
-                  <button
-                    key={agent.id}
-                    onClick={() => {
-                      setPreviewAgentId(agent.id)
-                      setAgentOpen(false)
-                      onAgentChange?.(agent.id)
-                    }}
-                    className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
-                  >
-                    <span>{agent.name}</span>
-                    <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
-                  </button>
-                ))}
+                {filteredAgents.map((agent, i) => {
+                  const isActive = agentNav.selectedIndex === i
+                  return (
+                    <button
+                      key={agent.id}
+                      ref={agentNav.itemRef(i)}
+                      onClick={() => handleAgentSelect(agent)}
+                      className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${isActive ? 'bg-muted/50' : activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
+                    >
+                      <span>{agent.name}</span>
+                      <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
+                    </button>
+                  )
+                })}
               </div>
             </div>,
             document.body
@@ -623,6 +657,7 @@ export function ChatInput({
                   autoFocus
                   value={attachSearch}
                   onChange={e => setAttachSearch(e.target.value)}
+                  onKeyDown={attachNav.handleKeyDown}
                   placeholder="Search files and folders…"
                   className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
                 />
@@ -631,41 +666,34 @@ export function ChatInput({
                 {filteredAttachments.length === 0 && (
                   <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
                 )}
-                {filteredAttachments.some(a => a.kind === 'folder') && (
-                  <>
-                    <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Folders</p>
-                    {filteredAttachments.filter(a => a.kind === 'folder').map(a => (
-                      <button key={a.id} onClick={() => insertMention(a)}
-                        className="flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left"
+                {filteredAttachments.map((a, i) => {
+                  const prev = i > 0 ? filteredAttachments[i - 1] : null
+                  const showFolderHeading = a.kind === 'folder' && (!prev || prev.kind !== 'folder')
+                  const showFileHeading = a.kind === 'item' && (!prev || prev.kind !== 'item')
+                  const Icon = a.kind === 'folder' ? Folder : ITEM_ICON[a.type]
+                  const isSelected = attachNav.selectedIndex === i
+                  return (
+                    <Fragment key={a.id}>
+                      {showFolderHeading && (
+                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Folders</p>
+                      )}
+                      {showFileHeading && (
+                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
+                      )}
+                      <button
+                        ref={attachNav.itemRef(i)}
+                        onClick={() => insertMention(a)}
+                        className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
                       >
-                        <Folder className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         <span className="truncate">{a.name}</span>
-                        {attachedItems.some(i => i.id === a.id) && (
+                        {attachedItems.some(it => it.id === a.id) && (
                           <span className="ml-auto shrink-0 h-1.5 w-1.5 rounded-full bg-primary" />
                         )}
                       </button>
-                    ))}
-                  </>
-                )}
-                {filteredAttachments.some(a => a.kind === 'item') && (
-                  <>
-                    <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
-                    {filteredAttachments.filter(a => a.kind === 'item').map(a => {
-                      const Icon = a.kind === 'item' ? ITEM_ICON[a.type] : FileText
-                      return (
-                        <button key={a.id} onClick={() => insertMention(a)}
-                          className="flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left"
-                        >
-                          <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="truncate">{a.name}</span>
-                          {attachedItems.some(i => i.id === a.id) && (
-                            <span className="ml-auto shrink-0 h-1.5 w-1.5 rounded-full bg-primary" />
-                          )}
-                        </button>
-                      )
-                    })}
-                  </>
-                )}
+                    </Fragment>
+                  )
+                })}
               </div>
               <div className="border-t">
                 <button

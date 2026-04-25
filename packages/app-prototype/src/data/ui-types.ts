@@ -182,7 +182,6 @@ export interface Chat {
   artifactIds?: string[]
   messages?: ChatMessage[]
   unread?: boolean
-  referenceIds?: string[]
   workspaceId?: string
   agentId?: string
 }

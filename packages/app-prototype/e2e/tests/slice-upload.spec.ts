@@ -48,13 +48,12 @@ test("library upload via 'Choose file' button uploads to the server", async ({
   ).toBeVisible({ timeout: 10_000 });
 });
 
-test("chat Files-tab upload goes through POST /library via the workspace fallback", async ({
+test("chat Files-tab upload stages the file and the next message attaches it", async ({
   loggedInPage: page,
   serverUrl,
   token,
 }) => {
   const workspaceId = await getFirstWorkspaceId(serverUrl, token);
-  // Create a chat via API so the chat view can open.
   const agents = (await (
     await fetch(`${serverUrl}/agents`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -77,37 +76,233 @@ test("chat Files-tab upload goes through POST /library via the workspace fallbac
 
   await page.reload();
   await page.waitForLoadState("networkidle");
-  // Click into the chat.
   await page.getByText("Upload spec chat").first().click();
   await page.waitForLoadState("networkidle");
 
-  // Switch to the Files right panel. Tabs are plain <button>s with text.
   await page.getByRole("button", { name: "Files", exact: true }).click();
 
-  // The FilesPanel has its own FileDropZone, and ChatView wraps its left
-  // column in another one. On this tab (Files selected), both are mounted.
+  // Two FileDropZones mount on the Files tab — the outer ChatView
+  // wrapper and the inner FilesPanel. Either one is fine for this
+  // assertion: dropping/uploading anywhere on the chat must land in
+  // `.chats/{id}/attachments/`, never the workspace library.
   const inputs = page.locator('[data-testid="dropzone-file-input"]');
-  await expect(inputs).toHaveCount(2); // ChatView column + FilesPanel
-  const filesTabInput = inputs.last();
-  await filesTabInput.setInputFiles({
+  await expect(inputs).toHaveCount(2);
+  await inputs.last().setInputFiles({
     name: "files-tab-upload.md",
     mimeType: "text/markdown",
     buffer: Buffer.from("hello from files-tab\n"),
   });
 
-  // Validate the upload by hitting /library directly — the UI flow only
-  // mutates local refs, so the best invariant is "file exists server-side".
-  const listRes = await fetch(
+  // Wait for the file to surface as a chip in the composer — both
+  // pendingUploads and stagedFiles render there, so this works regardless
+  // of which dropzone the input was attached to.
+  await expect(
+    page.getByRole("button", { name: "Remove files-tab-upload.md" }),
+  ).toBeVisible();
+
+  // File must land in `.chats/{chatId}/attachments/` (chat-scoped, not
+  // the workspace library).
+  const expectedPath = `.chats/${chat.id}/attachments/files-tab-upload.md`;
+
+  const chatFilesRes = await fetch(
+    `${serverUrl}/chats/${chat.id}/attachments`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const chatFiles = (await chatFilesRes.json()) as Array<{
+    path: string;
+    name: string;
+    kind: "attachment" | "note";
+  }>;
+  expect(chatFiles.map((i) => i.path)).toContain(expectedPath);
+  expect(chatFiles.find((i) => i.path === expectedPath)?.kind).toBe(
+    "attachment",
+  );
+
+  // Critical regression guard: Files-tab uploads must NOT spill into the
+  // workspace library. (Prior behavior staged via /library; current
+  // contract is chat-scoped.)
+  const libRes = await fetch(
     `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
-  const list = (await listRes.json()) as {
-    items: Array<{ name: string }>;
-  };
-  expect(list.items.map((i) => i.name)).toContain("files-tab-upload.md");
+  const lib = (await libRes.json()) as { items: Array<{ name: string }> };
+  expect(lib.items.map((i) => i.name)).not.toContain("files-tab-upload.md");
 
-  // Clean up the chat so other specs aren't affected.
-  void chat; // noop reference
+  // Send a message — the regression we're guarding against is "file
+  // uploaded but never attached, so the LLM never sees it". The POST body
+  // must carry attachments[] referencing the staged file's chat path.
+  const messagePromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      req.url().endsWith(`/chats/${chat.id}/messages`),
+  );
+  await page
+    .getByPlaceholder(/continue the conversation|ask anything/i)
+    .first()
+    .fill("look at this");
+  await page.keyboard.press("Enter");
+  const sent = await messagePromise;
+  const body = JSON.parse(sent.postData() ?? "{}") as {
+    attachments?: Array<{ path: string; name: string }>;
+  };
+  expect(body.attachments?.map((a) => a.name)).toContain("files-tab-upload.md");
+  expect(body.attachments?.map((a) => a.path)).toContain(expectedPath);
+
+  // The "In this chat" section keeps the file visible after send.
+  await expect(page.getByText("In this chat").first()).toBeVisible();
+  await expect(
+    page.getByText("files-tab-upload.md").first(),
+  ).toBeVisible();
+});
+
+test("attach picker mentions a library file and the next message attaches it", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+  request,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+  const agents = (await (
+    await fetch(`${serverUrl}/agents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json()) as Array<{ id: string }>;
+
+  // Seed a library file so the attach picker has something to mention.
+  const fileName = "library-mention-target.md";
+  const upload = await request.post(
+    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          name: fileName,
+          mimeType: "text/markdown",
+          buffer: Buffer.from("hello mention\n"),
+        },
+      },
+    },
+  );
+  expect(upload.status()).toBe(201);
+
+  const chat = (await (
+    await fetch(`${serverUrl}/chats`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        workspaceId,
+        agentId: agents[0].id,
+        title: "Mention spec chat",
+      }),
+    })
+  ).json()) as { id: string };
+
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await page.getByText("Mention spec chat").first().click();
+  await page.waitForLoadState("networkidle");
+
+  // Open the attach picker below the message input and pick the seeded file.
+  await page.getByRole("button", { name: /^Add files$/ }).click();
+  await page.getByRole("button", { name: fileName }).click();
+
+  // Regression: library mentions were filtered out in ChatInput.handleSubmit
+  // before reaching onSend, so attachments[] arrived empty on the wire.
+  const messagePromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      req.url().endsWith(`/chats/${chat.id}/messages`),
+  );
+  await page
+    .getByPlaceholder(/continue the conversation|ask anything/i)
+    .first()
+    .fill("look at this");
+  await page.keyboard.press("Enter");
+  const sent = await messagePromise;
+  const body = JSON.parse(sent.postData() ?? "{}") as {
+    attachments?: Array<{ path: string; name: string }>;
+  };
+  expect(body.attachments?.map((a) => a.name)).toContain(fileName);
+  expect(body.attachments?.map((a) => a.path)).toContain(fileName);
+});
+
+test("attach picker mentions a library folder and the next message attaches the directory", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+  request,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+  const agents = (await (
+    await fetch(`${serverUrl}/agents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json()) as Array<{ id: string }>;
+
+  // Seed a library folder so the attach picker has a directory to mention.
+  const folderName = `mention-folder-${Date.now()}`;
+  const folderRes = await request.post(
+    `${serverUrl}/library/folder?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { path: folderName },
+    },
+  );
+  expect(folderRes.status()).toBe(201);
+
+  const chat = (await (
+    await fetch(`${serverUrl}/chats`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        workspaceId,
+        agentId: agents[0].id,
+        title: "Folder mention chat",
+      }),
+    })
+  ).json()) as { id: string };
+
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await page.getByText("Folder mention chat").first().click();
+  await page.waitForLoadState("networkidle");
+
+  // Open the attach picker and pick the seeded folder. Folder rows render
+  // with a folder icon but the same accessible name as files.
+  await page.getByRole("button", { name: /^Add files$/ }).click();
+  await page.getByRole("button", { name: folderName }).click();
+
+  // Regression: ChatInput.handleSubmit used to filter out folder mentions
+  // before reaching onSend, so directory attachments never made it on the
+  // wire and opencode never saw the folder.
+  const messagePromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      req.url().endsWith(`/chats/${chat.id}/messages`),
+  );
+  await page
+    .getByPlaceholder(/continue the conversation|ask anything/i)
+    .first()
+    .fill("look in this folder");
+  await page.keyboard.press("Enter");
+  const sent = await messagePromise;
+  const body = JSON.parse(sent.postData() ?? "{}") as {
+    attachments?: Array<{ path: string; name: string; kind?: string }>;
+  };
+  expect(body.attachments?.map((a) => a.name)).toContain(folderName);
+  expect(body.attachments?.map((a) => a.path)).toContain(folderName);
+  // The `kind` discriminator is what makes the message-bubble chip render
+  // a folder icon and route clicks to the folder view instead of the file
+  // detail view — it must be present on the wire.
+  expect(body.attachments?.find((a) => a.path === folderName)?.kind).toBe(
+    "directory",
+  );
 });
 
 test("drop-zone overlay appears while files are being dragged", async ({

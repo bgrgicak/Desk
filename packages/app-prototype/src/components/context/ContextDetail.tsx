@@ -180,18 +180,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const [itemName, setItemName] = useState(item.name)
   const [isEditingItemName, setIsEditingItemName] = useState(false)
 
-  // Note title textarea (for display in the note editor header). Editing
-  // it doesn't rename the underlying file — renaming goes through the
-  // separate move endpoint, not the content PUT.
-  const [noteTitle, setNoteTitle] = useState(item.name)
-  const titleRef = useRef<HTMLTextAreaElement>(null)
-  const autoResize = (el: HTMLTextAreaElement | null) => {
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = el.scrollHeight + 'px'
-  }
-  useEffect(() => { autoResize(titleRef.current) }, [noteTitle])
-
   // Editable text content for text-kind files and notes. `editorValue`
   // is the working copy; when it diverges from `previewText` (the last
   // server-known content for this item) the Save button enables.
@@ -290,7 +278,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                     <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
                       <FileIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       {item.type === 'note' ? (
-                        <span className="truncate">{noteTitle || 'Untitled'}</span>
+                        <span className="truncate">{item.name}</span>
                       ) : isEditingItemName ? (
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
                           <input
@@ -383,33 +371,21 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
           {item.type === 'note' ? (
-            <div className="flex-1 flex flex-col min-h-0">
-              <div className="w-full px-4 pt-6 pb-2 shrink-0">
-                <textarea
-                  ref={titleRef}
-                  value={noteTitle}
-                  onChange={(e) => setNoteTitle(e.target.value)}
-                  placeholder="Untitled"
-                  rows={1}
-                  className="w-full resize-none overflow-hidden bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/30 outline-none leading-tight"
+            <div className="flex-1 min-h-0 bg-background">
+              {editorValue !== null ? (
+                <TextFileEditor
+                  value={editorValue}
+                  onChange={setEditorValue}
+                  filename={item.name}
+                  mimeType={item.mimeType}
                 />
-              </div>
-              <div className="flex-1 min-h-0 w-full">
-                {editorValue !== null ? (
-                  <TextFileEditor
-                    value={editorValue}
-                    onChange={setEditorValue}
-                    filename={item.name}
-                    mimeType={item.mimeType}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center py-12">
-                    <p className="text-sm text-muted-foreground">
-                      {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
-                    </p>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-sm text-muted-foreground">
+                    {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
+                  </p>
+                </div>
+              )}
             </div>
           ) : item.type === 'link' ? (
             (() => {

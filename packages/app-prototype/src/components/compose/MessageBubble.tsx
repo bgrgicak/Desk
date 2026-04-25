@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Wrench, AlertTriangle, StickyNote, Paperclip } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, StickyNote, Paperclip } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 
@@ -9,6 +9,8 @@ interface MessageBubbleProps {
   isNew?: boolean
   /** Fallback model label when the message row predates model stamping. */
   fallbackModel?: string
+  /** Fires when the user clicks an attachment chip — caller opens it. */
+  onAttachmentClick?: (attachment: AttachmentRef) => void
 }
 
 export function MessageBubble({
@@ -16,18 +18,24 @@ export function MessageBubble({
   isFirstInGroup = true,
   isNew = false,
   fallbackModel,
+  onAttachmentClick,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = message.model ?? fallbackModel ?? 'Agent'
   const timestamp = new Date(message.createdAt)
+  const hasAttachments = !!message.attachments && message.attachments.length > 0
 
   if (isUser) {
     return (
       <div className="flex flex-col items-end gap-1.5">
-        {message.attachments && message.attachments.length > 0 && (
+        {hasAttachments && (
           <div className="flex flex-col gap-1.5">
-            {message.attachments.map(att => (
-              <AttachmentCard key={att.path} attachment={att} />
+            {message.attachments!.map(att => (
+              <AttachmentCard
+                key={att.path}
+                attachment={att}
+                onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
+              />
             ))}
           </div>
         )}
@@ -55,6 +63,13 @@ export function MessageBubble({
               <span className="text-xs text-blue-500">New</span>
             </div>
           )}
+        </div>
+      )}
+      {hasAttachments && (
+        <div className="flex flex-col gap-1.5">
+          {message.attachments!.map(att => (
+            <AttachmentCard key={att.path} attachment={att} />
+          ))}
         </div>
       )}
       <MessageContentView content={message.content} />
@@ -110,15 +125,36 @@ function ArtifactRefRow({ path, name }: { path: string; name?: string }) {
   )
 }
 
-function AttachmentCard({ attachment }: { attachment: AttachmentRef }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px]">
-      <Paperclip className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+function AttachmentCard({
+  attachment,
+  onClick,
+}: {
+  attachment: AttachmentRef
+  onClick?: () => void
+}) {
+  const className =
+    'inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px] text-left'
+  const Icon = attachment.kind === 'directory' ? Folder : Paperclip
+  const inner = (
+    <>
+      <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{attachment.name}</p>
         <p className="text-[11px] text-muted-foreground truncate">{attachment.path}</p>
       </div>
-    </div>
+    </>
+  )
+  if (!onClick) {
+    return <div className={className}>{inner}</div>
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${className} hover:bg-muted/40 transition-colors`}
+    >
+      {inner}
+    </button>
   )
 }
 

@@ -17,7 +17,6 @@ export function toUiChat(c: ServerChat): UiChat {
     artifactIds: [], // populated by slice 8
     messages: [], // populated by slice 4
     unread: c.unread,
-    referenceIds: [],
     workspaceId: c.workspaceId,
     agentId: c.agentId,
   };
