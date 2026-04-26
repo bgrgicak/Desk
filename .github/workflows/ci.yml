@@ -82,6 +82,15 @@ jobs:
         # fail after three attempts.
         run: npx vitest run --passWithNoTests --retry=2
 
+      - name: Build @desk/api (+ deps via nx) for the Playwright fixture
+        # The Playwright fixture (`packages/app-prototype/e2e/fixtures/server.ts`)
+        # spawns `node packages/server/api/dist/main.js`. nx's
+        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
+        # storage, tools, runtime, scheduler) in topological order, so a
+        # single `nx build @desk/api` produces every `dist/` the spawned
+        # process resolves through Node's default `import` condition.
+        run: npx nx build @desk/api
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: packages/app-prototype
