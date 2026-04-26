@@ -24,7 +24,7 @@ import {
   File,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { SidebarTrigger } from '@/components/ui/sidebar'
+import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -125,11 +125,8 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
       {/* Main content area — preview */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         {/* Header — breadcrumb style */}
-        <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
-          <SidebarTrigger className="h-8 w-8 rounded-md shrink-0" />
-
-          {/* Breadcrumb */}
-          {(() => {
+        <PageHeader
+          breadcrumb={(() => {
             const folderPath = getFolderPath(item.folderId ?? null)
             return (
               <Breadcrumb className="min-w-0 flex-1">
@@ -206,54 +203,54 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick }: Cont
               </Breadcrumb>
             )
           })()}
-
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              size="sm"
-              className="text-xs"
-              onClick={() => onCompose([item])}
-            >
-              Use in chat
-            </Button>
-
-            {item.type === 'file' && (
-              <Button variant="outline" size="sm" className="text-xs">
-                Download
-              </Button>
-            )}
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem>
-                  <FolderPlus className="h-4 w-4 mr-2" />
-                  Move to folder
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Sidebar toggle */}
-            {sidebarCollapsed && (
+          actions={
+            <>
               <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setSidebarCollapsed(false)}
+                size="sm"
+                className="text-xs"
+                onClick={() => onCompose([item])}
               >
-                <PanelRight className="h-4 w-4" />
+                Use in chat
               </Button>
-            )}
-          </div>
-        </div>
+
+              {item.type === 'file' && (
+                <Button variant="outline" size="sm" className="text-xs">
+                  Download
+                </Button>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem>
+                    <FolderPlus className="h-4 w-4 mr-2" />
+                    Move to folder
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {sidebarCollapsed && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setSidebarCollapsed(false)}
+                >
+                  <PanelRight className="h-4 w-4" />
+                </Button>
+              )}
+            </>
+          }
+        />
 
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">

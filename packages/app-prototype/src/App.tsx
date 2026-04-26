@@ -42,6 +42,7 @@ function App() {
   const [selectedChatId, setSelectedChatId]       = useState<string | null>(null)
   const [selectedArtifact, setSelectedArtifact]   = useState<Artifact | null>(null)
   const [artifactTransitionSource, setArtifactTransitionSource] = useState<'compose' | 'chat' | null>(null)
+  const [artifactBackLabel, setArtifactBackLabel] = useState<string | null>(null)
   // IDs of artifacts that have been explicitly saved to the Desk. All pre-existing mock artifacts start saved.
   const [savedArtifactIds, setSavedArtifactIds] = useState<Set<string>>(
     () => new Set(MOCK_ARTIFACTS.map(a => a.id))
@@ -132,9 +133,10 @@ function App() {
     setArtifacts(prev => [artifact, ...prev])
   }, [])
 
-  const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat') => {
+  const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     setSelectedArtifact(artifact)
     setArtifactTransitionSource(source ?? null)
+    setArtifactBackLabel(backLabel ?? null)
   }, [])
 
   const handleSaveArtifact = useCallback((artifactId: string) => {
@@ -232,7 +234,8 @@ function App() {
             <ArtifactDetail
               key={selectedArtifact.id}
               artifact={selectedArtifact}
-              onBack={() => { setSelectedArtifact(null); setArtifactTransitionSource(null) }}
+              onBack={() => { setSelectedArtifact(null); setArtifactTransitionSource(null); setArtifactBackLabel(null) }}
+              backLabel={artifactBackLabel ?? undefined}
               update={selectedArtifactUpdate}
               isUpdateRead={selectedArtifactUpdate ? readUpdateIds.has(selectedArtifactUpdate.id) : true}
               onDismissUpdate={handleDismissUpdate}
@@ -264,7 +267,7 @@ function App() {
             key={activeChat.id}
             chat={activeChat}
             artifacts={isNewChat ? [] : chatArtifacts}
-            onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat')}
+            onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat', activeChat?.title)}
             onDeleteChat={isNewChat ? () => setSelectedChatId(null) : handleDeleteChat}
             onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
             onArtifactAdded={isNewChat ? handleArtifactAdded : undefined}

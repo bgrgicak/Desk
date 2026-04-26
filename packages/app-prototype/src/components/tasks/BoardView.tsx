@@ -19,6 +19,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Plus } from 'lucide-react'
 import { TaskCard } from './TaskCard'
 import { StatusBadge } from './task-badges'
@@ -43,12 +44,16 @@ type DropTarget = {
 // ── Drop placeholder card ─────────────────────────────────────────────────────
 
 function PlaceholderCard() {
-  const { setNodeRef, transform, transition } = useSortable({ id: PLACEHOLDER_ID })
+  const { setNodeRef, transform } = useSortable({ id: PLACEHOLDER_ID })
   return (
-    <div
+    <motion.div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className="h-10 w-full rounded-xl border-2 border-dotted border-muted-foreground/25 bg-muted/20"
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: 40, opacity: 1 }}
+      exit={{ height: 0, opacity: 0, transition: { duration: 0 } }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+      style={{ transform: CSS.Transform.toString(transform) }}
+      className="w-full shrink-0 rounded-xl border-2 border-dotted border-muted-foreground/25 bg-muted/20 overflow-hidden"
     />
   )
 }
@@ -124,7 +129,7 @@ function Column({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Column header — no bottom border */}
+      {/* Column header */}
       <div className={`flex items-center gap-2 pt-3 ${edgePx}`}>
         <StatusBadge status={column.id} />
         <span className="text-xs text-muted-foreground font-medium">{taskCount}</span>
@@ -145,27 +150,29 @@ function Column({
       <div
         ref={setNodeRef}
         className={[
-          'flex-1 overflow-y-auto pt-3 space-y-2 transition-colors min-h-[120px]',
+          'flex-1 overflow-y-auto pt-3 flex flex-col gap-2 transition-colors min-h-[120px]',
           edgePx,
           isOver ? 'bg-muted/20' : '',
         ].join(' ')}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          {displayItems.map((item, i) => {
-            if (item === PLACEHOLDER_ID) {
-              return <PlaceholderCard key={PLACEHOLDER_ID} />
-            }
-            const task = item as Task
-            return (
-              <SortableTaskCard
-                key={task.id}
-                task={task}
-                index={i}
-                isSelected={selectedTaskId === task.id}
-                onClick={() => onSelectTask(task)}
-              />
-            )
-          })}
+          <AnimatePresence initial={false}>
+            {displayItems.map((item, i) => {
+              if (item === PLACEHOLDER_ID) {
+                return <PlaceholderCard key={PLACEHOLDER_ID} />
+              }
+              const task = item as Task
+              return (
+                <SortableTaskCard
+                  key={task.id}
+                  task={task}
+                  index={i}
+                  isSelected={selectedTaskId === task.id}
+                  onClick={() => onSelectTask(task)}
+                />
+              )
+            })}
+          </AnimatePresence>
         </SortableContext>
         {taskCount === 0 && (
           <div className="h-20 flex items-center justify-center">
@@ -205,18 +212,23 @@ export function BoardView({
     if (!activeTask) return tasks.filter(t => t.status === columnId)
 
     if (activeTask.status === columnId) {
-      // Same column: normal sort — dnd-kit handles transforms
+      if (dropTarget?.columnId === columnId) {
+        // Same-column with a hover target: remove faded card, show placeholder at target position
+        const base = tasks.filter(t => t.status === columnId && t.id !== activeTask.id)
+        if (!dropTarget.insertBeforeId) return [...base, PLACEHOLDER_ID]
+        const idx = base.findIndex(t => t.id === dropTarget.insertBeforeId)
+        const result: DisplayItem[] = [...base]
+        result.splice(idx >= 0 ? idx : base.length, 0, PLACEHOLDER_ID)
+        return result
+      }
+      // No target yet: keep faded card in its original position
       return tasks.filter(t => t.status === columnId)
     }
 
-    // Cross-column: base = all tasks in this column (active task stays in its source column visually)
+    // Cross-column: base = all tasks in this column
     const base = tasks.filter(t => t.status === columnId)
-
     if (!dropTarget || dropTarget.columnId !== columnId) return base
-
-    // Insert placeholder at the correct position in the target column
     if (!dropTarget.insertBeforeId) return [...base, PLACEHOLDER_ID]
-
     const idx = base.findIndex(t => t.id === dropTarget.insertBeforeId)
     const result: DisplayItem[] = [...base]
     result.splice(idx >= 0 ? idx : base.length, 0, PLACEHOLDER_ID)
@@ -233,19 +245,23 @@ export function BoardView({
     if (!over || !activeTask) { setDropTarget(null); return }
 
     const overId = String(over.id)
-
-    // Don't re-compute when hovering over the placeholder itself
     if (overId === PLACEHOLDER_ID) return
 
     const overTask = tasks.find(t => t.id === overId)
     const overColumn = COLUMNS.find(c => c.id === overId)
 
     if (overTask && overTask.status !== activeTask.status) {
+      // Cross-column: hovering over a task in a different column
       setDropTarget({ columnId: overTask.status, insertBeforeId: overId })
     } else if (overColumn && overColumn.id !== activeTask.status) {
+      // Cross-column: hovering over empty area of a different column
       setDropTarget({ columnId: overColumn.id, insertBeforeId: null })
-    } else {
-      setDropTarget(null)
+    } else if (overTask && overTask.id !== activeTask.id) {
+      // Same-column: hovering over a different task
+      setDropTarget({ columnId: activeTask.status, insertBeforeId: overId })
+    } else if (overColumn && overColumn.id === activeTask.status) {
+      // Same-column: hovering over empty area
+      setDropTarget({ columnId: activeTask.status, insertBeforeId: null })
     }
   }
 
@@ -262,7 +278,23 @@ export function BoardView({
     const activeId = String(active.id)
     const overId = String(over.id)
 
-    // ── Intra-column reorder ──────────────────────────────────────────────────
+    // ── Same-column reorder (dropTarget-based) ────────────────────────────────
+    if (target?.columnId === prev.status) {
+      const colTasks = tasks.filter(t => t.status === prev.status)
+      const rest = colTasks.filter(t => t.id !== activeId)
+      let newList: Task[]
+      if (!target.insertBeforeId) {
+        newList = [...rest, prev]
+      } else {
+        const idx = rest.findIndex(t => t.id === target.insertBeforeId)
+        newList = [...rest]
+        newList.splice(idx >= 0 ? idx : rest.length, 0, prev)
+      }
+      onTasksChange([...tasks.filter(t => t.status !== prev.status), ...newList])
+      return
+    }
+
+    // ── Intra-column reorder fallback (no dropTarget, over.id is a task) ─────
     const overTask = overId !== PLACEHOLDER_ID ? tasks.find(t => t.id === overId) : null
     if (overTask && overTask.status === prev.status && activeId !== overId) {
       const colTasks = tasks.filter(t => t.status === prev.status)
@@ -320,7 +352,7 @@ export function BoardView({
       </div>
 
       {createPortal(
-        <DragOverlay>
+        <DragOverlay dropAnimation={null}>
           {activeTask && (
             <div className="rotate-1 opacity-90 shadow-xl">
               <TaskCard task={activeTask} onClick={() => {}} />
