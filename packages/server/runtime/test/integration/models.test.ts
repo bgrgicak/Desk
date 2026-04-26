@@ -25,7 +25,13 @@ function dockerAvailable(): boolean {
   }
 }
 
-const SKIP = !dockerAvailable();
+// `opencode models` only emits providers that have a real key configured,
+// so without ANTHROPIC_API_KEY the listing comes back empty and the
+// "must contain an anthropic model" assertion can't be true. Mirror the
+// gating from opencode.test.ts so this skips cleanly in keyless envs
+// (CI without the secret) and runs everywhere it can.
+const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
+const SKIP = !dockerAvailable() || !HAS_KEY;
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
