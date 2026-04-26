@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 
 export interface UiState {
   artifactTransitionSource: "compose" | "chat" | null;
+  artifactBackLabel: string | null;
   savedArtifactIds: string[];
   readUpdateIds: string[];
   readChatIds: string[];
@@ -11,6 +12,7 @@ export interface UiState {
 
 const initialState: UiState = {
   artifactTransitionSource: null,
+  artifactBackLabel: null,
   savedArtifactIds: [],
   readUpdateIds: [],
   readChatIds: [],
@@ -27,6 +29,9 @@ const slice = createSlice({
       action: PayloadAction<"compose" | "chat" | null>,
     ) {
       state.artifactTransitionSource = action.payload;
+    },
+    setArtifactBackLabel(state, action: PayloadAction<string | null>) {
+      state.artifactBackLabel = action.payload;
     },
     markArtifactSaved(state, action: PayloadAction<string>) {
       if (!state.savedArtifactIds.includes(action.payload))
@@ -51,6 +56,7 @@ const slice = createSlice({
 
 export const {
   setArtifactTransitionSource,
+  setArtifactBackLabel,
   markArtifactSaved,
   markUpdateRead,
   markChatRead,

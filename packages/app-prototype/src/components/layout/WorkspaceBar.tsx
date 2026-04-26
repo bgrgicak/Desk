@@ -203,17 +203,17 @@ export function WorkspaceBar({
 
   return (
     <>
-      <div className="h-[51px] shrink-0 flex items-stretch relative z-50 overflow-x-auto px-5">
+      <div className="h-[51px] shrink-0 flex items-center relative z-50 overflow-x-auto pr-4" style={{ paddingLeft: 'calc(var(--spacing) * 2)' }}>
 
         {/* ── Centered logo ── */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center -mt-0.5">
           <DeskLogo className="h-[20px] w-auto text-foreground" />
         </div>
 
         {/* ── Global Today ── */}
         <button
           onClick={onGlobalToday}
-          className="relative flex items-center gap-1.5 px-3 h-full text-sm font-medium whitespace-nowrap transition-colors text-muted-foreground hover:text-foreground"
+          className="relative flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors text-foreground/70 hover:text-foreground hover:bg-background/40"
         >
           <Inbox className="h-4 w-4 shrink-0" />
           Inbox
@@ -224,17 +224,12 @@ export function WorkspaceBar({
           )}
         </button>
 
-        {/* ── Workspace tabs + add button (hover group) ── */}
-        <div className="flex items-center py-3 mx-2">
-          <div className="w-px h-full bg-border" />
-        </div>
-
         <Reorder.Group
           as="div"
           axis="x"
           values={orderedWorkspaces}
           onReorder={setOrderedWorkspaces}
-          className="flex items-stretch group/ws"
+          className="flex items-center gap-1 group/ws ml-1"
         >
           {orderedWorkspaces.map(ws => {
             const isActive = !isGlobalToday && ws.id === activeWorkspaceId
@@ -243,7 +238,7 @@ export function WorkspaceBar({
                 as="div"
                 key={ws.id}
                 value={ws}
-                className="flex items-stretch"
+                className="flex items-center"
                 style={{ listStyle: 'none' }}
                 dragListener={true}
                 dragElastic={0.1}
@@ -252,17 +247,20 @@ export function WorkspaceBar({
                   <ContextMenuTrigger asChild>
                     <button
                       onClick={() => onSelectWorkspace(ws.id)}
-                      className={`relative flex items-center gap-1.5 px-3 h-full text-sm font-medium whitespace-nowrap transition-colors cursor-pointer select-none ${
-                        isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+                      className={`relative flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors cursor-pointer select-none ${
+                        isActive
+                          ? 'bg-background text-foreground shadow-xs'
+                          : 'text-foreground/70 hover:text-foreground hover:bg-background/40'
                       }`}
                     >
-                      {isActive && (
-                        <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground rounded-t-full" />
-                      )}
                       <span className="text-base leading-none">{ws.emoji}</span>
                       <span>{ws.name}</span>
                       {ws.unreadCount > 0 && (
-                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-background border border-border/70 px-1.5 text-xs font-medium text-foreground">
+                        <span className={`flex h-5 min-w-5 items-center justify-center rounded-full border px-1.5 text-xs font-medium ${
+                          isActive
+                            ? 'bg-muted border-transparent text-muted-foreground'
+                            : 'bg-background border-border/70 text-foreground'
+                        }`}>
                           {ws.unreadCount}
                         </span>
                       )}
@@ -296,7 +294,7 @@ export function WorkspaceBar({
             <button
               onClick={() => setCreateOpen(true)}
               title="New workspace"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
@@ -304,12 +302,12 @@ export function WorkspaceBar({
         </Reorder.Group>
 
         {/* ── Right-side controls ── */}
-        <div className="ml-auto flex items-center gap-1 px-2 shrink-0">
+        <div className="ml-auto flex items-center gap-1 shrink-0">
 
           {/* Dark mode toggle */}
           <button
             onClick={toggleDark}
-            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
             title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           >
             {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -317,7 +315,7 @@ export function WorkspaceBar({
 
           {/* Help */}
           <button
-            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
             title="Help"
           >
             <HelpCircle className="h-4 w-4" />

@@ -14,7 +14,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       {/* Full-screen background */}
       <div
         className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: 'url(/background.jpg)' }}
+        style={{ backgroundImage: 'url(/background2.jpg)' }}
       />
 
       <motion.div

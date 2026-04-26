@@ -36,6 +36,7 @@ import {
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
   setArtifactTransitionSource,
+  setArtifactBackLabel,
   setTodaySheetOpen,
   setAgentationVisible,
   markArtifactSaved,
@@ -111,6 +112,7 @@ function AppInner() {
   const selectedMessageId = searchParams.get('message')
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
+  const artifactBackLabel = useAppSelector(s => s.ui.artifactBackLabel)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
   const readUpdateIdList = useAppSelector(s => s.ui.readUpdateIds)
   const readChatIdList = useAppSelector(s => s.ui.readChatIds)
@@ -144,6 +146,7 @@ function AppInner() {
   useEffect(() => {
     if (!selectedArtifactPath && artifactTransitionSource !== null) {
       dispatch(setArtifactTransitionSource(null))
+      dispatch(setArtifactBackLabel(null))
     }
   }, [selectedArtifactPath, artifactTransitionSource, dispatch])
 
@@ -227,8 +230,9 @@ function AppInner() {
     goTo({ wsId: id, view })
   }, [goTo])
 
-  const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat') => {
+  const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))
+    dispatch(setArtifactBackLabel(backLabel ?? null))
     goTo({ artifact: artifact.id })
   }, [dispatch, goTo])
 
@@ -366,7 +370,8 @@ function AppInner() {
             <ArtifactDetail
               key={selectedArtifact.id}
               artifact={selectedArtifact}
-              onBack={() => goTo({ artifact: null })}
+              onBack={() => { goTo({ artifact: null }); dispatch(setArtifactBackLabel(null)) }}
+              backLabel={artifactBackLabel ?? undefined}
               update={selectedArtifactUpdate}
               isUpdateRead={selectedArtifactUpdate ? readUpdateIds.has(selectedArtifactUpdate.id) : true}
               onDismissUpdate={handleDismissUpdate}
@@ -395,7 +400,7 @@ function AppInner() {
             key={activeChat.id}
             chat={activeChat}
             artifacts={isNewChat ? [] : chatArtifacts}
-            onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat')}
+            onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat', activeChat?.title)}
             onDeleteChat={isNewChat ? () => goTo({ chat: null }) : handleDeleteChat}
             onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
             showNewBadge={!isNewChat && chatShowNewBadge}

@@ -14,7 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { SidebarTrigger } from '@/components/ui/sidebar'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
@@ -671,40 +671,36 @@ export function ChatView({
         {({ openPicker }) => (
       <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
 
-        {/* Header — Compose-style compact bar */}
-        <div className="h-[52px] flex items-center gap-2 border-b px-4 shrink-0">
-          <SidebarTrigger className="h-8 w-8 rounded-md" />
+        {/* Header */}
+        <PageHeader
+          breadcrumb={<span className="text-sm font-semibold truncate">{chat.title}</span>}
+          actions={
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => onDeleteChat?.(chat.id)}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete chat
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
-          <div className="flex-1 min-w-0">
-            <span className="text-sm font-medium truncate block">{chat.title}</span>
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <MoreHorizontal className="h-4 w-4" />
+              {!panelOpen && (
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPanelOpen(true)}>
+                  <PanelRight className="h-4 w-4" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-40">
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => onDeleteChat?.(chat.id)}
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete chat
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* PanelRight — show in header when panel is closed */}
-            {!panelOpen && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPanelOpen(true)}>
-                <PanelRight className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </div>
+              )}
+            </>
+          }
+        />
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto">

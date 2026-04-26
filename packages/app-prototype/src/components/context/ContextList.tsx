@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { SidebarTrigger } from '@/components/ui/sidebar'
+import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Dialog,
   DialogContent,
@@ -426,52 +426,50 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
       {/* ── Header bar ── */}
-      <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
-        <SidebarTrigger className="h-8 w-8 rounded-md shrink-0" />
-
-        {/* Breadcrumb */}
-        <Breadcrumb className="shrink-0">
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              {currentFolderId ? (
-                <BreadcrumbLink asChild>
-                  <button
-                    onClick={() => navigateToFolder(null)}
-                    className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                  >
-                    Library
-                  </button>
-                </BreadcrumbLink>
-              ) : (
-                <BreadcrumbPage className="text-sm font-semibold text-foreground">Library</BreadcrumbPage>
-              )}
-            </BreadcrumbItem>
-            {breadcrumbPath.map((folder, idx) => {
-              const isLast = idx === breadcrumbPath.length - 1
-              return (
-                <span key={folder.id} className="flex items-center gap-1.5">
-                  <BreadcrumbSeparator><ChevronRight className="h-3.5 w-3.5" /></BreadcrumbSeparator>
-                  <BreadcrumbItem>
-                    {isLast ? (
-                      <BreadcrumbPage className="text-sm font-semibold text-foreground">{folder.name}</BreadcrumbPage>
-                    ) : (
-                      <BreadcrumbLink asChild>
-                        <button
-                          onClick={() => navigateToFolder(folder.id)}
-                          className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                        >
-                          {folder.name}
-                        </button>
-                      </BreadcrumbLink>
-                    )}
-                  </BreadcrumbItem>
-                </span>
-              )
-            })}
-          </BreadcrumbList>
-        </Breadcrumb>
-
-        <div className="ml-auto flex items-center gap-2">
+      <PageHeader
+        breadcrumb={
+          <Breadcrumb className="shrink-0">
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                {currentFolderId ? (
+                  <BreadcrumbLink asChild>
+                    <button
+                      onClick={() => navigateToFolder(null)}
+                      className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
+                    >
+                      Library
+                    </button>
+                  </BreadcrumbLink>
+                ) : (
+                  <BreadcrumbPage className="text-sm font-semibold text-foreground">Library</BreadcrumbPage>
+                )}
+              </BreadcrumbItem>
+              {breadcrumbPath.map((folder, idx) => {
+                const isLast = idx === breadcrumbPath.length - 1
+                return (
+                  <span key={folder.id} className="flex items-center gap-1.5">
+                    <BreadcrumbSeparator><ChevronRight className="h-3.5 w-3.5" /></BreadcrumbSeparator>
+                    <BreadcrumbItem>
+                      {isLast ? (
+                        <BreadcrumbPage className="text-sm font-semibold text-foreground">{folder.name}</BreadcrumbPage>
+                      ) : (
+                        <BreadcrumbLink asChild>
+                          <button
+                            onClick={() => navigateToFolder(folder.id)}
+                            className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
+                          >
+                            {folder.name}
+                          </button>
+                        </BreadcrumbLink>
+                      )}
+                    </BreadcrumbItem>
+                  </span>
+                )
+              })}
+            </BreadcrumbList>
+          </Breadcrumb>
+        }
+        actions={<div className="flex items-center gap-2">
           {/* Type filter pills */}
           <div className="flex items-center rounded-lg border p-0.5">
             {TYPE_FILTERS.map(f => (
@@ -538,8 +536,8 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
+        </div>}
+      />
 
       {/* ── Body ── */}
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">

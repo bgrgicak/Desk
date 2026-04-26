@@ -15,8 +15,8 @@ import {
   Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskSheet } from './TaskSheet'
@@ -404,11 +404,9 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
       {/* ── Header bar ── */}
-      <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
-        <SidebarTrigger className="h-8 w-8 rounded-md shrink-0" />
-        <span className="text-sm font-semibold shrink-0">Tasks</span>
-
-        <div className="ml-auto flex items-center gap-2">
+      <PageHeader
+        breadcrumb={<span className="text-sm font-semibold">Tasks</span>}
+        actions={<div className="flex items-center gap-2">
           {viewMode !== 'board' && (
             <div className="flex items-center rounded-lg border p-0.5">
               {STATUS_FILTERS.map(f => (
@@ -462,8 +460,8 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
             <Plus className="h-3.5 w-3.5 mr-1" />
             Create
           </Button>
-        </div>
-      </div>
+        </div>}
+      />
 
       {/* ── Body ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">

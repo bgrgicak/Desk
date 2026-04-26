@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { SidebarTrigger } from '@/components/ui/sidebar'
+import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -61,9 +61,10 @@ interface ArtifactDetailProps {
   transitionFrom?: 'compose' | 'chat'
   isSaved?: boolean
   onSave?: () => void
+  backLabel?: string
 }
 
-export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRead, onDismissUpdate, transitionFrom, isSaved = true, onSave }: ArtifactDetailProps) {
+export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRead, onDismissUpdate, transitionFrom, isSaved = true, onSave, backLabel }: ArtifactDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [panelCollapsed, setPanelCollapsed] = useState(false)
 
@@ -118,142 +119,139 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
       {/* Main content area */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         {/* Header — breadcrumb style */}
-        <div className="h-[52px] flex items-center gap-3 border-b px-4 shrink-0">
-          <SidebarTrigger className="h-8 w-8 rounded-md shrink-0" />
-
-          {/* Breadcrumb */}
-          <Breadcrumb className="min-w-0 flex-1">
-            <BreadcrumbList className="flex-nowrap">
-              <BreadcrumbItem>
-                <BreadcrumbLink asChild>
-                  <button
-                    onClick={onBack}
-                    className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                  >
-                    Desk
-                  </button>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </BreadcrumbSeparator>
-              <BreadcrumbItem className="min-w-0">
-                <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
-                  {(() => { const Icon = getArtifactIcon(artifact.type); return <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> })()}
-                  {isEditingName ? (
-                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                      <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') setIsEditingName(false)
-                          if (e.key === 'Escape') { setName(artifact.name); setIsEditingName(false) }
-                        }}
-                        className="flex-1 min-w-0 bg-transparent text-sm font-semibold outline-none border-b-2 border-primary pb-0.5"
-                        autoFocus
-                      />
-                      <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setIsEditingName(false)}>
-                        <Check className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : (
+        <PageHeader
+          breadcrumb={
+            <Breadcrumb className="min-w-0 flex-1">
+              <BreadcrumbList className="flex-nowrap">
+                <BreadcrumbItem>
+                  <BreadcrumbLink asChild>
                     <button
-                      onClick={() => setIsEditingName(true)}
-                      className="flex items-center gap-1 min-w-0 group hover:text-foreground/70 transition-colors"
+                      onClick={onBack}
+                      className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
                     >
-                      <span className="truncate">{name}</span>
-                      <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                      {backLabel ? backLabel.slice(0, 40) : 'Desk'}
                     </button>
-                  )}
-                </BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Save to desk — shown only when opened from chat/compose and not yet saved */}
-            {transitionFrom && !isSaved && (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-8 gap-1.5 text-xs"
-                onClick={() => {
-                  onSave?.()
-                  toast.success(`"${name}" saved to your Desk`)
-                }}
-              >
-                <BookmarkPlus className="h-3.5 w-3.5" />
-                Save to Desk
-              </Button>
-            )}
-            {transitionFrom && isSaved && (
-              <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled>
-                <Check className="h-3.5 w-3.5" />
-                Saved
-              </Button>
-            )}
-
-            {/* Zoom controls — image artifacts only */}
-            {artifact.type === 'image' && (
-              <div className="flex items-center rounded-md border divide-x overflow-hidden">
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomOut} disabled={zoom <= 0.25}>
-                  <ZoomOut className="h-4 w-4" />
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </BreadcrumbSeparator>
+                <BreadcrumbItem className="min-w-0">
+                  <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
+                    {(() => { const Icon = getArtifactIcon(artifact.type); return <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> })()}
+                    {isEditingName ? (
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <input
+                          type="text"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') setIsEditingName(false)
+                            if (e.key === 'Escape') { setName(artifact.name); setIsEditingName(false) }
+                          }}
+                          className="flex-1 min-w-0 bg-transparent text-sm font-semibold outline-none border-b-2 border-primary pb-0.5"
+                          autoFocus
+                        />
+                        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setIsEditingName(false)}>
+                          <Check className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setIsEditingName(true)}
+                        className="flex items-center gap-1 min-w-0 group hover:text-foreground/70 transition-colors"
+                      >
+                        <span className="truncate">{name}</span>
+                        <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                      </button>
+                    )}
+                  </BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
+          }
+          actions={
+            <>
+              {transitionFrom && !isSaved && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={() => {
+                    onSave?.()
+                    toast.success(`"${name}" saved to your Desk`)
+                  }}
+                >
+                  <BookmarkPlus className="h-3.5 w-3.5" />
+                  Save to Desk
                 </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomReset} disabled={zoom === 1}>
-                  <RotateCcw className="h-3.5 w-3.5" />
+              )}
+              {transitionFrom && isSaved && (
+                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled>
+                  <Check className="h-3.5 w-3.5" />
+                  Saved
                 </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomIn} disabled={zoom >= 4}>
-                  <ZoomIn className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
+              )}
 
-            {/* Overflow menu */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem>
-                  <History className="h-4 w-4 mr-2" />
-                  Version history
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Play className="h-4 w-4 mr-2" />
-                  Convert to recurring task
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <Share className="h-4 w-4 mr-2" />
-                  Share or export
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <RotateCw className="h-4 w-4 mr-2" />
-                  Run again with {artifact.agentName}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              {artifact.type === 'image' && (
+                <div className="flex items-center rounded-md border divide-x overflow-hidden">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomOut} disabled={zoom <= 0.25}>
+                    <ZoomOut className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomReset} disabled={zoom === 1}>
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 rounded-none border-0" onClick={zoomIn} disabled={zoom >= 4}>
+                    <ZoomIn className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
 
-            {panelCollapsed && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setPanelCollapsed(false)}
-              >
-                <PanelRight className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem>
+                    <History className="h-4 w-4 mr-2" />
+                    Version history
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Play className="h-4 w-4 mr-2" />
+                    Convert to recurring task
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem>
+                    <Share className="h-4 w-4 mr-2" />
+                    Share or export
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <RotateCw className="h-4 w-4 mr-2" />
+                    Run again with {artifact.agentName}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {panelCollapsed && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setPanelCollapsed(false)}
+                >
+                  <PanelRight className="h-4 w-4" />
+                </Button>
+              )}
+            </>
+          }
+        />
 
         {/* Artifact content */}
         <motion.div

@@ -179,20 +179,8 @@ export function AppShell({
   const hasMore         = allChats.length > visibleChats.length
 
   return (
-    <div className="flex flex-col h-dvh overflow-hidden bg-muted" style={{ '--topbar-height': '51px' } as React.CSSProperties}>
+    <div className="flex flex-col h-dvh overflow-hidden bg-muted bg-cover bg-center" style={{ '--topbar-height': '51px', backgroundImage: 'url(/background2.jpg)' } as React.CSSProperties}>
 
-      {/* ── Global workspace bar ── */}
-      <WorkspaceBar
-        workspaces={displayWorkspaces}
-        activeWorkspaceId={activeWorkspaceId}
-        isGlobalToday={todaySheetOpen}
-        todayUnreadCount={unreadCount}
-        onGlobalToday={onGlobalToday}
-        onSelectWorkspace={onSelectWorkspace}
-        onNavigate={onNavigateWorkspace}
-        onCompose={onCompose}
-        onSignOut={onSignOut}
-      />
 
       {/* ── Today sheet (slides in from left) ── */}
       <Sheet
@@ -251,42 +239,29 @@ export function AppShell({
       </Sheet>
 
       {/* ── Card wrapper ── */}
-      <div className="flex-1 min-h-0 overflow-hidden px-3 pb-3">
-      <div className="flex flex-col h-full relative rounded-xl border overflow-hidden bg-background">
+      <div className="flex-1 min-h-0 overflow-hidden p-2">
+
+      {/* ── Single app card: workspace bar + sidebar + content ── */}
+      <div className="flex-1 min-h-0 h-full flex flex-col relative rounded-xl border overflow-hidden bg-sidebar/85 backdrop-blur-xl">
+
+        <WorkspaceBar
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          isGlobalToday={todaySheetOpen}
+          todayUnreadCount={unreadCount}
+          onGlobalToday={onGlobalToday}
+          onSelectWorkspace={onSelectWorkspace}
+          onNavigate={onNavigateWorkspace}
+          onCompose={onCompose}
+          onSignOut={onSignOut}
+        />
 
       {/* ── Sidebar + content ── */}
       <SidebarProvider style={{ height: 'auto' } as React.CSSProperties} className="flex-1 min-h-0">
         <Sidebar className="hidden md:flex">
 
-          {/* ── Header: workspace identity ── */}
-          <SidebarHeader>
-            <SidebarMenu>
-              {/* Workspace identity — static, switching happens in the top bar */}
-              <SidebarMenuItem>
-                <SidebarMenuButton size="lg" className="pointer-events-none select-none">
-                  <div
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base"
-                    style={{ backgroundColor: activeWorkspace.bg }}
-                  >
-                    {activeWorkspace.emoji}
-                  </div>
-                  <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-                    <span className="font-semibold text-sm truncate">{activeWorkspace.name}</span>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="text-xs text-muted-foreground truncate cursor-default">
-                          {activeWorkspace.description}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-56 text-xs">
-                        {activeWorkspace.description}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-
+          {/* ── Header: nav items ── */}
+          <SidebarHeader style={{ paddingTop: 'calc(var(--spacing) * 2.5)' }}>
             {/* Nav items: Desk / Runs / Library */}
             <SidebarMenu>
               {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
@@ -309,12 +284,12 @@ export function AppShell({
 
             {/* "Recent AI chats" label + search + new chat buttons */}
             <div className="flex items-center justify-between px-2 mt-3">
-              <span className="text-xs font-medium text-sidebar-foreground/70">Recent AI chats</span>
+              <span className="text-xs font-medium text-foreground/70">Recent AI chats</span>
               <div className="flex items-center gap-0.5">
                 <button
                   onClick={() => setChatSearchOpen(true)}
                   title="Search chats"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
                 >
                   <Search className="h-3.5 w-3.5" />
                   <span className="sr-only">Search chats</span>
@@ -322,7 +297,7 @@ export function AppShell({
                 <button
                   onClick={onCompose}
                   title="New chat"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   <span className="sr-only">New chat</span>
@@ -343,10 +318,10 @@ export function AppShell({
                         <SidebarMenuButton
                           isActive={chat.id === selectedChatId && !isDetailOpen}
                           onClick={() => onChatClick(chat)}
-                          className="pr-7"
+                          className="pr-7 text-muted-foreground"
                         >
                           <div className="relative shrink-0">
-                            <ChatIcon className="h-4 w-4 text-muted-foreground/60" />
+                            <ChatIcon className="h-4 w-4 text-muted-foreground" />
                             {chat.unread && !readChatIds.has(chat.id) && (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
                             )}
@@ -389,8 +364,7 @@ export function AppShell({
           </SidebarContent>
 
           {/* ── Footer: Customize only ── */}
-          <SidebarFooter className="relative pt-3">
-            <div className="absolute -top-12 inset-x-0 h-12 bg-gradient-to-b from-sidebar/0 to-sidebar pointer-events-none" />
+          <SidebarFooter className="border-t">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => setSettingsOpen(true)}>
@@ -403,7 +377,7 @@ export function AppShell({
         </Sidebar>
 
         {/* Main content */}
-        <SidebarInset>
+        <SidebarInset className="rounded-xl overflow-hidden shadow-xs">
           <main className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
             {children}
           </main>
