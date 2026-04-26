@@ -65,7 +65,13 @@ jobs:
 
       - name: Build desk/sandbox:v1 image
         working-directory: packages/server
-        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        # Match the in-container `agent` uid to the runner uid so the
+        # workspace bind-mount at /home/agent is writable from inside the
+        # container (CapDrop:ALL drops CAP_DAC_OVERRIDE, so uid 0 doesn't
+        # bypass DAC). Dev VMs build with AGENT_UID=2000 to match their
+        # `desk` service user; CI doesn't have one, so adapt to whoever
+        # the runner is.
+        run: docker build --build-arg AGENT_UID=$(id -u) -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 
       - name: Enable pg_trgm extension on admin DB
         run: PGPASSWORD=desk psql -h 127.0.0.1 -p 55432 -U desk -d desk -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
