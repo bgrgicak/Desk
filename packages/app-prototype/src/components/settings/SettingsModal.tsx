@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Settings2, Bot, Plug, Sliders,
@@ -25,6 +25,7 @@ import {
   useGetModelsQuery,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetMeQuery,
   type ModelRef,
 } from '@/store/api'
 
@@ -760,10 +761,60 @@ function ConnectionsSection() {
 
 type DefaultView = 'desk' | 'chats' | 'context'
 
+interface PrefsShape {
+  autoSave: boolean
+  defaultView: DefaultView
+  showBadges: boolean
+}
+
+const PREFS_DEFAULTS: PrefsShape = {
+  autoSave: true,
+  defaultView: 'desk',
+  showBadges: true,
+}
+
+function prefsKey(userId: string): string {
+  return `desk.prefs.${userId}`
+}
+
+export function loadPrefs(userId: string | undefined): PrefsShape {
+  if (!userId) return PREFS_DEFAULTS
+  try {
+    const raw = localStorage.getItem(prefsKey(userId))
+    if (!raw) return PREFS_DEFAULTS
+    const parsed = JSON.parse(raw) as Partial<PrefsShape>
+    return { ...PREFS_DEFAULTS, ...parsed }
+  } catch {
+    return PREFS_DEFAULTS
+  }
+}
+
+function savePrefs(userId: string | undefined, prefs: PrefsShape): void {
+  if (!userId) return
+  try {
+    localStorage.setItem(prefsKey(userId), JSON.stringify(prefs))
+  } catch {
+    /* ignore */
+  }
+}
+
 function PreferencesSection() {
-  const [autoSave, setAutoSave]           = useState(true)
-  const [defaultView, setDefaultView]     = useState<DefaultView>('desk')
-  const [showBadges, setShowBadges]       = useState(true)
+  const { data: me } = useGetMeQuery()
+  const userId = me?.id
+  const [prefs, setPrefs] = useState<PrefsShape>(PREFS_DEFAULTS)
+  // The /me query is async; backfill once it resolves so the toggles
+  // reflect what's persisted instead of always the defaults.
+  useEffect(() => {
+    setPrefs(loadPrefs(userId))
+  }, [userId])
+
+  const update = (patch: Partial<PrefsShape>): void => {
+    setPrefs(prev => {
+      const next = { ...prev, ...patch }
+      savePrefs(userId, next)
+      return next
+    })
+  }
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
     { value: 'desk',    label: 'Desk'    },
@@ -774,18 +825,10 @@ function PreferencesSection() {
   return (
     <div className="space-y-6">
       <div>
-        <div className="flex items-center gap-2 mb-0.5">
-          <h3 className="text-sm font-semibold">Preferences</h3>
-          <span
-            data-testid="preferences-coming-soon"
-            className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700"
-          >
-            Coming soon
-          </span>
-        </div>
+        <h3 className="text-sm font-semibold mb-0.5">Preferences</h3>
         <p className="text-xs text-muted-foreground">
-          Behaviour settings for this workspace. Saved to your browser only —
-          server-side persistence ships in a follow-up.
+          Behaviour settings for this workspace. Saved to your browser; a
+          server-side store for cross-device sync is on the roadmap.
         </p>
       </div>
 
@@ -799,7 +842,11 @@ function PreferencesSection() {
               Automatically save artifacts created in chats to your Desk.
             </p>
           </div>
-          <Switch checked={autoSave} onCheckedChange={setAutoSave} />
+          <Switch
+            data-testid="prefs-auto-save"
+            checked={prefs.autoSave}
+            onCheckedChange={v => update({ autoSave: v })}
+          />
         </div>
 
         <div className="border-t" />
@@ -812,7 +859,11 @@ function PreferencesSection() {
               Display unread counts on workspace tabs and nav items.
             </p>
           </div>
-          <Switch checked={showBadges} onCheckedChange={setShowBadges} />
+          <Switch
+            data-testid="prefs-show-badges"
+            checked={prefs.showBadges}
+            onCheckedChange={v => update({ showBadges: v })}
+          />
         </div>
 
         <div className="border-t" />
@@ -829,9 +880,10 @@ function PreferencesSection() {
             {VIEW_OPTIONS.map(opt => (
               <button
                 key={opt.value}
-                onClick={() => setDefaultView(opt.value)}
+                data-testid={`prefs-default-view-${opt.value}`}
+                onClick={() => update({ defaultView: opt.value })}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  defaultView === opt.value
+                  prefs.defaultView === opt.value
                     ? 'bg-foreground text-background'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                 }`}
