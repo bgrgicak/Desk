@@ -104,8 +104,12 @@ async function startVite(
     ["preview", "--logLevel", "warn"],
     { cwd: APP_ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
   );
+  // Always echo vite's own logs — if preview never binds (CI hosts
+  // network sometimes regresses), the only post-mortem signal we have
+  // is whatever vite said before we SIGKILL it.
   preview.stderr?.on("data", (b) => process.stderr.write(`[vite-err] ${b}`));
   preview.stdout?.on("data", (b) => process.stdout.write(`[vite-out] ${b}`));
+  preview.on("error", (err) => process.stderr.write(`[vite-spawn-error] ${err.message}\n`));
   preview.on("exit", (code, signal) =>
     process.stderr.write(`[vite-exit] code=${code} signal=${signal}\n`),
   );

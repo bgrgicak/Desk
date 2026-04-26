@@ -36,6 +36,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: { port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
-  preview: { port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
+  // Bind explicitly to 127.0.0.1 (default `host: false` resolves
+  // `localhost` and on stock GH runners that lands on ::1 only — the e2e
+  // fixture probes 127.0.0.1 and would never see the server).
+  server: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
+  preview: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
 })
