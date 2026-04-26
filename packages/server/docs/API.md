@@ -42,7 +42,6 @@ caller.
 | GET    | /workspaces/{id}/agents              | List agents enrolled in workspace    |
 | POST   | /workspaces/{id}/agents              | Enroll an agent in the workspace     |
 | DELETE | /workspaces/{id}/agents/{agentId}    | Remove an agent from the workspace   |
-| POST   | /workspaces/{id}/default-agent       | Set the workspace default agent      |
 
 ### POST /workspaces
 
@@ -54,11 +53,15 @@ Create a new workspace owned by the authenticated user.
 {
   "name": "My workspace",
   "description": "Optional description",
-  "icon": "optional-icon"
+  "icon": "optional-icon",
+  "color": "#fce7f3"
 }
 ```
 
-Only `name` is required. `description` and `icon` default to empty strings.
+Only `name` is required. `description`, `icon`, and `color` default to empty
+strings. `color` is a freeform hex string the UI uses as the workspace tab
+background; when empty the client falls back to a palette hash of the id.
+`PATCH /workspaces/{id}` accepts the same fields.
 
 **Response:** `201 Created` with the full workspace object.
 
@@ -72,9 +75,9 @@ Only `name` is required. `description` and `icon` default to empty strings.
 | PATCH  | /agents/{id}  | Update agent                   |
 
 Agents are user-owned. A chat can only reference an agent that has been
-enrolled in its workspace (via `POST /workspaces/{id}/agents`). Each
-workspace has exactly one default agent; creating a chat without an
-explicit `agentId` uses the workspace default.
+enrolled in its workspace (via `POST /workspaces/{id}/agents`). Creating a
+chat requires an explicit `agentId`; the client picks the first enrolled
+agent by default and lets the user change it from the compose bar.
 
 ## Chats
 
@@ -108,7 +111,7 @@ Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
 2. Drops the chat row from Postgres; `ON DELETE CASCADE` removes its messages.
-3. Moves both on-disk subtrees `~/Desk/.chats/{chatId}/` and `~/Desk/workspaces/*/chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
+3. Moves the chat's on-disk subtree `~/Desk/workspaces/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 
 Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE returns 404, never 403.
@@ -139,11 +142,24 @@ Messages grow optional execution fields (added M6a):
 |---|---|---|
 | `executeAt` | scheduled messages | timestamp at which the at-daemon curls `/internal/messages/fire` |
 | `cron` | recurring messages | cron expression; the parent stays `pending` forever, each firing creates a child |
-| `state` | executing messages | `pending` / `running` / `succeeded` / `failed` / `cancelled` |
+| `state` | executing messages | `pending` / `running` / `succeeded` / `failed` / `cancelled` / `paused` |
 | `parentId` | output/sub-messages | the message that produced this one (execution lineage) |
 | `agentId` | agent outputs | which agent produced it |
 | `schedulerRef` | scheduled messages | `{ kind: 'at'|'cron', id }` — the at/cron entry this message owns |
 | `startedAt` / `endedAt` | running/completed | execution timing |
+| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to opencode as `--file` flags when the trigger fires |
+| `model` | agent outputs | model id that produced the row, stamped at insert time; historical rows keep their original model even if the agent is later reconfigured |
+
+### POST /chats/{id}/messages
+
+Body: `{ content: string, attachments?: AttachmentRef[] }`. Each
+`AttachmentRef` is a workspace-relative `path` that resolves to either a
+file or a directory — chat uploads (`POST /chats/{id}/attachments`),
+library files, and library folders all share the same wire shape. The
+server persists them on the user message envelope and `fireMessage`
+forwards each path to opencode via a `--file` flag (opencode accepts
+both files and directories), so the agent sees the contents of every
+attached path when the trigger fires.
 
 ### PATCH /chats/{id}/messages/{messageId}
 
@@ -193,7 +209,7 @@ Returns every known AI provider key name with its value either masked
 (first 6 + last 4 characters) or `null` when unset. Keys are encrypted
 at rest in the `user_settings` table using AES-256-GCM; the encryption
 key lives on disk at `DESK_SECRET_KEY_PATH` (default
-`/var/lib/desk/secret.key`).
+`/home/desk/secret.key`).
 
 ### PUT /me/providers
 
@@ -211,15 +227,32 @@ in prod, the UI is the only way to populate them.
 |--------|--------------------------------|-------------------------------------------------|
 | GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
 | DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
 | GET    | /library/download?path=&workspaceId= | Stream a library file                     |
 
-Files are partitioned by workspace on disk at
-`~/Desk/workspaces/*/library/{workspaceId}/`. There is no DB index;
-listing walks the directory. File identifiers are workspace-relative
-paths inside that subtree (`foo.pdf`, `notes/bar.md`). The `path` query
-parameter is url-encoded.
+Library files live flat at the workspace root on disk
+(`~/Desk/workspaces/desk/`). There is no DB index; listing walks the
+directory and skips dot-prefixed entries (the universal hidden-file
+convention — `.chats/`, `.opencode/`, etc. are never shown). File
+identifiers are workspace-root-relative paths (`foo.pdf`,
+`notes/bar.md`). The `path` query parameter is url-encoded.
+
+### Links (`POST /library/link`)
+
+Body: `{ url: string, name?: string, subpath?: string }`. The URL must
+be `http(s)`. The on-disk format is chosen for the host OS so the file
+is openable directly from the user's file manager:
+
+- macOS → `.webloc` (Apple plist XML)
+- Windows → `.url` (INI: `[InternetShortcut]` + `URL=`)
+- Linux + others → `.desktop` with `Type=Link`
+
+Listings tag these extensions with mime `text/uri-list`; the UI maps
+that mime to a link entry. The URL is recovered from the file body via
+a format-agnostic `https?://` regex, since each format embeds the URL
+on a different syntactic line.
 
 ### Workspace scoping
 

@@ -30,7 +30,11 @@ function dockerAvailable(): boolean {
   }
 }
 
-const SKIP = !dockerAvailable();
+// `opencode models` returns an empty list when no provider key is set,
+// so the "anthropic must be present" assertions can't pass without a
+// real ANTHROPIC_API_KEY. Mirror the gating from runtime/opencode.test.ts.
+const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
+const SKIP = !dockerAvailable() || !HAS_KEY;
 const describeIf = SKIP ? describe.skip : describe;
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";

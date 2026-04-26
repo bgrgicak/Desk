@@ -5,3 +5,4 @@ dist/
 .env
 packages/app/test-results/
 test-results/
+*.tsbuildinfo

@@ -1,16 +1,14 @@
 import { useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SignupScreen } from './SignupScreen'
+import { markSignedIn } from '@/auth/auto-login'
 
 interface LoginScreenProps {
   onLogin: () => void
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
-
   return (
     <div className="relative flex min-h-screen items-center justify-center">
       {/* Full-screen background */}
@@ -19,49 +17,54 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         style={{ backgroundImage: 'url(/background.jpg)' }}
       />
 
-      <AnimatePresence mode="wait" initial={false}>
-        {mode === 'login' ? (
-          <motion.div
-            key="login"
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.02 }}
-            transition={{ duration: 0.22, ease: 'easeOut' }}
-            className="relative z-10 w-full max-w-sm mx-4"
-          >
-            <LoginCard onLogin={onLogin} onSignUp={() => setMode('signup')} />
-          </motion.div>
-        ) : (
-          <motion.div
-            key="signup"
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.02 }}
-            transition={{ duration: 0.22, ease: 'easeOut' }}
-            className="relative z-10 flex w-full justify-center px-4"
-          >
-            <SignupScreen onSignIn={() => setMode('login')} onComplete={onLogin} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.22, ease: 'easeOut' }}
+        className="relative z-10 w-full max-w-sm mx-4"
+      >
+        <LoginCard onLogin={onLogin} />
+      </motion.div>
     </div>
   )
 }
 
 // ── Login card ────────────────────────────────────────────────────────────────
 
-function LoginCard({ onLogin, onSignUp }: { onLogin: () => void; onSignUp: () => void }) {
+function LoginCard({ onLogin }: { onLogin: () => void }) {
   const [username, setUsername] = useState('desk')
   const [password, setPassword] = useState('change-me-before-first-boot')
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
-    // Scaffolding: will call POST /auth/login when backend is connected.
-    await new Promise(r => setTimeout(r, 600))
-    setIsLoading(false)
-    onLogin()
+    setError(null)
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (res.status !== 200) {
+        if (res.status === 401) {
+          setError('Invalid username or password.')
+        } else {
+          setError(`Login failed (${res.status}).`)
+        }
+        setIsLoading(false)
+        return
+      }
+      const body = (await res.json()) as { token: string }
+      try { sessionStorage.setItem('desk.session.token', body.token) } catch { /* ignore */ }
+      markSignedIn()
+      onLogin()
+      window.location.reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed.')
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -113,21 +116,21 @@ function LoginCard({ onLogin, onSignUp }: { onLogin: () => void; onSignUp: () =>
           />
         </div>
 
-        <Button type="submit" className="w-full mt-1" disabled={isLoading}>
+        {error && (
+          <p data-testid="login-error" className="text-sm text-destructive">{error}</p>
+        )}
+
+        <Button type="submit" className="w-full mt-1" disabled={isLoading} data-testid="login-submit">
           {isLoading ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
 
-      {/* Sign up link */}
-      <p className="text-center text-sm text-muted-foreground">
+      {/* Sign up — disabled until multi-user signup ships server-side */}
+      <p className="text-center text-sm text-muted-foreground" data-testid="signup-coming-soon">
         Don&apos;t have an account?{' '}
-        <button
-          type="button"
-          onClick={onSignUp}
-          className="text-foreground font-medium hover:underline underline-offset-4 transition-colors"
-        >
-          Sign up
-        </button>
+        <span className="text-muted-foreground/70 font-medium" title="Account signup coming soon">
+          Sign up — coming soon
+        </span>
       </p>
     </div>
   )

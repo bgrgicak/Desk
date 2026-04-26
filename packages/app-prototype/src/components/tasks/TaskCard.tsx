@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { Bot } from 'lucide-react'
-import type { Task } from '@/data/mock-data'
+import type { Task } from '@/data/ui-types'
 import { PriorityIcon } from './task-badges'
 
 interface TaskCardProps {
@@ -34,8 +34,8 @@ export function TaskCard({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: isDragging ? 0.4 : 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.2 }}
-      {...(attributes as React.HTMLAttributes<HTMLDivElement>)}
-      {...(listeners as React.HTMLAttributes<HTMLDivElement>)}
+      {...(attributes as Record<string, unknown>)}
+      {...(listeners as Record<string, unknown>)}
       onClick={onClick}
       className={[
         'w-full text-left rounded-xl border bg-background overflow-hidden',

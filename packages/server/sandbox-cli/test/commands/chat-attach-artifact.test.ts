@@ -22,19 +22,19 @@ import { run } from "../../src/commands/chat-attach-artifact.js";
 describe("chat attach-artifact", () => {
   it("calls callTool with chat.attach_artifact and correct request", async () => {
     const mockResponse = {
-      id: "m_1",
-      chatId: "ch_abc",
-      role: "assistant",
-      content: { type: "artifactRef", fileId: "f_xyz" },
+      id: "msg_1",
+      chatId: "cht_abc",
+      role: "agent",
+      content: { type: "artifactRef", path: "artifacts/out.md", name: "out.md", mime: "text/markdown" },
       createdAt: "2025-01-01T00:00:00Z",
     };
     vi.mocked(callTool).mockResolvedValue(mockResponse);
 
-    await run(["--chat", "ch_abc", "--file", "f_xyz"]);
+    await run(["--chat", "cht_abc", "--path", "artifacts/out.md"]);
 
     expect(callTool).toHaveBeenCalledWith("chat.attach_artifact", {
-      chatId: "ch_abc",
-      fileId: "f_xyz",
+      chatId: "cht_abc",
+      path: "artifacts/out.md",
     });
 
     const request = vi.mocked(callTool).mock.calls[0][1] as Record<string, unknown>;
@@ -42,6 +42,6 @@ describe("chat attach-artifact", () => {
   });
 
   it("throws on missing args", async () => {
-    await expect(run(["--chat", "ch_abc"])).rejects.toThrow("Usage");
+    await expect(run(["--chat", "cht_abc"])).rejects.toThrow("Usage");
   });
 });

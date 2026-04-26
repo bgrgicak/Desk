@@ -27,14 +27,14 @@ describe("parseModelsOutput", () => {
 
 describe("listModels (fake sandbox)", () => {
   it("returns a non-empty model list", async () => {
-    const models = await listModels("agt_test");
+    const models = await listModels("agt_test", "desk");
     expect(models.length).toBeGreaterThan(0);
     expect(models[0].id.includes("/")).toBe(true);
     expect(models[0].provider).toBe(models[0].id.split("/")[0]);
   });
 
   it("filters by provider", async () => {
-    const models = await listModels("agt_test", { provider: "anthropic" });
+    const models = await listModels("agt_test", "desk", { provider: "anthropic" });
     expect(models.length).toBeGreaterThan(0);
     expect(models.every((m) => m.provider === "anthropic")).toBe(true);
   });

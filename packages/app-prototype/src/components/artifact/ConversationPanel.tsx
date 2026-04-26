@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { MessageSquare, PanelRightClose, ChevronDown, ChevronRight } from 'lucide-react'
+import { PanelRightClose, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
-import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 
 type PanelTab = 'chat' | 'details'
 
@@ -20,7 +20,7 @@ interface ConversationPanelProps {
   update?: ArtifactUpdate | null
   isUpdateRead?: boolean
   onDismissUpdate?: (id: string) => void
-  transitionFrom?: 'compose'
+  transitionFrom?: 'compose' | 'chat'
 }
 
 export function ConversationPanel({
@@ -30,8 +30,6 @@ export function ConversationPanel({
   collapsed = false,
   artifact,
   update,
-  isUpdateRead,
-  onDismissUpdate,
   transitionFrom,
 }: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -128,10 +126,10 @@ export function ConversationPanel({
             <p className="text-[10px] text-muted-foreground/60 mb-2 leading-none">Changes in this conversation won't affect other chats.</p>
             <ChatInput
               onSend={(msg) => sendMessage(msg)}
-              disabled={isTyping}
               placeholder="Ask to make changes..."
               compact={true}
               showGoalPicker={true}
+              draftKey={artifact ? `artifact:${artifact.id}` : undefined}
             />
           </div>
         </>

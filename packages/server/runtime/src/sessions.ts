@@ -10,7 +10,7 @@ import { issueSessionToken, revokeSession } from "@desk/tools";
 export async function mintToken(
   pool: pg.Pool,
   agentId: string,
-  opts?: { runId?: string },
+  opts?: { runId?: string; workspaceId?: string },
 ): Promise<{ token: string; session: SandboxSession }> {
   return issueSessionToken(pool, agentId, opts);
 }

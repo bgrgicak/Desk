@@ -43,13 +43,14 @@ export interface ExecInSandboxResult {
  */
 export async function execInSandbox(
   workspaceId: string,
+  workspaceSlug: string,
   opts: ExecInSandboxOptions,
 ): Promise<ExecInSandboxResult> {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
     return fakeExecInSandbox(opts);
   }
 
-  const handle = await createOrReuse(workspaceId, undefined, opts.providerKeys);
+  const handle = await createOrReuse(workspaceId, workspaceSlug, undefined, opts.providerKeys);
 
   const { dockerSocketPath } = await import("./docker.js");
   const Docker = (await import("dockerode")).default;
@@ -58,7 +59,7 @@ export async function execInSandbox(
 
   const exec = await container.exec({
     Cmd: opts.argv,
-    User: opts.user ?? "agent",
+    ...(opts.user ? { User: opts.user } : {}),
     Env: opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined,
     AttachStdout: true,
     AttachStderr: true,

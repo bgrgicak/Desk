@@ -25,8 +25,8 @@ fi
 usage() {
   cat <<EOF
 Usage: DESK_INSTANCE=<name> vm.sh <command>
-Commands: up | halt | destroy | reload | provision | ssh | status |
-          snapshot | restore | reset | exec <cmd...>
+Commands: up | halt | destroy | reload | provision | ssh | ssh-desk |
+          status | snapshot | restore | reset | exec <cmd...>
 EOF
 }
 
@@ -58,6 +58,7 @@ case "$cmd" in
     ;;
   provision)  limactl shell "$NAME" sudo bash /desk/packages/server/setup/install.sh ;;
   ssh)        limactl shell "$NAME" ;;
+  ssh-desk)   limactl shell "$NAME" -- sudo -u desk bash ;;
   status)     limactl list "$NAME" ;;
   snapshot)   limactl snapshot create --tag clean-install "$NAME" ;;
   restore)    limactl snapshot apply --tag clean-install "$NAME" ;;

@@ -1,4 +1,4 @@
-import type { Artifact } from '@/data/mock-data'
+import type { Artifact } from '@/data/ui-types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FileText } from 'lucide-react'
@@ -7,16 +7,27 @@ import { ImagePreview } from '@/components/ImagePreview'
 interface ArtifactPreviewProps {
   artifact: Artifact
   zoom?: number
+  /**
+   * File body fetched by the caller (e.g. ArtifactDetail). When provided,
+   * document/spreadsheet previews render it as markdown instead of the
+   * empty `artifact.content` coming from the list-shape selector.
+   */
+  content?: string | null
+  /**
+   * Object URL for binary-body previews (images). When provided, the image
+   * case renders a real `<img>`; otherwise it falls back to the placeholder.
+   */
+  blobUrl?: string | null
 }
 
-export function ArtifactPreview({ artifact, zoom = 1 }: ArtifactPreviewProps) {
+export function ArtifactPreview({ artifact, zoom = 1, content, blobUrl }: ArtifactPreviewProps) {
   switch (artifact.type) {
     case 'document':
     case 'spreadsheet':
       return (
         <div className="mx-auto max-w-3xl px-8 py-8">
           <div className="prose prose-neutral prose-sm max-w-none prose-headings:font-semibold prose-h1:text-2xl prose-h2:text-lg prose-h3:text-base prose-p:text-sm prose-p:leading-relaxed prose-li:text-sm prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:bg-muted/50 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-td:border-t">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{artifact.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content ?? artifact.content}</ReactMarkdown>
           </div>
         </div>
       )
@@ -98,7 +109,18 @@ export function ArtifactPreview({ artifact, zoom = 1 }: ArtifactPreviewProps) {
       )
 
     case 'image':
-      return <ImagePreview zoom={zoom} />
+      return blobUrl ? (
+        <div className="relative flex flex-1 min-h-full items-center justify-center bg-zinc-700 overflow-auto">
+          <img
+            src={blobUrl}
+            alt={artifact.name}
+            style={{ transform: `scale(${zoom})` }}
+            className="max-w-full max-h-full object-contain transition-transform duration-150 ease-out select-none"
+          />
+        </div>
+      ) : (
+        <ImagePreview zoom={zoom} />
+      )
 
     case 'site':
       return (

@@ -1,7 +1,61 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Runs `cmd args...` with `input` on stdin and no shell in between.
+ * `spawn` (unlike bash `-c "echo '...' | cmd"`) never expands `$(...)` or
+ * backticks in the payload, which matters for us: the at-job script
+ * contains `$(cat /etc/desk-server/internal-token)` and must be stored
+ * verbatim so the token is read at fire time, not at scheduling time.
+ */
+function runWithStdin(
+  cmd: string,
+  args: string[],
+  input: string,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => { stdout += c; });
+    child.stderr.on("data", (c) => { stderr += c; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else {
+        const detail = (stderr || stdout).trim() || `exit ${code}`;
+        reject(new Error(`${cmd} ${args.join(" ")} failed: ${detail}`));
+      }
+    });
+    child.stdin.end(input);
+  });
+}
+
+/**
+ * Converts a timespec accepted by our callers into the argv tokens we pass
+ * to `at`. ISO 8601 timestamps get formatted as `-t CCYYMMDDhhmm.SS` (the
+ * deterministic form, interpreted by `at` in local time); anything else
+ * (e.g. "now", "now + 30 minutes") is forwarded as-is so the existing
+ * relative-time syntax keeps working.
+ */
+function atTimeArgs(time: string): string[] {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(time)) {
+    const d = new Date(time);
+    if (Number.isNaN(d.getTime())) {
+      throw new Error(`Invalid ISO time for at: ${time}`);
+    }
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const ts =
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+      `${pad(d.getHours())}${pad(d.getMinutes())}.${pad(d.getSeconds())}`;
+    return ["-t", ts];
+  }
+  // "now + 30 minutes" → ["now", "+", "30", "minutes"]. `at` concatenates
+  // argv into its timespec.
+  return time.trim().split(/\s+/);
+}
 
 export interface ScheduleAdapter {
   scheduleAt(command: string, time: string): Promise<string>; // returns at job ID
@@ -75,13 +129,15 @@ export function createMemoryAdapter(): ScheduleAdapter {
 function createRealAdapter(): ScheduleAdapter {
   return {
     async scheduleAt(command, time) {
-      const { stdout } = await execFileAsync("bash", [
-        "-c",
-        `echo "${command}" | at ${time} 2>&1`,
-      ]);
-      // at outputs: "job N at ..."
-      const match = stdout.match(/job\s+(\d+)/);
-      if (!match) throw new Error(`Failed to parse at output: ${stdout}`);
+      const { stdout, stderr } = await runWithStdin(
+        "at",
+        atTimeArgs(time),
+        command + "\n",
+      );
+      // `at` writes "job N at ..." to stderr on most distributions.
+      const combined = stderr + stdout;
+      const match = combined.match(/job\s+(\d+)/);
+      if (!match) throw new Error(`Failed to parse at output: ${combined}`);
       return match[1];
     },
 
@@ -122,8 +178,7 @@ function createRealAdapter(): ScheduleAdapter {
       const lines = existing.split("\n").filter((l) => !l.includes(marker));
       lines.push(line);
 
-      // Install updated crontab
-      await execFileAsync("bash", ["-c", `echo "${lines.join("\n")}" | crontab -`]);
+      await runWithStdin("crontab", ["-"], lines.join("\n") + "\n");
     },
 
     async removeCron(jobId) {
@@ -138,7 +193,7 @@ function createRealAdapter(): ScheduleAdapter {
       }
 
       const lines = existing.split("\n").filter((l) => !l.includes(marker));
-      await execFileAsync("bash", ["-c", `echo "${lines.join("\n")}" | crontab -`]);
+      await runWithStdin("crontab", ["-"], lines.join("\n") + "\n");
     },
 
     async listCron() {

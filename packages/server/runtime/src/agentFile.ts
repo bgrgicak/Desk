@@ -1,11 +1,17 @@
 /**
- * Generates and writes OpenCode agent definition files into sandbox containers.
+ * Generates and writes OpenCode agent definition files.
  *
- * Each Desk agent maps to a `.opencode/agents/<agentId>.md` file inside the
- * sandbox. The file contains YAML frontmatter (description, model) and a
- * markdown body with the hardcoded Desk framing followed by the user's custom
- * instructions from the DB.
+ * Under the workspace-as-home model the sandbox's `$HOME` is a bind-mount
+ * of the workspace root, so the agent file lives at
+ * `{workspaceRoot}/.opencode/agents/{agentId}.md` on the host and appears
+ * inside the container at `~/.opencode/agents/{agentId}.md`.
+ *
+ * Writing host-side means no `docker exec` dance — the file is simply
+ * present when the container runs `opencode`.
  */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { workspaceRootPath } from "@desk/storage";
 
 export interface AgentFileInput {
   agentId: string;
@@ -35,14 +41,32 @@ researching, writing, analyzing, building, or anything else they ask for.
 Take initiative within the scope of what's asked, ask for clarification when
 the request is ambiguous, and be direct about what you can and cannot do.
 
-## File access
+## Your workspace
 
-You can access files on the host filesystem under /mnt/desk:
-- /mnt/desk/files      (read-only) workspace files
-- /mnt/desk/library    (read-only) library items
-- /mnt/desk/desktop    (read-write) scratch space for your output
+~/ is your workspace — treat it like a coworker's home directory.
 
-When a chat has attachments, they will be mounted at a path provided in the chat context.
+Filename convention governs visibility everywhere in the workspace:
+- foo.md   — visible to the user
+- .foo.md  — hidden (drafts, scratch, your own notes)
+
+Use non-dot names for finished output you want the user to see. Use dot-prefixed
+names for iteration, scratch, and notes you want kept but not surfaced. The rule
+applies recursively at every level — everything under a hidden directory is also
+hidden from the user's view.
+
+User files live at ~/ and under folders they've created. Follow their
+organization when placing new files. Don't modify user files unless asked.
+
+Each conversation has a workbench at ~/.chats/{chatId}/ with these subdirs:
+- attachments/ — files the user attached to messages in this chat
+- notes/       — markdown snapshots of every chat note (one {messageId}.md per note)
+Put work-in-progress and intermediate output under the current chat's workbench
+by default; move finished output to ~/ (or a user folder) when the user asks to
+keep it.
+
+When the user asks what files you can see, enumerate the attachments/ and
+notes/ directories for the current chat plus the visible files under ~/ —
+don't guess. All three are real directories on disk.
 
 ## User instructions
 
@@ -52,38 +76,22 @@ ${input.instructions}`;
 }
 
 /**
- * Writes the agent definition file into a running sandbox container at
- * `/home/agent/.opencode/agents/<agentId>.md` via `docker exec`.
+ * Writes the agent definition file to the host workspace so it's visible
+ * inside the sandbox via the `~/` bind-mount. Idempotent — overwrites
+ * existing file contents.
+ *
+ * The `home` argument is the DESK_HOME root (contains
+ * `Desk/workspaces/desk/`). We no longer need the container id because
+ * the file lands on the host filesystem.
  */
 export async function writeAgentFile(
-  containerId: string,
+  home: string,
+  workspaceSlug: string,
   input: AgentFileInput,
 ): Promise<void> {
   const content = renderAgentFile(input);
-  const agentDir = "/home/agent/.opencode/agents";
-  const filePath = `${agentDir}/${input.agentId}.md`;
-
-  const { dockerSocketPath } = await import("./docker.js");
-  const Docker = (await import("dockerode")).default;
-  const docker = new Docker({ socketPath: dockerSocketPath() });
-  const container = docker.getContainer(containerId);
-
-  // mkdir + write in a single exec to avoid race conditions
-  const exec = await container.exec({
-    Cmd: ["sh", "-c", `mkdir -p "${agentDir}" && cat > "${filePath}"`],
-    User: "agent",
-    AttachStdin: true,
-    AttachStdout: true,
-    AttachStderr: true,
-  });
-
-  const stream = await exec.start({ hijack: true, stdin: true });
-  stream.write(content);
-  stream.end();
-
-  // Wait for the exec to finish
-  await new Promise<void>((resolve) => {
-    stream.on("end", resolve);
-    stream.on("error", () => resolve());
-  });
+  const agentDir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode", "agents");
+  const filePath = path.join(agentDir, `${input.agentId}.md`);
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.writeFile(filePath, content, "utf-8");
 }

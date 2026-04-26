@@ -25,7 +25,6 @@ export type Agent = z.infer<typeof AgentSchema>;
 export const WorkspaceAgentSchema = z.object({
   workspaceId: z.string(),
   agentId: z.string(),
-  isDefault: z.boolean(),
   addedAt: z.string(),
 });
 export type WorkspaceAgent = z.infer<typeof WorkspaceAgentSchema>;
@@ -36,6 +35,10 @@ export const WorkspaceSchema = z.object({
   name: z.string(),
   description: z.string(),
   icon: z.string(),
+  color: z.string(),
+  /** On-disk directory name under `~/Desk/workspaces/`. Derived from `name`
+   * at create time, renamed in lock-step when the workspace is renamed. */
+  path: z.string(),
   createdAt: z.string(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
@@ -78,18 +81,31 @@ export const MessageContentArtifactRefSchema = z.object({
   mime: z.string().optional(),
 });
 
-/** A single event from the OpenCode JSON event stream. */
-export const OpenCodeEventSchema = z.object({
+/** A single event from the agent's JSON event stream. */
+export const AgentEventSchema = z.object({
   type: z.string(),
   timestamp: z.number().optional(),
   sessionID: z.string().optional(),
   part: z.record(z.unknown()).optional(),
 }).passthrough();
-export type OpenCodeEvent = z.infer<typeof OpenCodeEventSchema>;
+export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+/**
+ * Tagged entry from a single agent run's log. `event` wraps a validated
+ * JSON event emitted by the agent on stdout; `stderr` is a raw stderr
+ * line; `unparsed` is a stdout line that didn't parse as JSON (kept so
+ * nothing is silently dropped).
+ */
+export const AgentLogEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), event: AgentEventSchema }),
+  z.object({ kind: z.literal("stderr"), line: z.string() }),
+  z.object({ kind: z.literal("unparsed"), line: z.string() }),
+]);
+export type AgentLogEntry = z.infer<typeof AgentLogEntrySchema>;
 
 export const MessageContentEventsSchema = z.object({
   type: z.literal("events"),
-  events: z.array(OpenCodeEventSchema),
+  log: z.array(AgentLogEntrySchema),
 });
 
 /**
@@ -136,7 +152,24 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
-export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
+/**
+ * Reference to a file or directory that was attached to a specific
+ * message. Lives on the Message envelope (not MessageContent) so the
+ * text-plus-files shape of a user message stays a single row. Paths are
+ * workspace-relative, forward-slash separated. `kind` defaults to
+ * `"file"` when omitted; directories opt in explicitly so the UI can
+ * render a folder icon and route clicks to the folder view.
+ */
+export const AttachmentRefSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  kind: z.enum(["file", "directory"]).optional(),
+  mime: z.string().optional(),
+  size: z.number().int().nonnegative().optional(),
+});
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled", "paused"] as const;
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
 export const SchedulerRefSchema = z.object({
@@ -151,6 +184,13 @@ export const MessageSchema = z.object({
   role: z.enum(MESSAGE_ROLES),
   content: MessageContentSchema,
   createdAt: z.string(),
+
+  /** Files attached to this message. User messages: files the user sent
+   * alongside the text. Agent messages: reserved for future use. */
+  attachments: z.array(AttachmentRefSchema).optional(),
+  /** Model identifier that produced this message. Stamped at insert time
+   * on assistant rows so history survives agent reconfiguration. */
+  model: z.string().optional(),
 
   /** Execution metadata (nullable — present for scheduled/executing messages only). */
   executeAt: z.string().optional(),
@@ -183,6 +223,9 @@ export type File = z.infer<typeof FileSchema>;
 export const SandboxSessionSchema = z.object({
   id: z.string(),
   agentId: z.string(),
+  /** Workspace whose sandbox container this token was minted for.
+   * Optional for historical sessions from before the multi-workspace split. */
+  workspaceId: z.string().optional(),
   tokenHash: z.string(),
   issuedAt: z.string(),
   revokedAt: z.string().optional(),

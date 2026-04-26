@@ -4,22 +4,23 @@ import { resolveHostPath } from "../src/layout.js";
 
 describe("resolveHostPath", () => {
   const home = "/tmp/desk-test-home";
+  const slug = "desk";
 
   it("resolves a valid relative path", () => {
-    const result = resolveHostPath(home, "files/fil_abc123-hello.txt");
+    const result = resolveHostPath(home, slug, "files/fil_abc123-hello.txt");
     expect(result).toBe("/tmp/desk-test-home/Desk/workspaces/desk/files/fil_abc123-hello.txt");
   });
 
   it("resolves a library path", () => {
-    const result = resolveHostPath(home, "library/fil_abc123-note.md");
+    const result = resolveHostPath(home, slug, "library/fil_abc123-note.md");
     expect(result).toBe("/tmp/desk-test-home/Desk/workspaces/desk/library/fil_abc123-note.md");
   });
 
   it("rejects path traversal with ..", () => {
-    expect(() => resolveHostPath(home, "../../etc/passwd")).toThrow(ValidationError);
+    expect(() => resolveHostPath(home, slug, "../../etc/passwd")).toThrow(ValidationError);
   });
 
   it("rejects absolute paths that escape the root", () => {
-    expect(() => resolveHostPath(home, "/etc/passwd")).toThrow(ValidationError);
+    expect(() => resolveHostPath(home, slug, "/etc/passwd")).toThrow(ValidationError);
   });
 });

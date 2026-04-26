@@ -16,13 +16,12 @@ import {
   SortableContext,
   verticalListSortingStrategy,
   useSortable,
-  arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Plus } from 'lucide-react'
 import { TaskCard } from './TaskCard'
 import { StatusBadge } from './task-badges'
-import type { Task } from '@/data/mock-data'
+import type { Task } from '@/data/ui-types'
 
 // ── Column config ─────────────────────────────────────────────────────────────
 
@@ -83,8 +82,8 @@ function SortableTaskCard({
       onClick={onClick}
       setNodeRef={setNodeRef}
       style={style}
-      attributes={attributes}
-      listeners={listeners}
+      attributes={attributes as unknown as Record<string, unknown>}
+      listeners={listeners as unknown as Record<string, unknown>}
       isDragging={isDragging}
     />
   )
@@ -183,7 +182,10 @@ interface BoardViewProps {
   tasks: Task[]
   selectedTaskId: string | null
   onSelectTask: (task: Task) => void
-  onTasksChange: (tasks: Task[]) => void
+  /** Cross-column drops fire this so the parent can persist the new
+   * status (PATCH /chats/:id/messages/:id). Intra-column reorder is
+   * client-only — the server has no order field. */
+  onTaskMove?: (task: Task, newStatus: Task['status']) => void
   onAddTask?: (status: Task['status']) => void
 }
 
@@ -191,7 +193,7 @@ export function BoardView({
   tasks,
   selectedTaskId,
   onSelectTask,
-  onTasksChange,
+  onTaskMove,
   onAddTask,
 }: BoardViewProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
@@ -250,7 +252,7 @@ export function BoardView({
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event
+    const { over } = event
     const prev = activeTask
     const target = dropTarget
 
@@ -259,41 +261,20 @@ export function BoardView({
 
     if (!over || !prev) return
 
-    const activeId = String(active.id)
     const overId = String(over.id)
-
-    // ── Intra-column reorder ──────────────────────────────────────────────────
     const overTask = overId !== PLACEHOLDER_ID ? tasks.find(t => t.id === overId) : null
-    if (overTask && overTask.status === prev.status && activeId !== overId) {
-      const colTasks = tasks.filter(t => t.status === prev.status)
-      const reordered = arrayMove(
-        colTasks,
-        colTasks.findIndex(t => t.id === activeId),
-        colTasks.findIndex(t => t.id === overId),
-      )
-      onTasksChange([...tasks.filter(t => t.status !== prev.status), ...reordered])
-      return
-    }
 
-    // ── Cross-column drop ─────────────────────────────────────────────────────
+    // Intra-column reorder is client-only (server has no order field).
+    if (overTask && overTask.status === prev.status) return
+
+    // Cross-column drop — fire the persistence hook.
     const targetColId: Task['status'] | undefined =
       target?.columnId ??
       (overTask && overTask.status !== prev.status ? overTask.status : undefined) ??
       COLUMNS.find(c => c.id === overId)?.id
 
     if (!targetColId || targetColId === prev.status) return
-
-    const updated: Task = { ...prev, status: targetColId }
-    const rest = tasks.filter(t => t.id !== activeId)
-
-    if (target?.insertBeforeId) {
-      const idx = rest.findIndex(t => t.id === target.insertBeforeId)
-      const newList = [...rest]
-      newList.splice(idx >= 0 ? idx : newList.length, 0, updated)
-      onTasksChange(newList)
-    } else {
-      onTasksChange([...rest, updated])
-    }
+    onTaskMove?.(prev, targetColId)
   }
 
   return (

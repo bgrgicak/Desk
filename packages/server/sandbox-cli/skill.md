@@ -15,16 +15,16 @@ The environment variables `DESK_TOOL_TOKEN` and `DESK_TOOL_SOCKET` are pre-set i
 
 Tool: `file.read`
 
-Read the content of a file by its ID.
+Read the content of a file by its workspace-relative path.
 
 ```
-desk file read <fileId>
+desk file read <path>
 ```
 
 Example:
 
 ```
-desk file read f_abc123
+desk file read notes/hello.md
 ```
 
 Returns the file content and MIME type.
@@ -67,16 +67,16 @@ desk library list --workspace ws_abc --limit 10
 
 Tool: `library.get`
 
-Get metadata for a library file.
+Get metadata for a library file by its workspace-relative path.
 
 ```
-desk library get <fileId>
+desk library get <path>
 ```
 
 Example:
 
 ```
-desk library get f_abc123
+desk library get library/report.pdf
 ```
 
 ## desk chat send-message
@@ -101,16 +101,16 @@ Warning: this sends a visible message to the user. Make sure the content is rele
 
 Tool: `chat.attach_artifact`
 
-Attach a file as an artifact to a chat.
+Attach a file as an artifact to a chat, by its workspace-relative path.
 
 ```
-desk chat attach-artifact --chat <id> --file <id>
+desk chat attach-artifact --chat <id> --path <path>
 ```
 
 Example:
 
 ```
-desk chat attach-artifact --chat ch_abc --file f_xyz
+desk chat attach-artifact --chat cht_abc --path artifacts/report.md
 ```
 
 ## desk web fetch

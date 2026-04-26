@@ -129,7 +129,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default) VALUES ($1, $2, true)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
       [ws, agentId],
     );
   }
@@ -283,7 +283,7 @@ beforeAll(async () => {
   await insertMessage(alpha, {
     chatId: alpha.chatA2,
     role: "agent",
-    content: { type: "events", events: [] },
+    content: { type: "events", log: [] },
     state: "failed",
   });
   //   8. agent toolResult cancelled (unscheduled)

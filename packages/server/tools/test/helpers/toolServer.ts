@@ -5,7 +5,7 @@ import * as http from "node:http";
 import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { generateId } from "@desk/shared";
-import { ensureLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
 import { issueSessionToken } from "../../src/auth.js";
 import { createToolServer } from "../../src/server.js";
 import type { StorageContext } from "@desk/storage";
@@ -74,8 +74,9 @@ export async function setupTestTools(): Promise<TestToolContext> {
   process.env.DESK_SEED_PASSWORD = "testpass";
   await seedIfEmpty(pool);
 
-  const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
+  const { rows: wsRows } = await pool.query("SELECT id, path FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;
+  const workspaceSlug = wsRows[0].path as string;
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
@@ -88,6 +89,7 @@ export async function setupTestTools(): Promise<TestToolContext> {
 
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tools-test-"));
   await ensureLayout(home);
+  await ensureWorkspaceLayout(home, workspaceSlug);
 
   const storage: StorageContext = { pool, home };
 
@@ -105,7 +107,7 @@ export async function setupTestTools(): Promise<TestToolContext> {
 
   const address = server.address() as { port: number };
 
-  const { token, session } = await issueSessionToken(pool, agentId);
+  const { token, session } = await issueSessionToken(pool, agentId, { workspaceId });
 
   return {
     pool,

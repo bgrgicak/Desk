@@ -190,7 +190,7 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     toolAllowlist: [],
   });
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default) VALUES ($1, $2, true)`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
     [workspaceId, agentId],
   );
 
@@ -217,6 +217,8 @@ async function createChatWithPayload(
     agentId: owner.agentId,
     title,
   });
+  const ws = await queries.workspaces.findById(pool, owner.workspaceId);
+  const wsPath = ws!.path;
 
   const userMessageId = generateId("message");
   await queries.messages.insert(pool, {
@@ -243,17 +245,16 @@ async function createChatWithPayload(
     schedulerRef: { kind: "at", id: atJobId },
   });
 
-  // Seed an on-disk artifact under chats/{chatId}/attachments and a log
-  // under .chats/{chatId}/logs to prove both subtrees get trashed.
-  const attachmentsDir = path.join(home, "Desk", "workspaces", "desk", "chats", chatId, "attachments");
+  // Seed an on-disk attachment + a log, both under the chat's hidden tree.
+  const attachmentsDir = path.join(home, "Desk", "workspaces", wsPath, ".chats", chatId, "attachments");
   await fs.mkdir(attachmentsDir, { recursive: true });
   await fs.writeFile(path.join(attachmentsDir, "hello.txt"), "chat artifact");
 
-  const logsDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "logs");
+  const logsDir = path.join(home, "Desk", "workspaces", wsPath, ".chats", chatId, "logs");
   await fs.mkdir(logsDir, { recursive: true });
   await fs.writeFile(path.join(logsDir, `${scheduledMessageId}.log`), "stdout\tready\n");
 
-  const attachmentRel = `chats/${chatId}/attachments/hello.txt`;
+  const attachmentRel = `.chats/${chatId}/attachments/hello.txt`;
   return { chatId, userMessageId, scheduledMessageId, atJobId, attachmentRel };
 }
 
@@ -364,16 +365,14 @@ describe("DELETE /chats/:id", () => {
     const row = await queries.messages.findById(pool, scheduledMessageId);
     expect(row).toBeNull();
 
-    // On-disk chat dirs moved to trash.
-    const liveHidden = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId);
-    const liveAttach = path.join(home, "Desk", "workspaces", "desk", "chats", chatId);
-    await expect(fs.stat(liveHidden)).rejects.toThrow();
-    await expect(fs.stat(liveAttach)).rejects.toThrow();
+    // On-disk chat dir moved to trash. The entire `.chats/{chatId}/`
+    // subtree — logs, attachments, note-history — relocates together.
+    const alphaWs = await queries.workspaces.findById(pool, alpha.workspaceId);
+    const live = path.join(home, "Desk", "workspaces", alphaWs!.path, ".chats", chatId);
+    await expect(fs.stat(live)).rejects.toThrow();
 
-    const trashedHidden = await fs.readdir(path.join(home, "Desk", ".trash", ".chats"));
-    expect(trashedHidden.some((n) => n.startsWith(`${chatId}-`))).toBe(true);
-    const trashedAttach = await fs.readdir(path.join(home, "Desk", ".trash", "chats"));
-    expect(trashedAttach.some((n) => n.startsWith(`${chatId}-`))).toBe(true);
+    const trashed = await fs.readdir(path.join(home, "Desk", ".trash", ".chats"));
+    expect(trashed.some((n) => n.startsWith(`${chatId}-`))).toBe(true);
 
     // WS event received.
     await new Promise((r) => setTimeout(r, 200));
@@ -427,7 +426,7 @@ describe("DELETE /chats/:id", () => {
       icon: "",
     });
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default) VALUES ($1, $2, true)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
       [wsId, alpha.agentId],
     );
 

@@ -12,8 +12,11 @@ export interface ExecRunOptions {
   chatContext?: string;
   home: string;
   workspaceId: string;
+  workspaceSlug: string;
   chatId?: string;
   agent: AgentFileInput;
+  /** Workspace-relative paths to forward to opencode as `--file` flags. */
+  attachments?: string[];
   onLog: (event: LogEvent) => void;
 }
 
@@ -27,28 +30,39 @@ export async function execRun(
   opts: ExecRunOptions,
 ): Promise<ExecResult> {
   // Session identifies the agent (not the workspace) so tool auth knows
-  // which agent is asking.
-  const { session } = await mintToken(pool, opts.agent.agentId, { runId: opts.runId });
+  // which agent is asking. Workspace is recorded alongside so tool handlers
+  // route filesystem ops to the right on-disk slug.
+  const { session } = await mintToken(pool, opts.agent.agentId, {
+    runId: opts.runId,
+    workspaceId: opts.workspaceId,
+  });
 
-  // Project mounts and get the resolved MountSet so we can tell the agent
-  // where to look for files inside the sandbox.
+  // Track the run + write a manifest for operator debugging.
   const mounts = await projectMounts(handle, {
     home: opts.home,
     workspaceId: opts.workspaceId,
+    workspaceSlug: opts.workspaceSlug,
     chatId: opts.chatId,
     runId: opts.runId,
   });
 
-  // Write the OpenCode agent definition file into the sandbox.
-  await writeAgentFile(handle.containerId, opts.agent);
+  // Write the OpenCode agent definition file to the host workspace. It
+  // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
+  // single-bind workspace mount.
+  await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
 
-  // Compose a per-run hint for chat attachments (only when present).
-  // The static file-access docs live in the agent .md file; this just adds
-  // the dynamic attachments path for the current chat.
-  const attachmentHint = mounts.attachmentsInSandbox
-    ? `Chat attachments are available at ${mounts.attachmentsInSandbox} (read-only).`
+  // Tell the agent which chat it's in. The per-chat workbench path is
+  // encoded in the system prompt as a template; here we anchor it and
+  // name the attachments/ + notes/ subdirs so the agent reads real
+  // paths instead of guessing.
+  const workbenchHint = opts.chatId
+    ? [
+        `Current chat workbench: ~/.chats/${opts.chatId}/`,
+        `Chat attachments: ~/.chats/${opts.chatId}/attachments/`,
+        `Chat notes:       ~/.chats/${opts.chatId}/notes/`,
+      ].join("\n")
     : null;
-  const chatContext = [attachmentHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
+  const chatContext = [workbenchHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
 
   try {
     const driver = createDriver();
@@ -56,7 +70,9 @@ export async function execRun(
       runId: opts.runId,
       prompt: opts.prompt,
       chatContext,
+      workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
+      attachments: opts.attachments,
       onLog: opts.onLog,
     });
     return result;

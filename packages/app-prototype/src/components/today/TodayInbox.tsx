@@ -19,8 +19,8 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useMockChat } from '@/hooks/use-mock-chat'
 import { cn } from '@/lib/utils'
-import type { TodayItem, TodayBand, Chat } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { TodayItem, TodayBand, Chat } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 
 // ── Workspace name lookup ─────────────────────────────────────────────────────
 const WS_NAME: Record<string, string> = {
@@ -491,6 +491,7 @@ function TodayItemDetail({
           placeholder="Ask about this…"
           compact
           showGoalPicker={false}
+          draftKey={`today-inbox:${item.id}`}
         />
       </div>
     </motion.div>

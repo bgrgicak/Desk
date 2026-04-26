@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import pg from "pg";
+import { PROVIDER_KEY_VARS } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "./helpers/db.js";
 import { seedIfEmpty, seedProviderKeysFromEnv } from "../src/seed.js";
 import * as userSettings from "../src/queries/userSettings.js";
@@ -10,6 +11,7 @@ import { resetSecretKeyCache } from "../src/encryption.js";
 
 let pool: pg.Pool;
 let keyDir: string;
+let savedProviderKeys: Record<string, string | undefined>;
 
 beforeAll(async () => {
   pool = await setupTestDb();
@@ -23,6 +25,13 @@ beforeEach(async () => {
   keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-seed-"));
   process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
   resetSecretKeyCache();
+  // Snapshot and clear every provider env var so tests that exercise
+  // seedProviderKeysFromEnv see only the keys they explicitly set.
+  savedProviderKeys = {};
+  for (const name of PROVIDER_KEY_VARS) {
+    savedProviderKeys[name] = process.env[name];
+    delete process.env[name];
+  }
   // Wipe any provider keys rows so each test's encryption key is the
   // only one used against them.
   await pool.query("DELETE FROM user_settings");
@@ -31,7 +40,10 @@ beforeEach(async () => {
 afterEach(() => {
   delete process.env.DESK_SECRET_KEY_PATH;
   delete process.env.DESK_DEV;
-  delete process.env.ANTHROPIC_API_KEY;
+  for (const [name, value] of Object.entries(savedProviderKeys)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   resetSecretKeyCache();
   fs.rmSync(keyDir, { recursive: true, force: true });
 });

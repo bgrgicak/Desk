@@ -83,6 +83,11 @@ export async function updateMeta(
   return rows.length ? rowToAgent(rows[0]) : null;
 }
 
+export async function remove(db: Queryable, id: string): Promise<boolean> {
+  const { rowCount } = await db.query("DELETE FROM agents WHERE id = $1", [id]);
+  return (rowCount ?? 0) > 0;
+}
+
 export async function getToolAllowlist(db: Queryable, id: string): Promise<string[] | null> {
   const { rows } = await db.query(
     "SELECT tool_allowlist FROM agents WHERE id = $1",

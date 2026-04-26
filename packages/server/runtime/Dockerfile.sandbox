@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts 2>/dev/null || true && \
 # ---- Runtime stage ----
 FROM ubuntu:24.04
 
-# Install basics + Node.js (needed for sandbox-cli and OpenCode)
+# Install basics + Node.js (needed for sandbox-cli and OpenCode).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl nodejs npm \
     && rm -rf /var/lib/apt/lists/*
@@ -26,18 +26,28 @@ RUN printf '#!/usr/bin/env node\n' | cat - /usr/local/lib/desk-cli/desk.js > /us
 # Copy skill file
 COPY sandbox-cli/skill.md /opt/desk/skills/desk-cli.md
 
-# Create mount targets (populated at runtime via bind-mounts from host)
-RUN mkdir -p /mnt/desk/files /mnt/desk/attachments /mnt/desk/library /mnt/desk/desktop
+# Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first
+# start (idempotent via `cp -rn`). See runtime/sandbox-entrypoint.sh.
+COPY runtime/sandbox-entrypoint.sh /usr/local/bin/desk-sandbox-entrypoint
+RUN chmod +x /usr/local/bin/desk-sandbox-entrypoint
 
-# Create non-root agent user.
-# AGENT_UID is a build-arg so the image can match the host user that owns the
-# bind-mount root. Default 1000 matches a typical dev VM; production install.sh
-# passes `--build-arg AGENT_UID=2000` to match the `desk` system user.
-ARG AGENT_UID=1000
-RUN (userdel -r ubuntu 2>/dev/null || true) && \
-    useradd -m -s /bin/bash -u ${AGENT_UID} agent
-USER agent
+# Unprivileged in-container user. Its uid must match the host user that
+# owns the workspace bind-mount (the VM's `desk` service user): the
+# workspace root is mounted as $HOME, so host-written files (agent .md,
+# attachments, notes) need to be writable by the in-container agent, and
+# in-container writes need to stay readable by the host service.
+#
+# Running as root here doesn't help — the container's HostConfig sets
+# CapDrop:ALL, which drops CAP_DAC_OVERRIDE, so even uid 0 obeys normal
+# DAC rules and can't write to a dir owned by a different uid.
+ARG AGENT_UID=2000
+RUN groupadd --gid "$AGENT_UID" agent \
+ && useradd --uid "$AGENT_UID" --gid "$AGENT_UID" --create-home --shell /bin/bash agent
 WORKDIR /home/agent
+ENV HOME=/home/agent
+USER agent
+
+ENTRYPOINT ["/usr/local/bin/desk-sandbox-entrypoint"]
 
 # Keep the container alive so `docker exec` has a target.
 # Runs (OpenCode invocations) are dispatched via `docker exec`.

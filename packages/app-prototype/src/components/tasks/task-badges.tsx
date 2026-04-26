@@ -1,5 +1,5 @@
 import { ChevronsUp, ArrowUp, Minus, ArrowDown } from 'lucide-react'
-import type { Task } from '@/data/mock-data'
+import type { Task } from '@/data/ui-types'
 
 export type Priority = NonNullable<Task['priority']>
 

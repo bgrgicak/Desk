@@ -41,14 +41,14 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
     );
 
     await client.query(
-      `INSERT INTO workspaces (id, user_id, name)
-       VALUES ($1, $2, $3)`,
-      [workspaceId, userId, "Desk"],
+      `INSERT INTO workspaces (id, user_id, name, path)
+       VALUES ($1, $2, $3, $4)`,
+      [workspaceId, userId, "Desk", "desk"],
     );
 
     await client.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-       VALUES ($1, $2, true)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id)
+       VALUES ($1, $2)`,
       [workspaceId, agentId],
     );
 

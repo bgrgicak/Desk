@@ -208,22 +208,6 @@
               "path": ["workspaces", "{{workspaceId}}", "agents", "{{agentId}}"]
             }
           }
-        },
-        {
-          "name": "POST /workspaces/:id/default-agent",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"agentId\": \"{{agentId}}\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}/default-agent",
-              "host": ["{{baseUrl}}"],
-              "path": ["workspaces", "{{workspaceId}}", "default-agent"]
-            }
-          }
         }
       ]
     },

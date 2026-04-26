@@ -55,8 +55,8 @@ beforeAll(async () => {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [workspaceId, agentId],
   );
 
