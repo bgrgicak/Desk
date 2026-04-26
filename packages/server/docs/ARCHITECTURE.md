@@ -167,7 +167,7 @@ Example host layout:
 Example sandbox persistent storage layout:
 
 ```text
-/var/lib/desk/sandboxes/
+/home/desk/sandboxes/
   sandbox_001/
     home/
     cache/

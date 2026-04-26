@@ -36,12 +36,14 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
   it("writes a library file to library/ and returns a workspace-relative path", async () => {
     const file = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "report.md",
       mime: "text/markdown",
       stream: makeStream("library content"),
     });
 
-    expect(file.path).toMatch(/^library\//);
+    // Workspace root is the library — file lands directly at the root.
+    expect(file.path).toBe("report.md");
     expect(file.name).toBe("report.md");
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
@@ -54,24 +56,39 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
   it("routes chat attachments into chats/{chatId}/attachments/", async () => {
     const file = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       chatId: ctx.chatId,
       name: "artifact.png",
       mime: "image/png",
       stream: makeStream("fake-png-data"),
     });
 
-    expect(file.path).toContain(`chats/${ctx.chatId}/attachments/`);
+    expect(file.path).toContain(`.chats/${ctx.chatId}/attachments/`);
+  });
+
+  it("rejects user uploads whose name starts with a dot (reserved for agent artifacts)", async () => {
+    await expect(
+      uploadArtifact(ctx, {
+        workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+        name: ".hidden.md",
+        mime: "text/markdown",
+        stream: makeStream("nope"),
+      }),
+    ).rejects.toThrow(ValidationError);
   });
 
   it("avoids collisions by suffixing -1, -2, ...", async () => {
     await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "dup.txt",
       mime: "text/plain",
       stream: makeStream("first"),
     });
     const second = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "dup.txt",
       mime: "text/plain",
       stream: makeStream("second"),
@@ -87,6 +104,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     await expect(
       uploadArtifact(ctx, {
         workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
         name: "toobig.bin",
         mime: "application/octet-stream",
         stream,
@@ -99,12 +117,13 @@ describe("readFile / downloadFile / statFile", () => {
   it("reads back the exact uploaded bytes", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "read-test.txt",
       mime: "text/plain",
       stream: makeStream("read me"),
     });
 
-    const { stream, file } = await readFile(ctx, uploaded.path);
+    const { stream, file } = await readFile(ctx, ctx.workspaceSlug,uploaded.path);
     expect(file.path).toBe(uploaded.path);
 
     const chunks: Buffer[] = [];
@@ -115,12 +134,13 @@ describe("readFile / downloadFile / statFile", () => {
   it("downloadFile is the same as readFile", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "download-test.txt",
       mime: "text/plain",
       stream: makeStream("download me"),
     });
 
-    const { stream } = await downloadFile(ctx, uploaded.path);
+    const { stream } = await downloadFile(ctx, ctx.workspaceSlug,uploaded.path);
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(Buffer.from(chunk));
     expect(Buffer.concat(chunks).toString()).toBe("download me");
@@ -129,18 +149,19 @@ describe("readFile / downloadFile / statFile", () => {
   it("statFile returns metadata without a stream", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "stat-test.txt",
       mime: "text/plain",
       stream: makeStream("12345"),
     });
 
-    const ref = await statFile(ctx, uploaded.path);
+    const ref = await statFile(ctx, ctx.workspaceSlug,uploaded.path);
     expect(ref.path).toBe(uploaded.path);
     expect(ref.size).toBe(5);
   });
 
   it("throws NotFoundError for an unknown path", async () => {
-    await expect(readFile(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(readFile(ctx, ctx.workspaceSlug,"does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -148,6 +169,7 @@ describe("deleteFile (moves to trash)", () => {
   it("moves the file to ~/.trash and the old path stops resolving", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "delete-me.txt",
       mime: "text/plain",
       stream: makeStream("bye"),
@@ -156,7 +178,7 @@ describe("deleteFile (moves to trash)", () => {
     const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
     await fs.access(hostPath);
 
-    await deleteFile(ctx, uploaded.path);
+    await deleteFile(ctx, ctx.workspaceSlug,uploaded.path);
 
     // Old path no longer exists.
     await expect(fs.access(hostPath)).rejects.toThrow();
@@ -173,7 +195,7 @@ describe("deleteFile (moves to trash)", () => {
   });
 
   it("throws NotFoundError for unknown path", async () => {
-    await expect(deleteFile(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(deleteFile(ctx, ctx.workspaceSlug,"does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -181,13 +203,14 @@ describe("moveFile (symlink-on-move)", () => {
   it("renames the file and leaves a symlink at the old location", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "movable.txt",
       mime: "text/plain",
       stream: makeStream("follow me"),
     });
 
-    const newRel = `library/moved-${Date.now()}.txt`;
-    const moved = await moveFile(ctx, uploaded.path, newRel);
+    const newRel = `moved-${Date.now()}.txt`;
+    const moved = await moveFile(ctx, ctx.workspaceSlug,uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
     const oldAbs = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
@@ -204,17 +227,18 @@ describe("resolveForSandbox", () => {
   it("returns an absolute path that actually exists", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
       name: "sandbox-resolve.txt",
       mime: "text/plain",
       stream: makeStream("sandbox"),
     });
 
-    const resolved = await resolveForSandbox(ctx, uploaded.path);
+    const resolved = await resolveForSandbox(ctx, ctx.workspaceSlug,uploaded.path);
     expect(path.isAbsolute(resolved)).toBe(true);
     await fs.access(resolved);
   });
 
   it("throws NotFoundError for unknown path", async () => {
-    await expect(resolveForSandbox(ctx, "library/does-not-exist.txt")).rejects.toThrow(NotFoundError);
+    await expect(resolveForSandbox(ctx, ctx.workspaceSlug,"does-not-exist.txt")).rejects.toThrow(NotFoundError);
   });
 });

@@ -96,7 +96,7 @@ describe("tool server", () => {
       });
       expect(result.status).toBe(200);
       const file = result.body as { path: string; name: string };
-      expect(file.path).toMatch(/^library\//);
+      expect(file.path).toBe("written.txt");
       expect(file.name).toBe("written.txt");
     });
   });

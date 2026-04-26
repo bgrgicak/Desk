@@ -39,7 +39,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
+import { useCreateWorkspaceMutation, useGetMeQuery } from '@/store/api'
+import { logout } from '@/auth/auto-login'
 import type { View } from './AppShell'
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
 
 // ── Logo ──────────────────────────────────────────────────────────────────────
 function DeskLogo({ className }: { className?: string }) {
@@ -56,11 +65,11 @@ function DeskLogo({ className }: { className?: string }) {
   )
 }
 
-// ── Account (static mock) ─────────────────────────────────────────────────────
-const ACCOUNT = {
-  name: 'Jaroslaw Morawski',
-  email: 'jaroslaw.morawski@a8c.com',
-  initials: 'JM',
+// ── Account fallback while /me is loading ────────────────────────────────────
+const ACCOUNT_PLACEHOLDER = {
+  name: '…',
+  email: '',
+  initials: '…',
 }
 
 // ── New workspace form options ────────────────────────────────────────────────
@@ -91,7 +100,7 @@ export interface WorkspaceInfo {
   unreadCount: number
 }
 
-export type WorkspaceNavView = Extract<View, 'desk' | 'runs' | 'context'>
+export type WorkspaceNavView = Extract<View, 'desk' | 'tasks' | 'context'>
 
 interface WorkspaceBarProps {
   workspaces: WorkspaceInfo[]
@@ -117,6 +126,15 @@ export function WorkspaceBar({
   onCompose,
   onSignOut,
 }: WorkspaceBarProps) {
+  // Current user — fetched once on mount via RTK Query. Falls back to a
+  // placeholder while in-flight so the initial render is stable.
+  const { data: me } = useGetMeQuery()
+  const [createWorkspaceMutation, { isLoading: isCreating }] =
+    useCreateWorkspaceMutation()
+  const account = me
+    ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
+    : ACCOUNT_PLACEHOLDER
+
   // Command palette
   const [commandOpen, setCommandOpen] = useState(false)
 
@@ -128,8 +146,22 @@ export function WorkspaceBar({
     document.documentElement.classList.toggle('dark', next)
   }
 
-  // Ordered workspaces (drag-to-reorder)
+  // Ordered workspaces (drag-to-reorder). We preserve any client-side
+  // reordering the user has already done, but fold in new server-side
+  // entries + drop removed ones so workspaces created via the API or in
+  // another tab appear without a reload.
   const [orderedWorkspaces, setOrderedWorkspaces] = useState<WorkspaceInfo[]>(workspaces)
+  useEffect(() => {
+    setOrderedWorkspaces(prev => {
+      const byId = new Map(workspaces.map(w => [w.id, w]))
+      const kept = prev
+        .filter(w => byId.has(w.id))
+        .map(w => byId.get(w.id)!)
+      const keptIds = new Set(kept.map(w => w.id))
+      const added = workspaces.filter(w => !keptIds.has(w.id))
+      return [...kept, ...added]
+    })
+  }, [workspaces])
 
   // New / edit workspace modal
   const [createOpen, setCreateOpen] = useState(false)
@@ -292,18 +324,21 @@ export function WorkspaceBar({
           {/* User avatar */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5">
-                {ACCOUNT.initials}
+              <button
+                data-testid="account-avatar"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5"
+              >
+                {account.initials}
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuLabel className="flex items-center gap-2.5 p-2.5">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-                  {ACCOUNT.initials}
+                  {account.initials}
                 </div>
                 <div className="flex min-w-0 flex-col">
-                  <span className="text-sm font-medium truncate">{ACCOUNT.name}</span>
-                  <span className="text-xs text-muted-foreground truncate">{ACCOUNT.email}</span>
+                  <span className="text-sm font-medium truncate">{account.name}</span>
+                  <span className="text-xs text-muted-foreground truncate">{account.email}</span>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
@@ -311,7 +346,10 @@ export function WorkspaceBar({
               <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
               <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={onSignOut}>
+              <DropdownMenuItem
+                onSelect={onSignOut ?? (() => void logout())}
+                data-testid="sign-out-button"
+              >
                 <LogOut className="h-4 w-4" />Sign out
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -338,7 +376,7 @@ export function WorkspaceBar({
           <CommandSeparator />
           <CommandGroup heading="Views">
             <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'desk');    setCommandOpen(false) }}><LayoutGrid />Desk</CommandItem>
-            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'runs');    setCommandOpen(false) }}><Zap />Runs</CommandItem>
+            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'tasks');   setCommandOpen(false) }}><Zap />Tasks</CommandItem>
             <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'context'); setCommandOpen(false) }}><FolderOpen />Library</CommandItem>
           </CommandGroup>
           {onCompose && (
@@ -435,18 +473,35 @@ export function WorkspaceBar({
               Cancel
             </Button>
             <Button
-              disabled={!newName.trim()}
-              onClick={() => {
+              disabled={!newName.trim() || isCreating}
+              onClick={async () => {
                 if (editingWorkspace) {
+                  // TODO: editing from this dialog is still client-state only;
+                  // use the Customize modal for persistent edits.
                   setOrderedWorkspaces(prev =>
                     prev.map(w => w.id === editingWorkspace.id
                       ? { ...w, name: newName.trim(), emoji: newEmoji, bg: newColor, description: newDescription }
                       : w
                     )
                   )
+                  setCreateOpen(false)
+                  resetForm()
+                  return
                 }
-                setCreateOpen(false)
-                resetForm()
+                try {
+                  const created = await createWorkspaceMutation({
+                    name: newName.trim(),
+                    description: newDescription,
+                    icon: newEmoji,
+                    color: newColor,
+                  }).unwrap()
+                  setCreateOpen(false)
+                  resetForm()
+                  onSelectWorkspace(created.id)
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.error('create workspace failed:', err)
+                }
               }}
             >
               {editingWorkspace ? 'Save changes' : 'Create workspace'}

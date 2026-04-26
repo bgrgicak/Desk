@@ -22,10 +22,7 @@ import { run } from "../../src/commands/library-get.js";
 describe("library get", () => {
   it("calls callTool with library.get and correct request", async () => {
     const mockResponse = {
-      id: "f_abc",
-      workspaceId: "ws_1",
-      class: "artifact",
-      path: "/doc.pdf",
+      path: "library/doc.pdf",
       name: "doc.pdf",
       mime: "application/pdf",
       size: 1024,
@@ -33,15 +30,15 @@ describe("library get", () => {
     };
     vi.mocked(callTool).mockResolvedValue(mockResponse);
 
-    await run(["f_abc"]);
+    await run(["library/doc.pdf"]);
 
-    expect(callTool).toHaveBeenCalledWith("library.get", { fileId: "f_abc" });
+    expect(callTool).toHaveBeenCalledWith("library.get", { path: "library/doc.pdf" });
 
     const request = vi.mocked(callTool).mock.calls[0][1] as Record<string, unknown>;
     TOOLS["library.get"].request.parse(request);
   });
 
-  it("throws on missing fileId", async () => {
+  it("throws on missing path", async () => {
     await expect(run([])).rejects.toThrow("Usage");
   });
 });

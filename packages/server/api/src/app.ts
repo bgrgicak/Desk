@@ -28,6 +28,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import {
   requireLibraryPathInWorkspace,
+  requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
 } from "./workspace-scope.js";
@@ -302,8 +303,8 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/workspaces" && method === "POST") {
-      const body = await parseBody(req) as { name: string; description?: string; icon?: string };
-      const result = await workspaceRoutes.createWorkspace(pool, userId, body);
+      const body = await parseBody(req) as { name: string; description?: string; icon?: string; color?: string };
+      const result = await workspaceRoutes.createWorkspace(pool, userId, storage.home, body);
       sendJson(res, 201, result);
       return;
     }
@@ -315,14 +316,14 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "PATCH") {
       await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as { name?: string; description?: string; icon?: string };
-      const result = await workspaceRoutes.patchWorkspace(pool, segments[1], body);
+      const body = await parseBody(req) as { name?: string; description?: string; icon?: string; color?: string };
+      const result = await workspaceRoutes.patchWorkspace(pool, storage.home, segments[1], body);
       sendJson(res, 200, result);
       return;
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "DELETE") {
       await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.deleteWorkspace(pool, segments[1]);
+      const result = await workspaceRoutes.deleteWorkspace(pool, storage.home, userId, segments[1]);
       sendJson(res, 200, result);
       return;
     }
@@ -343,14 +344,6 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 4 && method === "DELETE") {
       await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.removeAgentFromWorkspace(pool, segments[1], segments[3]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "default-agent" && segments.length === 3 && method === "POST") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as { agentId: string };
-      await requireOwnedAgent(pool, body.agentId, userId);
-      const result = await workspaceRoutes.setWorkspaceDefaultAgent(pool, segments[1], body.agentId);
       sendJson(res, 200, result);
       return;
     }
@@ -380,6 +373,12 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "agents" && segments.length === 2 && method === "DELETE") {
+      await requireOwnedAgent(pool, segments[1], userId);
+      const result = await agentRoutes.deleteAgent(pool, userId, segments[1]);
+      sendJson(res, 200, result);
+      return;
+    }
 
     // Chat routes
     if (path === "/chats" && method === "GET") {
@@ -404,7 +403,10 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string };
+      const body = await parseBody(req) as { title?: string; goal?: string; agentId?: string };
+      if (body.agentId !== undefined) {
+        await requireOwnedAgent(pool, body.agentId, userId);
+      }
       const result = await chatRoutes.patchChat(pool, segments[1], body);
       sendJson(res, 200, result);
       return;
@@ -430,7 +432,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { content: string };
+      const body = await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
       // Fire the pending trigger message (messages-as-truth path) and
@@ -447,7 +449,7 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
-      const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent);
+      const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
       sendJson(res, 200, result);
       return;
     }
@@ -470,13 +472,18 @@ export function createApp(opts: AppOptions): Server {
       stream.pipe(res);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "GET") {
+    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
-      const result = await chatRoutes.listArtifacts(storage, segments[1]);
+      const showHidden = query.get("showHidden") === "true";
+      const includeNotes = query.get("includeNotes") === "true";
+      const result = await chatRoutes.listAttachments(storage, segments[1], {
+        showHidden,
+        includeNotes,
+      });
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "artifacts" && segments.length === 3 && method === "POST") {
+    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
       const form = await parseMultipart(req);
       const part = form.get("file");
@@ -486,7 +493,7 @@ export function createApp(opts: AppOptions): Server {
       const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
       const mime = part.type || "application/octet-stream";
       const content = Buffer.from(await part.arrayBuffer());
-      const result = await chatRoutes.uploadArtifactToChat(
+      const result = await chatRoutes.uploadAttachmentToChat(
         storage,
         segments[1],
         { name, mime, content },
@@ -504,7 +511,10 @@ export function createApp(opts: AppOptions): Server {
       const wsId = await resolveWorkspaceId(pool, userId, query);
       const cursor = query.get("cursor") ?? undefined;
       const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
-      const result = wsId ? await libraryRoutes.list(storage, wsId, { cursor, limit }) : { items: [] };
+      const showHidden = query.get("showHidden") === "true";
+      const result = wsId
+        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden })
+        : { items: [] };
       sendJson(res, 200, result);
       return;
     }
@@ -517,8 +527,46 @@ export function createApp(opts: AppOptions): Server {
       }
       const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
       const mime = part.type || "application/octet-stream";
+      const subpathRaw = form.get("subpath");
+      const subpath = typeof subpathRaw === "string" && subpathRaw !== "" ? subpathRaw : undefined;
       const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
-      const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream }, emitEvent);
+      const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream, subpath }, emitEvent);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (path === "/library" && method === "PATCH") {
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      const body = await parseBody(req) as { from?: unknown; to?: unknown };
+      if (typeof body.from !== "string" || typeof body.to !== "string") {
+        throw new ValidationError("Body must be { from: string, to: string }");
+      }
+      requireLibraryPathInWorkspace(body.from, wsId);
+      requireLibraryPathInWorkspace(body.to, wsId);
+      const result = await libraryRoutes.move(storage, wsId, body.from, body.to, emitEvent);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/library/folder" && method === "POST") {
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      const body = await parseBody(req) as { path?: unknown };
+      if (typeof body.path !== "string" || body.path === "") {
+        throw new ValidationError("Body must include { path: string }");
+      }
+      const result = await libraryRoutes.createFolder(storage, wsId, body.path, emitEvent);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (path === "/library/link" && method === "POST") {
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      const body = await parseBody(req) as { url?: unknown; name?: unknown; subpath?: unknown };
+      if (typeof body.url !== "string" || body.url === "") {
+        throw new ValidationError("Body must include { url: string, name?: string, subpath?: string }");
+      }
+      const name = typeof body.name === "string" && body.name.trim() !== ""
+        ? body.name
+        : new URL(body.url).hostname || body.url;
+      const subpath = typeof body.subpath === "string" && body.subpath !== "" ? body.subpath : undefined;
+      const result = await libraryRoutes.createLink(storage, wsId, { url: body.url, name, subpath }, emitEvent);
       sendJson(res, 201, result);
       return;
     }
@@ -526,8 +574,8 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
-      const result = await libraryRoutes.get(storage, p);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      const result = await libraryRoutes.get(storage, wsId, p);
       sendJson(res, 200, result);
       return;
     }
@@ -535,13 +583,36 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
-      const { stream, file } = await libraryRoutes.download(storage, p);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
         "Content-Disposition": `attachment; filename="${file.name}"`,
       });
       stream.pipe(res);
+      return;
+    }
+    if (path === "/library/content" && method === "GET") {
+      const p = query.get("path");
+      if (!p) throw new ValidationError("Missing path query parameter");
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
+      res.writeHead(200, {
+        "Content-Type": file.mime,
+        "Content-Disposition": `inline; filename="${file.name}"`,
+        "Content-Length": String(file.size),
+      });
+      stream.pipe(res);
+      return;
+    }
+    if (path === "/library/content" && method === "PUT") {
+      const p = query.get("path");
+      if (!p) throw new ValidationError("Missing path query parameter");
+      const wsId = await requireWorkspaceId(pool, userId, query);
+      requireLibraryPathInWorkspace(p, wsId);
+      const result = await libraryRoutes.saveContent(storage, wsId, p, req, emitEvent);
+      sendJson(res, 200, result);
       return;
     }
     if (path === "/library" && method === "DELETE") {
@@ -580,7 +651,12 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
       const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
-      const result = await searchRoutes.search(pool, storage, q, scope);
+      const showHidden = query.get("showHidden") === "true";
+      const workspaceId = query.get("workspaceId") ?? undefined;
+      const result = await searchRoutes.search(pool, storage, q, scope, {
+        showHidden,
+        workspaceId,
+      });
       sendJson(res, 200, result);
       return;
     }

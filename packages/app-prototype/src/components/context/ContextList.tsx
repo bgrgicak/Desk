@@ -1,12 +1,10 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  FileText,
-  Link2,
-  StickyNote,
   Upload,
   ClipboardPaste,
   PenLine,
+  FilePlus,
   FolderOpen,
   Folder as FolderIcon,
   FolderPlus,
@@ -32,7 +30,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -48,16 +45,39 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { ContextItem, Folder } from '@/data/mock-data'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import type { ContextItem, Folder } from '@/data/ui-types'
 import {
   getRelativeTime,
-  MOCK_FOLDERS,
   getFolderById,
   getFolderPath,
   getChildFolders,
   getItemsInFolder,
   countItemsRecursive,
-} from '@/data/mock-data'
+} from '@/data/ui-types'
+import { useParams, useSearchParams } from 'react-router-dom'
+import {
+  useCreateLibraryFolderMutation,
+  useCreateLibraryLinkMutation,
+  useDeleteLibraryFileMutation,
+  useGetLibraryQuery,
+  useMoveLibraryEntryMutation,
+  useUploadLibraryFileMutation,
+} from '@/store/api'
+import { downloadLibraryFile } from '@/store/library-download'
+import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
+import { toFolderList } from '@/store/selectors/library'
+import { iconForItem } from '@/data/file-kind'
+import { toast } from 'sonner'
 
 interface ContextListProps {
   items: ContextItem[]
@@ -67,12 +87,6 @@ interface ContextListProps {
 
 type ViewMode = 'list' | 'grid'
 type TypeFilter = 'all' | 'folder' | 'file' | 'link' | 'note'
-
-const TYPE_ICON = {
-  file: FileText,
-  link: Link2,
-  note: StickyNote,
-}
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -87,30 +101,248 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
 
-  const createBlankNote = (): ContextItem => ({
-    id: `note-new-${Date.now()}`,
-    type: 'note',
-    name: '',
-    content: '',
-    folderId: currentFolderId,
-    addedAt: new Date(),
-    usedBy: [],
-    uploadedBy: 'user',
-    relatedArtifactIds: [],
-  })
+  const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
+  // Folder selection lives in the URL (?folder=<workspace-relative-path>) so
+  // it survives unmount/remount when the user opens a file detail and comes
+  // back, and so breadcrumb links in the detail view can jump straight to a
+  // specific folder.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const currentFolderId = searchParams.get('folder') || null
+  const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
+  const [deleteLibraryFile] = useDeleteLibraryFileMutation()
+  const [createLibraryFolder] = useCreateLibraryFolderMutation()
+  const [createLibraryLink] = useCreateLibraryLinkMutation()
+  const [moveLibraryEntry] = useMoveLibraryEntryMutation()
+  const { data: libraryResp } = useGetLibraryQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    { skip: !activeWorkspaceId },
+  )
+
+  /**
+   * Delete dialog targets can be files/notes (ContextItem) or folders.
+   * Both funnel through DELETE /library?path=..., so we only need the
+   * path and a display name.
+   */
+  type DeleteTarget = { path: string; name: string; kind: 'item' | 'folder' }
+  const [deleteTargets, setDeleteTargets] = useState<DeleteTarget[] | null>(null)
+  const [renameTarget, setRenameTarget] = useState<Folder | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [moveTargets, setMoveTargets] = useState<
+    Array<{ path: string; name: string; kind: 'item' | 'folder' }> | null
+  >(null)
+
+  const handleDownload = async (item: ContextItem) => {
+    if (!activeWorkspaceId) return
+    try {
+      await downloadLibraryFile({
+        workspaceId: activeWorkspaceId,
+        path: item.id,
+        filename: item.name,
+      })
+    } catch (err) {
+      toast.error(`Download failed: ${item.name}`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!activeWorkspaceId || !deleteTargets) return
+    const targets = deleteTargets
+    setDeleteTargets(null)
+    const results = await Promise.allSettled(
+      targets.map(t =>
+        deleteLibraryFile({ workspaceId: activeWorkspaceId, path: t.path }).unwrap(),
+      ),
+    )
+    const failed = results.filter(r => r.status === 'rejected').length
+    if (failed === 0) {
+      toast.success(
+        targets.length === 1 ? `Deleted ${targets[0].name}` : `Deleted ${targets.length} items`,
+      )
+    } else {
+      toast.error(`Failed to delete ${failed} of ${targets.length} items`)
+    }
+    clearSelection()
+  }
+
+  /**
+   * Folder ids ARE workspace-root-relative paths — turning one into the
+   * server's `subpath` is a no-op, save for treating a null selection
+   * (the library root) as `""`.
+   */
+  const subpathFromFolderId = (folderId: string | null): string => folderId ?? ''
+
+  const handleUpload = async (entries: UploadEntry[]) => {
+    if (!activeWorkspaceId) {
+      toast.error('Pick a workspace before uploading')
+      return
+    }
+    const basePath = subpathFromFolderId(currentFolderId)
+    for (const { file, relativePath } of entries) {
+      // The relativePath keeps the folder structure from the drop/pick;
+      // the filename is already in file.name, so we only pass the
+      // directory portion as the subpath.
+      const relDir = relativePath.includes('/')
+        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
+        : ''
+      const subpath = [basePath, relDir].filter(Boolean).join('/')
+      try {
+        await uploadLibraryFile({
+          workspaceId: activeWorkspaceId,
+          file,
+          subpath: subpath || undefined,
+        }).unwrap()
+      } catch (err) {
+        toast.error(`Upload failed: ${relativePath}`, {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
+    // A single toast for the batch — one-per-file is noisy on folder drops.
+    toast.success(
+      entries.length === 1
+        ? `Uploaded ${entries[0].file.name}`
+        : `Uploaded ${entries.length} files`,
+    )
+  }
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim()
+    if (!name || !activeWorkspaceId) return
+    const base = subpathFromFolderId(currentFolderId)
+    const subpath = base ? `${base}/${name}` : name
+    try {
+      await createLibraryFolder({ workspaceId: activeWorkspaceId, path: subpath }).unwrap()
+      toast.success(`Folder "${name}" created`)
+    } catch (err) {
+      toast.error(`Failed to create folder`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+    setFolderDialogOpen(false)
+    setNewFolderName('')
+  }
+
+  const handleRenameFolder = async () => {
+    if (!renameTarget || !activeWorkspaceId) return
+    const name = renameValue.trim()
+    if (!name || name === renameTarget.name) {
+      setRenameTarget(null)
+      return
+    }
+    const parentPath = renameTarget.parentId ?? ''
+    const to = parentPath ? `${parentPath}/${name}` : name
+    try {
+      await moveLibraryEntry({
+        workspaceId: activeWorkspaceId,
+        from: renameTarget.id,
+        to,
+      }).unwrap()
+      toast.success(`Renamed to "${name}"`)
+    } catch (err) {
+      toast.error(`Rename failed`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+    setRenameTarget(null)
+  }
+
+  const handleMoveToFolder = async (destFolderId: string | null) => {
+    if (!moveTargets || !activeWorkspaceId) return
+    const destDir = destFolderId ?? ''
+    const targets = moveTargets
+    setMoveTargets(null)
+    const results = await Promise.allSettled(
+      targets.map((t) =>
+        moveLibraryEntry({
+          workspaceId: activeWorkspaceId,
+          from: t.path,
+          to: destDir ? `${destDir}/${t.name}` : t.name,
+        }).unwrap(),
+      ),
+    )
+    const failed = results.filter((r) => r.status === 'rejected').length
+    if (failed === 0) {
+      toast.success(
+        targets.length === 1 ? `Moved ${targets[0].name}` : `Moved ${targets.length} items`,
+      )
+    } else {
+      toast.error(`Failed to move ${failed} of ${targets.length} items`)
+    }
+    clearSelection()
+  }
 
   // New folder dialog
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
 
-  const currentFolder = getFolderById(currentFolderId)
-  const breadcrumbPath = getFolderPath(currentFolderId)
+  // Create blank file dialog
+  const [createFileDialogOpen, setCreateFileDialogOpen] = useState(false)
+  const [newFileName, setNewFileName] = useState('')
+
+  // Paste link dialog — name is optional; falls back to the URL hostname.
+  const [pasteLinkDialogOpen, setPasteLinkDialogOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkName, setLinkName] = useState('')
+
+  const handleCreateLink = async () => {
+    const url = linkUrl.trim()
+    if (!url || !activeWorkspaceId) return
+    const subpath = subpathFromFolderId(currentFolderId)
+    try {
+      await createLibraryLink({
+        workspaceId: activeWorkspaceId,
+        url,
+        name: linkName.trim() || undefined,
+        subpath: subpath || undefined,
+      }).unwrap()
+      toast.success(`Link added`)
+      setPasteLinkDialogOpen(false)
+      setLinkUrl('')
+      setLinkName('')
+    } catch (err) {
+      toast.error(`Failed to add link`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  const handleCreateFile = async () => {
+    const name = newFileName.trim()
+    if (!name || !activeWorkspaceId) return
+    const subpath = subpathFromFolderId(currentFolderId)
+    const blob = new File([''], name, { type: 'application/octet-stream' })
+    try {
+      await uploadLibraryFile({
+        workspaceId: activeWorkspaceId,
+        file: blob,
+        subpath: subpath || undefined,
+      }).unwrap()
+      toast.success(`Created ${name}`)
+    } catch (err) {
+      toast.error(`Failed to create file`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+    setCreateFileDialogOpen(false)
+    setNewFileName('')
+  }
+
+  // Folders come from the server's recursive library listing; the
+  // selector maps each FolderRef to a UI Folder whose `id` is the
+  // workspace-relative path so navigation and filtering just work.
+  const folders = activeWorkspaceId
+    ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+    : []
+
+  const currentFolder = getFolderById(folders, currentFolderId)
+  const breadcrumbPath = getFolderPath(folders, currentFolderId)
   const isInsideFolder = currentFolder != null
 
   // Get folders + items in current location
-  const childFolders = getChildFolders(currentFolderId)
+  const childFolders = getChildFolders(folders, currentFolderId)
   const folderItems = getItemsInFolder(currentFolderId, items)
 
   // Apply filters
@@ -121,7 +353,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
 
   const filteredItems = folderItems
     .filter(i => typeFilter === 'all' || typeFilter === i.type)
-    .filter(i => typeFilter !== 'folder')
+    .filter(() => typeFilter !== 'folder')
     .filter(i => !searchQuery || i.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime())
 
@@ -154,10 +386,23 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const clearSelection = () => setSelectedIds(new Set())
 
   const selectedItems = items.filter(i => selectedIds.has(i.id))
+  // Bulk actions that funnel through /library (move, delete) apply to
+  // folders too — build a flat target list from both folders and items.
+  const selectedTargets: Array<{ path: string; name: string; kind: 'item' | 'folder' }> = [
+    ...folders
+      .filter(f => selectedIds.has(f.id))
+      .map(f => ({ path: f.id, name: f.name, kind: 'folder' as const })),
+    ...selectedItems.map(i => ({ path: i.id, name: i.name, kind: 'item' as const })),
+  ]
   const hasSelection = selectedIds.size > 0
 
   const navigateToFolder = (folderId: string | null) => {
-    setCurrentFolderId(folderId)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (folderId) next.set('folder', folderId)
+      else next.delete('folder')
+      return next
+    })
     clearSelection()
     setSearchQuery('')
     setTypeFilter('all')
@@ -170,7 +415,15 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   }
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+    <FileDropZone
+      onFiles={handleUpload}
+      disabled={!activeWorkspaceId || uploadState.isLoading}
+      overlayLabel={activeWorkspaceId ? 'Drop to add to Library' : 'Pick a workspace first'}
+      className="flex flex-1 flex-col min-h-0 overflow-hidden"
+      directory
+    >
+      {({ openPicker, openDirectoryPicker }) => (
+        <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
       {/* ── Header bar ── */}
       <PageHeader
@@ -277,9 +530,10 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-              <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>}
@@ -310,9 +564,10 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
-                  <DropdownMenuItem><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-                  <DropdownMenuItem><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onItemClick(createBlankNote())}><PenLine className="h-4 w-4 mr-2" />Write note</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -336,7 +591,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countItemsRecursive(folder.id, items)
+                const itemCount = countItemsRecursive(folders, folder.id, items)
                 return (
                   <motion.div
                     key={folder.id}
@@ -394,12 +649,20 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                             <MessageSquarePlus className="h-4 w-4 mr-2" />
                             Use in chat
                           </DropdownMenuItem>
-                          <DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setRenameTarget(folder); setRenameValue(folder.name) }}>
                             <PenLine className="h-4 w-4 mr-2" />
                             Rename
                           </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setMoveTargets([{ path: folder.id, name: folder.name, kind: 'folder' }])}
+                          >
+                            <FolderPlus className="h-4 w-4 mr-2" />
+                            Move to folder
+                          </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setDeleteTargets([{ path: folder.id, name: folder.name, kind: 'folder' }])}
+                          >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete
                           </DropdownMenuItem>
@@ -412,7 +675,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
 
               {/* Items */}
               {filteredItems.map((item, i) => {
-                const Icon = TYPE_ICON[item.type]
+                const Icon = iconForItem(item)
                 const isSelected = selectedIds.has(item.id)
                 return (
                   <motion.div
@@ -465,7 +728,13 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                       </Button>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            data-testid={`library-item-menu-${item.name}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <MoreHorizontal className="h-3.5 w-3.5" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -474,16 +743,20 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                             <MessageSquarePlus className="h-4 w-4 mr-2" />
                             Use in chat
                           </DropdownMenuItem>
-                          <DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleDownload(item)}>
                             <Download className="h-4 w-4 mr-2" />
                             Download
                           </DropdownMenuItem>
-                          <DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                          >
                             <FolderPlus className="h-4 w-4 mr-2" />
                             Move to folder
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                          >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete
                           </DropdownMenuItem>
@@ -501,7 +774,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countItemsRecursive(folder.id, items)
+              const itemCount = countItemsRecursive(folders, folder.id, items)
               return (
                 <motion.div
                   key={folder.id}
@@ -545,9 +818,20 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                         <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
                           <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
                         </DropdownMenuItem>
-                        <DropdownMenuItem><PenLine className="h-4 w-4 mr-2" />Rename</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setRenameTarget(folder); setRenameValue(folder.name) }}>
+                          <PenLine className="h-4 w-4 mr-2" />Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => setMoveTargets([{ path: folder.id, name: folder.name, kind: 'folder' }])}
+                        >
+                          <FolderPlus className="h-4 w-4 mr-2" />Move to folder
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem><Trash2 className="h-4 w-4 mr-2" />Delete</DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => setDeleteTargets([{ path: folder.id, name: folder.name, kind: 'folder' }])}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />Delete
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -564,7 +848,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
 
             {/* Item cards */}
             {filteredItems.map((item, i) => {
-              const Icon = TYPE_ICON[item.type]
+              const Icon = iconForItem(item)
               const isSelected = selectedIds.has(item.id)
               return (
                 <motion.div
@@ -609,10 +893,20 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                         <DropdownMenuItem onClick={() => onCompose([item])}>
                           <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
                         </DropdownMenuItem>
-                        <DropdownMenuItem><Download className="h-4 w-4 mr-2" />Download</DropdownMenuItem>
-                        <DropdownMenuItem><FolderPlus className="h-4 w-4 mr-2" />Move to folder</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleDownload(item)}>
+                          <Download className="h-4 w-4 mr-2" />Download
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                        >
+                          <FolderPlus className="h-4 w-4 mr-2" />Move to folder
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem><Trash2 className="h-4 w-4 mr-2" />Delete</DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />Delete
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -652,15 +946,32 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                     <MessageSquarePlus className="h-3.5 w-3.5" />
                     Use in chat
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5">
-                    <FolderPlus className="h-3.5 w-3.5" />
-                    Move to folder
-                  </Button>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={async () => {
+                      for (const item of selectedItems) await handleDownload(item)
+                    }}
+                  >
                     <Download className="h-3.5 w-3.5" />
                     Download
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={() => setMoveTargets(selectedTargets)}
+                  >
+                    <FolderPlus className="h-3.5 w-3.5" />
+                    Move
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={() => setDeleteTargets(selectedTargets)}
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
                   </Button>
@@ -703,13 +1014,229 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
             </Button>
             <Button
               disabled={!newFolderName.trim()}
-              onClick={() => { setFolderDialogOpen(false); setNewFolderName('') }}
+              onClick={handleCreateFolder}
             >
               Create folder
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+
+      {/* Create blank file dialog */}
+      <Dialog
+        open={createFileDialogOpen}
+        onOpenChange={(open) => {
+          setCreateFileDialogOpen(open)
+          if (!open) setNewFileName('')
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create file</DialogTitle>
+            <DialogDescription>
+              {currentFolder
+                ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
+                : 'Create a new blank file. Include the extension in the name.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm font-medium text-foreground">File name</label>
+            <Input
+              placeholder="e.g., notes.md"
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!newFileName.trim()}
+              onClick={handleCreateFile}
+            >
+              Create file
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Paste link dialog */}
+      <Dialog
+        open={pasteLinkDialogOpen}
+        onOpenChange={(open) => {
+          setPasteLinkDialogOpen(open)
+          if (!open) { setLinkUrl(''); setLinkName('') }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Paste link</DialogTitle>
+            <DialogDescription>
+              {currentFolder
+                ? `Save a URL to "${currentFolder.name}".`
+                : 'Save a URL to your library.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">URL</label>
+              <Input
+                placeholder="https://example.com"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Name <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <Input
+                placeholder="Defaults to the URL hostname"
+                value={linkName}
+                onChange={(e) => setLinkName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
+            >
+              Cancel
+            </Button>
+            <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
+              Save link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rename folder dialog */}
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename folder</DialogTitle>
+            <DialogDescription>Give the folder a new name.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm font-medium text-foreground">Folder name</label>
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleRenameFolder()
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
+            <Button
+              disabled={!renameValue.trim() || renameValue.trim() === renameTarget?.name}
+              onClick={handleRenameFolder}
+            >
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Move-to-folder dialog */}
+      <Dialog
+        open={moveTargets !== null}
+        onOpenChange={(open) => { if (!open) setMoveTargets(null) }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {moveTargets && moveTargets.length === 1
+                ? `Move "${moveTargets[0].name}"`
+                : `Move ${moveTargets?.length ?? 0} items`}
+            </DialogTitle>
+            <DialogDescription>Pick a destination folder.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[50vh] overflow-y-auto py-2 space-y-1">
+            <button
+              className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
+              onClick={() => handleMoveToFolder(null)}
+            >
+              <FolderIcon className="h-4 w-4 mr-2 inline" />
+              Library (root)
+            </button>
+            {folders
+              // Can't move an item into itself or one of its descendants.
+              .filter((f) => {
+                if (!moveTargets) return true
+                for (const t of moveTargets) {
+                  if (t.path === f.id) return false
+                  if (f.id.startsWith(`${t.path}/`)) return false
+                }
+                return true
+              })
+              .sort((a, b) => a.id.localeCompare(b.id))
+              .map((f) => (
+                <button
+                  key={f.id}
+                  className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
+                  onClick={() => handleMoveToFolder(f.id)}
+                >
+                  <FolderIcon className="h-4 w-4 mr-2 inline" />
+                  {f.id}
+                </button>
+              ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveTargets(null)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={deleteTargets !== null}
+        onOpenChange={(open) => { if (!open) setDeleteTargets(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteTargets && deleteTargets.length === 1
+                ? `Delete "${deleteTargets[0].name}"?`
+                : `Delete ${deleteTargets?.length ?? 0} items?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the selected items from your library.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+        </div>
+      )}
+    </FileDropZone>
   )
 }

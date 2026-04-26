@@ -1,22 +1,44 @@
 import pg from "pg";
 import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError } from "@desk/shared";
+import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@desk/shared";
+import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@desk/storage";
 
 export async function listWorkspaces(pool: pg.Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);
   return queries.workspaces.list(pool);
 }
 
+/**
+ * Creates a workspace and auto-enrolls the caller's first agent (from
+ * `agents.listByUser`, which orders by name). Without this, chat creation
+ * would 400 on every agentId in the new workspace — users would have to
+ * open settings and enroll an agent before the workspace is usable.
+ * Users can override the enrollment via the Agent access settings panel.
+ *
+ * The workspace's on-disk directory at `~/Desk/workspaces/{slug}/` is
+ * created before the DB insert so every successful insert has a matching
+ * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
+ * collision so two workspaces can't share a directory.
+ */
 export async function createWorkspace(
   pool: pg.Pool,
   userId: string,
-  data: { name: string; description?: string; icon?: string },
+  home: string,
+  data: { name: string; description?: string; icon?: string; color?: string },
 ) {
-  return queries.workspaces.insert(pool, {
+  const path = await queries.workspaces.reserveWorkspacePath(pool, data.name);
+  await ensureWorkspaceLayout(home, path);
+  const ws = await queries.workspaces.insert(pool, {
     id: generateId("workspace"),
     userId,
+    path,
     ...data,
   });
+  const userAgents = await queries.agents.listByUser(pool, userId);
+  if (userAgents.length > 0) {
+    await queries.workspaceAgents.addToWorkspace(pool, ws.id, userAgents[0].id);
+  }
+  return ws;
 }
 
 export async function getWorkspace(pool: pg.Pool, id: string) {
@@ -25,30 +47,65 @@ export async function getWorkspace(pool: pg.Pool, id: string) {
   return ws;
 }
 
+/**
+ * Updates workspace metadata. When `name` changes, computes a new slug
+ * from the new name; if it differs from the current slug and is free,
+ * renames the on-disk directory and updates the `path` column to match.
+ * All other changes are pure metadata and skip the filesystem op.
+ */
 export async function patchWorkspace(
   pool: pg.Pool,
+  home: string,
   id: string,
-  data: { name?: string; description?: string; icon?: string },
+  data: { name?: string; description?: string; icon?: string; color?: string },
 ) {
-  const ws = await queries.workspaces.updateMeta(pool, id, data);
+  const current = await queries.workspaces.findById(pool, id);
+  if (!current) throw new NotFoundError(`Workspace not found: ${id}`);
+
+  let newPath: string | undefined;
+  if (data.name !== undefined && data.name !== current.name) {
+    const desired = slugifyWorkspaceName(data.name);
+    if (desired !== current.path) {
+      newPath = await queries.workspaces.reserveWorkspacePath(pool, data.name, id);
+      await renameWorkspaceDir(home, current.path, newPath);
+    }
+  }
+
+  const ws = await queries.workspaces.updateMeta(pool, id, {
+    ...data,
+    ...(newPath ? { path: newPath } : {}),
+  });
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
   return ws;
 }
 
 /**
- * Soft-delete a workspace. v1: marks it deleted but doesn't purge data.
+ * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents)
+ * and moves its on-disk directory into `~/Desk/.trash/workspaces/`.
+ * Refuses to delete the user's last workspace — the app requires at least one.
  */
-export async function deleteWorkspace(pool: pg.Pool, id: string) {
+export async function deleteWorkspace(
+  pool: pg.Pool,
+  home: string,
+  userId: string,
+  id: string,
+) {
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
-  // Soft-delete: just mark updated. A real impl would set a deleted_at flag.
-  // For v1, we remove it from the list by actually deleting the row.
-  // The cascade will clean up chats/files.
+  const owned = await queries.workspaces.listByUser(pool, userId);
+  if (owned.length <= 1) {
+    throw new ValidationError(
+      "Cannot delete the last workspace; create another one first.",
+    );
+  }
   await pool.query(`DELETE FROM workspaces WHERE id = $1`, [id]);
+  await trashWorkspaceDir(home, ws.path).catch(() => {
+    // Best-effort; DB state is already gone.
+  });
   return { ok: true };
 }
 
-/** Lists agents enabled in a workspace, with defaults. */
+/** Lists agents enabled in a workspace, ordered by enrollment time. */
 export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
@@ -56,7 +113,7 @@ export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
   const agents = await Promise.all(
     memberships.map(async (m) => {
       const agent = await queries.agents.findById(pool, m.agentId);
-      return agent ? { ...agent, isDefault: m.isDefault, addedAt: m.addedAt } : null;
+      return agent ? { ...agent, addedAt: m.addedAt } : null;
     }),
   );
   return agents.filter((a): a is NonNullable<typeof a> => a !== null);
@@ -86,14 +143,5 @@ export async function removeAgentFromWorkspace(
   agentId: string,
 ) {
   await queries.workspaceAgents.removeFromWorkspace(pool, workspaceId, agentId);
-  return { ok: true };
-}
-
-export async function setWorkspaceDefaultAgent(
-  pool: pg.Pool,
-  workspaceId: string,
-  agentId: string,
-) {
-  await queries.workspaceAgents.setDefault(pool, workspaceId, agentId);
   return { ok: true };
 }

@@ -10,6 +10,8 @@ function rowToMessage(row: Record<string, unknown>): Message {
     role: row.role,
     content: row.content,
     createdAt: (row.created_at as Date).toISOString(),
+    attachments: row.attachments ?? undefined,
+    model: row.model ?? undefined,
     executeAt: row.execute_at ? (row.execute_at as Date).toISOString() : undefined,
     cron: row.cron ?? undefined,
     state: row.state ?? undefined,
@@ -67,13 +69,16 @@ export async function insert(
     parentId?: string | null;
     agentId?: string | null;
     schedulerRef?: unknown;
+    attachments?: unknown;
+    model?: string | null;
   },
 ): Promise<Message> {
   const { rows } = await db.query(
     `INSERT INTO messages (
        id, chat_id, role, content,
-       state, execute_at, cron, parent_id, agent_id, scheduler_ref
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       state, execute_at, cron, parent_id, agent_id, scheduler_ref,
+       attachments, model
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [
       data.id,
@@ -86,6 +91,8 @@ export async function insert(
       data.parentId ?? null,
       data.agentId ?? null,
       data.schedulerRef ? JSON.stringify(data.schedulerRef) : null,
+      data.attachments ? JSON.stringify(data.attachments) : null,
+      data.model ?? null,
     ],
   );
   // Touch the parent chat's updated_at
@@ -137,12 +144,19 @@ export async function finalizeExecution(
 
 /**
  * PATCH-style content/state update. Any field left undefined is preserved.
+ * `schedulerRef: null` clears the column; an object value is stored as JSON.
  * Returns the updated row, or null if not found.
  */
 export async function updateMessage(
   db: Queryable,
   id: string,
-  patch: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
+  patch: {
+    content?: unknown;
+    state?: string;
+    executeAt?: string | null;
+    cron?: string | null;
+    schedulerRef?: unknown | null;
+  },
 ): Promise<Message | null> {
   const sets: string[] = ["updated_at = now()"];
   const params: unknown[] = [];
@@ -162,6 +176,10 @@ export async function updateMessage(
   if (patch.cron !== undefined) {
     sets.push(`cron = $${idx++}`);
     params.push(patch.cron);
+  }
+  if (patch.schedulerRef !== undefined) {
+    sets.push(`scheduler_ref = $${idx++}`);
+    params.push(patch.schedulerRef === null ? null : JSON.stringify(patch.schedulerRef));
   }
   params.push(id);
   const { rows } = await db.query(

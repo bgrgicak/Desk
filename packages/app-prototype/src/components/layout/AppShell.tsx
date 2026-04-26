@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import {
-  LayoutGrid, Zap, FolderOpen, Plus, Search, X,
+  LayoutGrid, Zap, FolderOpen, Plus, Search,
   SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
   FileText, ImageIcon, Table, Globe, Play,
@@ -19,7 +19,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -48,24 +47,35 @@ import {
 } from '@/components/ui/command'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
-import type { Chat, Artifact, InboxItem } from '@/data/mock-data'
-import { getArtifactIcon } from '@/data/mock-data'
+import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
+import {
+  useGetWorkspacesQuery,
+  usePatchWorkspaceMutation,
+  useDeleteWorkspaceMutation,
+  useSearchQuery,
+} from '@/store/api'
+import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 
-export type View = 'today' | 'desk' | 'runs' | 'chats' | 'context' | 'compose'
+export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
-const NAV_ITEMS: { view: View; icon: LucideIcon; label: string }[] = [
+const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
   { view: 'desk',    icon: LayoutGrid,  label: 'Desk'    },
-  { view: 'runs',    icon: Zap,         label: 'Tasks'   },
+  { view: 'tasks',   icon: Zap,         label: 'Tasks'   },
   { view: 'context', icon: FolderOpen,  label: 'Library' },
 ]
 
-// ── Workspaces with mock unread counts ────────────────────────────────────────
-const INITIAL_WORKSPACES: WorkspaceInfo[] = [
-  { id: 'general',  name: 'General',      description: 'My personal AI workspace for everyday projects and tasks', emoji: '🏡', bg: '#fef3c7', unreadCount: 3 },
-  { id: 'work',     name: 'Work',         description: 'Professional projects, client deliverables and briefs',    emoji: '💼', bg: '#dbeafe', unreadCount: 8 },
-  { id: 'creative', name: 'Creative Lab', description: 'Design experiments, visual ideas and creative projects',   emoji: '🎨', bg: '#fce7f3', unreadCount: 0 },
-]
+// Fallback used only while the /workspaces query is in flight — the real
+// list comes from the server via useGetWorkspacesQuery().
+const LOADING_WORKSPACE: WorkspaceInfo = {
+  id: '__loading__',
+  name: '…',
+  description: '',
+  emoji: '…',
+  bg: '#e5e7eb',
+  unreadCount: 0,
+}
 
 const CHATS_PER_PAGE = 10
 
@@ -91,7 +101,7 @@ function getChatIcon(chat: Chat, artifacts: Artifact[]): LucideIcon {
 interface AppShellProps {
   children: ReactNode
   activeView: View
-  onViewChange: (view: View) => void
+  onViewChange: (view: WorkspaceNavView) => void
   onCompose: () => void
   chats: Chat[]
   artifacts: Artifact[]
@@ -140,12 +150,30 @@ export function AppShell({
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
+  // Server-side search — live query when the palette has ≥2 chars.
+  const searchEnabled = chatSearchQuery.trim().length >= 2
+  const { data: searchResults } = useSearchQuery(
+    { q: chatSearchQuery.trim(), scope: 'all' },
+    { skip: !searchEnabled },
+  )
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(INITIAL_WORKSPACES)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) ?? workspaces[0]
+  // Server-backed workspaces. The WorkspaceBar/Settings components still
+  // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
+  // — we map in a selector so nothing in the render tree needs to change.
+  const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  const [patchWorkspaceMutation] = usePatchWorkspaceMutation()
+  const [deleteWorkspaceMutation] = useDeleteWorkspaceMutation()
+  // Keep mutations reachable; the `create` modal lives inside WorkspaceBar
+  // and can be wired when we expose it via props. For now mutations below
+  // cover update + delete from the settings modal.
+  const workspaces: WorkspaceInfo[] = (serverWorkspaces ?? []).map(toWorkspaceInfo)
+  const displayWorkspaces = workspaces.length > 0 ? workspaces : [LOADING_WORKSPACE]
+  const activeWorkspace =
+    displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
+
   const allChats        = sortedChats(chats)
   const visibleChats    = allChats.slice(0, chatPage * CHATS_PER_PAGE)
   const hasMore         = allChats.length > visibleChats.length
@@ -393,14 +421,22 @@ export function AppShell({
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         workspace={activeWorkspace}
+        canDeleteWorkspace={workspaces.length > 1}
         onUpdateWorkspace={updated => {
-          setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w))
+          void patchWorkspaceMutation({
+            id: updated.id,
+            patch: {
+              name: updated.name,
+              description: updated.description,
+              icon: updated.emoji,
+              color: updated.bg,
+            },
+          })
         }}
         onDeleteWorkspace={() => {
-          setWorkspaces(prev => {
-            const next = prev.filter(w => w.id !== activeWorkspace.id)
+          void deleteWorkspaceMutation(activeWorkspace.id).then(() => {
+            const next = workspaces.filter(w => w.id !== activeWorkspace.id)
             if (next.length > 0) onSelectWorkspace(next[0].id)
-            return next
           })
         }}
       />
@@ -439,29 +475,45 @@ export function AppShell({
             </CommandGroup>
           )}
 
-          {/* Search state: all matching chats + artifacts */}
+          {/* Search state — results come from the server /search endpoint. */}
           {chatSearchQuery.trim() && (
             <>
               <CommandGroup heading="Chats">
-                {allChats.map(chat => {
-                  const ChatIcon = getChatIcon(chat, artifacts)
-                  return (
-                    <CommandItem
-                      key={chat.id}
-                      value={chat.title}
-                      onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery('') }}
-                    >
-                      <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                      <span className="truncate">{chat.title}</span>
-                    </CommandItem>
-                  )
-                })}
+                {(searchResults ?? [])
+                  .filter(r => r.type === 'chat')
+                  .map(r => {
+                    const chat = allChats.find(c => c.id === r.id)
+                    const ChatIcon = chat ? getChatIcon(chat, artifacts) : MessageSquare
+                    return (
+                      <CommandItem
+                        key={r.id}
+                        value={r.title}
+                        onSelect={() => {
+                          if (chat) onChatClick(chat)
+                          setChatSearchOpen(false)
+                          setChatSearchQuery('')
+                        }}
+                      >
+                        <ChatIcon className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">{r.title}</span>
+                      </CommandItem>
+                    )
+                  })}
               </CommandGroup>
               <CommandSeparator />
               <CommandGroup heading="Artifacts">
-                {artifacts.map(artifact => {
-                  const ArtifactIcon = getArtifactIcon(artifact.type)
-                  return (
+                {(searchResults ?? [])
+                  .filter(r => r.type === 'file')
+                  .map(r => {
+                    const artifact = artifacts.find(a => a.id === r.id)
+                    if (!artifact) return (
+                      <CommandItem key={r.id} value={r.title}>
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">{r.title}</span>
+                      </CommandItem>
+                    )
+                    const ArtifactIcon = getArtifactIcon(artifact.type)
+                    return (
                     <CommandItem
                       key={artifact.id}
                       value={artifact.name}

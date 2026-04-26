@@ -8,7 +8,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { InboxCard } from './InboxCard'
-import { MOCK_INBOX, type InboxItem } from '@/data/mock-data'
+import { type InboxItem } from '@/data/ui-types'
+import { useGetMessagesQuery, useGetAgentsQuery } from '@/store/api'
+import { toInboxItem } from '@/store/selectors/inbox'
 
 // ── Sort options ──────────────────────────────────────────────────────────────
 type SortOrder = 'priority' | 'newest'
@@ -55,7 +57,11 @@ interface TodayPanelProps {
 }
 
 export function TodayPanel({ onClose, onSelectItem, selectedItemId }: TodayPanelProps) {
-  const [inbox]     = useState<InboxItem[]>(MOCK_INBOX)
+  const { data: awaiting } = useGetMessagesQuery({ awaitingUser: true })
+  const { data: agents } = useGetAgentsQuery()
+  const inbox: InboxItem[] = (awaiting?.items ?? []).map((m) =>
+    toInboxItem(m, agents ?? []),
+  )
   const [sortOrder, setSortOrder] = useState<SortOrder>('priority')
 
   const totalCount = inbox.length

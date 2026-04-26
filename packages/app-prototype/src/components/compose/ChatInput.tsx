@@ -1,12 +1,18 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   CornerDownLeft, ChevronDown, Folder, FileText, StickyNote, Link2, Bot, Search, Paperclip, X,
   Zap, ImageIcon, Table, Globe, Play, Target,
   type LucideIcon,
 } from 'lucide-react'
-import { MOCK_AGENTS, MOCK_FOLDERS, MOCK_CONTEXT } from '@/data/mock-data'
-import type { ContextItem } from '@/data/mock-data'
+import type { ContextItem } from '@/data/ui-types'
+import {
+  useGetAgentsQuery,
+  useGetLibraryQuery,
+  useGetWorkspaceAgentsQuery,
+} from '@/store/api'
+import { toContextItem, toFolderList } from '@/store/selectors/library'
+import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 
 const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
@@ -56,6 +62,15 @@ type AttachedItem = {
 export interface UploadedFile {
   id: string
   name: string
+  /** Workspace-relative path on disk; present for chat artifact uploads
+   * so the caller can build an AttachmentRef when the message is sent. */
+  path?: string
+  /** "directory" when the path is a folder; the caller stamps this onto
+   * the AttachmentRef so the UI can render a folder icon and route
+   * clicks to the folder view. Omitted means "file". */
+  kind?: 'file' | 'directory'
+  mime?: string
+  size?: number
 }
 
 interface ChatInputProps {
@@ -67,7 +82,40 @@ interface ChatInputProps {
   showGoalPicker?: boolean
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
+  /**
+   * Optional chat context. When chatAgentId is set the agent picker
+   * hydrates from it (one-agent-per-chat contract). workspaceId scopes
+   * the attach picker to that workspace's library.
+   */
+  chatAgentId?: string
+  chatWorkspaceId?: string
+  /**
+   * Fired when the user picks a different agent from the bottom toggle.
+   * Parent decides what to do — for an existing chat, patch the chat
+   * (re-binds chat.agentId server-side); for a new chat, seed the id
+   * into the pending createChat call.
+   */
+  onAgentChange?: (agentId: string) => void
+  /**
+   * The parent (typically ChatView) owns the upload flow so the entire
+   * chat screen can be a drop target, not just this input strip. When
+   * these are set the "Upload a file…" button delegates to
+   * onOpenUploadPicker, and any files already uploaded appear as chips
+   * alongside library-item mentions.
+   */
+  chatId?: string
+  onOpenUploadPicker?: () => void
+  extraUploads?: UploadedFile[]
+  onRemoveExtraUpload?: (id: string) => void
+  uploadInProgress?: boolean
+  /**
+   * When set, the typed draft is persisted to localStorage under this key
+   * so the text survives navigation and reloads. Cleared on submit.
+   */
+  draftKey?: string
 }
+
+const DRAFT_STORAGE_PREFIX = 'chatDraft:'
 
 // Calculate fixed position above a trigger button
 function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
@@ -91,10 +139,52 @@ export function ChatInput({
   showGoalPicker = true,
   prefillValue,
   focusRef,
+  chatAgentId,
+  chatWorkspaceId: _chatWorkspaceId,
+  chatId: _chatId,
+  onAgentChange,
+  onOpenUploadPicker,
+  extraUploads = [],
+  onRemoveExtraUpload,
+  uploadInProgress = false,
+  draftKey,
 }: ChatInputProps) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState<string>(() =>
+    draftKey ? localStorage.getItem(DRAFT_STORAGE_PREFIX + draftKey) ?? '' : ''
+  )
+
+  // Persist the draft while typing; remove the entry once empty or submitted.
+  useEffect(() => {
+    if (!draftKey) return
+    const storageKey = DRAFT_STORAGE_PREFIX + draftKey
+    if (value) localStorage.setItem(storageKey, value)
+    else localStorage.removeItem(storageKey)
+  }, [draftKey, value])
   const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // ── Server-backed pickers ───────────────────────────────────────────────
+  // Scope the agent picker to the chat's workspace when we have one; the
+  // global list is only used for chat surfaces that aren't bound to a
+  // workspace yet (e.g. Today inbox previews).
+  const { data: globalAgents } = useGetAgentsQuery(undefined, {
+    skip: !!_chatWorkspaceId,
+  })
+  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(
+    _chatWorkspaceId ?? '',
+    { skip: !_chatWorkspaceId },
+  )
+  const serverAgents = _chatWorkspaceId ? workspaceAgents : globalAgents
+  const { data: libraryResp } = useGetLibraryQuery(
+    _chatWorkspaceId ? { workspaceId: _chatWorkspaceId } : undefined,
+    { skip: !_chatWorkspaceId },
+  )
+  const folders = _chatWorkspaceId
+    ? toFolderList(libraryResp?.folders ?? [], _chatWorkspaceId)
+    : []
+  const libraryItems: ContextItem[] = _chatWorkspaceId
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, _chatWorkspaceId))
+    : []
 
   // Register imperative focus handle
   useEffect(() => {
@@ -128,7 +218,22 @@ export function ChatInput({
   const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
 
   // Selections
-  const [selectedAgent, setSelectedAgent] = useState(MOCK_AGENTS[0])
+  // The picker surface is "pick the agent for this chat" now that the
+  // server enforces one agent per chat (see plan §6, row 3). Hydrate
+  // from chatAgentId when present; otherwise fall back to the first
+  // agent returned by /agents (used before the chat has been created).
+  //
+  // A local `previewAgentId` covers the pre-creation case: parent can
+  // pass a new chatAgentId anytime (e.g. after PATCH /chats/:id
+  // responds), and `previewAgentId` stays as the optimistic hint until
+  // the server-backed value catches up.
+  const serverActiveAgent =
+    (chatAgentId ? serverAgents?.find(a => a.id === chatAgentId) : undefined)
+    ?? serverAgents?.[0]
+    ?? null
+  const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
+  const activeAgent =
+    (previewAgentId ? serverAgents?.find(a => a.id === previewAgentId) : undefined) ?? serverActiveAgent
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
   const suggestedGoal = inferGoal(value)
   const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : suggestedGoal
@@ -139,17 +244,18 @@ export function ChatInput({
     ? (effectiveGoal?.placeholder ?? placeholder)
     : placeholder
 
-  // Attachment list
+  // Attachment list — folders are client-derived (empty for now; matrix
+  // §4.2.1), files come straight from the library.
   const allAttachments = [
-    ...MOCK_FOLDERS.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
-    ...MOCK_CONTEXT.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
+    ...folders.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
+    ...libraryItems.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
   ]
   const filteredAttachments = allAttachments.filter(
     a => !attachSearch || a.name.toLowerCase().includes(attachSearch.toLowerCase())
   )
-  const filteredAgents = MOCK_AGENTS.filter(
+  const filteredAgents = (serverAgents ?? []).filter(
     a => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())
-      || a.model.toLowerCase().includes(agentSearch.toLowerCase())
+      || (a.model?.toLowerCase().includes(agentSearch.toLowerCase()) ?? false)
   )
 
   // Auto-focus
@@ -281,34 +387,83 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
+  const handleAgentSelect = useCallback((agent: { id: string }) => {
+    setPreviewAgentId(agent.id)
+    setAgentOpen(false)
+    onAgentChange?.(agent.id)
+  }, [onAgentChange])
+
+  const agentNav = useListKeyboardNav({
+    items: filteredAgents,
+    enabled: agentOpen,
+    onSelect: handleAgentSelect,
+  })
+
+  const attachNav = useListKeyboardNav({
+    items: filteredAttachments,
+    enabled: attachOpen,
+    onSelect: insertMention,
+  })
+
+  const uploadEnabled = Boolean(onOpenUploadPicker)
+
   const handleSubmit = () => {
     const trimmed = value.trim()
-    if ((!trimmed && attachedItems.length === 0) || disabled) return
-    const uploads: UploadedFile[] = attachedItems
-      .filter(i => i.id.startsWith('upload-'))
-      .map(i => ({ id: i.id, name: i.name }))
-    onSend(trimmed, uploads)
+    if ((!trimmed && attachedItems.length === 0 && extraUploads.length === 0) || disabled) return
+    // Library items and folders mentioned via @ or the attach picker have
+    // id === workspace-relative path (see toContextItem / toFolderList).
+    // Forward both as UploadedFile entries with `path` set so the parent's
+    // onSend can build AttachmentRefs — opencode's `--file` flag accepts a
+    // directory path and surfaces its contents to the model, so folders ride
+    // the same wire as files.
+    const mentionedFiles: UploadedFile[] = attachedItems.map(i => ({
+      id: i.id,
+      name: i.name,
+      path: i.id,
+      kind: i.kind === 'folder' ? 'directory' : 'file',
+    }))
+    onSend(trimmed, [...extraUploads, ...mentionedFiles])
     setValue('')
     setAttachedItems([])
     setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (attachOpen && atMentionStart !== null && attachNav.handleKeyDown(e)) return
     if (e.key === 'Escape') { setAttachOpen(false); setAgentOpen(false); setGoalOpen(false); setAtMentionStart(null) }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
-  const canSubmit = (value.trim().length > 0 || attachedItems.length > 0) && !disabled
+  const canSubmit = (value.trim().length > 0 || attachedItems.length > 0 || extraUploads.length > 0) && !disabled
   const pickerBtnClass = 'flex items-center gap-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors px-2 h-6 text-xs font-medium shrink-0'
   const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
   return (
     <div className="w-full">
       {/* Input card */}
-      <div className="rounded-lg border bg-background shadow-xs">
-        {/* Chips — only when attachments exist */}
-        {attachedItems.length > 0 && (
+      <div className="rounded-lg border bg-background">
+        {/* Chips — only when attachments / uploads exist */}
+        {(attachedItems.length > 0 || extraUploads.length > 0) && (
           <div className={`flex flex-wrap gap-1.5 px-3 ${compact ? 'pt-2' : 'pt-3'}`}>
+            {extraUploads.map(upload => (
+              <span
+                key={upload.id}
+                className="inline-flex items-center gap-1 rounded-md bg-secondary text-secondary-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
+              >
+                <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{upload.name}</span>
+                {onRemoveExtraUpload && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveExtraUpload(upload.id)}
+                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    aria-label={`Remove ${upload.name}`}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </span>
+            ))}
             {attachedItems.map(item => {
               const Icon = item.kind === 'folder' ? Folder : ITEM_ICON[item.type ?? 'file'] ?? FileText
               return (
@@ -436,7 +591,7 @@ export function ChatInput({
             className={pickerBtnClass}
           >
             <Bot className="h-3 w-3" />
-            {selectedAgent.name}
+            {activeAgent?.name ?? 'Agent'}
             <ChevronDown className="h-3 w-3 opacity-60" />
           </button>
           {agentOpen && agentRect && createPortal(
@@ -447,6 +602,7 @@ export function ChatInput({
                   autoFocus
                   value={agentSearch}
                   onChange={e => setAgentSearch(e.target.value)}
+                  onKeyDown={agentNav.handleKeyDown}
                   placeholder="Search agents…"
                   className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
                 />
@@ -455,14 +611,20 @@ export function ChatInput({
                 {filteredAgents.length === 0 && (
                   <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
                 )}
-                {filteredAgents.map((agent, i) => (
-                  <button key={i} onClick={() => { setSelectedAgent(agent); setAgentOpen(false) }}
-                    className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${selectedAgent === agent ? 'bg-muted/30' : ''}`}
-                  >
-                    <span>{agent.name}</span>
-                    <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
-                  </button>
-                ))}
+                {filteredAgents.map((agent, i) => {
+                  const isActive = agentNav.selectedIndex === i
+                  return (
+                    <button
+                      key={agent.id}
+                      ref={agentNav.itemRef(i)}
+                      onClick={() => handleAgentSelect(agent)}
+                      className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${isActive ? 'bg-muted/50' : activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
+                    >
+                      <span>{agent.name}</span>
+                      <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
+                    </button>
+                  )
+                })}
               </div>
             </div>,
             document.body
@@ -495,6 +657,7 @@ export function ChatInput({
                   autoFocus
                   value={attachSearch}
                   onChange={e => setAttachSearch(e.target.value)}
+                  onKeyDown={attachNav.handleKeyDown}
                   placeholder="Search files and folders…"
                   className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
                 />
@@ -503,53 +666,47 @@ export function ChatInput({
                 {filteredAttachments.length === 0 && (
                   <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
                 )}
-                {filteredAttachments.some(a => a.kind === 'folder') && (
-                  <>
-                    <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Folders</p>
-                    {filteredAttachments.filter(a => a.kind === 'folder').map(a => (
-                      <button key={a.id} onClick={() => insertMention(a)}
-                        className="flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left"
+                {filteredAttachments.map((a, i) => {
+                  const prev = i > 0 ? filteredAttachments[i - 1] : null
+                  const showFolderHeading = a.kind === 'folder' && (!prev || prev.kind !== 'folder')
+                  const showFileHeading = a.kind === 'item' && (!prev || prev.kind !== 'item')
+                  const Icon = a.kind === 'folder' ? Folder : ITEM_ICON[a.type]
+                  const isSelected = attachNav.selectedIndex === i
+                  return (
+                    <Fragment key={a.id}>
+                      {showFolderHeading && (
+                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Folders</p>
+                      )}
+                      {showFileHeading && (
+                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
+                      )}
+                      <button
+                        ref={attachNav.itemRef(i)}
+                        onClick={() => insertMention(a)}
+                        className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
                       >
-                        <Folder className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         <span className="truncate">{a.name}</span>
-                        {attachedItems.some(i => i.id === a.id) && (
+                        {attachedItems.some(it => it.id === a.id) && (
                           <span className="ml-auto shrink-0 h-1.5 w-1.5 rounded-full bg-primary" />
                         )}
                       </button>
-                    ))}
-                  </>
-                )}
-                {filteredAttachments.some(a => a.kind === 'item') && (
-                  <>
-                    <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
-                    {filteredAttachments.filter(a => a.kind === 'item').map(a => {
-                      const Icon = a.kind === 'item' ? ITEM_ICON[a.type] : FileText
-                      return (
-                        <button key={a.id} onClick={() => insertMention(a)}
-                          className="flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left"
-                        >
-                          <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="truncate">{a.name}</span>
-                          {attachedItems.some(i => i.id === a.id) && (
-                            <span className="ml-auto shrink-0 h-1.5 w-1.5 rounded-full bg-primary" />
-                          )}
-                        </button>
-                      )
-                    })}
-                  </>
-                )}
+                    </Fragment>
+                  )
+                })}
               </div>
               <div className="border-t">
                 <button
                   onClick={() => {
-                    const mock: AttachedItem = { id: `upload-${Date.now()}`, name: 'Uploaded file.pdf', kind: 'item', type: 'file' }
-                    setAttachedItems(prev => [...prev, mock])
                     setAttachOpen(false)
+                    onOpenUploadPicker?.()
                   }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground"
+                  disabled={!uploadEnabled || uploadInProgress}
+                  data-testid="chat-upload-a-file"
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>Upload a file…</span>
+                  <span>{uploadInProgress ? 'Uploading…' : 'Upload a file…'}</span>
                 </button>
               </div>
             </div>,

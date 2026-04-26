@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   MoreHorizontal,
@@ -46,8 +47,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ArtifactPreview } from './ArtifactPreview'
 import { ConversationPanel } from './ConversationPanel'
-import type { Artifact, ArtifactUpdate } from '@/data/mock-data'
-import { getArtifactIcon, getRelativeTime } from '@/data/mock-data'
+import type { Artifact, ArtifactUpdate } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
+import { fetchLibraryContent } from '@/store/library-download'
 
 interface ArtifactDetailProps {
   artifact: Artifact
@@ -63,6 +65,7 @@ interface ArtifactDetailProps {
 }
 
 export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRead, onDismissUpdate, transitionFrom, isSaved = true, onSave, backLabel }: ArtifactDetailProps) {
+  const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [panelCollapsed, setPanelCollapsed] = useState(false)
 
   // Mark update as read as soon as the panel is visible
@@ -78,6 +81,38 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
   const zoomIn  = () => setZoom(z => Math.min(z + 0.25, 4))
   const zoomOut = () => setZoom(z => Math.max(z - 0.25, 0.25))
   const zoomReset = () => setZoom(1)
+
+  // Artifacts are library files; fetch the body when the detail opens so
+  // document/spreadsheet/image previews can render real content instead of
+  // the placeholder that the list-shape selector provides.
+  const [artifactContent, setArtifactContent] = useState<string | null>(null)
+  const [artifactBlobUrl, setArtifactBlobUrl] = useState<string | null>(null)
+  useEffect(() => {
+    setArtifactContent(null)
+    setArtifactBlobUrl(null)
+    if (!activeWorkspaceId) return
+    if (artifact.type !== 'document' && artifact.type !== 'spreadsheet' && artifact.type !== 'image') return
+    let cancelled = false
+    let createdUrl: string | null = null
+    void fetchLibraryContent({ workspaceId: activeWorkspaceId, path: artifact.id })
+      .then(async (blob) => {
+        if (cancelled) return
+        if (artifact.type === 'image') {
+          createdUrl = URL.createObjectURL(blob)
+          setArtifactBlobUrl(createdUrl)
+        } else {
+          const text = await blob.text()
+          if (!cancelled) setArtifactContent(text)
+        }
+      })
+      .catch(() => {
+        // Preview failure is non-fatal — the placeholder shows instead.
+      })
+    return () => {
+      cancelled = true
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [activeWorkspaceId, artifact.id, artifact.type])
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -225,7 +260,7 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
           animate={{ opacity: 1 }}
           transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
         >
-          <ArtifactPreview artifact={artifact} zoom={zoom} />
+          <ArtifactPreview artifact={artifact} zoom={zoom} content={artifactContent} blobUrl={artifactBlobUrl} />
         </motion.div>
       </div>
 

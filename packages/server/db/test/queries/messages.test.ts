@@ -18,10 +18,10 @@ beforeAll(async () => {
   const agentId = generateId("agent");
   await agents.insert(pool, { id: agentId, userId, name: "MsgAgent" });
   const wsId = generateId("workspace");
-  await workspaces.insert(pool, { id: wsId, userId, name: "MsgWS" });
+  await workspaces.insert(pool, { id: wsId, userId, name: "MsgWS", path: `msgws-${wsId.slice(-6)}` });
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-     VALUES ($1, $2, true) ON CONFLICT DO NOTHING`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [wsId, agentId],
   );
   chatId = generateId("chat");

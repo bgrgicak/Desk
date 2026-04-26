@@ -16,11 +16,22 @@ export function createPool(config?: PoolConfig): pg.Pool {
     process.env.DATABASE_URL ??
     buildConnectionString();
 
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString,
     max: config?.max ?? 10,
     ...config,
   });
+
+  // Pin every new session to UTC. TIMESTAMPTZ columns are already stored
+  // as UTC instants, but the session TZ governs how psql / TO_CHAR /
+  // DATE_TRUNC render and bucket them — so without this, raw SQL output
+  // drifts with the host's locale while the JSON API (via toISOString)
+  // stays UTC. Making the server side unambiguous as well.
+  pool.on("connect", (client) => {
+    client.query("SET TIME ZONE 'UTC'").catch(() => { /* best-effort */ });
+  });
+
+  return pool;
 }
 
 function buildConnectionString(): string {

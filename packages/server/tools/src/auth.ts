@@ -23,7 +23,7 @@ function hashToken(token: string): string {
 export async function issueSessionToken(
   pool: pg.Pool,
   agentId: string,
-  _opts?: { runId?: string },
+  opts?: { runId?: string; workspaceId?: string },
 ): Promise<{ token: string; session: SandboxSession }> {
   const raw = crypto.randomBytes(TOKEN_BYTES).toString("hex");
   const token = TOKEN_PREFIX + raw;
@@ -33,6 +33,7 @@ export async function issueSessionToken(
   const session = await queries.sandboxSessions.issue(pool, {
     id,
     agentId,
+    workspaceId: opts?.workspaceId,
     tokenHash,
   });
 

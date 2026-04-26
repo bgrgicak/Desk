@@ -27,14 +27,17 @@ describe("workspaces queries", () => {
   const wsId = generateId("workspace");
 
   it("inserts a workspace", async () => {
+    const path = await workspaces.reserveWorkspacePath(pool, "TestWS");
     const ws = await workspaces.insert(pool, {
       id: wsId,
       userId,
       name: "TestWS",
+      path,
     });
     expect(ws.id).toBe(wsId);
     expect(ws.name).toBe("TestWS");
     expect(ws.userId).toBe(userId);
+    expect(ws.path).toBe(path);
   });
 
   it("lists workspaces", async () => {
@@ -67,7 +70,8 @@ describe("workspaces queries", () => {
       email: "temp@example.com",
     });
     const tempWsId = generateId("workspace");
-    await workspaces.insert(pool, { id: tempWsId, userId: tempUserId, name: "TempWS" });
+    const tempPath = await workspaces.reserveWorkspacePath(pool, "TempWS");
+    await workspaces.insert(pool, { id: tempWsId, userId: tempUserId, name: "TempWS", path: tempPath });
 
     await pool.query("DELETE FROM users WHERE id = $1", [tempUserId]);
     const ws = await workspaces.findById(pool, tempWsId);

@@ -26,15 +26,15 @@ describe("file read", () => {
     const mockResponse = { content: "hello", mime: "text/plain" };
     vi.mocked(callTool).mockResolvedValue(mockResponse);
 
-    await run(["f_abc123"]);
+    await run(["notes/hello.md"]);
 
-    expect(callTool).toHaveBeenCalledWith("file.read", { fileId: "f_abc123" });
+    expect(callTool).toHaveBeenCalledWith("file.read", { path: "notes/hello.md" });
 
     const request = vi.mocked(callTool).mock.calls[0][1] as Record<string, unknown>;
     TOOLS["file.read"].request.parse(request);
   });
 
-  it("throws on missing fileId", async () => {
+  it("throws on missing path", async () => {
     await expect(run([])).rejects.toThrow("Usage");
   });
 });

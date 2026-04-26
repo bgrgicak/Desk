@@ -1,13 +1,16 @@
 export {
   ensureLayout,
+  ensureWorkspaceLayout,
+  renameWorkspaceDir,
+  trashWorkspaceDir,
   chatAttachmentsDir,
   chatsDir,
-  filesDir,
-  libraryDir,
-  workspaceLibraryDir,
+  resolveDeskHome,
   resolveHostPath,
+  tmpDir,
   trashDir,
   workspaceRootPath,
+  workspacesRoot,
 } from "./layout.js";
 export {
   uploadArtifact,
@@ -16,13 +19,30 @@ export {
   statFile,
   moveFile,
   deleteFile,
+  overwriteFile,
   trashChatDirectories,
   resolveForSandbox,
+  validateLibrarySubpath,
 } from "./files.js";
 export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";
-export { listLibrary } from "./library.js";
-export type { LibraryContext } from "./library.js";
+export {
+  listLibrary,
+  createLibraryFolder,
+  createLibraryLink,
+  moveLibraryEntry,
+  deleteLibraryEntry,
+  loadGitignoreFrame,
+  isGitIgnored,
+} from "./library.js";
+export type { LibraryContext, FolderRef, CreateLinkInput, IgnoreFrame } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
-export { snapshotNote, listNoteHistory, noteHistoryDir } from "./noteHistory.js";
+export {
+  snapshotNote,
+  listNoteHistory,
+  noteHistoryDir,
+  notesDir,
+  materializeNote,
+  deleteMaterializedNote,
+} from "./noteHistory.js";
 export type { NoteVersion } from "./noteHistory.js";
 export { enforceLogRetention } from "./logRetention.js";

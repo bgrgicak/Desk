@@ -1,6 +1,6 @@
 import { Bot } from 'lucide-react'
 import { AppCard } from '@/components/ui/app-card'
-import type { Task } from '@/data/mock-data'
+import type { Task } from '@/data/ui-types'
 import { PriorityIcon } from './task-badges'
 
 interface TaskCardProps {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronLeft,
@@ -20,7 +20,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskSheet } from './TaskSheet'
-import type { Task, TaskOccurrence } from '@/data/mock-data'
+import type { Task, TaskOccurrence } from '@/data/ui-types'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -29,10 +29,11 @@ type StatusFilter = 'all' | 'todo' | 'active' | 'complete' | 'scheduled'
 
 interface TasksPageProps {
   tasks: Task[]
-  onTasksChange: (tasks: Task[]) => void
-  createSheetOpen: boolean
-  onOpenCreateSheet: () => void
-  onCloseCreateSheet: () => void
+  /** Called when a board drop moves a task to a different column. Wires
+   * through to PATCH /chats/:id/messages/:id in App.tsx. Intra-column
+   * reorders don't fire this hook — the server has no ordering field. */
+  onTaskMove?: (task: Task, newStatus: Task['status']) => Promise<void> | void
+  onCreateTask?: (input: { name: string; description?: string; status: Task['status']; scheduledFor?: Date; scheduleRepeat?: boolean }) => Promise<void> | void
 }
 
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
@@ -53,7 +54,7 @@ function getCalendarWeeks(year: number, month: number): Date[][] {
   const endDate = new Date(lastDay)
   endDate.setDate(lastDay.getDate() + (6 - lastDay.getDay()))
   const weeks: Date[][] = []
-  let current = new Date(startDate)
+  const current = new Date(startDate)
   while (current <= endDate) {
     const week: Date[] = []
     for (let i = 0; i < 7; i++) { week.push(new Date(current)); current.setDate(current.getDate() + 1) }
@@ -80,6 +81,7 @@ function getOccurrencesForDay(day: Date, tasks: Task[]): { task: Task; occ: Task
       }
     }
   }
+  result.sort((a, b) => a.occ.startedAt.getTime() - b.occ.startedAt.getTime())
   return result
 }
 
@@ -107,6 +109,7 @@ function EventBar({ task, occurrence, isSelected, onClick }: {
   return (
     <button
       onClick={onClick}
+      data-testid={`task-row-${task.id}`}
       className={`
         h-5 w-full px-1.5 text-xs flex items-center gap-1 cursor-pointer truncate
         bg-background border rounded-sm
@@ -128,7 +131,7 @@ function MonthView({ year, month, tasks, selectedTaskId, onSelectTask }: {
   year: number; month: number; tasks: Task[]
   selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
-  const today = new Date('2026-04-16T10:00:00')
+  const today = useMemo(() => new Date(), [])
   const weeks = useMemo(() => getCalendarWeeks(year, month), [year, month])
   const DOW   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -204,7 +207,7 @@ function WeekView({ weekStart, tasks, selectedTaskId, onSelectTask }: {
   weekStart: Date; tasks: Task[]
   selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
-  const today = new Date('2026-04-16T10:00:00')
+  const today = useMemo(() => new Date(), [])
   const week: Date[] = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d
   })
@@ -219,6 +222,7 @@ function WeekView({ weekStart, tasks, selectedTaskId, onSelectTask }: {
               dayOccs.push({ task, occ })
           }
         }
+        dayOccs.sort((a, b) => a.occ.startedAt.getTime() - b.occ.startedAt.getTime())
         return (
           <div key={di} className="flex-1 border-r last:border-r-0 flex flex-col">
             <div className={`flex flex-col items-center py-2 border-b shrink-0 ${isToday ? 'bg-muted/30' : ''}`}>
@@ -233,6 +237,7 @@ function WeekView({ weekStart, tasks, selectedTaskId, onSelectTask }: {
                 return (
                   <button
                     key={`${task.id}-${occ.id}`}
+                    data-testid={`task-row-${task.id}`}
                     onClick={() => onSelectTask(task)}
                     className={`flex items-center gap-1 px-1.5 py-1 rounded-sm text-xs border text-left w-full bg-background truncate ${
                       isFailed ? 'border-red-300' : 'border-border'
@@ -256,12 +261,12 @@ function WeekView({ weekStart, tasks, selectedTaskId, onSelectTask }: {
 function ListView({ tasks, selectedTaskId, onSelectTask }: {
   tasks: Task[]; selectedTaskId: string | null; onSelectTask: (task: Task) => void
 }) {
-  const today     = new Date('2026-04-16T10:00:00')
-  const todayDate = dateOnly(today)
+  const today     = useMemo(() => new Date(), [])
+  const todayDate = useMemo(() => dateOnly(today), [today])
 
   const allOccs = tasks.flatMap(task =>
-    (task.history ?? []).map(occ => ({ task, occ, date: dateOnly(occ.startedAt) }))
-  ).sort((a, b) => b.date.getTime() - a.date.getTime())
+    (task.history ?? []).map(occ => ({ task, occ, date: dateOnly(occ.startedAt), ts: occ.startedAt.getTime() }))
+  ).sort((a, b) => a.ts - b.ts)
 
   const getSection = (date: Date): string => {
     const diff = Math.round((todayDate.getTime() - date.getTime()) / 86400000)
@@ -271,7 +276,7 @@ function ListView({ tasks, selectedTaskId, onSelectTask }: {
     return 'Earlier this month'
   }
 
-  const sectionOrder = ['Today', 'This week', 'Earlier this month', 'Upcoming']
+  const sectionOrder = ['Earlier this month', 'This week', 'Today', 'Upcoming']
   const grouped = new Map<string, typeof allOccs>()
   for (const item of allOccs) {
     const s = getSection(item.date)
@@ -294,6 +299,7 @@ function ListView({ tasks, selectedTaskId, onSelectTask }: {
                   return (
                     <button
                       key={`${task.id}-${occ.id}`}
+                      data-testid={`task-row-${task.id}`}
                       onClick={() => onSelectTask(task)}
                       className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors text-left ${selectedTaskId === task.id ? 'bg-muted/50' : ''}`}
                     >
@@ -319,16 +325,11 @@ function ListView({ tasks, selectedTaskId, onSelectTask }: {
 
 // ── Main TasksPage ────────────────────────────────────────────────────────────
 
-export function TasksPage({
-  tasks,
-  onTasksChange,
-  createSheetOpen,
-  onOpenCreateSheet,
-  onCloseCreateSheet,
-}: TasksPageProps) {
-  const today = new Date('2026-04-16T10:00:00')
+export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
+  const today = useMemo(() => new Date(), [])
   const [viewMode, setViewMode]         = useState<ViewMode>('board')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [createSheetOpen, setCreateSheetOpen] = useState(false)
   const [defaultCreateStatus, setDefaultCreateStatus] = useState<Task['status']>('todo')
   const [currentYear, setCurrentYear]   = useState(today.getFullYear())
   const [currentMonth, setCurrentMonth] = useState(today.getMonth())
@@ -339,6 +340,16 @@ export function TasksPage({
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [searchQuery, setSearchQuery]     = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Keep the selected task in sync with the underlying list: after a
+  // lifecycle PATCH (pause/resume/cancel) invalidates the messages
+  // query, the incoming `tasks` array carries the updated row.
+  useEffect(() => {
+    if (!selectedTask) return
+    const fresh = tasks.find(t => t.id === selectedTask.id)
+    if (!fresh) return
+    if (fresh !== selectedTask) setSelectedTask(fresh)
+  }, [tasks, selectedTask])
 
   const filteredTasks = useMemo(() => {
     let result = tasks
@@ -355,23 +366,6 @@ export function TasksPage({
   function handleSelectTask(task: Task) {
     setSelectedTask(task)
     setPanelCollapsed(false)
-  }
-
-  function handleTaskChange(updated: Task) {
-    setSelectedTask(updated)
-    onTasksChange(tasks.map(t => t.id === updated.id ? updated : t))
-  }
-
-  function handleTaskStatusChange(taskId: string, newStatus: Task['status']) {
-    const updated = tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
-    onTasksChange(updated)
-    if (selectedTask?.id === taskId) {
-      setSelectedTask(prev => prev ? { ...prev, status: newStatus } : prev)
-    }
-  }
-
-  function handleCreateTask(task: Task) {
-    onTasksChange([...tasks, task])
   }
 
   function prevPeriod() {
@@ -413,7 +407,6 @@ export function TasksPage({
       <PageHeader
         breadcrumb={<span className="text-sm font-semibold">Tasks</span>}
         actions={<div className="flex items-center gap-2">
-          {/* Status filter pills — hidden in board view (columns serve the same purpose) */}
           {viewMode !== 'board' && (
             <div className="flex items-center rounded-lg border p-0.5">
               {STATUS_FILTERS.map(f => (
@@ -432,7 +425,6 @@ export function TasksPage({
             </div>
           )}
 
-          {/* Search */}
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -445,8 +437,7 @@ export function TasksPage({
             />
           </div>
 
-          {/* View switcher */}
-          <div className="flex items-center rounded-lg border p-0.5">
+          <div className="flex items-center rounded-lg border p-0.5" data-testid="tasks-view-switcher">
             {([
               { mode: 'board' as ViewMode, icon: LayoutGrid,   title: 'Board' },
               { mode: 'month' as ViewMode, icon: CalendarDays, title: 'Month' },
@@ -457,6 +448,7 @@ export function TasksPage({
                 key={mode}
                 onClick={() => setViewMode(mode)}
                 title={title}
+                data-testid={`tasks-view-${mode}`}
                 className={`rounded-md p-1.5 transition-colors ${viewMode === mode ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 <Icon className="h-3.5 w-3.5" />
@@ -464,7 +456,8 @@ export function TasksPage({
             ))}
           </div>
 
-          <Button size="sm" onClick={onOpenCreateSheet}>
+          <Button size="sm" data-testid="tasks-create" onClick={() => { setDefaultCreateStatus('todo'); setCreateSheetOpen(true) }}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
             Create
           </Button>
         </div>}
@@ -473,10 +466,7 @@ export function TasksPage({
       {/* ── Body ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* Main content pane */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-
-          {/* Calendar sub-header (month/week only) */}
           {(viewMode === 'month' || viewMode === 'week') && (
             <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0">
               <div className="flex items-center gap-1">
@@ -504,16 +494,10 @@ export function TasksPage({
               tasks={filteredTasks}
               selectedTaskId={selectedTask?.id ?? null}
               onSelectTask={handleSelectTask}
-              onTasksChange={updatedTasks => {
-                onTasksChange(updatedTasks)
-                if (selectedTask) {
-                  const found = updatedTasks.find(t => t.id === selectedTask.id)
-                  if (found) setSelectedTask(found)
-                }
-              }}
+              onTaskMove={(task, newStatus) => onTaskMove?.(task, newStatus)}
               onAddTask={status => {
                 setDefaultCreateStatus(status)
-                onOpenCreateSheet()
+                setCreateSheetOpen(true)
               }}
             />
           )}
@@ -539,7 +523,6 @@ export function TasksPage({
           )}
         </div>
 
-        {/* Detail panel — slide in from right */}
         <AnimatePresence>
           {showPanel && (
             <motion.div
@@ -554,19 +537,20 @@ export function TasksPage({
               <TaskDetailPanel
                 task={selectedTask}
                 onCollapse={() => { setPanelCollapsed(true); setSelectedTask(null) }}
-                onTaskChange={handleTaskChange}
               />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Create task sheet */}
       <TaskSheet
         open={createSheetOpen}
-        onOpenChange={open => { if (!open) onCloseCreateSheet() }}
-        onCreateTask={handleCreateTask}
+        onOpenChange={open => setCreateSheetOpen(open)}
         defaultStatus={defaultCreateStatus}
+        onCreateTask={async (input) => {
+          await onCreateTask?.(input)
+          setCreateSheetOpen(false)
+        }}
       />
     </div>
   )

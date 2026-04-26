@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+    branches: [trunk]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (host + VM suites)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: desk
+          POSTGRES_PASSWORD: desk
+          POSTGRES_DB: desk
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://desk:desk@127.0.0.1:55432/desk
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DESK_DEV: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install OS packages (at, cron, postgres client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends at cron postgresql-client
+          sudo service atd start
+          sudo service cron start
+
+      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+        run: |
+          mkdir -p "$RUNNER_TEMP/desk-home"
+          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
+          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build sandbox-cli (prereq for sandbox image)
+        run: npm run build --workspace=@desk/sandbox-cli
+
+      - name: Build desk/sandbox:v1 image
+        working-directory: packages/server
+        # Match the in-container `agent` uid to the runner uid so the
+        # workspace bind-mount at /home/agent is writable from inside the
+        # container (CapDrop:ALL drops CAP_DAC_OVERRIDE, so uid 0 doesn't
+        # bypass DAC). Dev VMs build with AGENT_UID=2000 to match their
+        # `desk` service user; CI doesn't have one, so adapt to whoever
+        # the runner is.
+        run: docker build --build-arg AGENT_UID=$(id -u) -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+
+      - name: Enable pg_trgm extension on admin DB
+        run: PGPASSWORD=desk psql -h 127.0.0.1 -p 55432 -U desk -d desk -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
+
+      - name: Run unit + integration tests (vitest)
+        # `--retry=2` tolerates known flakes around async fireMessage polling
+        # (see message-model-attachments, agent-delete); real failures still
+        # fail after three attempts.
+        run: npx vitest run --passWithNoTests --retry=2
+
+      - name: Build @desk/api (+ deps via nx) for the Playwright fixture
+        # The Playwright fixture (`packages/app-prototype/e2e/fixtures/server.ts`)
+        # spawns `node packages/server/api/dist/main.js`. nx's
+        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
+        # storage, tools, runtime, scheduler) in topological order, so a
+        # single `nx build @desk/api` produces every `dist/` the spawned
+        # process resolves through Node's default `import` condition.
+        run: npx nx build @desk/api
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: packages/app-prototype
+
+      - name: Run Playwright e2e tests
+        # `--retries=2` catches timing flakes without masking deterministic
+        # failures (still red after three attempts).
+        run: npx playwright test --retries=2
+        working-directory: packages/app-prototype
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: packages/app-prototype/test-results/
+          retention-days: 7

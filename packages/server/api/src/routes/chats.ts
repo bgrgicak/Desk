@@ -4,10 +4,13 @@ import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError, type Message, type WsEvent } from "@desk/shared";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, type AttachmentRef, type Message, type WsEvent } from "@desk/shared";
+import { z } from "zod";
 import {
   chatAttachmentsDir,
   listNoteHistory,
+  materializeNote,
+  notesDir,
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
@@ -20,6 +23,18 @@ import {
 interface SchedulerCancelAdapter {
   removeAt: (id: string) => Promise<void>;
   removeCron: (id: string) => Promise<void>;
+}
+
+/**
+ * Subset of the run manager the patch-message route needs to drive
+ * scheduler-aware state transitions (pause / resume / cancel-in-place).
+ * Kept as its own interface so chats.ts doesn't depend on the whole
+ * scheduler package.
+ */
+export interface MessageLifecycleOps {
+  pauseMessage(messageId: string): Promise<Message | null>;
+  resumeMessage(messageId: string): Promise<Message | null>;
+  cancelScheduledMessage(messageId: string): Promise<Message | null>;
 }
 
 /**
@@ -65,6 +80,20 @@ async function cancelSchedulerRefsForChat(
   }
 }
 
+/**
+ * Resolves the on-disk slug for a chat's workspace. Used by route handlers
+ * that need to build a filesystem path from a bare chatId. Throws if the
+ * chat is missing.
+ */
+async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<string> {
+  const { rows } = await pool.query<{ path: string }>(
+    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
+    [chatId],
+  );
+  if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
+  return rows[0].path;
+}
+
 export async function listChats(pool: pg.Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
 }
@@ -88,7 +117,7 @@ export async function createChat(
 export async function patchChat(
   pool: pg.Pool,
   id: string,
-  data: { title?: string; goal?: string },
+  data: { title?: string; goal?: string; agentId?: string },
 ) {
   const chat = await queries.chats.updateMeta(pool, id, data);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
@@ -113,20 +142,35 @@ export async function listMessages(
  *
  * Callers (app.ts) get the trigger's id back to schedule the fire.
  */
+const SendMessageSchema = z.object({
+  content: z.string(),
+  attachments: z.array(AttachmentRefSchema).optional(),
+});
+
 export async function sendMessage(
   pool: pg.Pool,
   chatId: string,
-  data: { content: string },
+  rawData: unknown,
   emit: (event: WsEvent) => void,
 ): Promise<{ userMessage: Message; triggerId: string }> {
+  const parsed = SendMessageSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid message body: ${parsed.error.message}`);
+  }
+  const data = parsed.data;
+
   const chat = await queries.chats.findById(pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+
+  const attachments: AttachmentRef[] | undefined =
+    data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
 
   const userMessage = await queries.messages.insert(pool, {
     id: generateId("message"),
     chatId,
     role: "user",
     content: { type: "text", text: data.content },
+    attachments,
   });
 
   emit({ type: "message.appended", payload: userMessage });
@@ -147,12 +191,14 @@ export async function sendMessage(
 
 /**
  * PATCH a message. Supports editing content (e.g. user edits a note) and
- * cancelling state (setting state to 'cancelled'). Returns the updated
- * row. Emits message.updated over WS.
+ * lifecycle transitions: `cancelled` (stop & keep the row), `paused`
+ * (stop firing without losing the schedule), `pending` (resume from
+ * paused). Returns the updated row. Emits message.updated over WS.
  *
- * When the previous content was a `note`, the prior body is snapshotted
- * under `.chats/{chatId}/note-history/` before the update lands, so user
- * edits and AI rewrites both leave a trail.
+ * State transitions delegate to the run manager so the OS-level at/cron
+ * entry is actually removed or re-installed; content-only patches (e.g.
+ * user editing a note body) snapshot the prior note and take the plain
+ * DB update path.
  */
 export async function patchMessage(
   pool: pg.Pool,
@@ -161,22 +207,59 @@ export async function patchMessage(
   messageId: string,
   data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
   emit: (event: WsEvent) => void,
+  lifecycleOps: MessageLifecycleOps | null = null,
 ): Promise<Message> {
   const current = await queries.messages.findById(pool, messageId);
   if (!current || current.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
-  if (data.state !== undefined && !["cancelled", "pending"].includes(data.state)) {
+  if (data.state !== undefined && !["cancelled", "pending", "paused"].includes(data.state)) {
     throw new ValidationError(
-      `state can only be patched to 'cancelled' or 'pending' via this endpoint`,
+      `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
+    );
+  }
+  if (data.state === "pending" && current.state !== "paused") {
+    throw new ValidationError(
+      `state can only be patched to 'pending' from 'paused'`,
+    );
+  }
+  if (data.state === "paused" && current.state !== "pending") {
+    throw new ValidationError(
+      `state can only be patched to 'paused' from 'pending'`,
     );
   }
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "note" && typeof prev.body === "string") {
-      await snapshotNote(storage.home, chatId, messageId, prev.body);
+    if (prev?.type === "note" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "note") {
+      const chat = await queries.chats.findById(pool, chatId);
+      const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
+      if (ws) {
+        if (prev?.type === "note" && typeof prev.body === "string") {
+          await snapshotNote(storage.home, ws.path, chatId, messageId, prev.body);
+        }
+        const next = data.content as { type?: string; body?: string };
+        if (next?.type === "note" && typeof next.body === "string") {
+          await materializeNote(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+        }
+      }
     }
+  }
+
+  // Lifecycle transitions route through the scheduler so OS-level at/cron
+  // entries are added/removed in sync with the DB state. A state patch
+  // with no other fields is delegated entirely; a combined content+state
+  // patch first writes content, then transitions.
+  if (data.state && lifecycleOps) {
+    if (data.content !== undefined) {
+      await queries.messages.updateMessage(pool, messageId, { content: data.content });
+    }
+    let updated: Message | null = null;
+    if (data.state === "paused") updated = await lifecycleOps.pauseMessage(messageId);
+    else if (data.state === "pending") updated = await lifecycleOps.resumeMessage(messageId);
+    else if (data.state === "cancelled") updated = await lifecycleOps.cancelScheduledMessage(messageId);
+    if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
+    return updated;
   }
 
   const updated = await queries.messages.updateMessage(pool, messageId, data);
@@ -194,7 +277,8 @@ export async function getNoteHistory(
   chatId: string,
   messageId: string,
 ): Promise<{ versions: NoteVersion[] }> {
-  const versions = await listNoteHistory(storage.home, chatId, messageId);
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
+  const versions = await listNoteHistory(storage.home, slug, chatId, messageId);
   return { versions };
 }
 
@@ -217,15 +301,13 @@ export async function deleteMessage(
   }
 
   await cancelSchedulerRef(msg, adapter);
+  const slug = await workspaceSlugForChat(pool, chatId);
 
   await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
 
   // Move log file to trash if present.
   const logPath = path.join(
-    storage.home,
-    "Desk",
-    "workspaces",
-    "desk",
+    workspaceRootPath(storage.home, slug),
     ".chats",
     chatId,
     "logs",
@@ -247,11 +329,9 @@ export async function getMessageLogs(
   chatId: string,
   messageId: string,
 ): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
   const logPath = path.join(
-    storage.home,
-    "Desk",
-    "workspaces",
-    "desk",
+    workspaceRootPath(storage.home, slug),
     ".chats",
     chatId,
     "logs",
@@ -264,30 +344,73 @@ export async function getMessageLogs(
 }
 
 /**
- * Lists chat attachments directly from the filesystem. Returns workspace-
- * relative paths + stat metadata — no DB involvement.
+ * `attachment`: a user-uploaded file under `.chats/{id}/attachments/`.
+ * `note`: a materialized mirror of a `note`-content message, written by
+ * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
+ * read-only from the client's perspective — they're owned by the DB row.
  */
-export async function listArtifacts(
+export type ChatFileRef = FileRef & {
+  kind: "attachment" | "note";
+};
+
+/**
+ * Lists a chat's attachments from the filesystem. By default returns only
+ * visible (non-dot) entries — the user-uploaded chat files plus any
+ * agent-finalized output. Passing `showHidden: true` includes agent
+ * artifacts (dot-prefixed drafts / scratch) for the chat Artifacts panel
+ * or a diagnostic view. Passing `includeNotes: true` also walks
+ * `.chats/{id}/notes/` so the chat Files panel can show note mirrors
+ * alongside uploads — each item is tagged with `kind` so the UI can
+ * render them differently.
+ */
+export async function listAttachments(
   storage: StorageContext,
   chatId: string,
-): Promise<FileRef[]> {
-  const dir = await chatAttachmentsDir(storage.home, chatId);
-  const names = await fs.readdir(dir).catch(() => [] as string[]);
-  const out: FileRef[] = [];
-  for (const name of names) {
-    if (name.startsWith(".")) continue;
-    const abs = path.join(dir, name);
+  opts?: { showHidden?: boolean; includeNotes?: boolean },
+): Promise<ChatFileRef[]> {
+  const slug = await workspaceSlugForChat(storage.pool, chatId);
+  const root = workspaceRootPath(storage.home, slug);
+  const showHidden = opts?.showHidden ?? false;
+  const out: ChatFileRef[] = [];
+
+  const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
+  const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
+  for (const name of attNames) {
+    if (!showHidden && name.startsWith(".")) continue;
+    const abs = path.join(attDir, name);
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isFile()) continue;
-    const rel = path.relative(workspaceRootPath(storage.home), abs).split(path.sep).join("/");
     out.push({
-      path: rel,
+      path: path.relative(root, abs).split(path.sep).join("/"),
       name,
       mime: "application/octet-stream",
       size: stat.size,
       createdAt: stat.birthtime.toISOString(),
+      kind: "attachment",
     });
   }
+
+  if (opts?.includeNotes) {
+    const nDir = notesDir(storage.home, slug, chatId);
+    const noteNames = await fs.readdir(nDir).catch(() => [] as string[]);
+    for (const name of noteNames) {
+      // Notes are always materialized as `{messageId}.md`; skip anything
+      // that doesn't match so a stray dotfile doesn't show up.
+      if (!name.endsWith(".md")) continue;
+      const abs = path.join(nDir, name);
+      const stat = await fs.stat(abs).catch(() => null);
+      if (!stat || !stat.isFile()) continue;
+      out.push({
+        path: path.relative(root, abs).split(path.sep).join("/"),
+        name,
+        mime: "text/markdown",
+        size: stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        kind: "note",
+      });
+    }
+  }
+
   out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   return out;
 }
@@ -311,13 +434,16 @@ export async function deleteChat(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
   await cancelSchedulerRefsForChat(pool, chatId, adapter);
+  const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
   await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
 
-  await trashChatDirectories(storage.home, chatId).catch(() => {
-    // Best-effort; DB state is already gone.
-  });
+  if (ws) {
+    await trashChatDirectories(storage.home, ws.path, chatId).catch(() => {
+      // Best-effort; DB state is already gone.
+    });
+  }
 
   emit({
     type: "chat.deleted",
@@ -328,10 +454,12 @@ export async function deleteChat(
 }
 
 /**
- * Uploads an artifact to a chat's attachments dir. Streams directly, no
- * DB row. Returns a FileRef with the new path.
+ * Uploads a user-visible attachment to a chat. Streams directly, no DB
+ * row. The storage layer rejects dot-prefixed filenames (reserved for
+ * agent artifacts). Returns a FileRef with the new workspace-relative
+ * path.
  */
-export async function uploadArtifactToChat(
+export async function uploadAttachmentToChat(
   storage: StorageContext,
   chatId: string,
   data: { name: string; mime: string; content: Buffer },
@@ -339,11 +467,14 @@ export async function uploadArtifactToChat(
 ): Promise<FileRef> {
   const chat = await queries.chats.findById(storage.pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
   const stream = Readable.from(data.content);
 
   const file = await uploadArtifact(storage, {
     workspaceId: chat.workspaceId,
+    workspaceSlug: ws.path,
     chatId,
     name: data.name,
     mime: data.mime,

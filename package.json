@@ -12,6 +12,7 @@
     "vm:reload": "packages/server/setup/scripts/vm.sh reload",
     "vm:provision": "packages/server/setup/scripts/vm.sh provision",
     "vm:ssh": "packages/server/setup/scripts/vm.sh ssh",
+    "vm:ssh-desk": "packages/server/setup/scripts/vm.sh ssh-desk",
     "vm:status": "packages/server/setup/scripts/vm.sh status",
     "vm:snapshot": "packages/server/setup/scripts/vm.sh snapshot",
     "vm:restore": "packages/server/setup/scripts/vm.sh restore",

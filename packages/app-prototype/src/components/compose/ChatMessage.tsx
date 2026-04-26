@@ -1,5 +1,5 @@
-import type { ChatMessage as ChatMessageType } from '@/data/mock-data'
-import { getRelativeTime } from '@/data/mock-data'
+import type { ChatMessage as ChatMessageType } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 import { Bot } from 'lucide-react'
 
 interface ChatMessageProps {

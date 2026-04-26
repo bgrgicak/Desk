@@ -356,12 +356,12 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   // ── 1c. Workspace agents ──────────────────────────────────────────
-  it("GET /workspaces/:id/agents — returns seeded agent with default flag", async () => {
+  it("GET /workspaces/:id/agents — returns the seeded agent", async () => {
     const res = await request("GET", `/workspaces/${workspaceId}/agents`, token);
     expect(res.status).toBe(200);
-    const body = res.body as Array<{ id: string; isDefault: boolean }>;
+    const body = res.body as Array<{ id: string }>;
     expect(body.length).toBeGreaterThanOrEqual(1);
-    expect(body.some((a) => a.id === agentId && a.isDefault)).toBe(true);
+    expect(body.some((a) => a.id === agentId)).toBe(true);
   });
 
   it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
@@ -386,38 +386,16 @@ describe("Routes coverage (real Postgres)", () => {
     expect(addAgain.status).toBe(201);
 
     const listRes = await request("GET", `/workspaces/${workspaceId}/agents`, token);
-    const list = listRes.body as Array<{ id: string; isDefault: boolean }>;
-    expect(list.some((a) => a.id === created.id && !a.isDefault)).toBe(true);
+    const list = listRes.body as Array<{ id: string }>;
+    expect(list.some((a) => a.id === created.id)).toBe(true);
 
-    // Setting default
-    const setDef = await request(
-      "POST",
-      `/workspaces/${workspaceId}/default-agent`,
-      token,
-      { agentId: created.id },
-    );
-    expect(setDef.status).toBe(200);
-    const afterSet = (await request("GET", `/workspaces/${workspaceId}/agents`, token))
-      .body as Array<{ id: string; isDefault: boolean }>;
-    expect(afterSet.find((a) => a.id === created.id)?.isDefault).toBe(true);
-    expect(afterSet.find((a) => a.id === agentId)?.isDefault).toBe(false);
-
-    // Remove non-default agent (original seeded)
+    // Remove the newly-enrolled agent to restore state for downstream tests.
     const delRes = await request(
-      "DELETE",
-      `/workspaces/${workspaceId}/agents/${agentId}`,
-      token,
-    );
-    expect(delRes.status).toBe(200);
-
-    // Restore state for downstream tests: put the seeded agent back as default
-    await request("POST", `/workspaces/${workspaceId}/agents`, token, { agentId });
-    await request("POST", `/workspaces/${workspaceId}/default-agent`, token, { agentId });
-    await request(
       "DELETE",
       `/workspaces/${workspaceId}/agents/${created.id}`,
       token,
     );
+    expect(delRes.status).toBe(200);
   });
 
   it("POST /chats rejects an agent not in the workspace", async () => {
@@ -519,8 +497,8 @@ describe("Routes coverage (real Postgres)", () => {
     const userId = uRows[0].id;
     const tmpWsId = "ws_tmp_delete_test";
     await pool.query(
-      `INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, $3)`,
-      [tmpWsId, userId, "ToDelete"],
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES ($1, $2, $3, $4)`,
+      [tmpWsId, userId, "ToDelete", `todelete-${tmpWsId.slice(-6)}`],
     );
 
     // DELETE via API
@@ -584,8 +562,61 @@ describe("Routes coverage (real Postgres)", () => {
     const body = getRes.body as { title: string; goal: string };
     expect(body.title).toBe("PatchedTitle");
     expect(body.goal).toBe("PatchedGoal");
+  });
 
-    // NOTE: agentId is NOT patchable via PATCH /chats/:id (spec says it should be).
+  it("PATCH /chats/:id — agentId re-binds the chat when the new agent is enrolled", async () => {
+    // Create a second agent and enroll it in the workspace.
+    const createAgent = await request("POST", "/agents", token, {
+      name: "Switcher",
+      instructions: "Assist",
+      model: "anthropic/claude-opus-4-7",
+    });
+    const otherAgentId = (createAgent.body as { id: string }).id;
+    const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
+      agentId: otherAgentId,
+    });
+    expect(enroll.status).toBe(201);
+
+    // Create a chat bound to the default agent.
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "BindOrig",
+    });
+    const chat = createRes.body as { id: string; agentId: string };
+    expect(chat.agentId).toBe(agentId);
+
+    // Re-bind to the other agent.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      agentId: otherAgentId,
+    });
+    expect(patchRes.status).toBe(200);
+    expect((patchRes.body as { agentId: string }).agentId).toBe(otherAgentId);
+
+    const getRes = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes.body as { agentId: string }).agentId).toBe(otherAgentId);
+  });
+
+  it("PATCH /chats/:id — rejects an agent not enrolled in the chat's workspace", async () => {
+    // Create an agent but skip the workspace enrollment step.
+    const createAgent = await request("POST", "/agents", token, {
+      name: "Stranger",
+      instructions: "",
+      model: "anthropic/claude-opus-4-7",
+    });
+    const strangerId = (createAgent.body as { id: string }).id;
+
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "BindReject",
+    });
+    const chat = createRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      agentId: strangerId,
+    });
+    expect(patchRes.status).toBe(400);
   });
 
   // ── 7. DELETE /library + multipart upload ────────────────────────
@@ -598,7 +629,7 @@ describe("Routes coverage (real Postgres)", () => {
       [{ name: "file", filename: "to-delete.txt", contentType: "text/plain", body: Buffer.from(content) }],
     );
     const file = uploadRes.body as { path: string; name: string };
-    expect(file.path).toMatch(/^library\//);
+    expect(file.path).toBe(file.name);
 
     // Delete moves the file to the trash.
     const delRes = await request(

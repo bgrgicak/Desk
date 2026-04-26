@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/breadcrumb'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ArtifactCard } from './ArtifactCard'
-import type { Artifact, ArtifactType, ArtifactUpdate } from '@/data/mock-data'
+import type { Artifact, ArtifactType, ArtifactUpdate } from '@/data/ui-types'
 
 interface DeskGridProps {
   artifacts: Artifact[]

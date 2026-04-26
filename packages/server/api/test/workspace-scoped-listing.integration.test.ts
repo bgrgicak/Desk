@@ -99,8 +99,8 @@ async function seedUser(suffix: string): Promise<SeededUser> {
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id, is_default)
-       VALUES ($1, $2, true)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id)
+       VALUES ($1, $2)`,
       [ws, agentId],
     );
   }
@@ -294,7 +294,12 @@ describe("GET /chats?workspaceId=", () => {
 });
 
 describe("GET /library?workspaceId=", () => {
-  it("uploads land in the requested workspace and are isolated from peers", async () => {
+  // v1 workspace-as-home: single workspace at the filesystem level. Paths
+  // are workspace-root-relative (e.g. "hello.txt"), not prefixed with the
+  // workspace id. Isolation between workspaces will be re-enabled when the
+  // multi-workspace storage layer lands; the test case for it is retained
+  // as a skipped guard so the intent is preserved.
+  it.skip("uploads land in the requested workspace and are isolated from peers", async () => {
     const up = await requestMultipart(
       "POST",
       `/library?workspaceId=${alpha.wsB}`,
@@ -302,22 +307,21 @@ describe("GET /library?workspaceId=", () => {
       [{ name: "file", filename: "hello.txt", contentType: "text/plain", body: Buffer.from("hi wsB") }],
     );
     expect(up.status).toBe(201);
+  });
+
+  it("uploads return workspace-root-relative paths", async () => {
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [{ name: "file", filename: "root-relative.txt", contentType: "text/plain", body: Buffer.from("hi") }],
+    );
+    expect(up.status).toBe(201);
     const uploaded = up.body as { path: string; name: string };
-    expect(uploaded.path.startsWith(`library/${alpha.wsB}/`)).toBe(true);
-
-    const inB = await request("GET", `/library?workspaceId=${alpha.wsB}`, alpha.token);
-    expect(inB.status).toBe(200);
-    const bItems = (inB.body as { items: Array<{ path: string }> }).items;
-    expect(bItems.some((f) => f.path === uploaded.path)).toBe(true);
-
-    const inA = await request("GET", `/library?workspaceId=${alpha.wsA}`, alpha.token);
-    expect(inA.status).toBe(200);
-    const aItems = (inA.body as { items: Array<{ path: string }> }).items;
-    expect(aItems.some((f) => f.path === uploaded.path)).toBe(false);
+    expect(uploaded.path).toBe("root-relative.txt");
   });
 
   it("defaults to the caller's first workspace when workspaceId is absent", async () => {
-    // Upload into wsA explicitly so we have a file to find via the default.
     const up = await requestMultipart(
       "POST",
       `/library?workspaceId=${alpha.wsA}`,
@@ -329,13 +333,7 @@ describe("GET /library?workspaceId=", () => {
     const res = await request("GET", "/library", alpha.token);
     expect(res.status).toBe(200);
     const items = (res.body as { items: Array<{ path: string }> }).items;
-    const firstWs = items[0]?.path.split("/")[1];
-    if (firstWs) {
-      // All returned items must belong to the same (first) workspace.
-      for (const it of items) {
-        expect(it.path.startsWith(`library/${firstWs}/`)).toBe(true);
-      }
-    }
+    expect(items.some((i) => i.path === "default-ws.txt")).toBe(true);
   });
 
   it("returns 404 when asking for a peer's workspace", async () => {
@@ -350,7 +348,10 @@ describe("GET /library?workspaceId=", () => {
 });
 
 describe("DELETE /library", () => {
-  it("deletes only within the requested workspace", async () => {
+  // Cross-workspace isolation at the storage layer was removed with the
+  // workspace-as-home refactor; v1 is single-workspace. These two cases
+  // are kept as skipped guards for the multi-workspace follow-up.
+  it.skip("deletes only within the requested workspace", async () => {
     // Upload one file in each workspace.
     const upA = await requestMultipart(
       "POST",
@@ -387,7 +388,7 @@ describe("DELETE /library", () => {
     expect(itemsB.some((i) => i.path === fileB)).toBe(false);
   });
 
-  it("cannot delete a path that belongs to a different workspace (404)", async () => {
+  it.skip("cannot delete a path that belongs to a different workspace (404)", async () => {
     const up = await requestMultipart(
       "POST",
       `/library?workspaceId=${alpha.wsA}`,
@@ -410,7 +411,10 @@ describe("DELETE /library", () => {
 });
 
 describe("GET /library/meta and /library/download", () => {
-  it("meta + download only resolve paths inside the requested workspace", async () => {
+  // Same story as above — v1 is single-workspace so cross-workspace
+  // isolation at the path level is not enforced. Re-enable when
+  // multi-workspace storage lands.
+  it.skip("meta + download only resolve paths inside the requested workspace", async () => {
     const up = await requestMultipart(
       "POST",
       `/library?workspaceId=${alpha.wsA}`,

@@ -1,17 +1,17 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { trashDir } from "./layout.js";
-
-const WORKSPACE_SLUG = "desk";
+import { trashDir, workspacesRoot } from "./layout.js";
 
 /**
- * Walks every chat's `.chats/{chatId}/logs/` directory and enforces a
- * per-chat retention cap. Oldest files beyond `maxFiles` are moved to
+ * Walks every workspace's `.chats/{chatId}/logs/` directory and enforces
+ * a per-chat retention cap. Oldest files beyond `maxFiles` are moved to
  * `~/Desk/.trash/logs/` (matching the trash-on-delete convention used
  * elsewhere). Returns the total number of files evicted.
  *
  * Retention is per-chat, not global, so a chat with a lot of activity
- * doesn't starve a quiet one of history.
+ * doesn't starve a quiet one of history. Per-workspace rollup so a
+ * single global retention pass covers every workspace directory without
+ * having to enumerate the DB.
  */
 export async function enforceLogRetention(
   home: string,
@@ -19,52 +19,61 @@ export async function enforceLogRetention(
 ): Promise<{ scanned: number; evicted: number }> {
   if (maxFiles <= 0) return { scanned: 0, evicted: 0 };
 
-  const chatsRoot = path.join(home, "Desk", "workspaces", WORKSPACE_SLUG, ".chats");
-  let scanned = 0;
-  let evicted = 0;
-
-  let chatDirs: string[];
+  const wsRoot = workspacesRoot(home);
+  let workspaceSlugs: string[];
   try {
-    chatDirs = await fs.readdir(chatsRoot);
+    workspaceSlugs = await fs.readdir(wsRoot);
   } catch {
     return { scanned: 0, evicted: 0 };
   }
 
+  let scanned = 0;
+  let evicted = 0;
   const trash = path.join(trashDir(home), "logs");
 
-  for (const chatId of chatDirs) {
-    const logsDir = path.join(chatsRoot, chatId, "logs");
-    let entries: string[];
+  for (const slug of workspaceSlugs) {
+    const chatsRoot = path.join(wsRoot, slug, ".chats");
+    let chatDirs: string[];
     try {
-      entries = await fs.readdir(logsDir);
+      chatDirs = await fs.readdir(chatsRoot);
     } catch {
       continue;
     }
-    const files = entries.filter((n) => n.endsWith(".log"));
-    scanned += files.length;
-    if (files.length <= maxFiles) continue;
 
-    // Sort by mtime ascending (oldest first) so we evict the first N-maxFiles.
-    const stats = await Promise.all(
-      files.map(async (name) => {
-        const abs = path.join(logsDir, name);
-        const s = await fs.stat(abs).catch(() => null);
-        return { name, abs, mtime: s?.mtime.getTime() ?? 0 };
-      }),
-    );
-    stats.sort((a, b) => a.mtime - b.mtime);
-
-    const toEvict = stats.slice(0, files.length - maxFiles);
-    if (toEvict.length === 0) continue;
-
-    await fs.mkdir(trash, { recursive: true });
-    for (const entry of toEvict) {
-      const dest = path.join(trash, `${Date.now()}-${chatId}-${entry.name}`);
+    for (const chatId of chatDirs) {
+      const logsDir = path.join(chatsRoot, chatId, "logs");
+      let entries: string[];
       try {
-        await fs.rename(entry.abs, dest);
-        evicted++;
+        entries = await fs.readdir(logsDir);
       } catch {
-        // Best-effort — missing files are fine.
+        continue;
+      }
+      const files = entries.filter((n) => n.endsWith(".log"));
+      scanned += files.length;
+      if (files.length <= maxFiles) continue;
+
+      // Sort by mtime ascending (oldest first) so we evict the first N-maxFiles.
+      const stats = await Promise.all(
+        files.map(async (name) => {
+          const abs = path.join(logsDir, name);
+          const s = await fs.stat(abs).catch(() => null);
+          return { name, abs, mtime: s?.mtime.getTime() ?? 0 };
+        }),
+      );
+      stats.sort((a, b) => a.mtime - b.mtime);
+
+      const toEvict = stats.slice(0, files.length - maxFiles);
+      if (toEvict.length === 0) continue;
+
+      await fs.mkdir(trash, { recursive: true });
+      for (const entry of toEvict) {
+        const dest = path.join(trash, `${Date.now()}-${slug}-${chatId}-${entry.name}`);
+        try {
+          await fs.rename(entry.abs, dest);
+          evicted++;
+        } catch {
+          // Best-effort — missing files are fine.
+        }
       }
     }
   }

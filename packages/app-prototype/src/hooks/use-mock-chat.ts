@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from 'react'
-import type { ChatMessage } from '@/data/mock-data'
-import { matchComposeScenario } from '@/data/mock-data'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import type { ChatMessage } from '@/data/ui-types'
+import { matchComposeScenario } from '@/data/ui-types'
 
 interface UseMockChatOptions {
   initialMessages?: ChatMessage[]
@@ -13,6 +13,23 @@ export function useMockChat({ initialMessages = [], onArtifactCreated, mode = 'c
   const [isTyping, setIsTyping] = useState(false)
   const [statusText, setStatusText] = useState<string | null>(null)
   const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  // If the caller's initialMessages arrives after mount (e.g. RTK Query
+  // resolved /chats/:id/messages), reconcile into the local state. User-
+  // sent messages added via sendMessage stay; server rows are appended
+  // where they aren't already present.
+  const lastInitialKeyRef = useRef<string>('')
+  useEffect(() => {
+    const key = initialMessages.map(m => m.id).join('|')
+    if (key === lastInitialKeyRef.current) return
+    lastInitialKeyRef.current = key
+    setMessages(prev => {
+      const have = new Set(prev.map(m => m.id))
+      const additions = initialMessages.filter(m => !have.has(m.id))
+      if (additions.length === 0) return prev
+      return prev.length === 0 ? [...initialMessages] : [...additions, ...prev]
+    })
+  }, [initialMessages])
 
   const clearTimeouts = useCallback(() => {
     timeoutsRef.current.forEach(clearTimeout)
