@@ -19,16 +19,6 @@ VM_SH="${SCRIPT_DIR}/vm.sh"
 INSTANCE="${DESK_INSTANCE:-dev}"
 NAME="desk-${INSTANCE}"
 
-# 1. Bootstrap workspace deps.
-#
-#    Also handles https://github.com/npm/cli/issues/4828 — a package-lock.json
-#    written on a different OS (e.g. Linux CI) locks in Linux-specific
-#    @rolldown/binding-* optional deps, so npm installs them on macOS too and
-#    vite crashes at startup with "Cannot find native binding".
-#    Fix: after any install, verify the platform binding is present; if not,
-#    nuke ALL workspace node_modules AND package-lock.json and reinstall so npm
-#    re-resolves optional deps for the current platform from scratch.
-
 # Returns 0 if the rolldown native binding for the current OS/arch is present.
 rolldown_binding_ok() {
   local os arch
@@ -48,24 +38,40 @@ full_clean() {
     "${REPO_ROOT}/package-lock.json"
 }
 
-if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ]; then
-  echo "==> Installing workspace dependencies"
-  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
-fi
-
-# Always verify rolldown binding (catches stale-lockfile or partial-install cases).
-if ! rolldown_binding_ok; then
-  echo "==> rolldown native binding missing — platform mismatch in lockfile. Reinstalling…"
-  full_clean
-  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
-fi
-
-# 2. Ensure the dev VM is running. dev-override.sh just bails if it isn't,
+# 1. Ensure the dev VM is running. dev-override.sh just bails if it isn't,
 #    which is hostile on a clean clone — bring it up automatically.
 vm_status="$(limactl list --format '{{.Status}}' "$NAME" 2>/dev/null || true)"
 if [ "$vm_status" != "Running" ]; then
   echo "==> VM $NAME is not running — starting it (this can take a few minutes the first time)"
   "$VM_SH" up
+fi
+
+# 2. Bootstrap host workspace deps.
+#
+#    Done AFTER vm:up because on first boot the VM provisioning runs
+#    `npm ci` / `npm install` on Linux against the 9p-mounted repo
+#    (packages/server/setup/install.sh + dev-provision.sh), which rewrites
+#    the host's node_modules — replacing @rolldown/binding-darwin-* with
+#    Linux bindings on macOS. The self-heal below has to run after that
+#    or vite crashes on startup with "Cannot find native binding".
+#
+#    Also handles https://github.com/npm/cli/issues/4828 — a package-lock.json
+#    written on a different OS (e.g. Linux CI) locks in Linux-specific
+#    @rolldown/binding-* optional deps, so npm installs them on macOS too.
+#    Fix: after any install, verify the platform binding is present; if not,
+#    nuke ALL workspace node_modules AND package-lock.json and reinstall so npm
+#    re-resolves optional deps for the current platform from scratch.
+if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ]; then
+  echo "==> Installing workspace dependencies"
+  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+fi
+
+# Always verify rolldown binding (catches VM-provisioning corruption,
+# stale-lockfile, and partial-install cases).
+if ! rolldown_binding_ok; then
+  echo "==> rolldown native binding missing for $(uname -s)/$(uname -m) — reinstalling…"
+  full_clean
+  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
 # 3. Kill any stale process holding port 5173 from a previous run.
