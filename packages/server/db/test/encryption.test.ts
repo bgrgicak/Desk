@@ -13,19 +13,24 @@ import {
 
 let tmpDir: string;
 let keyPath: string;
-let prevEnv: string | undefined;
+let prevKeyPath: string | undefined;
+let prevSecretKey: string | undefined;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-crypt-"));
   keyPath = path.join(tmpDir, "secret.key");
-  prevEnv = process.env.DESK_SECRET_KEY_PATH;
+  prevKeyPath = process.env.DESK_SECRET_KEY_PATH;
+  prevSecretKey = process.env.DESK_SECRET_KEY;
   process.env.DESK_SECRET_KEY_PATH = keyPath;
+  delete process.env.DESK_SECRET_KEY;
   resetSecretKeyCache();
 });
 
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.DESK_SECRET_KEY_PATH;
-  else process.env.DESK_SECRET_KEY_PATH = prevEnv;
+  if (prevKeyPath === undefined) delete process.env.DESK_SECRET_KEY_PATH;
+  else process.env.DESK_SECRET_KEY_PATH = prevKeyPath;
+  if (prevSecretKey === undefined) delete process.env.DESK_SECRET_KEY;
+  else process.env.DESK_SECRET_KEY = prevSecretKey;
   resetSecretKeyCache();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -83,5 +88,32 @@ describe("encryption", () => {
     const obj = { ANTHROPIC_API_KEY: "sk-abc", OPENAI_API_KEY: "sk-xyz" };
     const ct = encryptJson(obj);
     expect(decryptJson<typeof obj>(ct)).toEqual(obj);
+  });
+
+  it("ensureSecretKey uses DESK_SECRET_KEY env var when set", () => {
+    const raw = Buffer.alloc(32, 0xab);
+    process.env.DESK_SECRET_KEY = raw.toString("base64");
+    resetSecretKeyCache();
+    const key = ensureSecretKey();
+    expect(key.equals(raw)).toBe(true);
+    // key file must not be written
+    expect(fs.existsSync(keyPath)).toBe(false);
+  });
+
+  it("DESK_SECRET_KEY takes precedence over key file", () => {
+    // Pre-write a different key to the file path.
+    const fileKey = Buffer.alloc(32, 0x01);
+    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+    fs.writeFileSync(keyPath, fileKey, { mode: 0o600 });
+    const envKey = Buffer.alloc(32, 0x02);
+    process.env.DESK_SECRET_KEY = envKey.toString("base64");
+    resetSecretKeyCache();
+    expect(ensureSecretKey().equals(envKey)).toBe(true);
+  });
+
+  it("ensureSecretKey throws when DESK_SECRET_KEY has wrong length", () => {
+    process.env.DESK_SECRET_KEY = Buffer.alloc(16).toString("base64");
+    resetSecretKeyCache();
+    expect(() => ensureSecretKey()).toThrow(/16 bytes/);
   });
 });

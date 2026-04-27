@@ -84,5 +84,19 @@ export async function setProviders(
     }
   }
   await queries.userSettings.mergeProviderKeys(pool, userId, data.providers);
+
+  const written = Object.entries(data.providers)
+    .filter(([, v]) => v !== null)
+    .map(([k]) => k);
+  const deleted = Object.entries(data.providers)
+    .filter(([, v]) => v === null)
+    .map(([k]) => k);
+  if (written.length > 0) {
+    await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "write", written, "user_update");
+  }
+  if (deleted.length > 0) {
+    await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "delete", deleted, "user_update");
+  }
+
   return getProviders(pool, userId);
 }
