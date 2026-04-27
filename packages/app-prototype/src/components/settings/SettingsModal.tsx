@@ -241,7 +241,7 @@ function WorkspaceSection({
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+const DEFAULT_MODEL = 'opencode/big-pickle'
 
 /** Groups ModelRef[] by provider for the picker. */
 function groupModels(models: ModelRef[]): { provider: string; models: ModelRef[] }[] {
@@ -268,10 +268,18 @@ function ModelPicker({
   onChange: (modelId: string) => void
   disabled?: boolean
 }) {
-  const { data: models, isLoading, isError } = useGetModelsQuery()
+  const { data: models, isLoading, isError, error, refetch } = useGetModelsQuery()
   const [open, setOpen] = useState(false)
   const groups = useMemo(() => groupModels(models ?? []), [models])
   const hasModels = groups.length > 0
+
+  const errorMessage = (() => {
+    if (!isError) return null
+    const status = error && typeof error === 'object' && 'status' in error ? error.status : null
+    if (status === 404) return "No workspace found. Create a workspace to load models."
+    if (status === 400) return "Provider key error. Re-enter your API key in Preferences."
+    return "Couldn't reach the model catalog. Check that Desk is running, or add a provider key in Preferences."
+  })()
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -290,13 +298,20 @@ function ModelPicker({
           <p className="px-2.5 py-2 text-xs text-muted-foreground">Loading models…</p>
         )}
         {!isLoading && isError && (
-          <p className="px-2.5 py-2 text-xs text-muted-foreground">
-            Couldn't reach the model catalog. Add a provider key in Preferences, then reopen.
-          </p>
+          <div className="px-2.5 py-2 space-y-1.5">
+            <p className="text-xs text-muted-foreground">{errorMessage}</p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="text-xs text-primary hover:underline"
+            >
+              Retry
+            </button>
+          </div>
         )}
         {!isLoading && !isError && !hasModels && (
           <p className="px-2.5 py-2 text-xs text-muted-foreground">
-            No models available. Configure a provider key in Preferences.
+            No models returned by the sandbox. Check that Desk is running correctly.
           </p>
         )}
         {hasModels &&
