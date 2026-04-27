@@ -41,7 +41,6 @@ describe("AgentSchema", () => {
     name: "Helper",
     instructions: "Be helpful",
     model: "gpt-4",
-    toolAllowlist: ["file.read"],
   };
 
   it("parses a valid agent", () => {
@@ -49,11 +48,11 @@ describe("AgentSchema", () => {
   });
 
   it("rejects missing name", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", instructions: "x", model: "m", toolAllowlist: [] })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", instructions: "x", model: "m" })).toThrow();
   });
 
   it("rejects missing userId (M3 invariant)", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", instructions: "x", model: "m", toolAllowlist: [] })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", instructions: "x", model: "m" })).toThrow();
   });
 
   it("round-trips through JSON", () => {
@@ -98,7 +97,7 @@ describe("ChatSchema", () => {
 });
 
 describe("MessageSchema", () => {
-  const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now };
+  const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now, kind: "chat" as const };
 
   it("parses text content", () => {
     const msg = { ...base, role: "user", content: { type: "text", text: "hello" } };
@@ -151,7 +150,7 @@ describe("FileSchema (FS-backed FileRef)", () => {
 });
 
 describe("MessageSchema execution metadata", () => {
-  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "ai_note_request" }, createdAt: now };
+  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "ai_note_request" }, createdAt: now, kind: "chat" as const };
 
   it("accepts state + executeAt + schedulerRef", () => {
     const msg = {
@@ -222,7 +221,7 @@ describe("MessageSchema execution metadata", () => {
 });
 
 describe("MessageContent note / ai_note_request", () => {
-  const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now };
+  const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now, kind: "chat" as const };
 
   it("parses note content", () => {
     const msg = { ...base, role: "agent", content: { type: "note", body: "Running summary of the chat." } };

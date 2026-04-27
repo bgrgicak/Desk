@@ -21,6 +21,8 @@ function rowToMessage(row: Record<string, unknown>): Message {
     startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
     endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : undefined,
     updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : undefined,
+    kind: row.kind ?? "chat",
+    title: row.title ?? null,
   });
 }
 
@@ -71,14 +73,16 @@ export async function insert(
     schedulerRef?: unknown;
     attachments?: unknown;
     model?: string | null;
+    kind?: string | null;
+    title?: string | null;
   },
 ): Promise<Message> {
   const { rows } = await db.query(
     `INSERT INTO messages (
        id, chat_id, role, content,
        state, execute_at, cron, parent_id, agent_id, scheduler_ref,
-       attachments, model
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       attachments, model, kind, title
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING *`,
     [
       data.id,
@@ -93,6 +97,8 @@ export async function insert(
       data.schedulerRef ? JSON.stringify(data.schedulerRef) : null,
       data.attachments ? JSON.stringify(data.attachments) : null,
       data.model ?? null,
+      data.kind ?? "chat",
+      data.title ?? null,
     ],
   );
   // Touch the parent chat's updated_at
@@ -123,9 +129,81 @@ export async function claimPending(db: Queryable, id: string): Promise<boolean> 
 }
 
 /**
- * Marks a running message as succeeded or failed. Cron-root messages stay
- * in "pending" after firing (they're always-active schedules), so callers
- * opt in explicitly.
+ * Atomically starts a new task_run row as a child of the task message.
+ * Locks the task FOR UPDATE, refuses if another task_run for the same task
+ * is already pending or running (so concurrent fires of the same task
+ * converge on one in-flight run), and inserts the new row directly in
+ * `running` state with `started_at = now()`. Returns the run row, or null
+ * if the task is missing / not a task / already firing.
+ *
+ * Pool-only: opens a dedicated client for the transaction. Don't pass a
+ * PoolClient here — the lock has to be held end-to-end on one connection.
+ */
+export async function startTaskRun(
+  pool: pg.Pool,
+  args: {
+    runId: string;
+    taskId: string;
+    chatId: string;
+    role: string;
+    content: unknown;
+    agentId?: string | null;
+    model?: string | null;
+  },
+): Promise<Message | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const lock = await client.query(
+      `SELECT id FROM messages WHERE id = $1 AND kind = 'task' FOR UPDATE`,
+      [args.taskId],
+    );
+    if (lock.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const inFlight = await client.query(
+      `SELECT 1 FROM messages
+       WHERE parent_id = $1 AND kind = 'task_run' AND state IN ('pending', 'running')
+       LIMIT 1`,
+      [args.taskId],
+    );
+    if ((inFlight.rowCount ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const ins = await client.query(
+      `INSERT INTO messages (
+         id, chat_id, role, content, parent_id, kind,
+         state, started_at, agent_id, model
+       ) VALUES ($1, $2, $3, $4, $5, 'task_run', 'running', now(), $6, $7)
+       RETURNING *`,
+      [
+        args.runId,
+        args.chatId,
+        args.role,
+        JSON.stringify(args.content),
+        args.taskId,
+        args.agentId ?? null,
+        args.model ?? null,
+      ],
+    );
+    await client.query(
+      "UPDATE chats SET updated_at = now() WHERE id = $1",
+      [args.chatId],
+    );
+    await client.query("COMMIT");
+    return rowToMessage(ins.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Marks a running message as succeeded or failed.
  */
 export async function finalizeExecution(
   db: Queryable,
@@ -156,6 +234,7 @@ export async function updateMessage(
     executeAt?: string | null;
     cron?: string | null;
     schedulerRef?: unknown | null;
+    title?: string | null;
   },
 ): Promise<Message | null> {
   const sets: string[] = ["updated_at = now()"];
@@ -180,6 +259,10 @@ export async function updateMessage(
   if (patch.schedulerRef !== undefined) {
     sets.push(`scheduler_ref = $${idx++}`);
     params.push(patch.schedulerRef === null ? null : JSON.stringify(patch.schedulerRef));
+  }
+  if (patch.title !== undefined) {
+    sets.push(`title = $${idx++}`);
+    params.push(patch.title);
   }
   params.push(id);
   const { rows } = await db.query(
@@ -207,6 +290,13 @@ export interface CrossChatListOptions {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKinds?: string[];
+  /** Filter by `messages.kind` (the message-kind discriminator — `task`,
+   * `task_run`, `ai_note`, `chat`). Distinct from `contentKinds`, which
+   * filters on `content.type`. */
+  kinds?: string[];
+  /** Filter by `parent_id` — the Tasks page uses this with `kinds=task_run`
+   * to fetch a task's run history in one call. */
+  parentId?: string;
   since?: string;
   cursor?: string;
   limit?: number;
@@ -251,6 +341,15 @@ export async function listCrossChat(
     const placeholders = opts.contentKinds.map(() => `$${idx++}`).join(", ");
     conditions.push(`(m.content->>'type') IN (${placeholders})`);
     params.push(...opts.contentKinds);
+  }
+  if (opts.kinds && opts.kinds.length > 0) {
+    const placeholders = opts.kinds.map(() => `$${idx++}`).join(", ");
+    conditions.push(`m.kind IN (${placeholders})`);
+    params.push(...opts.kinds);
+  }
+  if (opts.parentId) {
+    conditions.push(`m.parent_id = $${idx++}`);
+    params.push(opts.parentId);
   }
   if (opts.since) {
     conditions.push(`m.created_at > $${idx++}`);

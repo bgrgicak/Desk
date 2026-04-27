@@ -1,5 +1,5 @@
 import pg from "pg";
-import { generateId, PROVIDER_KEY_VARS, TOOLS, type ToolName } from "@desk/shared";
+import { generateId, PROVIDER_KEY_VARS } from "@desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
 
@@ -14,7 +14,6 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
   const agentId = generateId("agent");
   const workspaceId = generateId("workspace");
 
-  const toolNames = Object.keys(TOOLS) as ToolName[];
   const passwordHash = await hashPassword(password);
 
   const client = await pool.connect();
@@ -28,15 +27,14 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
     );
 
     await client.query(
-      `INSERT INTO agents (id, user_id, name, instructions, model, tool_allowlist)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO agents (id, user_id, name, instructions, model)
+       VALUES ($1, $2, $3, $4, $5)`,
       [
         agentId,
         userId,
         "Desk",
         "You are Desk, a helpful AI assistant.",
         "opencode/big-pickle",
-        JSON.stringify(toolNames),
       ],
     );
 

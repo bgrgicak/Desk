@@ -4,6 +4,7 @@ export * as workspaces from "./workspaces.js";
 export * as chats from "./chats.js";
 export * as messages from "./messages.js";
 export * as sandboxSessions from "./sandboxSessions.js";
+export * as authSessions from "./authSessions.js";
 export * as userSettings from "./userSettings.js";
 export * as workspaceAgents from "./workspaceAgents.js";
 export * as providerKeyAccessLog from "./providerKeyAccessLog.js";
