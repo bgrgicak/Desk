@@ -96,6 +96,7 @@ export const api = createApi({
     "LibraryFile",
     "ChatArtifact",
     "ProviderKeys",
+    "ProvidersMeta",
     "Models",
   ],
   endpoints: (build) => ({
@@ -138,6 +139,28 @@ export const api = createApi({
       transformResponse: (r: { providers: Record<string, string | null> }) =>
         r.providers,
       invalidatesTags: ["ProviderKeys"],
+    }),
+    getProvidersMeta: build.query<
+      Record<string, { name?: string }>,
+      void
+    >({
+      query: () => "/me/providers/meta",
+      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+        r.meta,
+      providesTags: ["ProvidersMeta"],
+    }),
+    putProvidersMeta: build.mutation<
+      Record<string, { name?: string }>,
+      Record<string, { name?: string } | null>
+    >({
+      query: (meta) => ({
+        url: "/me/providers/meta",
+        method: "PUT",
+        body: { meta },
+      }),
+      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+        r.meta,
+      invalidatesTags: ["ProvidersMeta"],
     }),
 
     // ── Workspaces ────────────────────────────────────────────────────
@@ -215,6 +238,9 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { id }) => [
         { type: "Agent", id },
         { type: "Agent", id: "LIST" },
+        // WorkspaceAgents extends Agent — invalidate so the compose picker
+        // picks up the renamed agent without a full reload.
+        { type: "WorkspaceAgents", id: "LIST" },
       ],
     }),
     deleteAgent: build.mutation<{ ok: true }, string>({
@@ -548,6 +574,8 @@ export const {
   useChangePasswordMutation,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetProvidersMetaQuery,
+  usePutProvidersMetaMutation,
   useGetWorkspacesQuery,
   useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,

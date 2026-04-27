@@ -241,7 +241,9 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
                   className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${isActive ? 'bg-muted/50' : activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
                 >
                   <span>{agent.name}</span>
-                  <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
+                  <span className="text-xs text-muted-foreground ml-2 shrink-0">
+                    {agent.model.length > 24 ? agent.model.slice(0, 24) + '…' : agent.model}
+                  </span>
                 </button>
               )
             })}

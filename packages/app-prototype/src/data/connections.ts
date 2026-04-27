@@ -40,15 +40,7 @@ export interface Connection {
   id: string
   kind: ConnectionKind
   name: string
-  baseUrl?: string
   enabled: boolean
-}
-
-// Default base URLs surfaced in the connection detail form. Display only —
-// the server resolves the actual base URL from the provider key.
-export const DEFAULT_BASE_URL_BY_KIND: Partial<Record<ConnectionKind, string>> = {
-  claude: 'https://api.anthropic.com',
-  chatgpt: 'https://api.openai.com/v1',
 }
 
 // Provider id (as used by /tools/models and stored on agent.model) that a

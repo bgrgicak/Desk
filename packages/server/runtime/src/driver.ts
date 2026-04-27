@@ -24,9 +24,9 @@ export interface RunOptions {
    */
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
-   * Provider API keys to inject when the sandbox container is first created.
-   * Used only for the initial creation; existing containers keep their env.
-   * Omit to fall back to the host process env.
+   * Provider API keys injected as env vars on every `docker exec` call, so
+   * a key added after the container was first created takes effect immediately
+   * without requiring a container restart or recreation.
    */
   providerKeys?: Record<string, string>;
 }
@@ -155,12 +155,16 @@ function createRealDriver(): SandboxDriver {
         attachments: opts.attachments,
       });
 
+      const { providerKeyEnv } = await import("./docker.js");
       const exec = await container.exec({
         Cmd: cmd,
         Env: [
           `DESK_TOOL_TOKEN=${opts.runId}`,
           `DESK_TOOL_SOCKET=/run/desk/tools.sock`,
           `DESK_PROMPT=${fullPrompt}`,
+          // Inject provider keys per-exec so a key added after the container
+          // was created takes effect immediately without recreation.
+          ...providerKeyEnv(opts.providerKeys),
         ],
         AttachStdout: true,
         AttachStderr: true,

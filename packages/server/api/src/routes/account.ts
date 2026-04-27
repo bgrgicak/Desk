@@ -2,6 +2,9 @@ import pg from "pg";
 import { queries } from "@desk/db";
 import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@desk/shared";
 
+type ProviderMetaEntry = { name?: string };
+type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
+
 export async function getMe(pool: pg.Pool, userId: string) {
   const user = await queries.users.findById(pool, userId);
   if (!user) throw new NotFoundError("User not found");
@@ -99,4 +102,33 @@ export async function setProviders(
   }
 
   return getProviders(pool, userId);
+}
+
+/**
+ * Returns per-provider display metadata for the current user.
+ * Response: `{ meta: Record<string, { name?: string }> }`
+ */
+export async function getProvidersMeta(
+  pool: pg.Pool,
+  userId: string,
+): Promise<{ meta: ProviderMetaMap }> {
+  const meta = await queries.userSettings.getProviderMeta(pool, userId);
+  return { meta };
+}
+
+/**
+ * Partial-update provider metadata. Each entry is merged into the stored
+ * object; a null entry removes that provider's metadata. Keys not present
+ * in the body are left alone.
+ */
+export async function setProvidersMeta(
+  pool: pg.Pool,
+  userId: string,
+  data: { meta: Record<string, ProviderMetaEntry | null> },
+): Promise<{ meta: ProviderMetaMap }> {
+  if (!data || typeof data.meta !== "object" || data.meta === null) {
+    throw new ValidationError("Missing meta object");
+  }
+  const meta = await queries.userSettings.mergeProviderMeta(pool, userId, data.meta);
+  return { meta };
 }

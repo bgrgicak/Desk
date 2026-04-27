@@ -42,13 +42,14 @@ import {
   useGetModelsQuery,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetProvidersMetaQuery,
+  usePutProvidersMetaMutation,
   useGetMeQuery,
   type ModelRef,
 } from '@/store/api'
 import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
-  DEFAULT_BASE_URL_BY_KIND,
   FALLBACK_MODELS_BY_PROVIDER,
   MODEL_PROVIDER_BY_KIND,
   PROVIDER_KEY_BY_KIND,
@@ -138,17 +139,20 @@ function isFunctionalKind(kind: ConnectionKind): boolean {
 
 // Build the connections list from the persisted provider keys. Only
 // kinds whose key is set show up — we don't fake "Claude is connected"
-// when no key has been saved.
-function deriveConnections(providerKeys: Record<string, string | null>): Connection[] {
+// when no key has been saved. Custom display names come from providerMeta.
+function deriveConnections(
+  providerKeys: Record<string, string | null>,
+  providerMeta: Record<string, { name?: string }>,
+): Connection[] {
   const out: Connection[] = []
   for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
     if (providerKeys[envKey]) {
-      const meta = CONNECTION_CATALOG[kind]
+      const catalogMeta = CONNECTION_CATALOG[kind]
+      const customName = providerMeta[envKey]?.name
       out.push({
         id: `conn-${kind}`,
         kind,
-        name: meta.name,
-        baseUrl: DEFAULT_BASE_URL_BY_KIND[kind],
+        name: customName || catalogMeta.name,
         enabled: true,
       })
     }
@@ -538,7 +542,7 @@ function buildModelIndex(
 
 function AgentsList({
   agents, modelIndex, enrolledIds, statusFilter, search,
-  onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled,
+  onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled, onChatNow,
 }: {
   agents: ServerAgent[]
   modelIndex: Map<string, ModelRef[]>
@@ -550,6 +554,7 @@ function AgentsList({
   onDelete: (id: string) => void
   onDuplicate: (id: string) => void
   onToggleEnabled: (id: string, next: boolean) => void
+  onChatNow?: (id: string) => void
 }) {
   const q = search.trim().toLowerCase()
   const filtered = agents
@@ -626,7 +631,7 @@ function AgentsList({
                   <DropdownMenuItem onSelect={() => onOpen(a.id)}>
                     <Pencil className="h-4 w-4" />Edit
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => { /* stub: open chat with this agent */ }}>
+                  <DropdownMenuItem onSelect={() => onChatNow?.(a.id)}>
                     <MessageSquare className="h-4 w-4" />Chat now
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => onDuplicate(a.id)}>
@@ -964,13 +969,15 @@ function ConnectionsPicker({
 }
 
 function ConnectionDetail({
-  connections, focus, providerKeys, busySaveKey,
+  connections, focus, providerKeys, providerMeta, busySaveKey, busySaveMeta,
   onSave, onCancel, onDelete, onSaveProviderKey,
 }: {
   connections: Connection[]
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   providerKeys: Record<string, string | null>
+  providerMeta: Record<string, { name?: string }>
   busySaveKey: boolean
+  busySaveMeta: boolean
   onSave: (c: Connection) => void
   onCancel: () => void
   onDelete: (id: string) => void
@@ -978,20 +985,17 @@ function ConnectionDetail({
 }) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
   const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
-  const meta = CONNECTION_CATALOG[kind]
+  const catalogMeta = CONNECTION_CATALOG[kind]
 
   const providerEnvKey = PROVIDER_KEY_BY_KIND[kind]
   const persistedKey = providerEnvKey ? providerKeys[providerEnvKey] ?? '' : ''
+  const persistedName = providerEnvKey ? providerMeta[providerEnvKey]?.name ?? '' : ''
 
   // For Claude/ChatGPT the API key is the persisted masked echo on first
   // load. The user has to type a fresh value to overwrite it.
-  const [name, setName]       = useState(existing?.name ?? meta.name)
-  const [apiKey, setApiKey]   = useState(existing?.apiKey ?? persistedKey ?? '')
+  const [name, setName]       = useState(existing?.name ?? (persistedName || catalogMeta.name))
+  const [apiKey, setApiKey]   = useState(persistedKey ?? '')
   const [apiKeyDirty, setApiKeyDirty] = useState(false)
-  const [baseUrl, setBaseUrl] = useState(
-    existing?.baseUrl ?? (kind === 'claude' ? 'https://api.anthropic.com'
-      : kind === 'chatgpt' ? 'https://api.openai.com/v1' : ''),
-  )
 
   // Backfill the masked key once /me/providers resolves.
   useEffect(() => {
@@ -1000,13 +1004,17 @@ function ConnectionDetail({
     }
   }, [providerEnvKey, persistedKey, apiKeyDirty])
 
+  // Backfill the custom name once /me/providers/meta resolves.
+  useEffect(() => {
+    if (persistedName) setName(persistedName)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistedName])
+
   const handleSave = () => {
     onSave({
       id: existing?.id ?? `conn-${kind}-${Date.now()}`,
       kind,
-      name: name.trim() || meta.name,
-      apiKey: providerEnvKey ? undefined : (apiKey.trim() || undefined),
-      baseUrl: baseUrl.trim() || undefined,
+      name: name.trim() || catalogMeta.name,
       enabled: existing?.enabled ?? true,
     })
   }
@@ -1026,13 +1034,13 @@ function ConnectionDetail({
         <div className="flex items-center gap-3">
           <ConnectionGlyph kind={kind} size="lg" />
           <div>
-            <p className="text-sm font-medium">{meta.name}</p>
-            <p className="text-xs text-muted-foreground">{meta.description}</p>
+            <p className="text-sm font-medium">{catalogMeta.name}</p>
+            <p className="text-xs text-muted-foreground">{catalogMeta.description}</p>
           </div>
         </div>
 
-        <Field label="Display name">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder={meta.name} />
+        <Field label="Display name" help="Optional custom label shown in the connections list.">
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
         </Field>
 
         <Field
@@ -1061,10 +1069,6 @@ function ConnectionDetail({
               </Button>
             )}
           </div>
-        </Field>
-
-        <Field label="Base URL" help="Override only if proxying through a gateway.">
-          <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://…" />
         </Field>
       </div>
 
@@ -1106,9 +1110,9 @@ function ConnectionDetail({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-          <Button size="sm" onClick={handleSave}>
-            {focus.mode === 'new' ? 'Add connection' : 'Save'}
+          <Button variant="outline" size="sm" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={busySaveMeta}>
+            {focus.mode === 'new' ? (busySaveMeta ? 'Adding…' : 'Add connection') : (busySaveMeta ? 'Saving…' : 'Save')}
           </Button>
         </div>
       </div>
@@ -1264,6 +1268,8 @@ interface SettingsModalProps {
   canDeleteWorkspace: boolean
   onUpdateWorkspace: (ws: WorkspaceInfo) => void
   onDeleteWorkspace: () => void
+  /** Called when the user clicks "Chat now" on an agent. Receives the agent id. */
+  onChatWithAgent?: (agentId: string) => void
 }
 
 export function SettingsModal({
@@ -1273,6 +1279,7 @@ export function SettingsModal({
   canDeleteWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
+  onChatWithAgent,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>('workspace')
 
@@ -1306,7 +1313,9 @@ export function SettingsModal({
       if (v.id) {
         await patchAgent({ id: v.id, patch: { name: v.name, model: v.model, instructions: v.instructions } }).unwrap()
       } else {
-        await createAgent({ name: v.name, model: v.model, instructions: v.instructions }).unwrap()
+        const created = await createAgent({ name: v.name, model: v.model, instructions: v.instructions }).unwrap()
+        // Auto-enroll in the current workspace so the agent is active immediately.
+        await addWorkspaceAgent({ workspaceId: workspace.id, agentId: created.id }).unwrap()
       }
       setAgentsFocus(null)
     } catch (err) {
@@ -1361,11 +1370,14 @@ export function SettingsModal({
   // disabled in the picker until a backend lands.
   const { data: providerKeys } = useGetProviderKeysQuery()
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
+  const { data: providersMeta } = useGetProvidersMetaQuery()
+  const [putProvidersMeta, { isLoading: savingMeta }] = usePutProvidersMetaMutation()
 
   const providerKeysMap = providerKeys ?? {}
+  const providersMetaMap = providersMeta ?? {}
   const connections = useMemo(
-    () => deriveConnections(providerKeysMap),
-    [providerKeysMap],
+    () => deriveConnections(providerKeysMap, providersMetaMap),
+    [providerKeysMap, providersMetaMap],
   )
   const configuredKinds = useMemo(
     () => new Set(connections.map(c => c.kind)),
@@ -1390,10 +1402,21 @@ export function SettingsModal({
     setConnectionsSearch('')
   }
 
-  const handleSaveConnection = (_conn: Connection) => {
-    // Display-only fields like name / baseUrl aren't persisted yet — the
-    // API only stores the key. Save happens via the Apply button next to
-    // the API key field, so closing the detail is enough here.
+  const handleSaveConnection = async (conn: Connection) => {
+    // Persist the display name to /me/providers/meta if this is a
+    // functional (API-key-backed) connection kind.
+    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    if (envKey) {
+      const catalogName = CONNECTION_CATALOG[conn.kind].name
+      // Only write if it differs from the catalog default or a prior custom name
+      const metaName = conn.name === catalogName ? '' : conn.name
+      try {
+        await putProvidersMeta({ [envKey]: metaName ? { name: metaName } : null }).unwrap()
+      } catch (err) {
+        toast.error('Could not save connection name', { description: describeApiError(err) })
+        return
+      }
+    }
     setConnectionsFocus(null)
   }
 
@@ -1647,7 +1670,9 @@ export function SettingsModal({
                   connections={connectionsView}
                   focus={connectionsFocus}
                   providerKeys={providerKeysMap}
+                  providerMeta={providersMetaMap}
                   busySaveKey={savingKey}
+                  busySaveMeta={savingMeta}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
                   onDelete={handleDeleteConnection}
@@ -1677,6 +1702,10 @@ export function SettingsModal({
                         onDelete={handleDeleteAgent}
                         onDuplicate={handleDuplicateAgent}
                         onToggleEnabled={handleToggleAgentEnabled}
+                        onChatNow={(id) => {
+                          onOpenChange(false)
+                          onChatWithAgent?.(id)
+                        }}
                       />
                     </div>
                   )}

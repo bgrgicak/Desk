@@ -172,7 +172,7 @@ function bindsEqual(actual: string[] | undefined, expected: string[]): boolean {
  * Only keys with non-empty values are emitted, so opencode's auto-detection
  * doesn't light up empty providers.
  */
-function providerKeyEnv(keys?: Record<string, string>): string[] {
+export function providerKeyEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
   const source: Record<string, string | undefined> = keys ?? process.env;
   for (const name of PROVIDER_KEY_VARS) {

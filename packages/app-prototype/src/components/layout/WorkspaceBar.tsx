@@ -39,7 +39,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import { useCreateWorkspaceMutation, useGetMeQuery } from '@/store/api'
+import { useCreateWorkspaceMutation, useDeleteWorkspaceMutation, useGetMeQuery, usePatchWorkspaceMutation } from '@/store/api'
 import { logout } from '@/auth/auto-login'
 import type { View } from './AppShell'
 
@@ -131,6 +131,10 @@ export function WorkspaceBar({
   const { data: me } = useGetMeQuery()
   const [createWorkspaceMutation, { isLoading: isCreating }] =
     useCreateWorkspaceMutation()
+  const [patchWorkspaceMutation, { isLoading: isPatching }] =
+    usePatchWorkspaceMutation()
+  const [deleteWorkspaceMutation] =
+    useDeleteWorkspaceMutation()
   const account = me
     ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
     : ACCOUNT_PLACEHOLDER
@@ -185,8 +189,13 @@ export function WorkspaceBar({
     setCreateOpen(true)
   }
 
-  const deleteWorkspace = (wsId: string) => {
-    setOrderedWorkspaces(prev => prev.filter(w => w.id !== wsId))
+  const deleteWorkspace = async (wsId: string) => {
+    try {
+      await deleteWorkspaceMutation(wsId).unwrap()
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('delete workspace failed:', err)
+    }
   }
 
   // Global ⌘K shortcut
@@ -473,17 +482,23 @@ export function WorkspaceBar({
               Cancel
             </Button>
             <Button
-              disabled={!newName.trim() || isCreating}
+              disabled={!newName.trim() || isCreating || isPatching}
               onClick={async () => {
                 if (editingWorkspace) {
-                  // TODO: editing from this dialog is still client-state only;
-                  // use the Customize modal for persistent edits.
-                  setOrderedWorkspaces(prev =>
-                    prev.map(w => w.id === editingWorkspace.id
-                      ? { ...w, name: newName.trim(), emoji: newEmoji, bg: newColor, description: newDescription }
-                      : w
-                    )
-                  )
+                  try {
+                    await patchWorkspaceMutation({
+                      id: editingWorkspace.id,
+                      patch: {
+                        name: newName.trim(),
+                        description: newDescription,
+                        icon: newEmoji,
+                        color: newColor,
+                      },
+                    }).unwrap()
+                  } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.error('patch workspace failed:', err)
+                  }
                   setCreateOpen(false)
                   resetForm()
                   return
