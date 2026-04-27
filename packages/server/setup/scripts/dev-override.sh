@@ -11,7 +11,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 vm() { "$VM_SH" exec "$@"; }
 
-if ! sg kvm -c "limactl list --quiet" | grep -qx "$NAME"; then
+# Reading instance status doesn't need any privilege wrapper — only `up`
+# and `reset` (which spawn QEMU) might, and that's handled inside vm.sh.
+# Calling limactl directly here keeps this dev-only helper portable across
+# macOS and Linux.
+status="$(limactl list --format '{{.Status}}' "$NAME" 2>/dev/null || true)"
+if [ "$status" != "Running" ]; then
   echo "Error: VM $NAME is not running. Run npm run vm:up first." >&2
   exit 1
 fi
@@ -36,4 +41,7 @@ echo "==> Applying dev override on $NAME..."
 vm "sudo mkdir -p /etc/systemd/system/desk-server.service.d && sudo install -m 644 $VM_OVERRIDE_SRC /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server"
 
 echo "==> Dev override active. Streaming logs (Ctrl+C to revert)..."
-vm "journalctl -fu desk-server"
+# `sudo` because the default lima user typically isn't in `systemd-journal`,
+# and journalctl without it just prints "No journal files were opened" and
+# exits — which would tear down the whole dev stack on first start.
+vm "sudo journalctl -fu desk-server"

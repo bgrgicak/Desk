@@ -35,8 +35,12 @@ export function AppCard({
       transition={{ delay: index * 0.04, duration: 0.2 }}
       onClick={onClick}
       type="button"
-      {...(dragAttributes as React.ButtonHTMLAttributes<HTMLButtonElement>)}
-      {...(dragListeners as React.ButtonHTMLAttributes<HTMLButtonElement>)}
+      // dnd-kit's listeners include `onDragStart`/`onDrag`/`onDragEnd`
+      // typed for native HTML drag, which clashes with framer-motion's
+      // own pan-based drag prop signatures. The runtime values are fine;
+      // we just bypass the structural type check here.
+      {...(dragAttributes as Record<string, unknown>)}
+      {...(dragListeners as Record<string, unknown>)}
       className={[
         'w-full text-left rounded-xl border bg-background overflow-hidden',
         'hover:shadow-md hover:border-foreground/10 transition-all duration-200',

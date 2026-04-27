@@ -15,6 +15,64 @@ set -m
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+VM_SH="${SCRIPT_DIR}/vm.sh"
+INSTANCE="${DESK_INSTANCE:-dev}"
+NAME="desk-${INSTANCE}"
+
+# 1. Bootstrap workspace deps.
+#
+#    Also handles https://github.com/npm/cli/issues/4828 — a package-lock.json
+#    written on a different OS (e.g. Linux CI) locks in Linux-specific
+#    @rolldown/binding-* optional deps, so npm installs them on macOS too and
+#    vite crashes at startup with "Cannot find native binding".
+#    Fix: after any install, verify the platform binding is present; if not,
+#    nuke ALL workspace node_modules AND package-lock.json and reinstall so npm
+#    re-resolves optional deps for the current platform from scratch.
+
+# Returns 0 if the rolldown native binding for the current OS/arch is present.
+rolldown_binding_ok() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+  find "${REPO_ROOT}/node_modules/@rolldown" -maxdepth 2 \
+    -path "*binding-${os}-${arch}*" -name "*.node" 2>/dev/null | grep -q .
+}
+
+# Removes every workspace node_modules + package-lock.json so npm re-resolves
+# optional deps for the current platform from scratch.
+full_clean() {
+  rm -rf \
+    "${REPO_ROOT}/node_modules" \
+    "${REPO_ROOT}/packages"/*/node_modules \
+    "${REPO_ROOT}/packages"/server/*/node_modules \
+    "${REPO_ROOT}/package-lock.json"
+}
+
+if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ]; then
+  echo "==> Installing workspace dependencies"
+  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+fi
+
+# Always verify rolldown binding (catches stale-lockfile or partial-install cases).
+if ! rolldown_binding_ok; then
+  echo "==> rolldown native binding missing — platform mismatch in lockfile. Reinstalling…"
+  full_clean
+  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+fi
+
+# 2. Ensure the dev VM is running. dev-override.sh just bails if it isn't,
+#    which is hostile on a clean clone — bring it up automatically.
+vm_status="$(limactl list --format '{{.Status}}' "$NAME" 2>/dev/null || true)"
+if [ "$vm_status" != "Running" ]; then
+  echo "==> VM $NAME is not running — starting it (this can take a few minutes the first time)"
+  "$VM_SH" up
+fi
+
+# 3. Kill any stale process holding port 5173 from a previous run.
+if lsof -ti :5173 >/dev/null 2>&1; then
+  echo "==> Port 5173 in use — killing stale process…"
+  lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+fi
 
 # Run vite in the background so its stdout interleaves with journalctl.
 (
@@ -33,8 +91,9 @@ cleanup() {
     sleep 1
     kill -KILL -- "-$VITE_PID" 2>/dev/null || true
   fi
-  # Belt-and-braces: kill anything left from this repo's prototype vite.
+  # Belt-and-braces: kill anything left from this repo's prototype vite or port 5173.
   pkill -f "packages/app-prototype/node_modules/.*/vite" 2>/dev/null || true
+  lsof -ti :5173 | xargs kill -9 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
