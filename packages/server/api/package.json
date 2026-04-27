@@ -20,7 +20,6 @@
     "@desk/shared": "*",
     "@desk/db": "*",
     "@desk/storage": "*",
-    "@desk/tools": "*",
     "@desk/runtime": "*",
     "@desk/scheduler": "*",
     "pg": "^8.13.0"

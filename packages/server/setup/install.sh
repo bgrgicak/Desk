@@ -87,7 +87,7 @@ mkdir -p /opt/desk-server
 cp "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" /opt/desk-server/
 cp -a "$REPO_ROOT/node_modules" /opt/desk-server/
 mkdir -p /opt/desk-server/packages/server
-for pkg in shared db storage tools runtime scheduler sandbox-cli api; do
+for pkg in shared db storage runtime scheduler sandbox-cli api; do
   SRC="$REPO_ROOT/packages/server/$pkg"
   DST="/opt/desk-server/packages/server/$pkg"
   mkdir -p "$DST"

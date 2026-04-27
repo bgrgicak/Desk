@@ -18,7 +18,6 @@
     "@desk/shared": "*",
     "@desk/db": "*",
     "@desk/storage": "*",
-    "@desk/tools": "*",
     "dockerode": "^4.0.0",
     "pg": "^8.13.0"
   },

@@ -6,14 +6,12 @@ await build({
   outfile: "dist/desk.js",
   bundle: true,
   platform: "node",
-  target: "node22",
-  format: "esm",
-  // Resolve workspace deps via the `@desk/dev` export condition so
-  // esbuild picks up their TS source directly. Without this it follows
-  // the default `import` condition (e.g. @desk/shared/dist/index.js),
-  // which only exists after a separate `tsc` build — fine locally once
-  // anyone has built the package, broken on fresh CI checkouts where
-  // `npm ci` does not run package build scripts.
+  // CJS, not ESM: the sandbox base image ships Node 18, which requires
+  // `.mjs` (or a "type":"module" package.json) to load ESM `.js`. esbuild
+  // rewrites our ESM source imports into requires, producing a single
+  // self-contained script that runs on any Node version with `.js`.
+  format: "cjs",
+  target: "node18",
   conditions: ["@desk/dev"],
   banner: { js: "#!/usr/bin/env node" },
 });
