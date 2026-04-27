@@ -42,7 +42,9 @@ import {
   markArtifactSaved,
   markUpdateRead,
   markChatRead,
+  setPendingNewChatAgentId,
 } from '@/store/slices/uiSlice'
+import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiTask } from '@/store/selectors/tasks'
@@ -418,8 +420,41 @@ function AppInner() {
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'desk' && (
           <DeskGrid
             artifacts={artifacts.filter(a => savedArtifactIds.has(a.id))}
+            workspaceId={activeWorkspaceId || undefined}
             onArtifactClick={(artifact) => goTo({ artifact: artifact.id })}
-            onCompose={enterCompose}
+            onCreateArtifact={async (input) => {
+              if (!activeWorkspaceId) return
+              const pickedAgentId = input.agentId ?? workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
+              if (!pickedAgentId) {
+                toast.error('No agent enabled in this workspace', {
+                  description: 'Open Settings → Agents to enable one.',
+                })
+                return
+              }
+              try {
+                const raw = input.name?.trim() || input.instructions || 'New artifact'
+                const title = raw.length > 50 ? raw.slice(0, 50) + '…' : raw
+                const newChat = await createChatMutation({
+                  workspaceId: activeWorkspaceId,
+                  agentId: pickedAgentId,
+                  title,
+                }).unwrap()
+                await postMessageMutation({
+                  chatId: newChat.id,
+                  content: buildArtifactPrompt(input),
+                  attachments: input.attachments?.length ? input.attachments : undefined,
+                }).unwrap()
+                goTo({ chat: newChat.id })
+              } catch (err) {
+                toast.error('Failed to create artifact', {
+                  description: err instanceof Error ? err.message : undefined,
+                })
+              }
+            }}
+            onSkipToChat={(agentId) => {
+              if (agentId) dispatch(setPendingNewChatAgentId(agentId))
+              goTo({ chat: NEW_CHAT_ID })
+            }}
             updates={artifactUpdates}
             readUpdateIds={readUpdateIds}
             onDismissUpdate={handleDismissUpdate}

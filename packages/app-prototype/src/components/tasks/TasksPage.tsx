@@ -8,7 +8,6 @@ import {
   List,
   LayoutGrid,
   Search,
-  Plus,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -457,7 +456,6 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
           </div>
 
           <Button size="sm" data-testid="tasks-create" onClick={() => { setDefaultCreateStatus('todo'); setCreateSheetOpen(true) }}>
-            <Plus className="h-3.5 w-3.5 mr-1" />
             Create
           </Button>
         </div>}

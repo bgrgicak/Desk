@@ -9,12 +9,15 @@ import {
 } from '@/components/ui/breadcrumb'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ArtifactCard } from './ArtifactCard'
+import { ArtifactCreationSheet, type ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
 import type { Artifact, ArtifactType, ArtifactUpdate } from '@/data/ui-types'
 
 interface DeskGridProps {
   artifacts: Artifact[]
   onArtifactClick: (artifact: Artifact) => void
-  onCompose: () => void
+  onCreateArtifact: (input: ArtifactCreateInput) => Promise<void>
+  onSkipToChat: (agentId?: string) => Promise<void> | void
+  workspaceId?: string
   updates?: ArtifactUpdate[]
   readUpdateIds?: Set<string>
   onDismissUpdate?: (id: string) => void
@@ -22,9 +25,10 @@ interface DeskGridProps {
 
 type FilterType = 'all' | ArtifactType
 
-export function DeskGrid({ artifacts, onArtifactClick, onCompose, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
+export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipToChat, workspaceId, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   const filters: { value: FilterType; label: string }[] = [
     { value: 'all',         label: 'All'    },
@@ -85,7 +89,7 @@ export function DeskGrid({ artifacts, onArtifactClick, onCompose, updates, readU
                 </div>
               </>
             )}
-            <Button size="sm" onClick={onCompose}>
+            <Button size="sm" onClick={() => setSheetOpen(true)}>
               Create
             </Button>
           </>
@@ -101,7 +105,7 @@ export function DeskGrid({ artifacts, onArtifactClick, onCompose, updates, readU
             <p className="text-sm text-muted-foreground mb-6">
               Create your first document, app, or design to see it appear here.
             </p>
-            <Button onClick={onCompose} className="gap-2">
+            <Button onClick={() => setSheetOpen(true)} className="gap-2">
               <Plus className="h-4 w-4" />
               Create something
             </Button>
@@ -130,6 +134,20 @@ export function DeskGrid({ artifacts, onArtifactClick, onCompose, updates, readU
           </div>
         </div>
       )}
+
+      <ArtifactCreationSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        workspaceId={workspaceId}
+        onCreateArtifact={async (input) => {
+          setSheetOpen(false)
+          await onCreateArtifact(input)
+        }}
+        onSkipToChat={async (agentId) => {
+          setSheetOpen(false)
+          await onSkipToChat(agentId)
+        }}
+      />
     </div>
   )
 }

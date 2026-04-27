@@ -32,6 +32,8 @@ import {
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import { NEW_CHAT_ID } from '@/router/nav'
+import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
 import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
@@ -431,8 +433,20 @@ export function ChatView({
   const [patchChatMutation] = usePatchChatMutation()
 
   // Pre-creation agent pick for the "new chat" case. Once the chat
-  // exists, re-binding flows through PATCH /chats/:id instead.
-  const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null)
+  // exists, re-binding flows through PATCH /chats/:id instead. The
+  // initial value is seeded from any pending agent id stashed by the
+  // artifact-creation sheet's "Skip to chat" path; ChatView is keyed by
+  // chat.id, so remounting on navigation refreshes the seed.
+  const dispatch = useAppDispatch()
+  const pendingNewChatAgentId = useAppSelector(s => s.ui.pendingNewChatAgentId)
+  const [newChatAgentId, setNewChatAgentId] = useState<string | null>(
+    isNewChat ? pendingNewChatAgentId : null,
+  )
+  useEffect(() => {
+    if (isNewChat && pendingNewChatAgentId) {
+      dispatch(setPendingNewChatAgentId(null))
+    }
+  }, [isNewChat, pendingNewChatAgentId, dispatch])
 
   const handleAgentChange = useCallback(
     (agentId: string) => {

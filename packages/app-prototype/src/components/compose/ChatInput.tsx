@@ -1,24 +1,15 @@
-import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  CornerDownLeft, ChevronDown, Folder, FileText, StickyNote, Link2, Bot, Search, Paperclip, X,
+  CornerDownLeft, ChevronDown, FileText, Paperclip, X,
   Zap, ImageIcon, Table, Globe, Play, Target,
   type LucideIcon,
 } from 'lucide-react'
-import type { ContextItem } from '@/data/ui-types'
 import {
-  useGetAgentsQuery,
-  useGetLibraryQuery,
-  useGetWorkspaceAgentsQuery,
-} from '@/store/api'
-import { toContextItem, toFolderList } from '@/store/selectors/library'
-import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
-
-const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
-  file: FileText,
-  note: StickyNote,
-  link: Link2,
-}
+  ComposerPickers,
+  type ComposerPickersHandle,
+} from './ComposerPickers'
+import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
 
 type GoalKey = 'app' | 'document' | 'image' | 'data' | 'site' | 'run' | null
 
@@ -50,13 +41,6 @@ function inferGoal(text: string): GoalKey {
   if (lower.match(/write|draft|create|plan|strategy|brief|report|email|agenda|notes|document|summary|summarise|summarize/)) return 'document'
   if (lower.length > 10) return 'document'
   return null
-}
-
-type AttachedItem = {
-  id: string
-  name: string
-  kind: 'folder' | 'item'
-  type?: ContextItem['type']
 }
 
 export interface UploadedFile {
@@ -141,7 +125,7 @@ export function ChatInput({
   focusRef,
   chatAgentId,
   chatWorkspaceId: _chatWorkspaceId,
-  chatId: _chatId,
+  chatId,
   onAgentChange,
   onOpenUploadPicker,
   extraUploads = [],
@@ -149,6 +133,12 @@ export function ChatInput({
   uploadInProgress = false,
   draftKey,
 }: ChatInputProps) {
+  // chatId is part of the public prop surface (callers pass it for
+  // upload routing) but ChatInput itself doesn't read it — touch it
+  // here so eslint's no-unused-vars stays quiet without dropping the
+  // prop from the API.
+  void chatId
+
   const [value, setValue] = useState<string>(() =>
     draftKey ? localStorage.getItem(DRAFT_STORAGE_PREFIX + draftKey) ?? '' : ''
   )
@@ -160,31 +150,11 @@ export function ChatInput({
     if (value) localStorage.setItem(storageKey, value)
     else localStorage.removeItem(storageKey)
   }, [draftKey, value])
-  const [attachedItems, setAttachedItems] = useState<AttachedItem[]>([])
+  const [attachedItems, setAttachedItems] = useState<ComposerAttachment[]>([])
+  const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  // ── Server-backed pickers ───────────────────────────────────────────────
-  // Scope the agent picker to the chat's workspace when we have one; the
-  // global list is only used for chat surfaces that aren't bound to a
-  // workspace yet (e.g. Today inbox previews).
-  const { data: globalAgents } = useGetAgentsQuery(undefined, {
-    skip: !!_chatWorkspaceId,
-  })
-  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(
-    _chatWorkspaceId ?? '',
-    { skip: !_chatWorkspaceId },
-  )
-  const serverAgents = _chatWorkspaceId ? workspaceAgents : globalAgents
-  const { data: libraryResp } = useGetLibraryQuery(
-    _chatWorkspaceId ? { workspaceId: _chatWorkspaceId } : undefined,
-    { skip: !_chatWorkspaceId },
-  )
-  const folders = _chatWorkspaceId
-    ? toFolderList(libraryResp?.folders ?? [], _chatWorkspaceId)
-    : []
-  const libraryItems: ContextItem[] = _chatWorkspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, _chatWorkspaceId))
-    : []
+  const pickersRef = useRef<ComposerPickersHandle>(null)
+  const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
 
   // Register imperative focus handle
   useEffect(() => {
@@ -192,48 +162,12 @@ export function ChatInput({
     return () => { if (focusRef) focusRef.current = null }
   }, [focusRef])
 
-  // Button refs (for portal positioning)
-  const attachBtnRef = useRef<HTMLButtonElement>(null)
-  const agentBtnRef = useRef<HTMLButtonElement>(null)
   const goalBtnRef = useRef<HTMLButtonElement>(null)
-
-  // Dropdown content refs (for click-outside)
-  const attachDropRef = useRef<HTMLDivElement>(null)
-  const agentDropRef = useRef<HTMLDivElement>(null)
   const goalDropRef = useRef<HTMLDivElement>(null)
-
-  // Stored rects for portal positioning
-  const [attachRect, setAttachRect] = useState<DOMRect | null>(null)
-  const [agentRect, setAgentRect] = useState<DOMRect | null>(null)
   const [goalRect, setGoalRect] = useState<DOMRect | null>(null)
-
-  // Pickers open state
-  const [attachOpen, setAttachOpen] = useState(false)
-  const [agentOpen, setAgentOpen] = useState(false)
   const [goalOpen, setGoalOpen] = useState(false)
 
-  // Search state
-  const [attachSearch, setAttachSearch] = useState('')
-  const [agentSearch, setAgentSearch] = useState('')
-  const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
-
-  // Selections
-  // The picker surface is "pick the agent for this chat" now that the
-  // server enforces one agent per chat (see plan §6, row 3). Hydrate
-  // from chatAgentId when present; otherwise fall back to the first
-  // agent returned by /agents (used before the chat has been created).
-  //
-  // A local `previewAgentId` covers the pre-creation case: parent can
-  // pass a new chatAgentId anytime (e.g. after PATCH /chats/:id
-  // responds), and `previewAgentId` stays as the optimistic hint until
-  // the server-backed value catches up.
-  const serverActiveAgent =
-    (chatAgentId ? serverAgents?.find(a => a.id === chatAgentId) : undefined)
-    ?? serverAgents?.[0]
-    ?? null
-  const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
-  const activeAgent =
-    (previewAgentId ? serverAgents?.find(a => a.id === previewAgentId) : undefined) ?? serverActiveAgent
+  const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
   const suggestedGoal = inferGoal(value)
   const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : suggestedGoal
@@ -244,28 +178,18 @@ export function ChatInput({
     ? (effectiveGoal?.placeholder ?? placeholder)
     : placeholder
 
-  // Attachment list — folders are client-derived (empty for now; matrix
-  // §4.2.1), files come straight from the library.
-  const allAttachments = [
-    ...folders.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
-    ...libraryItems.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
-  ]
-  const filteredAttachments = allAttachments.filter(
-    a => !attachSearch || a.name.toLowerCase().includes(attachSearch.toLowerCase())
-  )
-  const filteredAgents = (serverAgents ?? []).filter(
-    a => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())
-      || (a.model?.toLowerCase().includes(agentSearch.toLowerCase()) ?? false)
-  )
-
   // Auto-focus
   useEffect(() => {
     if (autoFocus && textareaRef.current) textareaRef.current.focus()
   }, [autoFocus])
 
-  // Prefill: set value and focus when prefillValue changes
+  // Prefill: set value and focus when prefillValue changes. We can't
+  // derive `value` from `prefillValue` because the user must be able to
+  // edit it after — so syncing imperatively from an effect is the
+  // intended pattern here.
   useEffect(() => {
     if (prefillValue !== undefined && prefillValue !== '') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setValue(prefillValue)
       setTimeout(() => {
         const el = textareaRef.current
@@ -315,23 +239,10 @@ export function ChatInput({
     el.style.overflowY  = newH >= maxH ? 'auto' : 'hidden'
   }, [value, compact])
 
-  // Close on outside click
+  // Close goal picker on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
-      if (
-        !attachBtnRef.current?.contains(target) &&
-        !attachDropRef.current?.contains(target)
-      ) {
-        setAttachOpen(false)
-        if (atMentionStart !== null) setAtMentionStart(null)
-      }
-      if (
-        !agentBtnRef.current?.contains(target) &&
-        !agentDropRef.current?.contains(target)
-      ) {
-        setAgentOpen(false)
-      }
       if (
         !goalBtnRef.current?.contains(target) &&
         !goalDropRef.current?.contains(target)
@@ -341,9 +252,10 @@ export function ChatInput({
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [atMentionStart])
+  }, [])
 
-  // Detect @ mention while typing
+  // Detect @ mention while typing — drives the attach picker open via
+  // the ComposerPickers imperative handle.
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newVal = e.target.value
     const cursor = e.target.selectionStart ?? newVal.length
@@ -353,20 +265,15 @@ export function ChatInput({
     if (atMatch) {
       const start = cursor - atMatch[1].length - 1
       setAtMentionStart(start)
-      setAttachSearch(atMatch[1])
-      setAttachRect(attachBtnRef.current?.getBoundingClientRect() ?? null)
-      setAttachOpen(true)
-    } else {
-      if (atMentionStart !== null) {
-        setAtMentionStart(null)
-        setAttachSearch('')
-        setAttachOpen(false)
-      }
+      pickersRef.current?.openAttach(atMatch[1])
+    } else if (atMentionStart !== null) {
+      setAtMentionStart(null)
+      pickersRef.current?.closeAttach()
     }
     setValue(newVal)
   }
 
-  const insertMention = useCallback((attachment: AttachedItem) => {
+  const insertMention = useCallback((attachment: ComposerAttachment) => {
     const el = textareaRef.current
     if (!el) return
     setAttachedItems(prev =>
@@ -377,9 +284,7 @@ export function ChatInput({
       ? value.slice(0, atMentionStart) + value.slice(cursor)
       : value
     setValue(newVal)
-    setAttachOpen(false)
     setAtMentionStart(null)
-    setAttachSearch('')
     setTimeout(() => el.focus(), 0)
   }, [value, atMentionStart])
 
@@ -387,25 +292,10 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
-  const handleAgentSelect = useCallback((agent: { id: string }) => {
-    setPreviewAgentId(agent.id)
-    setAgentOpen(false)
-    onAgentChange?.(agent.id)
+  const handleAgentChange = useCallback((agentId: string) => {
+    setPreviewAgentId(agentId)
+    onAgentChange?.(agentId)
   }, [onAgentChange])
-
-  const agentNav = useListKeyboardNav({
-    items: filteredAgents,
-    enabled: agentOpen,
-    onSelect: handleAgentSelect,
-  })
-
-  const attachNav = useListKeyboardNav({
-    items: filteredAttachments,
-    enabled: attachOpen,
-    onSelect: insertMention,
-  })
-
-  const uploadEnabled = Boolean(onOpenUploadPicker)
 
   const handleSubmit = () => {
     const trimmed = value.trim()
@@ -429,8 +319,7 @@ export function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (attachOpen && atMentionStart !== null && attachNav.handleKeyDown(e)) return
-    if (e.key === 'Escape') { setAttachOpen(false); setAgentOpen(false); setGoalOpen(false); setAtMentionStart(null) }
+    if (e.key === 'Escape') { setGoalOpen(false); setAtMentionStart(null); pickersRef.current?.closeAttach() }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
@@ -465,7 +354,7 @@ export function ChatInput({
               </span>
             ))}
             {attachedItems.map(item => {
-              const Icon = item.kind === 'folder' ? Folder : ITEM_ICON[item.type ?? 'file'] ?? FileText
+              const Icon = attachmentChipIcon(item)
               return (
                 <span
                   key={item.id}
@@ -474,10 +363,7 @@ export function ChatInput({
                   <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
                   <button
                     type="button"
-                    onClick={() => {
-                      setAttachRect(attachBtnRef.current?.getBoundingClientRect() ?? null)
-                      setAttachOpen(true); setAgentOpen(false); setAttachSearch('')
-                    }}
+                    onClick={() => pickersRef.current?.openAttach('')}
                     className="truncate hover:underline decoration-muted-foreground/60"
                   >
                     {item.name}
@@ -526,17 +412,16 @@ export function ChatInput({
       {/* Pickers row — below the input */}
       <div className={`flex items-center gap-1.5 ${compact ? 'mt-1.5' : 'mt-2'}`}>
 
-        {/* Goal picker */}
+        {/* Goal picker — chat-only */}
         {showGoalPicker && (
           <>
             <button
+              type="button"
               ref={goalBtnRef}
               onClick={() => {
                 const rect = goalBtnRef.current?.getBoundingClientRect() ?? null
                 setGoalRect(rect)
                 setGoalOpen(v => !v)
-                setAttachOpen(false)
-                setAgentOpen(false)
               }}
               className={`${pickerBtnClass} ${effectiveGoal && effectiveGoal.key !== null ? 'text-foreground' : ''}`}
             >
@@ -556,6 +441,7 @@ export function ChatInput({
                     const isSelected = goalOverride !== undefined ? goal.key === goalOverride : goal.key === suggestedGoal
                     return (
                       <button
+                        type="button"
                         key={String(goal.key)}
                         onClick={() => { setGoalOverride(goal.key); setGoalOpen(false) }}
                         className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/30' : ''}`}
@@ -576,143 +462,17 @@ export function ChatInput({
           </>
         )}
 
-        {/* Agent picker */}
-        <>
-          <button
-            ref={agentBtnRef}
-            onClick={() => {
-              const rect = agentBtnRef.current?.getBoundingClientRect() ?? null
-              setAgentRect(rect)
-              setAgentOpen(v => !v)
-              setAttachOpen(false)
-              setGoalOpen(false)
-              setAgentSearch('')
-            }}
-            className={pickerBtnClass}
-          >
-            <Bot className="h-3 w-3" />
-            {activeAgent?.name ?? 'Agent'}
-            <ChevronDown className="h-3 w-3 opacity-60" />
-          </button>
-          {agentOpen && agentRect && createPortal(
-            <div ref={agentDropRef} style={getDropdownStyle(agentRect, 256)} className={dropdownClass}>
-              <div className="flex items-center gap-2 px-3 py-2 border-b">
-                <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <input
-                  autoFocus
-                  value={agentSearch}
-                  onChange={e => setAgentSearch(e.target.value)}
-                  onKeyDown={agentNav.handleKeyDown}
-                  placeholder="Search agents…"
-                  className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
-                />
-              </div>
-              <div className="overflow-y-auto max-h-48">
-                {filteredAgents.length === 0 && (
-                  <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
-                )}
-                {filteredAgents.map((agent, i) => {
-                  const isActive = agentNav.selectedIndex === i
-                  return (
-                    <button
-                      key={agent.id}
-                      ref={agentNav.itemRef(i)}
-                      onClick={() => handleAgentSelect(agent)}
-                      className={`flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left ${isActive ? 'bg-muted/50' : activeAgent?.id === agent.id ? 'bg-muted/30' : ''}`}
-                    >
-                      <span>{agent.name}</span>
-                      <span className="text-xs text-muted-foreground ml-2 shrink-0">{agent.model}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>,
-            document.body
-          )}
-        </>
-
-        {/* Attachment picker */}
-        <>
-          <button
-            ref={attachBtnRef}
-            onClick={() => {
-              const rect = attachBtnRef.current?.getBoundingClientRect() ?? null
-              setAttachRect(rect)
-              setAttachOpen(v => !v)
-              setAgentOpen(false)
-              setGoalOpen(false)
-              setAttachSearch('')
-            }}
-            className={pickerBtnClass}
-          >
-            <Paperclip className="h-3 w-3" />
-            Add files
-            <ChevronDown className="h-3 w-3 opacity-60" />
-          </button>
-          {attachOpen && attachRect && createPortal(
-            <div ref={attachDropRef} style={getDropdownStyle(attachRect, 288)} className={dropdownClass}>
-              <div className="flex items-center gap-2 px-3 py-2 border-b">
-                <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <input
-                  autoFocus
-                  value={attachSearch}
-                  onChange={e => setAttachSearch(e.target.value)}
-                  onKeyDown={attachNav.handleKeyDown}
-                  placeholder="Search files and folders…"
-                  className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
-                />
-              </div>
-              <div className="overflow-y-auto max-h-52">
-                {filteredAttachments.length === 0 && (
-                  <p className="px-3 py-4 text-xs text-muted-foreground text-center">No results</p>
-                )}
-                {filteredAttachments.map((a, i) => {
-                  const prev = i > 0 ? filteredAttachments[i - 1] : null
-                  const showFolderHeading = a.kind === 'folder' && (!prev || prev.kind !== 'folder')
-                  const showFileHeading = a.kind === 'item' && (!prev || prev.kind !== 'item')
-                  const Icon = a.kind === 'folder' ? Folder : ITEM_ICON[a.type]
-                  const isSelected = attachNav.selectedIndex === i
-                  return (
-                    <Fragment key={a.id}>
-                      {showFolderHeading && (
-                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Folders</p>
-                      )}
-                      {showFileHeading && (
-                        <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
-                      )}
-                      <button
-                        ref={attachNav.itemRef(i)}
-                        onClick={() => insertMention(a)}
-                        className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
-                      >
-                        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="truncate">{a.name}</span>
-                        {attachedItems.some(it => it.id === a.id) && (
-                          <span className="ml-auto shrink-0 h-1.5 w-1.5 rounded-full bg-primary" />
-                        )}
-                      </button>
-                    </Fragment>
-                  )
-                })}
-              </div>
-              <div className="border-t">
-                <button
-                  onClick={() => {
-                    setAttachOpen(false)
-                    onOpenUploadPicker?.()
-                  }}
-                  disabled={!uploadEnabled || uploadInProgress}
-                  data-testid="chat-upload-a-file"
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>{uploadInProgress ? 'Uploading…' : 'Upload a file…'}</span>
-                </button>
-              </div>
-            </div>,
-            document.body
-          )}
-        </>
+        <ComposerPickers
+          ref={pickersRef}
+          workspaceId={_chatWorkspaceId}
+          agentId={effectiveAgentId}
+          onAgentChange={handleAgentChange}
+          attachments={attachedItems}
+          onAttachmentsChange={setAttachedItems}
+          onAttachmentPick={insertMention}
+          onOpenUploadPicker={onOpenUploadPicker}
+          uploadInProgress={uploadInProgress}
+        />
 
       </div>
     </div>
