@@ -16,6 +16,8 @@ interface DeskGridProps {
   artifacts: Artifact[]
   onArtifactClick: (artifact: Artifact) => void
   onCreateArtifact: (input: ArtifactCreateInput) => Promise<void>
+  onSkipToChat: (agentId?: string) => Promise<void> | void
+  workspaceId?: string
   updates?: ArtifactUpdate[]
   readUpdateIds?: Set<string>
   onDismissUpdate?: (id: string) => void
@@ -23,7 +25,7 @@ interface DeskGridProps {
 
 type FilterType = 'all' | ArtifactType
 
-export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
+export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipToChat, workspaceId, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -136,9 +138,14 @@ export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, updates
       <ArtifactCreationSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
+        workspaceId={workspaceId}
         onCreateArtifact={async (input) => {
           setSheetOpen(false)
           await onCreateArtifact(input)
+        }}
+        onSkipToChat={async (agentId) => {
+          setSheetOpen(false)
+          await onSkipToChat(agentId)
         }}
       />
     </div>

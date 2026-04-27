@@ -15,12 +15,11 @@ import type { WorkspaceNavView } from '@/components/layout/WorkspaceBar'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
-import type { ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
-import type { Artifact, ArtifactType, Chat, ContextItem } from '@/data/ui-types'
+import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
 import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
@@ -43,7 +42,9 @@ import {
   markArtifactSaved,
   markUpdateRead,
   markChatRead,
+  setPendingNewChatAgentId,
 } from '@/store/slices/uiSlice'
+import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiTask } from '@/store/selectors/tasks'
@@ -62,18 +63,6 @@ const NEW_CHAT_STUB: Chat = {
   artifactIds: [],
   messages: [],
   unread: false,
-}
-
-const TYPE_VERB: Record<ArtifactType, string> = {
-  document: 'Write', app: 'Build', image: 'Generate', spreadsheet: 'Create', site: 'Build',
-}
-const TYPE_NOUN: Record<ArtifactType, string> = {
-  document: 'a document', app: 'an app', image: 'an image', spreadsheet: 'a spreadsheet', site: 'a site',
-}
-
-function buildArtifactPrompt(input: ArtifactCreateInput): string {
-  const namePart = input.name?.trim() ? ` called "${input.name.trim()}"` : ''
-  return `${TYPE_VERB[input.type]} ${TYPE_NOUN[input.type]}${namePart}\n\n${input.instructions.trim()}`
 }
 
 export default function App() {
@@ -431,10 +420,11 @@ function AppInner() {
         {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'desk' && (
           <DeskGrid
             artifacts={artifacts.filter(a => savedArtifactIds.has(a.id))}
+            workspaceId={activeWorkspaceId || undefined}
             onArtifactClick={(artifact) => goTo({ artifact: artifact.id })}
             onCreateArtifact={async (input) => {
               if (!activeWorkspaceId) return
-              const pickedAgentId = workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
+              const pickedAgentId = input.agentId ?? workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
               if (!pickedAgentId) {
                 toast.error('No agent enabled in this workspace', {
                   description: 'Open Settings → Agents to enable one.',
@@ -442,7 +432,7 @@ function AppInner() {
                 return
               }
               try {
-                const raw = input.name?.trim() || input.instructions
+                const raw = input.name?.trim() || input.instructions || 'New artifact'
                 const title = raw.length > 50 ? raw.slice(0, 50) + '…' : raw
                 const newChat = await createChatMutation({
                   workspaceId: activeWorkspaceId,
@@ -452,6 +442,7 @@ function AppInner() {
                 await postMessageMutation({
                   chatId: newChat.id,
                   content: buildArtifactPrompt(input),
+                  attachments: input.attachments?.length ? input.attachments : undefined,
                 }).unwrap()
                 goTo({ chat: newChat.id })
               } catch (err) {
@@ -459,6 +450,10 @@ function AppInner() {
                   description: err instanceof Error ? err.message : undefined,
                 })
               }
+            }}
+            onSkipToChat={(agentId) => {
+              if (agentId) dispatch(setPendingNewChatAgentId(agentId))
+              goTo({ chat: NEW_CHAT_ID })
             }}
             updates={artifactUpdates}
             readUpdateIds={readUpdateIds}
