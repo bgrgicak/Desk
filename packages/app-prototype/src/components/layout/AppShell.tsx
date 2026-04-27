@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/sheet'
 import { TodayPanel } from '@/components/today/TodayPanel'
 import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
