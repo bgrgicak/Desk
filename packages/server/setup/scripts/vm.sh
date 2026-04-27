@@ -13,13 +13,24 @@ CONFIG="${REPO_ROOT}/lima.yaml"
 PORT="$(python3 -c 'import zlib,sys; print(3000 + zlib.crc32(sys.argv[1].encode()) % 100)' "$INSTANCE")"
 
 # Only `up` and `reset` actually spawn QEMU and need /dev/kvm access; the
-# rest talk to the running VM via sockets in ~/.lima. If /dev/kvm isn't
-# readable in the current shell (you haven't logged out since joining the
-# `kvm` group), wrap QEMU-spawning calls in `sg kvm -c`.
-if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-  with_kvm() { "$@"; }
-else
+# rest talk to the running VM via sockets in ~/.lima. On Linux, if /dev/kvm
+# exists but the current shell isn't in the `kvm` group yet (no re-login
+# since `usermod -aG kvm`), wrap QEMU-spawning calls in `sg kvm -c`.
+# macOS uses Apple's Virtualization framework (or QEMU userspace) — no
+# /dev/kvm, no `sg`, so just run commands directly.
+if [ -e /dev/kvm ] && { [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; }; then
   with_kvm() { sg kvm -c "$(printf '%q ' "$@")"; }
+else
+  with_kvm() { "$@"; }
+fi
+
+if ! command -v limactl >/dev/null 2>&1; then
+  echo "Error: limactl not found on PATH." >&2
+  case "$(uname -s)" in
+    Darwin) echo "Install with: brew install lima" >&2 ;;
+    Linux)  echo "See https://lima-vm.io/docs/installation/" >&2 ;;
+  esac
+  exit 1
 fi
 
 usage() {
