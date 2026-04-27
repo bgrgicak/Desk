@@ -1021,7 +1021,7 @@
     "/chats/{id}/attachments": {
       "get": {
         "summary": "List chat attachments",
-        "description": "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts.",
+        "description": "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeNotes=true to also include the chat's materialized note mirrors from `.chats/{id}/notes/`. Each item carries a `kind` field: \"attachment\" or \"note\".",
         "parameters": [
           {
             "name": "id",
@@ -1033,6 +1033,13 @@
           },
           {
             "name": "showHidden",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "includeNotes",
             "in": "query",
             "schema": {
               "type": "boolean"
@@ -1090,7 +1097,7 @@
     "/library": {
       "get": {
         "summary": "List library files and folders",
-        "description": "Recursively reads the workspace library directory; returns `items` (FileRef entries) and `folders` (FolderRef entries) describing the full tree. Files/folders with a leading dot are hidden. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: [], folders: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
+        "description": "Recursively reads the workspace library directory; returns `items` (FileRef entries) and `folders` (FolderRef entries) describing the full tree. Hidden by default: dot-prefixed entries AND entries matched by any `.gitignore` in the subtree (root and nested gitignores compose like git itself). Pass `?showHidden=true` to include both. Scoped to `workspaceId`; defaults to the caller's first workspace. Returns `{items: [], folders: []}` when the user has no workspaces. 400 if `workspaceId` is malformed; 404 when it refers to a workspace the caller does not own.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -1112,6 +1119,13 @@
             "in": "query",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "showHidden",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -1557,7 +1571,7 @@
     "/tools/models": {
       "get": {
         "summary": "List AI models that are ready to use",
-        "description": "Returns the set of models reachable with currently configured provider credentials (server-wide, not agent-scoped). Every returned model is ready — opencode only surfaces models for providers whose API key is present in the sandbox env. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+        "description": "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid provider models (anthropic, openai) appear only when the corresponding API key is configured. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
         "parameters": [
           {
             "name": "provider",
@@ -1565,12 +1579,12 @@
             "schema": {
               "type": "string"
             },
-            "description": "Restrict to a single provider id, e.g. \"anthropic\"."
+            "description": "Restrict to a single provider id, e.g. \"opencode\"."
           }
         ],
         "responses": {
           "200": {
-            "description": "Array of ready-to-use models",
+            "description": "Array of available models",
             "content": {
               "application/json": {
                 "schema": {
@@ -1580,11 +1594,11 @@
                     "properties": {
                       "id": {
                         "type": "string",
-                        "description": "Opencode canonical id, e.g. \"anthropic/claude-opus-4-7\"."
+                        "description": "Opencode canonical id, e.g. \"opencode/big-pickle\"."
                       },
                       "provider": {
                         "type": "string",
-                        "description": "Provider portion of id, e.g. \"anthropic\"."
+                        "description": "Provider portion of id, e.g. \"opencode\"."
                       }
                     },
                     "required": [
