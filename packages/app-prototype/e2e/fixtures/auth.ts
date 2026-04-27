@@ -23,7 +23,8 @@ export async function fetchToken(
 
 /**
  * Inject a pre-obtained token into the page's sessionStorage so the React
- * app's ensureSession() short-circuits and does not pop a window.prompt().
+ * app's ensureSession() resumes the session instead of rendering the
+ * LoginScreen.
  */
 export async function seedSessionToken(
   context: BrowserContext,

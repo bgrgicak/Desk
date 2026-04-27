@@ -20,6 +20,7 @@ import { queries } from "@desk/db";
 import { createRunManager, createAdapter, reconcile, sweepStaleRuns } from "@desk/scheduler";
 import { auditSandboxMounts } from "@desk/runtime";
 import { createApp } from "./app.js";
+import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@desk/shared";
 
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
   await runMigrations(pool);
   await seedIfEmpty(pool);
   await seedProviderKeysFromEnv(pool);
+  await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this
   // value and the bind source the runtime computes once dropped every user

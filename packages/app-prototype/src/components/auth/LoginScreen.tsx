@@ -2,13 +2,9 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { markSignedIn } from '@/auth/auto-login'
+import { setSessionToken } from '@/auth/session'
 
-interface LoginScreenProps {
-  onLogin: () => void
-}
-
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+export function LoginScreen() {
   return (
     <div className="relative flex min-h-screen items-center justify-center">
       {/* Full-screen background */}
@@ -23,7 +19,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         transition={{ duration: 0.22, ease: 'easeOut' }}
         className="relative z-10 w-full max-w-sm mx-4"
       >
-        <LoginCard onLogin={onLogin} />
+        <LoginCard />
       </motion.div>
     </div>
   )
@@ -31,9 +27,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
 // ── Login card ────────────────────────────────────────────────────────────────
 
-function LoginCard({ onLogin }: { onLogin: () => void }) {
-  const [username, setUsername] = useState('desk')
-  const [password, setPassword] = useState('change-me-before-first-boot')
+function LoginCard() {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -57,9 +53,7 @@ function LoginCard({ onLogin }: { onLogin: () => void }) {
         return
       }
       const body = (await res.json()) as { token: string }
-      try { sessionStorage.setItem('desk.session.token', body.token) } catch { /* ignore */ }
-      markSignedIn()
-      onLogin()
+      setSessionToken(body.token)
       window.location.reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed.')

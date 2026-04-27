@@ -5,15 +5,15 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { store } from './store/store'
-import { ensureSession } from './auth/auto-login'
+import { ensureSession } from './auth/session'
 import { wsConnect } from './store/ws/middleware'
 
 async function boot(): Promise<void> {
   const token = await ensureSession()
 
-  // Connect the WS middleware once we actually have a token. After an
-  // explicit sign-out `ensureSession()` returns null and we render the
-  // LoginScreen instead — re-trying the WS would just 1008-close.
+  // Connect the WS middleware once we actually have a token. With no
+  // token `ensureSession()` returns null and we render the LoginScreen
+  // instead — re-trying the WS would just 1008-close.
   if (token) store.dispatch(wsConnect())
 
   createRoot(document.getElementById('root')!).render(

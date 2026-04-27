@@ -10,13 +10,16 @@ export async function handleLogin(
   const user = await queries.users.login(pool, body.username, body.password);
   if (!user) throw new UnauthorizedError("Invalid credentials");
 
-  const token = issueSession(user.id);
+  const token = await issueSession(pool, user.id);
   return { token };
 }
 
-export function handleLogout(authHeader: string | undefined): { ok: boolean } {
+export async function handleLogout(
+  pool: pg.Pool,
+  authHeader: string | undefined,
+): Promise<{ ok: boolean }> {
   if (authHeader?.startsWith("Bearer ")) {
-    revokeSession(authHeader.slice(7));
+    await revokeSession(pool, authHeader.slice(7));
   }
   return { ok: true };
 }

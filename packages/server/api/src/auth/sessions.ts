@@ -1,46 +1,52 @@
 import * as crypto from "node:crypto";
+import pg from "pg";
+import { queries } from "@desk/db";
 
 const TOKEN_PREFIX = "ses_";
 const TOKEN_BYTES = 32;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-interface SessionEntry {
-  userId: string;
-  issuedAt: number;
-}
-
-/** In-memory session store. Good enough for single-user v1. */
-const sessions = new Map<string, SessionEntry>();
-
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export function issueSession(userId: string): string {
+export async function issueSession(
+  pool: pg.Pool,
+  userId: string,
+): Promise<string> {
   const raw = crypto.randomBytes(TOKEN_BYTES).toString("hex");
   const token = TOKEN_PREFIX + raw;
-  const hash = hashToken(token);
-  sessions.set(hash, { userId, issuedAt: Date.now() });
+  await queries.authSessions.insert(pool, {
+    tokenHash: hashToken(token),
+    userId,
+  });
   return token;
 }
 
-export function revokeSession(token: string): boolean {
-  const hash = hashToken(token);
-  return sessions.delete(hash);
+export async function revokeSession(
+  pool: pg.Pool,
+  token: string,
+): Promise<boolean> {
+  return queries.authSessions.deleteByTokenHash(pool, hashToken(token));
 }
 
-export function verifySession(token: string): string | null {
-  const hash = hashToken(token);
-  const entry = sessions.get(hash);
-  if (!entry) return null;
-  if (Date.now() - entry.issuedAt > SESSION_TTL_MS) {
-    sessions.delete(hash);
-    return null;
-  }
-  return entry.userId;
+export async function verifySession(
+  pool: pg.Pool,
+  token: string,
+): Promise<string | null> {
+  return queries.authSessions.verify(pool, hashToken(token), SESSION_TTL_MS);
+}
+
+/**
+ * Server-startup hook: drop rows past the TTL so the table doesn't grow
+ * unbounded. Lazy-deletion in verifySession() handles the hot path; this
+ * keeps the cold tail tidy.
+ */
+export async function pruneExpiredSessions(pool: pg.Pool): Promise<number> {
+  return queries.authSessions.deleteExpired(pool, SESSION_TTL_MS);
 }
 
 /** Clears all sessions. For testing. */
-export function clearSessions(): void {
-  sessions.clear();
+export async function clearSessions(pool: pg.Pool): Promise<void> {
+  await queries.authSessions.deleteAll(pool);
 }
