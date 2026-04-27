@@ -294,6 +294,17 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/me/providers/meta" && method === "GET") {
+      const result = await accountRoutes.getProvidersMeta(pool, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/me/providers/meta" && method === "PUT") {
+      const body = await parseBody(req) as { meta: Record<string, { name?: string } | null> };
+      const result = await accountRoutes.setProvidersMeta(pool, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
 
     // Workspace routes — all scoped to the authenticated user. Non-owned
     // workspaces return 404 to avoid leaking existence.

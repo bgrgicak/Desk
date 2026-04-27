@@ -121,6 +121,7 @@ interface AppShellProps {
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
   onSignOut?: () => void
+  onChatWithAgent?: (agentId: string) => void
 }
 
 export function AppShell({
@@ -145,6 +146,7 @@ export function AppShell({
   todaySheetOpen = false,
   onTodaySheetClose,
   onSignOut,
+  onChatWithAgent,
 }: AppShellProps) {
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
@@ -432,6 +434,7 @@ export function AppShell({
             },
           })
         }}
+        onChatWithAgent={onChatWithAgent}
         onDeleteWorkspace={() => {
           void deleteWorkspaceMutation(activeWorkspace.id).then(() => {
             const next = workspaces.filter(w => w.id !== activeWorkspace.id)

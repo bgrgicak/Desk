@@ -215,6 +215,11 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [goTo])
 
+  const handleChatWithAgent = useCallback((agentId: string) => {
+    dispatch(setPendingNewChatAgentId(agentId))
+    goTo({ chat: NEW_CHAT_ID })
+  }, [dispatch, goTo])
+
   const handleViewChange = useCallback((view: RouteView) => {
     goTo({ view })
   }, [goTo])
@@ -365,6 +370,7 @@ function AppInner() {
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
+        onChatWithAgent={handleChatWithAgent}
       >
         {selectedArtifact && (() => {
           const selectedArtifactUpdate = artifactUpdates.find(u => u.artifactId === selectedArtifact.id) ?? null

@@ -62,3 +62,56 @@ export async function mergeProviderKeys(
   await setProviderKeys(db, userId, current);
   return current;
 }
+
+// ── Provider metadata (display names, etc.) ──────────────────────────────────
+
+export type ProviderMetaEntry = { name?: string };
+export type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
+
+/**
+ * Reads per-provider metadata for the user. Returns an empty object when
+ * no row exists or the column is null.
+ */
+export async function getProviderMeta(
+  db: Queryable,
+  userId: string,
+): Promise<ProviderMetaMap> {
+  const { rows } = await db.query(
+    "SELECT provider_meta_encrypted FROM user_settings WHERE user_id = $1",
+    [userId],
+  );
+  if (rows.length === 0) return {};
+  const ciphertext = rows[0].provider_meta_encrypted as Buffer | null;
+  if (!ciphertext || ciphertext.length === 0) return {};
+  return decryptJson<ProviderMetaMap>(ciphertext);
+}
+
+/**
+ * Merges the given metadata patch into the user's stored provider meta.
+ * Each entry is merged at the key level (not deep-merged within entries).
+ * A null entry removes that provider's metadata entirely.
+ */
+export async function mergeProviderMeta(
+  db: Queryable,
+  userId: string,
+  patch: Record<string, ProviderMetaEntry | null>,
+): Promise<ProviderMetaMap> {
+  const current = await getProviderMeta(db, userId);
+  for (const [key, entry] of Object.entries(patch)) {
+    if (entry === null) {
+      delete current[key];
+    } else {
+      current[key] = { ...current[key], ...entry };
+    }
+  }
+  const payload = encryptJson(current);
+  await db.query(
+    `INSERT INTO user_settings (user_id, provider_meta_encrypted, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (user_id) DO UPDATE
+       SET provider_meta_encrypted = EXCLUDED.provider_meta_encrypted,
+           updated_at = now()`,
+    [userId, payload],
+  );
+  return current;
+}

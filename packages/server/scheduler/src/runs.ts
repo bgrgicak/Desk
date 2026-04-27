@@ -313,6 +313,7 @@ export function createRunManager(opts: RunManagerOptions) {
           chatId: msg.chatId,
           agent: agentFileInput,
           attachments,
+          providerKeys,
           onLog,
         });
       }

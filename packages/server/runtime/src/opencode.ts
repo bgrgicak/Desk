@@ -17,6 +17,8 @@ export interface ExecRunOptions {
   agent: AgentFileInput;
   /** Workspace-relative paths to forward to opencode as `--file` flags. */
   attachments?: string[];
+  /** Provider API keys forwarded into every exec so they're always current. */
+  providerKeys?: Record<string, string>;
   onLog: (event: LogEvent) => void;
 }
 
@@ -73,6 +75,7 @@ export async function execRun(
       workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
+      providerKeys: opts.providerKeys,
       onLog: opts.onLog,
     });
     return result;
