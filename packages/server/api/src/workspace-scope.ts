@@ -71,14 +71,17 @@ export function requireLibraryPathInWorkspace(relPath: string, _workspaceId: str
 
 /**
  * Path validator for read endpoints that should also serve user-uploaded
- * chat attachments. Accepts strict library paths (delegates to
- * `requireLibraryPathInWorkspace`) AND `.chats/<chatId>/attachments/<filename>`
- * shapes after verifying the caller owns the chat. Other dot-prefixed
- * paths remain blocked so this can't be used to traverse agent
- * infrastructure (`.chats/<id>/notes/`, `.chats/<id>/logs/`, etc.).
+ * chat attachments and materialized chat notes. Accepts strict library
+ * paths (delegates to `requireLibraryPathInWorkspace`),
+ * `.chats/<chatId>/attachments/<filename>` (uploads), and
+ * `.chats/<chatId>/notes/<messageId>.md` (note mirrors), after verifying
+ * the caller owns the chat. Other dot-prefixed paths (e.g. `logs/`)
+ * remain blocked so this can't be used to traverse agent infrastructure.
  */
 const CHAT_ATTACHMENT_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/attachments\/([^/]+)$/;
+const CHAT_NOTE_PATTERN =
+  /^\.chats\/(cht_[A-Za-z0-9_-]+)\/notes\/([^/]+\.md)$/;
 
 export async function requireReadablePathInWorkspace(
   pool: pg.Pool,
@@ -86,9 +89,14 @@ export async function requireReadablePathInWorkspace(
   relPath: string,
   workspaceId: string,
 ): Promise<void> {
-  const m = relPath.match(CHAT_ATTACHMENT_PATTERN);
-  if (m) {
-    await requireOwnedChat(pool, m[1], userId);
+  const att = relPath.match(CHAT_ATTACHMENT_PATTERN);
+  if (att) {
+    await requireOwnedChat(pool, att[1], userId);
+    return;
+  }
+  const note = relPath.match(CHAT_NOTE_PATTERN);
+  if (note) {
+    await requireOwnedChat(pool, note[1], userId);
     return;
   }
   requireLibraryPathInWorkspace(relPath, workspaceId);

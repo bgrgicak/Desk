@@ -95,7 +95,6 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     name: `agent-${suffix}`,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(
@@ -238,7 +237,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();

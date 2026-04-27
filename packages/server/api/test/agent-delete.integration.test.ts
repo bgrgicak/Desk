@@ -147,7 +147,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
@@ -174,7 +174,6 @@ async function insertAgent(userId: string, name: string): Promise<string> {
     name,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
   return id;
 }

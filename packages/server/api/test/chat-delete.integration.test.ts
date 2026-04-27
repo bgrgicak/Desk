@@ -187,7 +187,6 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     name: `agent-${suffix}`,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
@@ -304,7 +303,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();

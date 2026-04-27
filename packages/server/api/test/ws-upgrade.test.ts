@@ -1,18 +1,55 @@
-import { describe, it, expect, afterEach, afterAll } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
 import * as net from "node:net";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as crypto from "node:crypto";
+import pg from "pg";
+import { runMigrations, queries } from "@desk/db";
+import { ensureLayout } from "@desk/storage";
+import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { generateId } from "@desk/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections, connectionCount, broadcast } from "../src/ws/registry.js";
 
-// Minimal stubs for AppOptions — we only need the WS upgrade path
-function stubOpts(): AppOptions {
+const workerId = process.env.VITEST_WORKER_ID ?? "0";
+const testDbName = `desk_ws_upgrade_${workerId}`;
+
+function adminConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = "/postgres";
+  return url.toString();
+}
+function testConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = `/${testDbName}`;
+  return url.toString();
+}
+
+let pool: pg.Pool;
+let home: string;
+let userId: string;
+
+function appOpts(): AppOptions {
   return {
-    pool: {} as any,
-    storage: {} as any,
-    runManager: { enqueueRun: async () => ({}), cancelRun: async () => {}, cancelJob: async () => {}, adapter: {} } as any,
-    broadcastUserId: "usr_wstest",
+    pool,
+    storage: { pool, home },
+    runManager: createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 0 }),
+    }),
+    broadcastUserId: userId,
   };
 }
 
@@ -21,19 +58,11 @@ function getServerPort(server: http.Server): number {
   return addr.port;
 }
 
-afterEach(() => {
-  clearSessions();
-  clearConnections();
-});
-
 let servers: http.Server[] = [];
-afterAll(() => {
-  for (const s of servers) s.close();
-});
 
 function startServer(): Promise<http.Server> {
   return new Promise((resolve) => {
-    const server = createApp(stubOpts());
+    const server = createApp(appOpts());
     server.listen(0, () => {
       servers.push(server);
       resolve(server);
@@ -46,13 +75,13 @@ function startServer(): Promise<http.Server> {
  */
 function rawUpgrade(
   port: number,
-  path: string,
+  reqPath: string,
 ): Promise<{ response: string; socket: net.Socket }> {
   return new Promise((resolve, reject) => {
     const key = crypto.randomBytes(16).toString("base64");
     const socket = net.createConnection({ port, host: "127.0.0.1" }, () => {
       socket.write(
-        `GET ${path} HTTP/1.1\r\n` +
+        `GET ${reqPath} HTTP/1.1\r\n` +
         `Host: 127.0.0.1:${port}\r\n` +
         `Upgrade: websocket\r\n` +
         `Connection: Upgrade\r\n` +
@@ -73,6 +102,59 @@ function rawUpgrade(
     setTimeout(() => reject(new Error("Upgrade timeout")), 3000);
   });
 }
+
+beforeAll(async () => {
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+    await admin.query(`CREATE DATABASE ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
+
+  pool = new pg.Pool({ connectionString: testConn() });
+  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  await runMigrations(pool);
+
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-upgrade-"));
+  await ensureLayout(home);
+  process.env.DESK_HOME = home;
+
+  userId = generateId("user");
+  await queries.users.insert(pool, {
+    id: userId,
+    username: "ws-upgrade-test",
+    passwordHash: "$2b$10$placeholder",
+    email: "ws-upgrade@example.com",
+  });
+});
+
+afterEach(async () => {
+  await clearSessions(pool);
+  clearConnections();
+});
+
+afterAll(async () => {
+  for (const s of servers) s.close();
+  if (pool) await pool.end();
+  if (home) await fs.rm(home, { recursive: true, force: true });
+  delete process.env.DESK_HOME;
+
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
+});
 
 describe("WebSocket upgrade", () => {
   it("rejects upgrade without token", async () => {
@@ -99,7 +181,7 @@ describe("WebSocket upgrade", () => {
     const server = await startServer();
     const port = getServerPort(server);
 
-    const token = issueSession("usr_wstest");
+    const token = await issueSession(pool, userId);
     const { response, socket } = await rawUpgrade(port, `/ws?token=${token}`);
 
     expect(response).toContain("101 Switching Protocols");
@@ -116,9 +198,8 @@ describe("WebSocket upgrade", () => {
   it("receives a broadcast event after upgrade", async () => {
     const server = await startServer();
     const port = getServerPort(server);
-    const userId = "usr_wstest";
 
-    const token = issueSession(userId);
+    const token = await issueSession(pool, userId);
     const { response, socket } = await rawUpgrade(port, `/ws?token=${token}`);
 
     expect(response).toContain("101 Switching Protocols");
@@ -176,7 +257,7 @@ describe("WebSocket upgrade", () => {
     const server = await startServer();
     const port = getServerPort(server);
 
-    const token = issueSession("usr_wstest");
+    const token = await issueSession(pool, userId);
 
     await expect(rawUpgrade(port, `/other?token=${token}`)).rejects.toThrow();
   });

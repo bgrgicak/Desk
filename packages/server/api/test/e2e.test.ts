@@ -96,7 +96,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
 
@@ -318,6 +318,67 @@ describe("API e2e (real Postgres)", () => {
       }
     }
     expect(replied).toBe(true);
+  });
+
+  it("POST /chats/:id/messages with kind=task creates one self-firing row (no agent_turn pair)", async () => {
+    const wsRes = await request("GET", "/workspaces", token);
+    const workspaces = wsRes.body as Array<{ id: string }>;
+    const agentsRes = await request("GET", "/agents", token);
+    const agents = agentsRes.body as Array<{ id: string }>;
+
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId: workspaces[0].id,
+      agentId: agents[0].id,
+      title: "Task Test Chat",
+    });
+    const chat = chatRes.body as { id: string };
+
+    const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "Audit the numbers",
+      kind: "task",
+      title: "Audit Q2",
+      executeAt: futureIso,
+    });
+    expect(msgRes.status).toBe(201);
+    const taskMsg = msgRes.body as {
+      id: string;
+      role: string;
+      kind: string;
+      title: string | null;
+      executeAt: string;
+      state: string;
+    };
+    expect(taskMsg.kind).toBe("task");
+    expect(taskMsg.title).toBe("Audit Q2");
+    expect(taskMsg.executeAt).toBe(futureIso);
+    expect(taskMsg.state).toBe("pending");
+
+    // No `agent_turn` trigger should exist alongside it. Self-firing kinds
+    // are a single row.
+    const list = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (list.body as { items: Array<{ id: string; content: { type: string } }> }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe(taskMsg.id);
+    expect(items[0].content.type).toBe("text");
+
+    // Surfaces under both kind=task and scheduled=true (the row carries
+    // its own schedule).
+    const kindRes = await request(
+      "GET",
+      `/messages?kind=task&workspaceId=${workspaces[0].id}`,
+      token,
+    );
+    const kindItems = (kindRes.body as { items: Array<{ id: string }> }).items;
+    expect(kindItems.some((m) => m.id === taskMsg.id)).toBe(true);
+
+    const schedRes = await request(
+      "GET",
+      `/messages?scheduled=true&workspaceId=${workspaces[0].id}`,
+      token,
+    );
+    const schedItems = (schedRes.body as { items: Array<{ id: string }> }).items;
+    expect(schedItems.some((m) => m.id === taskMsg.id)).toBe(true);
   });
 
   it("GET /search searches across real data", async () => {
@@ -1061,7 +1122,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
   }, 30000);
 
   afterAll(async () => {
-    clearSessions();
+    if (realPool) await clearSessions(realPool);
     clearConnections();
     realServer?.close();
     if (realPool) await realPool.end();

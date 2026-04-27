@@ -289,6 +289,82 @@ export async function overwriteFile(
 }
 
 /**
+ * Pins an existing library file to a chat by symlinking it into the
+ * chat's `.chats/{chatId}/attachments/` directory. The library file is
+ * not copied or moved — the symlink exists purely so `listAttachments`
+ * surfaces the pinned file in the chat's "In this chat" sidebar list.
+ *
+ * Idempotent: if a symlink with the same basename already points at the
+ * same target, returns its FileRef unchanged. On basename collision with
+ * a different target, falls back to the same `name-1.ext` rename scheme
+ * `uploadArtifact` uses.
+ *
+ * Returns a FileRef whose `path` is the symlink's workspace-relative
+ * path (under `.chats/{chatId}/attachments/`). `fs.stat` follows the
+ * link, so size / createdAt reflect the underlying library file.
+ */
+export async function pinLibraryFileToChat(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  libraryRelPath: string,
+): Promise<FileRef> {
+  const targetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const targetStat = await fs.stat(targetAbs).catch(() => null);
+  if (!targetStat) throw new NotFoundError(`File not found: ${libraryRelPath}`);
+  if (!targetStat.isFile()) throw new ValidationError(`Not a file: ${libraryRelPath}`);
+
+  const root = workspaceRootPath(ctx.home, slug);
+  const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+
+  // A library path that already lives inside this chat's attachments dir
+  // is already pinned (or is a chat-local upload). Pinning it would
+  // create a self-referential symlink — refuse.
+  if (targetAbs === attDir || targetAbs.startsWith(attDir + path.sep)) {
+    throw new ValidationError(`Cannot pin a file that is already a chat attachment: ${libraryRelPath}`);
+  }
+
+  const desiredName = path.basename(targetAbs);
+  rejectHiddenName(desiredName);
+
+  const sameNameAbs = path.join(attDir, desiredName);
+  const existingTarget = await fs.readlink(sameNameAbs).catch(() => null);
+  if (existingTarget !== null) {
+    // Existing symlink at the desired name. If it points at the same
+    // library file, this pin is a no-op — return its FileRef.
+    const resolvedExisting = path.isAbsolute(existingTarget)
+      ? existingTarget
+      : path.resolve(attDir, existingTarget);
+    if (resolvedExisting === targetAbs) {
+      const stat = await fs.stat(sameNameAbs).catch(() => null);
+      if (stat) {
+        const relPath = path.relative(root, sameNameAbs).split(path.sep).join("/");
+        return {
+          path: relPath,
+          name: desiredName,
+          mime: guessMime(desiredName),
+          size: stat.size,
+          createdAt: stat.birthtime.toISOString(),
+        };
+      }
+    }
+  }
+
+  const linkPath = await uniqueDestPath(attDir, desiredName);
+  await fs.symlink(targetAbs, linkPath);
+
+  const stat = await fs.stat(linkPath);
+  const relPath = path.relative(root, linkPath).split(path.sep).join("/");
+  return {
+    path: relPath,
+    name: path.basename(linkPath),
+    mime: guessMime(linkPath),
+    size: stat.size,
+    createdAt: stat.birthtime.toISOString(),
+  };
+}
+
+/**
  * Move a file from one workspace-relative path to another. Leaves a symlink
  * at the old path pointing to the new absolute path so existing references
  * remain valid.
