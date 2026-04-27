@@ -71,8 +71,11 @@ log "Installing workspace dependencies at $REPO_ROOT"
 cd "$REPO_ROOT"
 npm ci --no-audit --no-fund
 
-log "Building all workspace packages"
-npm run build
+log "Building server workspace packages"
+# The VM only runs the server. The host-side `app` prototype is built by
+# Vite when the dev server starts; building it here just adds latency and
+# couples the VM provision to the prototype's typecheck health.
+npx nx run-many -t build --exclude=app
 
 log "Staging /opt/desk-server from the built workspace"
 rm -rf /opt/desk-server

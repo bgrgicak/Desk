@@ -274,6 +274,11 @@ export function createRunManager(opts: RunManagerOptions) {
       const providerKeys = userId
         ? await queries.userSettings.getProviderKeys(pool, userId)
         : {};
+      if (userId && Object.keys(providerKeys).length > 0) {
+        await queries.providerKeyAccessLog.logKeyAccess(
+          pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${messageId}`,
+        );
+      }
       const agent = await queries.agents.findById(pool, agentId);
       const agentFileInput: AgentFileInput = {
         agentId,

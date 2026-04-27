@@ -9,6 +9,7 @@
  * to the server's real URL.
  */
 import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as net from "node:net";
@@ -98,7 +99,10 @@ async function startVite(
   // parent shell process whose PID we track in the teardown handle, but
   // the real vite process is a grandchild that outlives our SIGTERM and
   // keeps port 5179 busy for the next run.
-  const viteBin = path.join(APP_ROOT, "node_modules", ".bin", "vite");
+  // npm workspaces may hoist vite to the repo root, so fall back there.
+  const workspaceBin = path.join(APP_ROOT, "node_modules", ".bin", "vite");
+  const rootBin = path.join(APP_ROOT, "..", "..", "node_modules", ".bin", "vite");
+  const viteBin = existsSync(workspaceBin) ? workspaceBin : rootBin;
   const preview = spawn(
     viteBin,
     ["preview", "--logLevel", "warn"],

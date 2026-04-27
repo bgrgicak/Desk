@@ -16,7 +16,21 @@ test("editing workspace name + description + color from the Customize modal pers
   serverUrl,
   token,
 }) => {
-  // Seeded workspace is "Desk" (see packages/server/db/src/seed.ts).
+  // Reset workspace to seed state so retries start clean. A previous attempt
+  // may have renamed it to "Updated Desk" before failing on a later assertion.
+  const listRes = await fetch(`${serverUrl}/workspaces`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const [ws] = (await listRes.json()) as Array<{ id: string; name: string }>;
+  if (ws.name !== "Desk") {
+    await fetch(`${serverUrl}/workspaces/${ws.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: "Desk", icon: "", color: "", description: "" }),
+    });
+    await loggedInPage.reload();
+  }
+
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
   await expect(loggedInPage.getByRole("button", { name: /Desk/ }).first()).toBeVisible();
 
@@ -37,7 +51,8 @@ test("editing workspace name + description + color from the Customize modal pers
 
   await loggedInPage.getByRole("button", { name: /Save changes/ }).click();
 
-  // Bar re-renders with the new name after the mutation invalidates the list.
+  // Bar re-renders with the new name and emoji after the mutation invalidates the list.
+  // The top-bar button text is "{emoji} {name}", so both appear in its accessible name.
   await expect(
     loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
