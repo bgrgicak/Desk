@@ -6,6 +6,7 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 
@@ -33,7 +34,8 @@ export function ConversationPanel({
   transitionFrom,
 }: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [activeTab, setActiveTab] = useState<PanelTab>('chat')
+  const tabKey = artifact ? `desk.artifact.${artifact.id}.tab` : null
+  const [activeTab, setActiveTab] = usePersistedState<PanelTab>(tabKey, 'chat')
   const [detailsSectionOpen, setDetailsSectionOpen] = useState(true)
   const [notesSectionOpen, setNotesSectionOpen] = useState(true)
   const [artifactNotes, setArtifactNotes] = useState('')

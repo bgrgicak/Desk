@@ -10,7 +10,6 @@ function rowToAgent(row: Record<string, unknown>): Agent {
     name: row.name,
     instructions: row.instructions,
     model: row.model,
-    toolAllowlist: row.tool_allowlist,
   });
 }
 
@@ -34,11 +33,11 @@ export async function findById(db: Queryable, id: string): Promise<Agent | null>
 
 export async function insert(
   db: Queryable,
-  data: { id: string; userId: string; name: string; instructions?: string; model?: string; toolAllowlist?: string[] },
+  data: { id: string; userId: string; name: string; instructions?: string; model?: string },
 ): Promise<Agent> {
   const { rows } = await db.query(
-    `INSERT INTO agents (id, user_id, name, instructions, model, tool_allowlist)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO agents (id, user_id, name, instructions, model)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
     [
       data.id,
@@ -46,7 +45,6 @@ export async function insert(
       data.name,
       data.instructions ?? "",
       data.model ?? "opencode/big-pickle",
-      JSON.stringify(data.toolAllowlist ?? []),
     ],
   );
   return rowToAgent(rows[0]);
@@ -86,13 +84,4 @@ export async function updateMeta(
 export async function remove(db: Queryable, id: string): Promise<boolean> {
   const { rowCount } = await db.query("DELETE FROM agents WHERE id = $1", [id]);
   return (rowCount ?? 0) > 0;
-}
-
-export async function getToolAllowlist(db: Queryable, id: string): Promise<string[] | null> {
-  const { rows } = await db.query(
-    "SELECT tool_allowlist FROM agents WHERE id = $1",
-    [id],
-  );
-  if (!rows.length) return null;
-  return rows[0].tool_allowlist as string[];
 }

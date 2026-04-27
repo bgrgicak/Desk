@@ -34,22 +34,18 @@ test("moving a task to the Complete column persists as cancelled", async ({
     })
   ).json()) as { id: string };
 
+  const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const post = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ content: "Slice19 board card" }),
+    body: JSON.stringify({
+      content: "Slice19 board card",
+      kind: "task",
+      title: "Slice19 board card",
+      executeAt: futureIso,
+    }),
   });
   const userMsg = (await post.json()) as { id: string };
-
-  const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const sched = await fetch(`${serverUrl}/chats/${chat.id}/messages/${userMsg.id}`, {
-    method: "PATCH",
-    headers,
-    body: JSON.stringify({ executeAt: futureIso }),
-  });
-  if (sched.status >= 400) {
-    test.skip(true, "server rejected executeAt on user message — feature not available");
-  }
 
   // Simulate the BoardView drop → PATCH `state: 'cancelled'` (our UI
   // mapping for the Complete column). The Tasks page should reflect

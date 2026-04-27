@@ -8,6 +8,11 @@ export const UserSchema = z.object({
   username: z.string(),
   email: z.string().email(),
   avatarPath: z.string().optional(),
+  /** IANA timezone reported by the user's app client, e.g. "America/Los_Angeles".
+   * Self-healing: every authed API request carries `X-Client-Timezone` and the
+   * server upserts when the stored value drifts. The agent file injects it as
+   * the default zone for ambiguous user-supplied times. */
+  timezone: z.string().optional(),
   createdAt: z.string(),
 });
 export type User = z.infer<typeof UserSchema>;
@@ -18,7 +23,6 @@ export const AgentSchema = z.object({
   name: z.string(),
   instructions: z.string(),
   model: z.string(),
-  toolAllowlist: z.array(z.string()),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
@@ -172,6 +176,18 @@ export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
 export const MESSAGE_STATES = ["pending", "running", "succeeded", "failed", "cancelled", "paused"] as const;
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
+/**
+ * Discriminates a message's role on non-chat surfaces. `chat` is the default
+ * conversational message; `task` is a user-defined task surfaced on the Tasks
+ * page; `ai_note` is the system-scheduled note refresh trigger; `task_run`
+ * is one firing of a task (parent_id points at the task definition, state
+ * tracks that single execution). See:
+ *   - packages/server/docs/plans/message-as-task.md
+ *   - packages/server/docs/plans/task-runs-as-messages.md
+ */
+export const MESSAGE_KINDS = ["chat", "task", "task_run", "ai_note"] as const;
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
 export const SchedulerRefSchema = z.object({
   kind: z.enum(["at", "cron"]),
   id: z.string(),
@@ -202,6 +218,11 @@ export const MessageSchema = z.object({
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   updatedAt: z.string().optional(),
+
+  /** Discriminator for non-chat surfaces (tasks, ai-note refresh, etc.). */
+  kind: z.enum(MESSAGE_KINDS).default("chat"),
+  /** Display name for tasks; null for ordinary chat messages. */
+  title: z.string().nullable().optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 

@@ -23,14 +23,29 @@ const rawBaseQuery = fetchBaseQuery({
   prepareHeaders: (headers) => {
     const token = getSessionToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
+    // Self-healing: server upserts users.timezone when this drifts.
+    // Resolved per-request so a user moving between zones is captured
+    // without a re-login. Wrapped in try/catch because Intl is unavailable
+    // in some test environments.
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) headers.set("X-Client-Timezone", tz);
+    } catch {
+      /* ignore */
+    }
     return headers;
   },
 });
 
 /**
- * If an authed call returns 401 the stored token is dead. Clearing it
- * and forcing a reload kicks the user back through ensureSession().
+ * If an authed call returns 401 the stored token is dead. Clear it and
+ * reload so the App outer-render check sees no token and renders the
+ * LoginScreen — without a reload the React tree stays wedged on the stale
+ * token (the check runs once at mount and doesn't subscribe to
+ * sessionStorage). The one-shot guard keeps a 401-storm from looping
+ * the page.
  */
+let reloadingFor401 = false;
 const baseQuery: BaseQueryFn<
   Parameters<typeof rawBaseQuery>[0],
   unknown,
@@ -48,6 +63,10 @@ const baseQuery: BaseQueryFn<
     } catch {
       /* ignore */
     }
+    if (!reloadingFor401 && typeof window !== "undefined") {
+      reloadingFor401 = true;
+      window.location.reload();
+    }
   }
   return result;
 };
@@ -63,6 +82,7 @@ function buildMessagesQuery(f: MessagesFilter): string {
     params.set("awaitingUser", String(f.awaitingUser));
   if (f.contentKind && f.contentKind.length > 0)
     params.set("contentKind", f.contentKind.join(","));
+  if (f.kind && f.kind.length > 0) params.set("kind", f.kind.join(","));
   if (f.since) params.set("since", f.since);
   if (f.limit !== undefined) params.set("limit", String(f.limit));
   if (f.cursor) params.set("cursor", f.cursor);
@@ -217,7 +237,6 @@ export const api = createApi({
         name: string;
         instructions?: string;
         model?: string;
-        toolAllowlist?: string[];
       }
     >({
       query: (body) => ({ url: "/agents", method: "POST", body }),
@@ -352,15 +371,32 @@ export const api = createApi({
     }),
     postChatMessage: build.mutation<
       ServerMessage,
-      { chatId: string; content: string; attachments?: AttachmentRef[] }
+      {
+        chatId: string;
+        content: string;
+        attachments?: AttachmentRef[];
+        kind?: "chat" | "task" | "ai_note";
+        title?: string;
+        executeAt?: string;
+        cron?: string;
+      }
     >({
-      query: ({ chatId, content, attachments }) => ({
-        url: `/chats/${chatId}/messages`,
-        method: "POST",
-        body: attachments && attachments.length > 0 ? { content, attachments } : { content },
-      }),
+      query: ({ chatId, content, attachments, kind, title, executeAt, cron }) => {
+        const body: Record<string, unknown> = { content };
+        if (attachments && attachments.length > 0) body.attachments = attachments;
+        if (kind) body.kind = kind;
+        if (title) body.title = title;
+        if (executeAt) body.executeAt = executeAt;
+        if (cron) body.cron = cron;
+        return {
+          url: `/chats/${chatId}/messages`,
+          method: "POST",
+          body,
+        };
+      },
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
+        { type: "Message", id: "CROSS" },
         { type: "Chat", id: chatId },
         { type: "Chat", id: "LIST" },
       ],
@@ -375,6 +411,7 @@ export const api = createApi({
           state: "cancelled" | "pending" | "paused";
           executeAt: string | null;
           cron: string | null;
+          title: string | null;
         }>;
       }
     >({
@@ -395,6 +432,19 @@ export const api = createApi({
       query: ({ chatId, messageId }) => ({
         url: `/chats/${chatId}/messages/${messageId}`,
         method: "DELETE",
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "Message", id: `CHAT_${chatId}` },
+        { type: "Message", id: "CROSS" },
+      ],
+    }),
+    runMessage: build.mutation<
+      ServerMessage,
+      { chatId: string; messageId: string }
+    >({
+      query: ({ chatId, messageId }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/run`,
+        method: "POST",
       }),
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
@@ -542,6 +592,22 @@ export const api = createApi({
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
+    // Pins a workspace-library file to the chat by symlinking it into
+    // `.chats/{chatId}/attachments/`. The library file is untouched.
+    // Idempotent — pinning the same file twice is a no-op server-side.
+    pinChatLibraryRef: build.mutation<
+      ServerFile,
+      { chatId: string; path: string }
+    >({
+      query: ({ chatId, path }) => ({
+        url: `/chats/${chatId}/library-refs`,
+        method: "POST",
+        body: { path },
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "ChatArtifact", id: `CHAT_${chatId}` },
+      ],
+    }),
 
     // ── Search ────────────────────────────────────────────────────────
     search: build.query<
@@ -595,6 +661,7 @@ export const {
   usePostChatMessageMutation,
   usePatchMessageMutation,
   useDeleteMessageMutation,
+  useRunMessageMutation,
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
@@ -606,6 +673,7 @@ export const {
   useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
   useUploadChatArtifactMutation,
+  usePinChatLibraryRefMutation,
   useSearchQuery,
   useGetModelsQuery,
 } = api;

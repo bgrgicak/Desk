@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, StickyNote, Paperclip } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 
@@ -85,8 +85,6 @@ function MessageContentView({ content }: { content: MessageContent }) {
           {content.text}
         </p>
       )
-    case 'note':
-      return <NoteBlock body={content.body} />
     case 'artifactRef':
       return <ArtifactRefRow path={content.path} name={content.name} />
     case 'events':
@@ -95,24 +93,14 @@ function MessageContentView({ content }: { content: MessageContent }) {
       return <ToolCallChip toolName={content.toolName} args={content.args} />
     case 'toolResult':
       return <ToolResultChip toolName={content.toolName} result={content.result} />
+    case 'note':
     case 'ai_note_request':
     case 'agent_turn':
-      // System rows — shouldn't reach here (filtered upstream), but render
-      // nothing instead of throwing so a stray row doesn't blank the chat.
+      // Filtered out of the bubble stream upstream — notes surface in the
+      // Artifacts panel; ai_note_request / agent_turn drive the typing
+      // indicator. Render nothing if a stray row reaches this layer.
       return null
   }
-}
-
-function NoteBlock({ body }: { body: string }) {
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3 text-sm leading-relaxed whitespace-pre-wrap">
-      <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground font-medium">
-        <StickyNote className="h-3 w-3" />
-        Note
-      </div>
-      {body}
-    </div>
-  )
 }
 
 function ArtifactRefRow({ path, name }: { path: string; name?: string }) {

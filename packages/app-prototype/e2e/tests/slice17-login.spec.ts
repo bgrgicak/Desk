@@ -11,18 +11,13 @@ const SEED_USERNAME = "e2e";
 const SEED_PASSWORD = "e2e";
 const APP_URL = "http://127.0.0.1:5179";
 
-// Force the app into the signed-out branch by setting the sticky flag
-// `desk.session.signed_out` (set by `logout()`) before main.tsx boots.
-// Otherwise main.tsx auto-logs in the dev user and we never see the
-// LoginScreen. After a successful login the LoginScreen calls
-// `markSignedIn()` which clears that flag, so subsequent reloads boot
-// straight into the app — no need for a teardown.
+// Clear any stored token so main.tsx renders the LoginScreen rather than
+// resuming a session.
 async function simulateSignedOut(page: import("@playwright/test").Page): Promise<void> {
   await page.goto(APP_URL);
   await page.evaluate(() => {
     try {
       sessionStorage.removeItem('desk.session.token');
-      localStorage.setItem('desk.session.signed_out', '1');
     } catch { /* ignore */ }
   });
   await page.reload();

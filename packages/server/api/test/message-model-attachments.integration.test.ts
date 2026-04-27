@@ -114,7 +114,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
@@ -315,14 +315,34 @@ describe("GET /library/content for chat attachments", () => {
     expect(meta.size).toBe(fileBody.length);
   });
 
-  it("rejects other dot-prefixed paths (e.g. .chats/<id>/notes/) with 404", async () => {
+  it("serves a chat-owned note via /library/meta with a 'Chat notes' label", async () => {
+    const noteFilename = "msg_open_me.md";
+    const notePath = `.chats/${chatId}/notes/${noteFilename}`;
+    const noteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes");
+    await fs.mkdir(noteDir, { recursive: true });
+    await fs.writeFile(path.join(noteDir, noteFilename), "# Running summary\n");
+
     const noteRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/notes/anything.md`)}`,
+      `/library/meta?path=${encodeURIComponent(notePath)}`,
       undefined,
       userToken,
     );
-    expect(noteRes.status).toBe(404);
+    expect(noteRes.status).toBe(200);
+    const meta = noteRes.body as { path: string; name: string; label?: string };
+    expect(meta.path).toBe(notePath);
+    expect(meta.name).toBe(noteFilename);
+    expect(meta.label).toBe("Chat notes");
+  });
+
+  it("still rejects other dot-prefixed paths (e.g. .chats/<id>/logs/) with 404", async () => {
+    const logRes = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/logs/anything.log`)}`,
+      undefined,
+      userToken,
+    );
+    expect(logRes.status).toBe(404);
   });
 });
 

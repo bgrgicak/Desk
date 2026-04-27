@@ -99,7 +99,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
@@ -282,6 +282,130 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(res.status).toBe(400);
   });
 
+  // Kanban "Scheduled → Todo": clearing executeAt on a pending row must
+  // remove the at-job (via reschedule) and not leave a stale scheduler_ref.
+  it("PATCH executeAt:null on a scheduled row clears the at-job and scheduler_ref", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Scheduled→Todo" });
+    // The seed insertPendingMessage installs no scheduler_ref; simulate
+    // one as if scheduleMessage had run.
+    await pool.query(
+      `UPDATE messages SET scheduler_ref = $1 WHERE id = $2`,
+      [JSON.stringify({ kind: "at", id: "fake-at-1" }), mid],
+    );
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { executeAt: null });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeUndefined();
+    expect(row?.schedulerRef).toBeUndefined();
+  });
+
+  // Kanban "Complete → Todo": cancelled row gets state:pending + executeAt:null.
+  // The cancelled→pending transition must be allowed and the row must end up
+  // with no schedule and no scheduler_ref.
+  it("PATCH state:pending+executeAt:null restores a cancelled row to plain todo", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Complete→Todo" });
+    // Cancel it first (kanban drag-to-Complete).
+    const cancel = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "cancelled" });
+    expect(cancel.status).toBe(200);
+    expect((cancel.body as { state: string }).state).toBe("cancelled");
+
+    // Drag back to Todo: client sends pending + clears schedule.
+    const restore = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(restore.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeUndefined();
+    expect(row?.cron).toBeUndefined();
+    expect(row?.schedulerRef).toBeUndefined();
+  });
+
+  // Kanban "Complete → Scheduled": cancelled row with stored executeAt
+  // gets state:pending. resumeMessage must re-install the at-job from the
+  // preserved executeAt.
+  it("PATCH state:pending re-schedules a cancelled row that still carries executeAt", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Complete→Scheduled" });
+    const cancel = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "cancelled" });
+    expect(cancel.status).toBe(200);
+
+    // The executeAt set by insertPendingMessage (now + 1h) survived the
+    // cancel because cancelScheduledMessage only touches state and
+    // scheduler_ref. Drag-back should re-install the at-job.
+    const resume = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(resume.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeDefined();
+    expect(row?.schedulerRef).toBeDefined();
+    expect(row?.schedulerRef?.kind).toBe("at");
+  });
+
+  // No-op state PATCH on an already-pending row falls through to the
+  // field-only path. The kanban board sends the column's target state
+  // unconditionally, so this must not 400.
+  it("PATCH state:pending on an already-pending row is a no-op (does not 400)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "no-op pending" });
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  // Kanban "Complete → Todo" for a *succeeded* row: PATCH state:pending
+  // must restore the row instead of 400'ing. Previously the validator
+  // only allowed pending from paused/cancelled — re-running a finished
+  // task surfaced "state can only be patched to 'pending' from 'paused'
+  // or 'cancelled'" in the UI.
+  it("PATCH state:pending restores a succeeded row to pending (re-run)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "succeeded→todo" });
+    await pool.query(
+      `UPDATE messages SET state = 'succeeded', execute_at = NULL,
+                           started_at = now(), ended_at = now()
+       WHERE id = $1`,
+      [mid],
+    );
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  // And the same for a failed row.
+  it("PATCH state:pending restores a failed row to pending (re-run)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "failed→todo" });
+    await pool.query(
+      `UPDATE messages SET state = 'failed', execute_at = NULL,
+                           started_at = now(), ended_at = now()
+       WHERE id = $1`,
+      [mid],
+    );
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  // Patching the state of a running message is forbidden (the row is
+  // claimed by fireMessage and a manual flip would race the executor).
+  it("PATCH state:pending on a running row is rejected", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "running guard" });
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = $1`, [mid]);
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(res.status).toBe(400);
+  });
+
   it("DELETE removes the message", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "delete me" });
     const res = await userRequest("DELETE", `/chats/${chatId}/messages/${mid}`);
@@ -302,6 +426,75 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
   it("GET logs returns 404 for a message with no log file", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "no log yet" });
     const res = await userRequest("GET", `/chats/${chatId}/messages/${mid}/logs`);
+    expect(res.status).toBe(404);
+  });
+
+  // Kanban "drag to Active" → POST /chats/{id}/messages/{id}/run.
+  // Forces the row back to pending and dispatches the agent. The run
+  // is fire-and-forget: the route returns the freshly-pending row
+  // immediately; fireMessage finalizes the state asynchronously.
+  it("POST /run on a pending row dispatches the agent and the run finalizes", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "drag to active" });
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+
+    // Wait for the fire-and-forget run to settle (claim → execRunFn →
+    // finalize). The fake driver in this suite returns synchronously,
+    // so a short tick is enough.
+    for (let i = 0; i < 50; i++) {
+      const row = await queries.messages.findById(pool, mid);
+      if (row?.state === "succeeded") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("succeeded");
+    expect(row?.startedAt).toBeDefined();
+    expect(row?.endedAt).toBeDefined();
+  });
+
+  // Re-running a previously-succeeded task: POST /run flips it back to
+  // pending and fires it again. This is the "drag from Complete to
+  // Active" path.
+  it("POST /run re-fires a succeeded row", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "rerun me" });
+    await pool.query(
+      `UPDATE messages SET state = 'succeeded', execute_at = NULL,
+                           started_at = now() - interval '1 hour',
+                           ended_at = now() - interval '1 hour'
+       WHERE id = $1`,
+      [mid],
+    );
+    const before = await queries.messages.findById(pool, mid);
+    const beforeStart = before?.startedAt;
+
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+
+    for (let i = 0; i < 50; i++) {
+      const row = await queries.messages.findById(pool, mid);
+      if (row?.state === "succeeded" && row.startedAt && row.startedAt !== beforeStart) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("succeeded");
+    expect(row?.startedAt).not.toBe(beforeStart);
+  });
+
+  // POST /run on a row that's already running is a no-op — the row is
+  // claimed by the prior fireMessage and a second dispatch would race.
+  it("POST /run on a running row is a no-op (returns the row unchanged)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "already running" });
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = $1`, [mid]);
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("running");
+  });
+
+  // POST /run on a foreign chat returns 404 (ownership guard runs first).
+  it("POST /run rejects a wrong chatId with 404", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "wrong chat" });
+    const res = await userRequest("POST", `/chats/chat_does_not_exist/messages/${mid}/run`);
     expect(res.status).toBe(404);
   });
 });

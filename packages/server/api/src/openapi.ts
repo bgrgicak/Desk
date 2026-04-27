@@ -230,7 +230,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet" } },
+          responses: { "200": { description: "Chat array with last-message snippet and `iconKind` (newest non-chat message kind, falling back to `chat` — drives the chat-list icon)." } },
         },
         post: {
           summary: "Create chat",
@@ -580,6 +580,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
             { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
+            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|ai_note`). Distinct from `contentKind`." },
+            { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },
             { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
             { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },

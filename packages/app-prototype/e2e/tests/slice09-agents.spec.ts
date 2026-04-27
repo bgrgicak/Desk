@@ -18,6 +18,16 @@ import { test, expect } from "../fixtures";
 async function openAgentsTab(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Customize/i }).click();
   await page.getByRole("button", { name: /^Agents$/i }).click();
+  // Wait for /tools/models to populate. The Add form snapshots flatModels
+  // via useState(initialModel) on mount — open it before models resolve and
+  // the Add agent button stays disabled with no way to pick one. The Desk
+  // row's provider label is the readiness signal: it only renders once
+  // modelIndex has the seeded model.
+  await page
+    .getByRole("dialog")
+    .getByText(/^OpenCode$/)
+    .first()
+    .waitFor({ state: "visible", timeout: 10_000 });
 }
 
 test("settings modal lists the seeded agent", async ({ loggedInPage }) => {
@@ -44,27 +54,19 @@ test("toggling an agent on/off in a workspace round-trips through the membership
   await openAgentsTab(loggedInPage);
   const dialog = loggedInPage.getByRole("dialog");
 
-  // A brand-new agent is NOT auto-enrolled into existing workspaces —
-  // the auto-enroll only runs on workspace creation, not on agent creation.
-  await dialog.getByRole("button", { name: /Add custom agent/i }).click();
-  await dialog.getByLabel("Agent name").fill(candidateName);
-  await dialog.getByRole("button", { name: /^Create agent$/i }).click();
+  // The redesigned Settings modal auto-enrolls a freshly-created agent into
+  // the current workspace via addWorkspaceAgent, so the row starts checked.
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await dialog.getByPlaceholder("e.g. Copywriter").fill(candidateName);
+  await dialog.getByRole("button", { name: /^Add agent$/i }).click();
   await expect(dialog.getByText(candidateName)).toBeVisible({ timeout: 5_000 });
 
   const candidateRow = dialog.locator("div.group", { hasText: candidateName }).first();
-  const toggle = candidateRow.getByRole("switch", {
-    name: new RegExp(`Enable ${candidateName} in this workspace`, "i"),
+  const enabledToggle = candidateRow.getByRole("switch", {
+    name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
   });
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("data-state", "unchecked");
-
-  // Enable — server gets a POST, membership appears.
-  await toggle.click();
-  await expect(
-    candidateRow.getByRole("switch", {
-      name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
-    }),
-  ).toHaveAttribute("data-state", "checked", { timeout: 5_000 });
+  await expect(enabledToggle).toBeVisible();
+  await expect(enabledToggle).toHaveAttribute("data-state", "checked");
 
   {
     const memRes = await fetch(
@@ -76,10 +78,7 @@ test("toggling an agent on/off in a workspace round-trips through the membership
   }
 
   // Disable — server gets a DELETE, membership goes away.
-  const disableToggle = candidateRow.getByRole("switch", {
-    name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
-  });
-  await disableToggle.click();
+  await enabledToggle.click();
   await expect(
     candidateRow.getByRole("switch", {
       name: new RegExp(`Enable ${candidateName} in this workspace`, "i"),
@@ -94,6 +93,16 @@ test("toggling an agent on/off in a workspace round-trips through the membership
     const memberships = (await memRes.json()) as Array<{ name: string }>;
     expect(memberships.find(m => m.name === candidateName)).toBeUndefined();
   }
+
+  // Re-enable — server gets a POST, membership comes back.
+  await candidateRow
+    .getByRole("switch", { name: new RegExp(`Enable ${candidateName} in this workspace`, "i") })
+    .click();
+  await expect(
+    candidateRow.getByRole("switch", {
+      name: new RegExp(`Disable ${candidateName} in this workspace`, "i"),
+    }),
+  ).toHaveAttribute("data-state", "checked", { timeout: 5_000 });
 
   // Cleanup — remove the custom agent so later tests see the seeded list.
   const agentsRes = await fetch(`${serverUrl}/agents`, {
@@ -155,15 +164,15 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
   const dialog = loggedInPage.getByRole("dialog");
 
   // Open the inline create form.
-  await dialog.getByRole("button", { name: /Add custom agent/i }).click();
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
 
   // Editor uses the default model; no need to touch the picker (which is
   // empty in the e2e lane anyway).
-  await dialog.getByLabel("Agent name").fill(initialName);
+  await dialog.getByPlaceholder("e.g. Copywriter").fill(initialName);
   await dialog
-    .getByPlaceholder(/How should this agent behave/i)
+    .getByPlaceholder(/Describe how this agent should behave/i)
     .fill("Be concise.");
-  await dialog.getByRole("button", { name: /^Create agent$/i }).click();
+  await dialog.getByRole("button", { name: /^Add agent$/i }).click();
 
   // New agent row is rendered from the invalidated GET /agents list.
   await expect(dialog.getByText(initialName)).toBeVisible({ timeout: 5_000 });
@@ -182,23 +191,25 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
     expect(created?.instructions).toBe("Be concise.");
   }
 
-  // Hover the row to reveal the edit button, then rename.
+  // Hover the row to reveal the Edit button, then rename via the Save button
+  // in the detail editor.
   const row = dialog.locator("div.group", { hasText: initialName }).first();
   await row.hover();
-  await row.getByRole("button", { name: `Edit ${initialName}` }).click();
+  await row.getByRole("button", { name: /^Edit$/ }).click();
 
-  const nameInput = dialog.getByLabel("Agent name");
+  const nameInput = dialog.getByPlaceholder("e.g. Copywriter");
   await nameInput.fill(renamedName);
   await dialog.getByRole("button", { name: /^Save$/ }).click();
 
   await expect(dialog.getByText(renamedName)).toBeVisible({ timeout: 5_000 });
   await expect(dialog.getByText(initialName)).toHaveCount(0);
 
-  // Delete via trash + confirm popover.
+  // Delete via the row's More actions kebab → Delete (no confirm popover —
+  // the redesigned modal deletes immediately from the list).
   const renamedRow = dialog.locator("div.group", { hasText: renamedName }).first();
   await renamedRow.hover();
-  await renamedRow.getByRole("button", { name: `Delete ${renamedName}` }).click();
-  await loggedInPage.getByRole("button", { name: /^Delete$/ }).click();
+  await renamedRow.getByRole("button", { name: "More actions" }).click();
+  await loggedInPage.getByRole("menuitem", { name: /^Delete$/ }).click();
 
   await expect(dialog.getByText(renamedName)).toHaveCount(0, { timeout: 5_000 });
 

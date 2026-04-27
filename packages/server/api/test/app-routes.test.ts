@@ -1,28 +1,66 @@
-import { describe, it, expect, afterEach, afterAll } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
 import * as net from "node:net";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import pg from "pg";
+import { runMigrations, queries } from "@desk/db";
+import { ensureLayout } from "@desk/storage";
+import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { generateId } from "@desk/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-function stubOpts(): AppOptions {
-  return {
-    pool: {} as any,
-    storage: {} as any,
-    runManager: { enqueueRun: async () => ({}), cancelRun: async () => {}, cancelJob: async () => {}, adapter: {} } as any,
-    broadcastUserId: "usr_apptest",
-  };
+const workerId = process.env.VITEST_WORKER_ID ?? "0";
+const testDbName = `desk_app_routes_${workerId}`;
+
+function adminConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = "/postgres";
+  return url.toString();
 }
+function testConn(): string {
+  const url = new URL(
+    process.env.DESK_TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://desk:desk@127.0.0.1:55432/desk",
+  );
+  url.pathname = `/${testDbName}`;
+  return url.toString();
+}
+
+let pool: pg.Pool;
+let home: string;
+let userId: string;
 
 function getServerPort(server: http.Server): number {
   return (server.address() as net.AddressInfo).port;
+}
+
+function appOpts(): AppOptions {
+  return {
+    pool,
+    storage: { pool, home },
+    runManager: createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 0 }),
+    }),
+    broadcastUserId: userId,
+  };
 }
 
 let servers: http.Server[] = [];
 
 function startServer(): Promise<http.Server> {
   return new Promise((resolve) => {
-    const server = createApp(stubOpts());
+    const server = createApp(appOpts());
     server.listen(0, () => {
       servers.push(server);
       resolve(server);
@@ -33,7 +71,7 @@ function startServer(): Promise<http.Server> {
 function request(
   port: number,
   method: string,
-  path: string,
+  reqPath: string,
   token?: string,
   body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
@@ -45,7 +83,7 @@ function request(
     if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
 
     const req = http.request(
-      { hostname: "127.0.0.1", port, path, method, headers },
+      { hostname: "127.0.0.1", port, path: reqPath, method, headers },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
@@ -63,13 +101,57 @@ function request(
   });
 }
 
-afterEach(() => {
-  clearSessions();
+beforeAll(async () => {
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+    await admin.query(`CREATE DATABASE ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
+
+  pool = new pg.Pool({ connectionString: testConn() });
+  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  await runMigrations(pool);
+
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-routes-"));
+  await ensureLayout(home);
+  process.env.DESK_HOME = home;
+
+  userId = generateId("user");
+  await queries.users.insert(pool, {
+    id: userId,
+    username: "app-routes-test",
+    passwordHash: "$2b$10$placeholder",
+    email: "app-routes@example.com",
+  });
+});
+
+afterEach(async () => {
+  await clearSessions(pool);
   clearConnections();
 });
 
-afterAll(() => {
+afterAll(async () => {
   for (const s of servers) s.close();
+  if (pool) await pool.end();
+  if (home) await fs.rm(home, { recursive: true, force: true });
+  delete process.env.DESK_HOME;
+
+  const admin = new pg.Pool({ connectionString: adminConn() });
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
+      [testDbName],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
+  } finally {
+    await admin.end();
+  }
 });
 
 describe("app route dispatch", () => {
@@ -87,9 +169,18 @@ describe("app route dispatch", () => {
   });
 
   it("DELETE /me returns 200 with ok message", async () => {
+    // Re-seed the user — DELETE /me wipes it, and other tests in this
+    // file expect the row to exist when they issue a session against it.
+    await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    await queries.users.insert(pool, {
+      id: userId,
+      username: "delete-me-test",
+      passwordHash: "$2b$10$placeholder",
+      email: "delete-me@example.com",
+    });
     const server = await startServer();
     const port = getServerPort(server);
-    const token = issueSession("usr_test");
+    const token = await issueSession(pool, userId);
 
     const res = await request(port, "DELETE", "/me", token);
     expect(res.status).toBe(200);
@@ -105,9 +196,16 @@ describe("app route dispatch", () => {
   });
 
   it("unknown route returns 404", async () => {
+    // Re-seed in case a prior test deleted the user.
+    await pool.query(
+      `INSERT INTO users (id, username, password_hash, email)
+            VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, "unknown-route-test", "$2b$10$placeholder", "unknown@example.com"],
+    );
     const server = await startServer();
     const port = getServerPort(server);
-    const token = issueSession("usr_test");
+    const token = await issueSession(pool, userId);
 
     const res = await request(port, "GET", "/nonexistent", token);
     expect(res.status).toBe(404);

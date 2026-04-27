@@ -4,8 +4,9 @@ import pg from "pg";
 import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
-import { requireAuth } from "./auth/middleware.js";
+import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
+import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {
   requireOwnedAgent,
@@ -116,7 +117,7 @@ export function createApp(opts: AppOptions): Server {
       // Auth
       let userId: string;
       try {
-        userId = requireAuth(path, req.headers.authorization);
+        userId = await requireAuth(pool, path, req.headers.authorization);
       } catch (err) {
         if (err instanceof DeskError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
@@ -125,6 +126,15 @@ export function createApp(opts: AppOptions): Server {
         }
         return;
       }
+
+      // Self-healing timezone: every authed request carries X-Client-Timezone
+      // from the app; the helper UPDATEs only when it drifts. Failure is
+      // non-fatal — never block a real request because the timezone write
+      // hiccuped.
+      recordClientTimezone(pool, userId, req.headers["x-client-timezone"]).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("recordClientTimezone failed:", err);
+      });
 
       const segments = path.split("/").filter(Boolean);
       const params: RouteParams = { path, segments, userId, query: url.searchParams };
@@ -143,6 +153,7 @@ export function createApp(opts: AppOptions): Server {
 
   // WebSocket upgrade handler
   server.on("upgrade", (req, socket, head) => {
+    void (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== "/ws") {
       socket.destroy();
@@ -157,7 +168,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    const userId = verifySession(token);
+    const userId = await verifySession(pool, token);
     if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -224,6 +235,10 @@ export function createApp(opts: AppOptions): Server {
       ws.readyState = 3;
       removeConnection(userId, ws);
     });
+    })().catch((err) => {
+      console.error("WebSocket upgrade failed:", err);
+      try { socket.destroy(); } catch { /* ignore */ }
+    });
   });
 
   async function dispatch(method: string, params: RouteParams, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -247,6 +262,38 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
+    // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
+    // and we use the agent's userId to gate the chat ownership check.
+    if (path === "/sandbox/messages" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      const chatId = body.chatId;
+      await requireOwnedChat(pool, chatId, agent.userId);
+
+      // Default kind = "task" for sandbox-issued messages: the agent calls
+      // this from `desk task schedule`, so a chat reply isn't the intent.
+      // Caller can still override (e.g. kind="ai_note") if they have a
+      // reason to.
+      const sendBody = { kind: "task", ...body };
+      delete (sendBody as { chatId?: string }).chatId;
+
+      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent);
+      if (userMessage.kind && userMessage.kind !== "chat" && (userMessage.executeAt || userMessage.cron)) {
+        runManager.scheduleMessage(triggerId).catch((err) => {
+          // eslint-disable-next-line no-console
+          console.error(`scheduleMessage for ${triggerId} failed:`, err);
+        });
+      }
+      sendJson(res, 201, userMessage);
+      return;
+    }
+
     // Auth routes
     if (path === "/auth/login" && method === "POST") {
       const body = await parseBody(req) as { username: string; password: string };
@@ -255,7 +302,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/logout" && method === "POST") {
-      const result = authRoutes.handleLogout(req.headers.authorization);
+      const result = await authRoutes.handleLogout(pool, req.headers.authorization);
       sendJson(res, 200, result);
       return;
     }
@@ -366,7 +413,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/agents" && method === "POST") {
-      const body = await parseBody(req) as { name: string; instructions?: string; model?: string; toolAllowlist?: string[] };
+      const body = await parseBody(req) as { name: string; instructions?: string; model?: string };
       const result = await agentRoutes.createAgent(pool, userId, body);
       sendJson(res, 201, result);
       return;
@@ -446,8 +493,27 @@ export function createApp(opts: AppOptions): Server {
       const body = await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Fire the pending trigger message (messages-as-truth path) and
-      // schedule an ai-note refresh for this chat.
+      // Self-firing kinds (task / ai_note): the agent only acts when the
+      // row carries a schedule. A schedule installs the at/cron entry; a
+      // manual task (no executeAt, no cron) is just inserted and sits in
+      // the user-chosen column until the user moves it. Agents must not
+      // change the column-state of a task the user added by hand.
+      if (userMessage.kind && userMessage.kind !== "chat") {
+        if (userMessage.executeAt || userMessage.cron) {
+          runManager.scheduleMessage(triggerId).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.error(`scheduleMessage for ${triggerId} failed:`, err);
+          });
+        }
+        // No fire-now branch: unscheduled tasks stay where the user
+        // placed them; the agent is silent until the user schedules it
+        // or runs it explicitly.
+        sendJson(res, 201, userMessage);
+        return;
+      }
+
+      // Default chat path: fire the pending trigger message and schedule
+      // an ai-note refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`fireMessage for trigger ${triggerId} failed:`, err);
@@ -461,6 +527,12 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "run" && segments.length === 5 && method === "POST") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
+      const result = await chatRoutes.runMessage(pool, segments[1], segments[3], runManager, emitEvent);
       sendJson(res, 200, result);
       return;
     }
@@ -508,6 +580,22 @@ export function createApp(opts: AppOptions): Server {
         storage,
         segments[1],
         { name, mime, content },
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const libraryPath = typeof body?.path === "string" ? body.path : "";
+      if (!libraryPath) {
+        throw new ValidationError("Missing 'path' in body");
+      }
+      const result = await chatRoutes.pinLibraryFile(
+        storage,
+        segments[1],
+        libraryPath,
         emitEvent,
       );
       sendJson(res, 201, result);
@@ -587,7 +675,13 @@ export function createApp(opts: AppOptions): Server {
       const wsId = await requireWorkspaceId(pool, userId, query);
       await requireReadablePathInWorkspace(pool, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
-      sendJson(res, 200, result);
+      // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
+      // user-friendly "Chat notes" label so the detail view doesn't title
+      // the page with the messageId-based filename.
+      const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
+        ? { ...result, label: "Chat notes" }
+        : result;
+      sendJson(res, 200, decorated);
       return;
     }
     if (path === "/library/download" && method === "GET") {

@@ -130,7 +130,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (SKIP) return;
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
 

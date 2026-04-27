@@ -10,6 +10,7 @@ function rowToUser(row: Record<string, unknown>): User {
     username: row.username,
     email: row.email,
     avatarPath: row.avatar_path ?? undefined,
+    timezone: row.timezone ?? undefined,
     createdAt: (row.created_at as Date).toISOString(),
   });
 }
@@ -83,6 +84,23 @@ export async function updatePassword(
     [passwordHash, id],
   );
   return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Sets the user's IANA timezone if it differs from what's stored. No-op when
+ * the value matches, so it's safe to call on every authed request from the
+ * `X-Client-Timezone` header without a DB write storm.
+ */
+export async function setTimezoneIfChanged(
+  db: Queryable,
+  id: string,
+  timezone: string,
+): Promise<void> {
+  await db.query(
+    `UPDATE users SET timezone = $1
+     WHERE id = $2 AND (timezone IS DISTINCT FROM $1)`,
+    [timezone, id],
+  );
 }
 
 export async function getPasswordHash(

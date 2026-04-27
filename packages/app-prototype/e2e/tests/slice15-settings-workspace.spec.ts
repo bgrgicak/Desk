@@ -18,7 +18,7 @@ test("editing workspace name + icon + color from Settings → Workspace persists
   await loggedInPage.getByRole("button", { name: /Customize/ }).click();
   // Workspace tab is the default. Confirm and edit.
   const dialog = loggedInPage.getByRole("dialog");
-  await expect(dialog.getByText(/Workspace details/i)).toBeVisible();
+  await expect(dialog.getByPlaceholder("Workspace name")).toBeVisible();
 
   await dialog.getByPlaceholder("Workspace name").fill("Slice15 Renamed");
   await dialog.getByPlaceholder("What's this workspace for?").fill("renamed by slice15");

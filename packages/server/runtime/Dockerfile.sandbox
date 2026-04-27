@@ -18,13 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g opencode-ai --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
-# Install @desk/sandbox-cli binary from builder stage
+# Install @desk/sandbox-cli binary from builder stage. esbuild's `banner`
+# config already prepends `#!/usr/bin/env node`, so we just symlink — adding
+# a second shebang here would break the file as a Node entry point.
 COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-cli/desk.js
-RUN printf '#!/usr/bin/env node\n' | cat - /usr/local/lib/desk-cli/desk.js > /usr/local/bin/desk && \
-    chmod +x /usr/local/bin/desk
-
-# Copy skill file
-COPY sandbox-cli/skill.md /opt/desk/skills/desk-cli.md
+RUN ln -s /usr/local/lib/desk-cli/desk.js /usr/local/bin/desk && \
+    chmod +x /usr/local/lib/desk-cli/desk.js
 
 # Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first
 # start (idempotent via `cp -rn`). See runtime/sandbox-entrypoint.sh.

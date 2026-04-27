@@ -4,13 +4,14 @@ import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, type AttachmentRef, type Message, type WsEvent } from "@desk/shared";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@desk/shared";
 import { z } from "zod";
 import {
   chatAttachmentsDir,
   listNoteHistory,
   materializeNote,
   notesDir,
+  pinLibraryFileToChat,
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
@@ -35,6 +36,16 @@ export interface MessageLifecycleOps {
   pauseMessage(messageId: string): Promise<Message | null>;
   resumeMessage(messageId: string): Promise<Message | null>;
   cancelScheduledMessage(messageId: string): Promise<Message | null>;
+  /** Sync the OS-level at/cron entry with the row's current
+   * executeAt/cron/state. Removes the existing entry, then re-installs
+   * iff state='pending' and a schedule remains. Used after PATCHes that
+   * change schedule fields without crossing a state boundary, so
+   * `executeAt: null` actually cancels the at-job. */
+  rescheduleMessage(messageId: string): Promise<Message | null>;
+  /** Claims the row and runs the agent in-process. Used by the run-now
+   * route so the kanban "drag to Active" can fire a task on demand. */
+  fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }>;
+  adapter: SchedulerCancelAdapter | null;
 }
 
 /**
@@ -133,18 +144,26 @@ export async function listMessages(
 }
 
 /**
- * User sends a chat message. Inserts two rows:
- *   1. The user's message (role=user, immutable) — carries the text.
- *   2. A pending system trigger with `agent_turn` content that references
- *      the user message id. fireMessage resolves the referenced user
- *      message at fire time and uses its text as the prompt, so the
- *      payload is never duplicated.
+ * User sends a message into a chat. Two write shapes depending on kind:
  *
- * Callers (app.ts) get the trigger's id back to schedule the fire.
+ * - `kind='chat'` (default): a user-role text row plus a pending system
+ *   `agent_turn` trigger that references the user message. fireMessage
+ *   resolves the trigger at fire time, reads the parent user message's
+ *   text as the prompt. No duplication of payload.
+ * - `kind='task'` or `'ai_note'`: a single self-firing row. The schedule
+ *   (`executeAt` / `cron`) lives directly on it; fireMessage dispatches
+ *   on `kind` to know what to run. No separate trigger.
+ *
+ * Callers (app.ts) get the trigger's id (or the message id for self-firing
+ * kinds) back to schedule the fire.
  */
 const SendMessageSchema = z.object({
   content: z.string(),
   attachments: z.array(AttachmentRefSchema).optional(),
+  kind: z.enum(MESSAGE_KINDS).optional(),
+  title: z.string().optional(),
+  executeAt: z.string().optional(),
+  cron: z.string().optional(),
 });
 
 export async function sendMessage(
@@ -164,6 +183,34 @@ export async function sendMessage(
 
   const attachments: AttachmentRef[] | undefined =
     data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
+
+  const kind: MessageKind = data.kind ?? "chat";
+
+  // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
+  // dispatches by kind. The "userMessage" / "triggerId" pair in the return
+  // value is a chat-shape concession — both ids point at the same row so
+  // app.ts can schedule the message id without branching.
+  if (kind !== "chat") {
+    const messageId = generateId("message");
+    const message = await queries.messages.insert(pool, {
+      id: messageId,
+      chatId,
+      role: "user",
+      content: { type: "text", text: data.content },
+      attachments,
+      kind,
+      title: data.title ?? null,
+      // Self-firing kinds always land as `pending` so claimPending in the
+      // fire handler can transition them. Schedule presence governs whether
+      // app.ts schedules an at/cron entry or fires immediately.
+      state: "pending",
+      executeAt: data.executeAt ?? null,
+      cron: data.cron ?? null,
+      agentId: chat.agentId,
+    });
+    emit({ type: "message.appended", payload: message });
+    return { userMessage: message, triggerId: messageId };
+  }
 
   const userMessage = await queries.messages.insert(pool, {
     id: generateId("message"),
@@ -218,14 +265,19 @@ export async function patchMessage(
       `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
     );
   }
-  if (data.state === "pending" && current.state !== "paused") {
+  // A no-op state patch (e.g. `state: 'pending'` on an already-pending row)
+  // is allowed and falls through to the field-only path below — the kanban
+  // board sends the column's target state on every drop without inspecting
+  // the row's current state.
+  const stateTransition = data.state !== undefined && data.state !== current.state;
+  // The only forbidden destination is from 'running' — that's claimed
+  // atomically by fireMessage and a manual flip would race with the
+  // executor. Every other transition (terminal → pending for a re-run,
+  // paused → cancelled, …) is fair game; the lifecycle ops reconcile
+  // OS-level at/cron entries.
+  if (stateTransition && current.state === "running") {
     throw new ValidationError(
-      `state can only be patched to 'pending' from 'paused'`,
-    );
-  }
-  if (data.state === "paused" && current.state !== "pending") {
-    throw new ValidationError(
-      `state can only be patched to 'paused' from 'pending'`,
+      `cannot patch state of a running message; cancel or wait for it to finish`,
     );
   }
 
@@ -247,12 +299,15 @@ export async function patchMessage(
   }
 
   // Lifecycle transitions route through the scheduler so OS-level at/cron
-  // entries are added/removed in sync with the DB state. A state patch
-  // with no other fields is delegated entirely; a combined content+state
-  // patch first writes content, then transitions.
-  if (data.state && lifecycleOps) {
-    if (data.content !== undefined) {
-      await queries.messages.updateMessage(pool, messageId, { content: data.content });
+  // entries are added/removed in sync with the DB state. We apply non-state
+  // fields (content, executeAt, cron) first so the lifecycle op observes
+  // the new schedule when it re-installs at/cron — e.g. `pending + executeAt:null`
+  // resumes the row but rescheduleMessage's at-job install correctly no-ops.
+  if (stateTransition && lifecycleOps) {
+    const preTransition = { ...data };
+    delete preTransition.state;
+    if (Object.keys(preTransition).length > 0) {
+      await queries.messages.updateMessage(pool, messageId, preTransition);
     }
     let updated: Message | null = null;
     if (data.state === "paused") updated = await lifecycleOps.pauseMessage(messageId);
@@ -262,10 +317,61 @@ export async function patchMessage(
     return updated;
   }
 
+  // Non-transition path. Apply DB update, then if executeAt or cron changed,
+  // sync the OS-level at/cron entry. Without this, clearing executeAt would
+  // leave a stale at-job that fires on a now-orphaned schedule.
   const updated = await queries.messages.updateMessage(pool, messageId, data);
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
+  if (lifecycleOps && (data.executeAt !== undefined || data.cron !== undefined)) {
+    const synced = await lifecycleOps.rescheduleMessage(messageId);
+    return synced ?? updated;
+  }
   emit({ type: "message.updated", payload: updated });
   return updated;
+}
+
+/**
+ * Runs a task message on demand. Used by the kanban "drag to Active"
+ * gesture: forces the row back to `pending`, drops any pending OS-level
+ * at/cron entry, then dispatches the agent. Re-fires terminal rows
+ * (succeeded/failed/cancelled) too — the column drop is the user's
+ * "do it again, now" intent. Idempotent if the row is already running:
+ * returns the current row without firing twice.
+ */
+export async function runMessage(
+  pool: pg.Pool,
+  chatId: string,
+  messageId: string,
+  ops: MessageLifecycleOps,
+  emit: (event: WsEvent) => void,
+): Promise<Message> {
+  const current = await queries.messages.findById(pool, messageId);
+  if (!current || current.chatId !== chatId) {
+    throw new NotFoundError(`Message not found in chat: ${messageId}`);
+  }
+  if (current.state === "running") return current;
+
+  // Drop any scheduled at/cron entry so a manual run doesn't race a
+  // queued one. We keep executeAt/cron on the row as metadata; if the
+  // task succeeds, statusFor maps it to the Complete column anyway.
+  await cancelSchedulerRef(current, ops.adapter);
+  const reset = await queries.messages.updateMessage(pool, messageId, {
+    state: "pending",
+    schedulerRef: null,
+  });
+  if (!reset) throw new NotFoundError(`Message not found: ${messageId}`);
+  emit({ type: "message.updated", payload: reset });
+
+  // Fire-and-forget. fireMessage's claimPending flips the row to
+  // 'running' and broadcasts message.updated; the kanban picks that up
+  // over WS and moves the card to the Active column. The full agent
+  // run continues in the background.
+  ops.fireMessage(messageId).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(`runMessage fireMessage failed for ${messageId}:`, err);
+  });
+
+  return reset;
 }
 
 /**
@@ -348,9 +454,14 @@ export async function getMessageLogs(
  * `note`: a materialized mirror of a `note`-content message, written by
  * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
  * read-only from the client's perspective — they're owned by the DB row.
+ *
+ * `label` is an optional human-friendly name the UI shows alongside the
+ * raw file name (e.g. notes always carry "Chat notes" so the listing
+ * doesn't expose the messageId-based filename as the primary label).
  */
 export type ChatFileRef = FileRef & {
   kind: "attachment" | "note";
+  label?: string;
 };
 
 /**
@@ -407,6 +518,7 @@ export async function listAttachments(
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
         kind: "note",
+        label: "Chat notes",
       });
     }
   }
@@ -459,6 +571,28 @@ export async function deleteChat(
  * agent artifacts). Returns a FileRef with the new workspace-relative
  * path.
  */
+/**
+ * Pins a library file into the chat's "In this chat" sidebar by
+ * symlinking it under `.chats/{chatId}/attachments/`. The library file
+ * stays where it is — only a link is created, so deleting the chat
+ * doesn't affect the workspace library.
+ */
+export async function pinLibraryFile(
+  storage: StorageContext,
+  chatId: string,
+  libraryPath: string,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const file = await pinLibraryFileToChat(storage, ws.path, chatId, libraryPath);
+  emit({ type: "artifact.created", payload: file });
+  return file;
+}
+
 export async function uploadAttachmentToChat(
   storage: StorageContext,
   chatId: string,

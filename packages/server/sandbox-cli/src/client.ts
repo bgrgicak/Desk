@@ -1,89 +1,78 @@
 import http from "node:http";
-import { TOOLS, type ToolName } from "@desk/shared";
+import { URL } from "node:url";
 import { CliError } from "./errors.js";
 
-export function callTool(
-  name: ToolName,
-  request: unknown,
+/**
+ * Posts to the host-side desk-server REST API. Resolves the API URL from
+ * `DESK_API_URL` and authenticates with the per-run sandbox session token
+ * in `DESK_SANDBOX_TOKEN` — both injected by the runtime when OpenCode is
+ * started for a run.
+ */
+export async function postJson(
+  pathname: string,
+  body: unknown,
 ): Promise<unknown> {
-  const tool = TOOLS[name];
-  const parsed = tool.request.parse(request);
-
-  const token = process.env.DESK_TOOL_TOKEN;
+  const token = process.env.DESK_SANDBOX_TOKEN;
   if (!token) {
-    throw new CliError("NO_TOKEN", "DESK_TOOL_TOKEN is not set");
+    throw new CliError("NO_TOKEN", "DESK_SANDBOX_TOKEN is not set");
+  }
+  const apiUrl = process.env.DESK_API_URL;
+  if (!apiUrl) {
+    throw new CliError("NO_ENDPOINT", "DESK_API_URL is not set");
   }
 
-  const socketPath = process.env.DESK_TOOL_SOCKET;
-  const baseUrl = process.env.DESK_TOOL_URL;
+  const target = new URL(pathname, apiUrl);
+  const json = JSON.stringify(body);
 
-  if (!socketPath && !baseUrl) {
-    throw new CliError(
-      "NO_ENDPOINT",
-      "Neither DESK_TOOL_SOCKET nor DESK_TOOL_URL is set",
+  return await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        method: "POST",
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "https:" ? 443 : 80),
+        path: target.pathname + target.search,
+        protocol: target.protocol,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Desk-Sandbox-Token": token,
+          "Content-Length": Buffer.byteLength(json),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              resolve(JSON.parse(raw));
+            } catch (err) {
+              reject(
+                new CliError(
+                  "INVALID_RESPONSE",
+                  err instanceof Error ? err.message : String(err),
+                ),
+              );
+            }
+          } else {
+            let code = "HTTP_ERROR";
+            let message = `HTTP ${res.statusCode}: ${raw}`;
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed.code) code = parsed.code;
+              if (parsed.message) message = parsed.message;
+            } catch {
+              // use defaults
+            }
+            reject(new CliError(code, message));
+          }
+        });
+      },
     );
-  }
-
-  const body = JSON.stringify(parsed);
-
-  const options: http.RequestOptions = {
-    method: "POST",
-    path: `/tools/${name}`,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Desk-Sandbox-Token": token,
-      "Content-Length": Buffer.byteLength(body),
-    },
-  };
-
-  if (socketPath) {
-    options.socketPath = socketPath;
-  } else {
-    const url = new URL(baseUrl!);
-    options.hostname = url.hostname;
-    options.port = url.port;
-    options.protocol = url.protocol;
-  }
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () => {
-        const raw = Buffer.concat(chunks).toString();
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            const json = JSON.parse(raw);
-            const validated = tool.response.parse(json);
-            resolve(validated);
-          } catch (err) {
-            reject(
-              new CliError(
-                "INVALID_RESPONSE",
-                err instanceof Error ? err.message : String(err),
-              ),
-            );
-          }
-        } else {
-          let code = "HTTP_ERROR";
-          let message = `HTTP ${res.statusCode}: ${raw}`;
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed.code) code = parsed.code;
-            if (parsed.message) message = parsed.message;
-          } catch {
-            // use defaults
-          }
-          reject(new CliError(code, message));
-        }
-      });
-    });
-
     req.on("error", (err) => {
       reject(new CliError("CONNECTION_ERROR", err.message));
     });
-
-    req.write(body);
+    req.write(json);
     req.end();
   });
 }

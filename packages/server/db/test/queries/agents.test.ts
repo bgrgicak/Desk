@@ -30,12 +30,10 @@ describe("agents queries", () => {
       id: agentId,
       userId: ownerId,
       name: "TestAgent",
-      toolAllowlist: ["file.read", "file.write"],
     });
     expect(agent.id).toBe(agentId);
     expect(agent.userId).toBe(ownerId);
     expect(agent.name).toBe("TestAgent");
-    expect(agent.toolAllowlist).toEqual(["file.read", "file.write"]);
   });
 
   it("listByUser returns only agents owned by the user", async () => {
@@ -74,10 +72,5 @@ describe("agents queries", () => {
     const updated = await agents.updateMeta(pool, agentId, { name: "UpdatedAgent" });
     expect(updated).not.toBeNull();
     expect(updated!.name).toBe("UpdatedAgent");
-  });
-
-  it("gets tool allowlist", async () => {
-    const tools = await agents.getToolAllowlist(pool, agentId);
-    expect(tools).toEqual(["file.read", "file.write"]);
   });
 });

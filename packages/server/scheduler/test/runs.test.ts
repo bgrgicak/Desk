@@ -106,6 +106,37 @@ async function insertPendingMessage(content: unknown): Promise<string> {
   return id;
 }
 
+async function insertTask(opts: { content: unknown; cron?: string; executeAt?: string }): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, state, kind, cron, execute_at)
+     VALUES ($1, $2, 'user', $3, 'pending', 'task', $4, $5)`,
+    [
+      id,
+      chatId,
+      JSON.stringify(opts.content),
+      opts.cron ?? null,
+      opts.executeAt ? new Date(opts.executeAt) : null,
+    ],
+  );
+  return id;
+}
+
+async function listTaskRuns(taskId: string): Promise<Array<{ id: string; state: string; startedAt: Date | null; endedAt: Date | null }>> {
+  const { rows } = await pool.query(
+    `SELECT id, state, started_at, ended_at FROM messages
+     WHERE parent_id = $1 AND kind = 'task_run'
+     ORDER BY started_at ASC NULLS LAST, id ASC`,
+    [taskId],
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    state: r.state as string,
+    startedAt: r.started_at as Date | null,
+    endedAt: r.ended_at as Date | null,
+  }));
+}
+
 describe("fireMessage", () => {
   it("claims pending → running, runs the agent, produces an events child, succeeds", async () => {
     const events: WsEvent[] = [];
@@ -238,6 +269,136 @@ describe("fireMessage", () => {
     await mgr.fireMessage(triggerId);
 
     expect(capturedPrompt).toBe("resolve me please");
+  });
+});
+
+describe("fireMessage on kind='task'", () => {
+  it("each fire creates a task_run child; the task definition is not mutated", async () => {
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      emit: (evt) => events.push(evt),
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "do the thing" },
+      cron: "*/5 * * * *",
+    });
+
+    const a = await mgr.fireMessage(taskId);
+    expect(a.fired).toBe(true);
+    const b = await mgr.fireMessage(taskId);
+    expect(b.fired).toBe(true);
+
+    // Parent task is untouched: still pending, no started_at — the schedule
+    // is the source of truth, runs hold per-fire state.
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.startedAt).toBeUndefined();
+    expect(parent?.endedAt).toBeUndefined();
+
+    // Two task_run children, each with its own terminal state and timing.
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].state).toBe("succeeded");
+    expect(runs[1].state).toBe("succeeded");
+    expect(runs[0].startedAt).not.toBeNull();
+    expect(runs[1].startedAt).not.toBeNull();
+    expect(runs[0].id).not.toBe(runs[1].id);
+
+    // The agent output child of each fire is parented to its run, not the
+    // task definition. result.childIds is the agent output id from the
+    // most recent fire.
+    const lastOutput = await queries.messages.findById(pool, b.childIds[0]);
+    expect(lastOutput?.parentId).toBe(runs[1].id);
+  });
+
+  it("one-shot task transitions parent to terminal and clears executeAt", async () => {
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "one-shot" },
+      executeAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("succeeded");
+    expect(parent?.executeAt).toBeUndefined();
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("task run failure marks the run failed and the one-shot parent failed", async () => {
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async () => ({ exitCode: 1 }),
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "boom" },
+      executeAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("failed");
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("failed");
+  });
+
+  it("declines to start a second concurrent run for the same task", async () => {
+    // Block the first fire inside execRunFn so its run is still "running"
+    // when the second fire arrives. The second should see the in-flight
+    // run via startTaskRun's lock and bail out without creating a row.
+    let release: (() => void) | null = null;
+    const blocked = new Promise<void>((r) => { release = r; });
+    const mgr = createRunManager({
+      pool,
+      adapter: createMemoryAdapter(),
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "" });
+        await blocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "race" },
+      cron: "*/5 * * * *",
+    });
+
+    const first = mgr.fireMessage(taskId);
+    // Yield to the event loop so first proceeds past startTaskRun + claim.
+    await new Promise((r) => setTimeout(r, 25));
+
+    const second = await mgr.fireMessage(taskId);
+    expect(second.fired).toBe(false);
+    expect(second.childIds).toHaveLength(0);
+
+    release!();
+    const firstResult = await first;
+    expect(firstResult.fired).toBe(true);
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
   });
 });
 

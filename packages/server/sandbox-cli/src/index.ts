@@ -1,40 +1,21 @@
-import { TOOLS, type ToolName } from "@desk/shared";
 import { writeErrorAndExit } from "./errors.js";
 
-// Command registry: map tool-name-based subcommands to their modules.
-// The CLI surface is "desk <group> <action>" where group.action = tool name.
+/**
+ * `desk` — the in-sandbox CLI used by the OpenCode agent to call back into
+ * the host desk-server. The only command today is `task schedule`; new
+ * commands plug in through COMMANDS as additional `<group> <action>`
+ * entries.
+ */
+
 interface Command {
   usage: string;
+  help?: string;
   run(argv: string[]): Promise<void>;
 }
 
 const COMMANDS: Record<string, () => Promise<Command>> = {
-  "file read": () => import("./commands/file-read.js"),
-  "file write": () => import("./commands/file-write.js"),
-  "library list": () => import("./commands/library-list.js"),
-  "library get": () => import("./commands/library-get.js"),
-  "chat send-message": () => import("./commands/chat-send-message.js"),
-  "chat attach-artifact": () => import("./commands/chat-attach-artifact.js"),
-  "web fetch": () => import("./commands/web-fetch.js"),
+  "task schedule": () => import("./commands/task-schedule.js"),
 };
-
-// Map from tool name (e.g. "file.read") to subcommand key (e.g. "file read")
-const TOOL_TO_SUBCOMMAND: Record<ToolName, string> = {
-  "file.read": "file read",
-  "file.write": "file write",
-  "library.list": "library list",
-  "library.get": "library get",
-  "chat.send_message": "chat send-message",
-  "chat.attach_artifact": "chat attach-artifact",
-  "web.fetch": "web fetch",
-};
-
-// Verify all tools are covered
-for (const toolName of Object.keys(TOOLS) as ToolName[]) {
-  if (!(toolName in TOOL_TO_SUBCOMMAND)) {
-    throw new Error(`Tool ${toolName} is not mapped to a subcommand`);
-  }
-}
 
 export function output(data: unknown): void {
   const json = process.stdout.isTTY
@@ -45,11 +26,12 @@ export function output(data: unknown): void {
 
 async function printHelp(): Promise<void> {
   const lines: string[] = ["Usage: desk <command> [options]", "", "Commands:"];
-  for (const [sub, loader] of Object.entries(COMMANDS)) {
+  for (const loader of Object.values(COMMANDS)) {
     const cmd = await loader();
     lines.push(`  ${cmd.usage}`);
   }
   lines.push("");
+  lines.push("Run `desk <command> --help` for full documentation.");
   process.stdout.write(lines.join("\n") + "\n");
 }
 
@@ -61,9 +43,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Try matching two-word subcommand first (e.g. "file read")
   if (args.length >= 2) {
-    // Handle hyphenated subcommand: "chat send-message" = args[0]="chat", args[1]="send-message"
     const twoWord = `${args[0]} ${args[1]}`;
     if (twoWord in COMMANDS) {
       const cmd = await COMMANDS[twoWord]();

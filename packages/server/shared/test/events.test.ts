@@ -14,7 +14,7 @@ const fixtures: Record<string, WsEvent> = {
   },
   "message.appended": {
     type: "message.appended",
-    payload: { id: "msg_abc", chatId: "cht_abc", role: "user", content: { type: "text", text: "hi" }, createdAt: now },
+    payload: { id: "msg_abc", chatId: "cht_abc", role: "user", content: { type: "text", text: "hi" }, createdAt: now, kind: "chat" },
   },
   "message.streaming": {
     type: "message.streaming",
@@ -38,6 +38,7 @@ const fixtures: Record<string, WsEvent> = {
       createdAt: now,
       state: "running",
       startedAt: now,
+      kind: "chat",
     },
   },
   "message.log_appended": {

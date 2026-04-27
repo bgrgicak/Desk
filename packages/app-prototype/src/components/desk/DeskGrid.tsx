@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Search, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -26,7 +27,7 @@ interface DeskGridProps {
 type FilterType = 'all' | ArtifactType
 
 export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipToChat, workspaceId, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
-  const [filter, setFilter] = useState<FilterType>('all')
+  const [filter, setFilter] = usePersistedState<FilterType>('desk.deskGrid.filter', 'all')
   const [searchQuery, setSearchQuery] = useState('')
   const [sheetOpen, setSheetOpen] = useState(false)
 

@@ -96,15 +96,7 @@ export async function createOrReuse(
 
   const deskHome = home ?? resolveDeskHome();
   const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
-  const toolSocket = process.env.DESK_TOOL_SOCKET;
-  // Only mount the tool socket when it actually exists on the host. Binding
-  // a non-existent path makes Docker create an empty directory there, which
-  // then confuses the sandbox CLI. With the socket absent, the in-sandbox
-  // CLI surfaces a clear "tool socket missing" error instead.
-  const expectedBinds = [
-    ...bindsFromPlan(plan),
-    ...(toolSocket ? [`${toolSocket}:/run/desk/tools.sock`] : []),
-  ];
+  const expectedBinds = bindsFromPlan(plan);
 
   // Reuse the container only if its image and binds still match the current
   // plan; otherwise tear it down and fall through to the create path. Bind
@@ -141,6 +133,11 @@ export async function createOrReuse(
     HostConfig: {
       CapDrop: ["ALL"],
       NetworkMode: "bridge",
+      // host-gateway lets the in-sandbox `desk` CLI reach the host-side
+      // desk-server REST API as `host.docker.internal`. The bridge default
+      // gives the container an IP but no DNS name for the host, so without
+      // this the agent has no route back to /sandbox/messages.
+      ExtraHosts: ["host.docker.internal:host-gateway"],
       PidsLimit: 256,
       Memory: 512 * 1024 * 1024,
       Tmpfs: { "/tmp": "" },

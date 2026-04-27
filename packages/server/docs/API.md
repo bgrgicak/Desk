@@ -122,6 +122,17 @@ Accepts `multipart/form-data` with a single part named `file`. The part's
 filename and `Content-Type` become the artifact's name and MIME. Returns
 `201 Created` with the file record.
 
+### POST /chats/{id}/library-refs
+
+Pins an existing workspace-library file into the chat's "In this chat"
+sidebar by symlinking it under `.chats/{chatId}/attachments/`. Body:
+`{ path: string }` (workspace-root-relative path of the library file).
+The library file itself is not copied or moved. Idempotent — pinning
+the same target twice returns the same FileRef. Returns `201 Created`
+with the symlink's FileRef. Returns `404` for an unknown library path,
+`400` if `path` already lives inside the chat's own attachments
+directory.
+
 ### Message content types
 
 Messages carry one of:

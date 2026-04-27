@@ -9,7 +9,7 @@ export async function listAgents(pool: pg.Pool, userId: string) {
 export async function createAgent(
   pool: pg.Pool,
   userId: string,
-  data: { name: string; instructions?: string; model?: string; toolAllowlist?: string[] },
+  data: { name: string; instructions?: string; model?: string },
 ) {
   return queries.agents.insert(pool, {
     id: generateId("agent"),

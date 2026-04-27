@@ -6,6 +6,7 @@ import * as users from "../../src/queries/users.js";
 import * as agents from "../../src/queries/agents.js";
 import * as workspaces from "../../src/queries/workspaces.js";
 import * as chats from "../../src/queries/chats.js";
+import * as messages from "../../src/queries/messages.js";
 
 let pool: pg.Pool;
 let wsId: string;
@@ -55,6 +56,61 @@ describe("chats queries", () => {
   it("lists with latest message", async () => {
     const list = await chats.listWithLatestMessage(pool, wsId);
     expect(list.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("iconKind picks the newest non-chat kind, with chat as fallback", async () => {
+    // Chat A: starts as chat, later gets a task. iconKind should be 'task'.
+    const chatA = generateId("chat");
+    await chats.insert(pool, { id: chatA, workspaceId: wsId, agentId, title: "Chat → task" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatA,
+      role: "user",
+      content: { type: "text", text: "hi" },
+      kind: "chat",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatA,
+      role: "user",
+      content: { type: "text", text: "do the thing" },
+      kind: "task",
+    });
+
+    // Chat B: starts as task, then plain chat replies. The task icon should
+    // stick because the newest non-chat kind is still 'task'.
+    const chatB = generateId("chat");
+    await chats.insert(pool, { id: chatB, workspaceId: wsId, agentId, title: "Task → chat" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatB,
+      role: "user",
+      content: { type: "text", text: "do the thing" },
+      kind: "task",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatB,
+      role: "user",
+      content: { type: "text", text: "follow-up" },
+      kind: "chat",
+    });
+
+    // Chat C: only chat messages → fallback to 'chat'.
+    const chatC = generateId("chat");
+    await chats.insert(pool, { id: chatC, workspaceId: wsId, agentId, title: "Plain chat" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatC,
+      role: "user",
+      content: { type: "text", text: "just chatting" },
+      kind: "chat",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === chatA)?.iconKind).toBe("task");
+    expect(list.find((c) => c.id === chatB)?.iconKind).toBe("task");
+    expect(list.find((c) => c.id === chatC)?.iconKind).toBe("chat");
   });
 
   it("updates meta", async () => {

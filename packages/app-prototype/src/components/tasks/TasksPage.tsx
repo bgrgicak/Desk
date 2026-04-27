@@ -20,6 +20,7 @@ import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskSheet } from './TaskSheet'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -326,8 +327,8 @@ function ListView({ tasks, selectedTaskId, onSelectTask }: {
 
 export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
   const today = useMemo(() => new Date(), [])
-  const [viewMode, setViewMode]         = useState<ViewMode>('board')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [viewMode, setViewMode]         = usePersistedState<ViewMode>('desk.tasks.viewMode', 'board')
+  const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>('desk.tasks.statusFilter', 'all')
   const [createSheetOpen, setCreateSheetOpen] = useState(false)
   const [defaultCreateStatus, setDefaultCreateStatus] = useState<Task['status']>('todo')
   const [currentYear, setCurrentYear]   = useState(today.getFullYear())

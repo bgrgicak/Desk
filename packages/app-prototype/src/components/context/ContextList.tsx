@@ -78,6 +78,7 @@ import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone
 import { toFolderList } from '@/store/selectors/library'
 import { iconForItem } from '@/data/file-kind'
 import { toast } from 'sonner'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 
 interface ContextListProps {
   items: ContextItem[]
@@ -98,8 +99,8 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
 
 export function ContextList({ items, onItemClick, onCompose }: ContextListProps) {
   const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
-  const [viewMode, setViewMode] = useState<ViewMode>('list')
+  const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
+  const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()

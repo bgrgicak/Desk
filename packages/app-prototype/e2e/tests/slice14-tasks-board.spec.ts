@@ -36,27 +36,19 @@ test("tasks board view renders columns and places a scheduled message in the Sch
     })
   ).json()) as { id: string };
 
+  const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const postRes = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ content: "Slice14 board card" }),
+    body: JSON.stringify({
+      content: "Slice14 board card",
+      kind: "task",
+      title: "Slice14 board card",
+      executeAt: futureIso,
+    }),
   });
   expect(postRes.status).toBeGreaterThanOrEqual(200);
   expect(postRes.status).toBeLessThan(300);
-  const userMsg = (await postRes.json()) as { id: string };
-
-  const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const patchRes = await fetch(
-    `${serverUrl}/chats/${chat.id}/messages/${userMsg.id}`,
-    {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ executeAt: futureIso }),
-    },
-  );
-  if (patchRes.status >= 400) {
-    test.skip(true, "server rejected executeAt on user message — feature not available");
-  }
 
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();

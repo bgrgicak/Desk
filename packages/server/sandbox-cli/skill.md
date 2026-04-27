@@ -1,132 +1,130 @@
 # Desk CLI
 
-The `desk` command lets you interact with the host Desk application from inside the sandbox. All commands communicate with the Desk Tool API over a pre-configured connection.
+The `desk` command is your only path to surface work back to the user. It
+runs inside the sandbox and POSTs to the host-side desk-server REST API.
+
+## When to use it
+
+You have one command — `desk task schedule` — and three reasons to reach
+for it:
+
+1. **The user asked for a reminder, recurring report, or follow-up.**
+   Schedule a task instead of saying "I'll remember to do that" — you
+   won't.
+2. **A piece of work needs to live on the user's Tasks board.** Manual
+   tasks (no `--at`/`--cron`) sit there until the user runs them.
+3. **You need to fire your own future turn.** A scheduled task with
+   `--at` or `--cron` re-enters the chat at fire time with your `<content>`
+   as the prompt.
+
+If you just need to reply to the user *now*, write to stdout — that's the
+chat reply channel. Don't use `desk task schedule` for plain replies.
+
+## How to use it (action bias)
+
+Run the command first, narrate after. Don't ask the user to confirm
+defaults you can fill in (date, title, timezone). The instructions in the
+agent file specify the defaults — apply them silently and tell the user
+what you did in one short sentence.
+
+Anti-pattern (do not do this):
+> "I can schedule that. Which timezone? One-time or recurring? Want a title?
+>  Plan: …. Confirm and I'll run it."
+
+Pattern (do this):
+> *runs* `desk task schedule --chat … --at "2026-04-27T18:51:00Z" "Hello there"`
+> *replies* "Scheduled for today at 20:51 Europe/Berlin — 'Hello there'."
 
 ## Environment
 
-The environment variables `DESK_TOOL_TOKEN` and `DESK_TOOL_SOCKET` are pre-set in the sandbox. You must not alter or echo them. Never include the token value in any output.
+The runtime sets these for you. Don't echo, log, or alter them.
+- `DESK_SANDBOX_TOKEN` — per-run auth token sent as `X-Desk-Sandbox-Token`.
+- `DESK_API_URL`       — base URL of the host desk-server.
 
 ## Output format
 
-- Success: JSON on stdout, exit code 0.
-- Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit code.
+- Success: JSON message row on stdout, exit 0.
+- Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit.
 
-## desk file read
+## desk task schedule
 
-Tool: `file.read`
-
-Read the content of a file by its workspace-relative path.
-
-```
-desk file read <path>
-```
-
-Example:
+Create a task message in a chat. The task can be:
+- **Scheduled** (`--at <iso8601>`): fires once at the given instant.
+- **Recurring** (`--cron <expr>`): fires on each cron tick.
+- **Manual** (neither): sits as a TODO on the Tasks board.
 
 ```
-desk file read notes/hello.md
+desk task schedule --chat <id> [--title <text>] [--at <iso> | --cron <expr>] [--kind <kind>] <content>
 ```
 
-Returns the file content and MIME type.
+`--at` and `--cron` are mutually exclusive. If you pass both, the command
+errors out — pick one.
 
-## desk file write
+### Examples
 
-Tool: `file.write`
-
-Write a file from stdin. The content is read from standard input.
-
-```
-desk file write --workspace <id> --name <str> --mime <str> [--chat <id>] < input.txt
-```
-
-Example:
+Recurring — weekday standup reminder at 09:00:
 
 ```
-echo "Hello" | desk file write --workspace ws_abc --name hello.txt --mime text/plain
+desk task schedule --chat ch_abc \
+    --title "Daily standup" \
+    --cron "0 9 * * 1-5" \
+    "Post the standup template to #team-engineering"
 ```
 
-Warning: this writes to real user storage. Be deliberate about what you write.
-
-## desk library list
-
-Tool: `library.list`
-
-List files in a workspace library.
+One-shot — fires once at a specific time:
 
 ```
-desk library list --workspace <id> [--cursor <str>] [--limit <n>]
+desk task schedule --chat ch_abc \
+    --title "Review migration PR" \
+    --at "2026-05-01T15:00:00Z" \
+    "Review the schema migration PR before the merge freeze"
 ```
 
-Example:
+Manual — no schedule, sits on the Tasks board until the user runs it:
 
 ```
-desk library list --workspace ws_abc --limit 10
+desk task schedule --chat ch_abc \
+    --title "Summarize Q1 metrics" \
+    "Pull the Q1 numbers from the deck and produce a 1-pager"
 ```
 
-## desk library get
+### Cron quick reference
 
-Tool: `library.get`
-
-Get metadata for a library file by its workspace-relative path.
+Classic 5-field crontab: `minute hour day-of-month month day-of-week`.
 
 ```
-desk library get <path>
+0 9 * * 1-5       weekdays at 09:00
+*/15 * * * *      every 15 minutes
+0 */2 * * *       every 2 hours, on the hour
+0 0 1 * *         midnight on the 1st of each month
+0 17 * * 5        Fridays at 17:00
 ```
 
-Example:
+Day-of-week: 0 (Sun) – 6 (Sat). Avoid sub-minute cadences — the task
+fires through the system `at`/`cron` daemon, not a sub-second loop.
 
-```
-desk library get library/report.pdf
-```
+### --at format
 
-## desk chat send-message
+ISO 8601 with timezone. Both forms are accepted:
+- `2026-05-01T09:00:00Z`         (UTC)
+- `2026-05-01T09:00:00-07:00`    (offset)
 
-Tool: `chat.send_message`
+Past timestamps fire immediately on insert. Don't pass timezone-naive
+strings — the parser will reject them.
 
-Send a text message to a chat.
+### --kind
 
-```
-desk chat send-message --chat <id> <content>
-```
+Defaults to `task`. Override only if you have a reason — the other kinds
+(`ai_note`, `chat`) drive specialized internal flows that don't behave
+like user-visible tasks.
 
-Example:
+### Failure modes worth knowing
 
-```
-desk chat send-message --chat ch_abc "Here is my analysis."
-```
-
-Warning: this sends a visible message to the user. Make sure the content is relevant and complete.
-
-## desk chat attach-artifact
-
-Tool: `chat.attach_artifact`
-
-Attach a file as an artifact to a chat, by its workspace-relative path.
-
-```
-desk chat attach-artifact --chat <id> --path <path>
-```
-
-Example:
-
-```
-desk chat attach-artifact --chat cht_abc --path artifacts/report.md
-```
-
-## desk web fetch
-
-Tool: `web.fetch`
-
-Fetch a URL. Optionally specify method, headers, and a body file.
-
-```
-desk web fetch <url> [--method <m>] [--header k=v]... [--body-file <path>]
-```
-
-Example:
-
-```
-desk web fetch https://example.com/api --method POST --header Content-Type=application/json --body-file request.json
-```
-
-The response includes status, headers, and base64-encoded body.
+- `NO_TOKEN` / `NO_ENDPOINT` — the runtime didn't inject env. Surface to
+  the user; you can't recover.
+- `UNAUTHORIZED` — your token expired (run was canceled and re-issued).
+  Don't retry; the next turn will mint a fresh one.
+- `NOT_FOUND` on chatId — the chat doesn't belong to your agent's user.
+  Double-check the id you're using.
+- `VALIDATION` — bad `--at` or `--cron`. Read the message and fix the
+  argument; don't paper over it with a different schedule.

@@ -1,5 +1,5 @@
 import pg from "pg";
-import { ChatSchema, ValidationError, type Chat } from "@desk/shared";
+import { ChatSchema, ValidationError, type Chat, type MessageKind } from "@desk/shared";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -18,6 +18,14 @@ function rowToChat(row: Record<string, unknown>): Chat {
 
 export interface ChatWithLastMessage extends Chat {
   lastMessageContent?: unknown;
+  /**
+   * Kind that drives the chat-list icon. Defined as the newest message in the
+   * chat whose kind is not 'chat' — so a chat that started conversational and
+   * later spawned a task takes on the task icon, while a long-running task
+   * chat keeps its task icon even after follow-up chat replies. Falls back to
+   * 'chat' when every message is a plain chat message (or the chat is empty).
+   */
+  iconKind: MessageKind;
 }
 
 export async function listWithLatestMessage(
@@ -26,7 +34,13 @@ export async function listWithLatestMessage(
 ): Promise<ChatWithLastMessage[]> {
   const { rows } = await db.query(
     `SELECT c.*,
-            (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content
+            (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
+            COALESCE(
+              (SELECT m.kind FROM messages m
+                 WHERE m.chat_id = c.id AND m.kind <> 'chat'
+                 ORDER BY m.created_at DESC LIMIT 1),
+              'chat'
+            ) AS icon_kind
      FROM chats c
      WHERE c.workspace_id = $1
      ORDER BY c.updated_at DESC`,
@@ -35,6 +49,7 @@ export async function listWithLatestMessage(
   return rows.map((r) => ({
     ...rowToChat(r),
     lastMessageContent: r.last_message_content ?? undefined,
+    iconKind: r.icon_kind as MessageKind,
   }));
 }
 
