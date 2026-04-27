@@ -10,7 +10,7 @@
  */
 
 import { PassThrough } from "node:stream";
-import { createOrReuse } from "./docker.js";
+import { createOrReuse, providerKeyEnv } from "./docker.js";
 
 export interface ExecInSandboxOptions {
   /** Command + args to run inside the container. */
@@ -22,9 +22,9 @@ export interface ExecInSandboxOptions {
   /** Extra environment variables. */
   env?: Record<string, string>;
   /**
-   * AI-provider credentials to inject when the sandbox is created on demand.
-   * Only used if the container doesn't exist yet; existing containers keep
-   * their original env. Omit to fall back to reading from host process env.
+   * AI-provider credentials to inject. Used both when the sandbox is created
+   * on demand and on every exec, so reused containers pick up rotated or
+   * newly-saved keys without a restart. Omit to fall back to host process env.
    */
   providerKeys?: Record<string, string>;
 }
@@ -57,10 +57,14 @@ export async function execInSandbox(
   const docker = new Docker({ socketPath: dockerSocketPath() });
   const container = docker.getContainer(handle.containerId);
 
+  const keyEnv = providerKeyEnv(opts.providerKeys);
+  const extraEnv = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : [];
+  const execEnv = [...keyEnv, ...extraEnv];
+
   const exec = await container.exec({
     Cmd: opts.argv,
     ...(opts.user ? { User: opts.user } : {}),
-    Env: opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined,
+    Env: execEnv.length > 0 ? execEnv : undefined,
     AttachStdout: true,
     AttachStderr: true,
   });
