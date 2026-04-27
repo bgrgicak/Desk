@@ -11,11 +11,19 @@ async function openClaudeConnection(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Customize/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
-  // The Claude row's Edit button is hover-revealed; clicking the "More
-  // actions" kebab → Edit is the deterministic path.
-  const claudeRow = dialog.locator("div").filter({ hasText: /^Claude/ }).first();
-  await claudeRow.getByRole("button", { name: "More actions" }).click();
-  await page.getByRole("menuitem", { name: /^Edit$/ }).click();
+  // Connections list is derived from /me/providers — only configured kinds
+  // appear. On first run the list is empty so we open the picker; on reload
+  // (after a key is saved) the Claude row exists and we edit it directly.
+  // Wait briefly for the async fetch to settle before deciding.
+  const claudeRow = dialog.locator("div.group", { hasText: /^Claude/ }).first();
+  try {
+    await claudeRow.waitFor({ state: "visible", timeout: 3_000 });
+    await claudeRow.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: /^Edit$/ }).click();
+  } catch {
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await dialog.getByRole("button", { name: /^Claude/ }).click();
+  }
   return dialog;
 }
 
