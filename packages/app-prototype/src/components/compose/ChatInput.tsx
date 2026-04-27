@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import { createPortal } from 'react-dom'
 import {
   CornerDownLeft, ChevronDown, FileText, Paperclip, X,
-  Zap, ImageIcon, Table, Globe, Play, Target,
+  Zap, ImageIcon, Table, Globe, Play, Target, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -11,7 +11,10 @@ import {
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
 
-type GoalKey = 'app' | 'document' | 'image' | 'data' | 'site' | 'run' | null
+type GoalKey =
+  | 'app' | 'document' | 'image' | 'data' | 'site' | 'run'
+  | 'task' | 'scheduled'
+  | null
 
 interface Goal {
   key: GoalKey
@@ -21,23 +24,48 @@ interface Goal {
 }
 
 const GOALS: Goal[] = [
-  { key: 'app',      label: 'New app',   Icon: Zap,       placeholder: 'Describe the app you want to build...' },
-  { key: 'document', label: 'New doc',   Icon: FileText,  placeholder: 'What should the document cover?' },
-  { key: 'image',    label: 'New image', Icon: ImageIcon, placeholder: 'Describe the image you want to create...' },
-  { key: 'data',     label: 'New data',  Icon: Table,     placeholder: 'What data do you want to track or analyse?' },
-  { key: 'site',     label: 'New site',  Icon: Globe,     placeholder: 'Describe the site you want to build...' },
-  { key: 'run',      label: 'New run',   Icon: Play,      placeholder: 'What should run in the background?' },
-  { key: null,       label: 'No goal',   Icon: Target,    placeholder: 'Ask anything, start a task, build something...' },
+  { key: 'app',       label: 'New app',       Icon: Zap,           placeholder: 'Describe the app you want to build...' },
+  { key: 'document',  label: 'New doc',       Icon: FileText,      placeholder: 'What should the document cover?' },
+  { key: 'image',     label: 'New image',     Icon: ImageIcon,     placeholder: 'Describe the image you want to create...' },
+  { key: 'data',      label: 'New data',      Icon: Table,         placeholder: 'What data do you want to track or analyse?' },
+  { key: 'site',      label: 'New site',      Icon: Globe,         placeholder: 'Describe the site you want to build...' },
+  { key: 'run',       label: 'New run',       Icon: Play,          placeholder: 'What should run in the background?' },
+  { key: 'task',      label: 'New task',      Icon: ListTodo,      placeholder: 'What needs to be done?' },
+  { key: 'scheduled', label: 'New scheduled', Icon: CalendarClock, placeholder: 'What should happen, and when?' },
+  { key: null,        label: 'No type',       Icon: Target,        placeholder: 'Ask anything, start a task, build something...' },
 ]
+
+/**
+ * Map a picker selection to the kind/title/executeAt fields the
+ * `postChatMessage` mutation accepts. Only `task` and `scheduled` need
+ * server-side wiring today — the content-output goals (app, doc, …)
+ * still flow as ordinary chat messages.
+ */
+function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined {
+  if (goal !== 'task' && goal !== 'scheduled') return undefined
+  const firstLine = message.split('\n')[0].trim()
+  const title = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine || undefined
+  if (goal === 'task') return { kind: 'task', title }
+  // 'scheduled' default: same time tomorrow. The user can refine via the
+  // task detail panel; this matches the default in App.tsx's onTaskCreate
+  // when status === 'scheduled' but no scheduledFor was picked.
+  return {
+    kind: 'task',
+    title,
+    executeAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  }
+}
 
 function inferGoal(text: string): GoalKey {
   const lower = text.toLowerCase().trim()
   if (!lower) return null
+  if (lower.match(/\b(every|daily|weekly|monthly|each (day|morning|week)|at \d|tomorrow|tonight|next (week|month)|cron)\b/)) return 'scheduled'
+  if (lower.match(/\b(todo|to do|task|remind me|follow up|chase|finish|complete by|due)\b/)) return 'task'
   if (lower.match(/build|make|app|tracker|dashboard|tool|calculator/)) return 'app'
   if (lower.match(/site|website|landing|portfolio|page/))              return 'site'
   if (lower.match(/image|design|logo|illustration|palette|visual|photo|picture/)) return 'image'
   if (lower.match(/spreadsheet|data|table|csv|metrics|numbers|chart|graph/))      return 'data'
-  if (lower.match(/run|check|monitor|scan|sync|schedule|automate|watch/))         return 'run'
+  if (lower.match(/run|check|monitor|scan|sync|automate|watch/))                  return 'run'
   if (lower.match(/write|draft|create|plan|strategy|brief|report|email|agenda|notes|document|summary|summarise|summarize/)) return 'document'
   if (lower.length > 10) return 'document'
   return null
@@ -57,8 +85,20 @@ export interface UploadedFile {
   size?: number
 }
 
+/**
+ * Optional kind/schedule hints derived from the message-type picker.
+ * `kind: 'task'` flips the message into the Tasks listing; `executeAt`
+ * (ISO) defers the first run via the at-job scheduler. Both omitted →
+ * normal chat message, which is the default.
+ */
+export interface SendOptions {
+  kind?: 'task'
+  title?: string
+  executeAt?: string
+}
+
 interface ChatInputProps {
-  onSend: (message: string, uploads: UploadedFile[]) => void
+  onSend: (message: string, uploads: UploadedFile[], options?: SendOptions) => void
   disabled?: boolean
   placeholder?: string
   autoFocus?: boolean
@@ -312,7 +352,8 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    onSend(trimmed, [...extraUploads, ...mentionedFiles])
+    const options = optionsForGoal(effectiveGoalKey, trimmed)
+    onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
     setGoalOverride(undefined)
@@ -429,12 +470,12 @@ export function ChatInput({
                 ? <effectiveGoal.Icon className="h-3 w-3" />
                 : <Target className="h-3 w-3" />
               }
-              {effectiveGoal && effectiveGoal.key !== null ? effectiveGoal.label : 'No goal'}
+              {effectiveGoal && effectiveGoal.key !== null ? effectiveGoal.label : 'No type'}
               <ChevronDown className="h-3 w-3 opacity-60" />
             </button>
             {goalOpen && goalRect && createPortal(
               <div ref={goalDropRef} style={getDropdownStyle(goalRect, 208)} className={dropdownClass}>
-                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Output</p>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Message type</p>
                 <div className="pb-1.5">
                   {GOALS.map(goal => {
                     const isSuggested = goal.key === suggestedGoal && suggestedGoal !== null

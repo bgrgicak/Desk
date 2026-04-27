@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import type { UploadedFile } from '@/components/compose/ChatInput'
+import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import {
   DropdownMenu,
@@ -14,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -26,9 +27,9 @@ import {
   useGetChatMessagesQuery,
   useGetLibraryQuery,
   usePatchChatMutation,
+  usePinChatLibraryRefMutation,
   usePostChatMessageMutation,
   useUploadChatArtifactMutation,
-  useUploadLibraryFileMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import { NEW_CHAT_ID } from '@/router/nav'
@@ -38,6 +39,8 @@ import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
+import { usePersistedState } from '@/hooks/use-persisted-state'
+import { useClickOrDoubleClick } from '@/hooks/use-click-or-double-click'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -64,9 +67,16 @@ interface ChatViewProps {
   /**
    * Fires for the "new chat" case on first message. Optional second
    * arg is the agent id picked in the bottom toggle before sending —
-   * parent should use it when POST /chats'ing the new chat.
+   * parent should use it when POST /chats'ing the new chat. Optional
+   * third arg carries any files the user attached (via @ mention or
+   * the staging tray) so they ride the very first POST /messages.
    */
-  onFirstMessage?: (message: string, agentId?: string) => void
+  onFirstMessage?: (
+    message: string,
+    agentId?: string,
+    attachments?: AttachmentRef[],
+    options?: SendOptions,
+  ) => void
   /** When set and the id matches a rendered message, scroll that row
    * into view instead of the default scroll-to-bottom. Drives the
    * "open in chat" affordance from the Run detail panel. */
@@ -74,6 +84,13 @@ interface ChatViewProps {
   /** Fires when the user clicks an attachment chip on a chat message —
    * the parent navigates to the file's library detail view. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
+  /** Library items to pre-stage in the input tray for the new-chat case.
+   * Mirrors the right-sidebar "+ Add" flow (`addStagedFromLibrary`): the
+   * items ride the first POST /messages as attachments, and the parent
+   * pins them via library-refs once the chat exists. Only consumed on
+   * mount, so re-clicking "Use in chat" while already on the new-chat
+   * stub requires the parent to remount the view. */
+  initialStagedItems?: ContextItem[]
 }
 
 // ── Icon helpers ───────────────────────────────────────────────────────────────
@@ -91,19 +108,36 @@ const ARTIFACT_TYPE_LABELS: Record<string, string> = {
 // ── Right panel: Artifacts tab ─────────────────────────────────────────────────
 
 function ArtifactsPanel({
+  chatId,
   artifacts,
+  chatNotes,
   onArtifactClick,
+  onArtifactStage,
+  onChatNoteClick,
+  onChatNoteStage,
   onPrefillInput,
   savedArtifactIds = new Set(),
   onSaveArtifact,
 }: {
+  chatId: string
   artifacts: Artifact[]
+  /** Materialized chat-note files (`.chats/{id}/notes/*.md`). Rendered as
+   *  a "Chat notes" section above the workspace artifacts list. */
+  chatNotes: ServerFile[]
+  /** Double-click an artifact: open it in detail view. */
   onArtifactClick?: (artifact: Artifact) => void
+  /** Single-click an artifact: stage it on the next outgoing message. */
+  onArtifactStage?: (artifact: Artifact) => void
+  /** Double-click a chat note: open the markdown file in detail view. */
+  onChatNoteClick?: (note: ServerFile) => void
+  /** Single-click a chat note: stage it on the next outgoing message. */
+  onChatNoteStage?: (note: ServerFile) => void
   onPrefillInput?: (text: string) => void
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
 }) {
-  const [filter, setFilter] = useState<ArtifactFilter>('all')
+  const filterKey = chatId && chatId !== NEW_CHAT_ID ? `desk.chat.${chatId}.artifactFilter` : null
+  const [filter, setFilter] = usePersistedState<ArtifactFilter>(filterKey, 'all')
   const [search, setSearch] = useState('')
 
   const filtered = artifacts.filter(a => {
@@ -111,8 +145,25 @@ function ArtifactsPanel({
     if (search.trim() && !a.name.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
+  const filteredNotes = chatNotes.filter(n =>
+    !search.trim()
+    || (n.label ?? '').toLowerCase().includes(search.toLowerCase())
+    || n.name.toLowerCase().includes(search.toLowerCase())
+  )
 
-  if (artifacts.length === 0) {
+  // Single click → stage on the next message; double click → open in
+  // detail view. The natural `dblclick` event fires after both `click`s,
+  // so we debounce single-click via this helper instead.
+  const handleNoteClick = useClickOrDoubleClick<ServerFile>(
+    (note) => onChatNoteStage?.(note),
+    (note) => onChatNoteClick?.(note),
+  )
+  const handleArtifactClick = useClickOrDoubleClick<Artifact>(
+    (artifact) => onArtifactStage?.(artifact),
+    (artifact) => onArtifactClick?.(artifact),
+  )
+
+  if (artifacts.length === 0 && chatNotes.length === 0) {
     return <ArtifactsEmptyState onPrefillInput={onPrefillInput} />
   }
 
@@ -148,16 +199,45 @@ function ArtifactsPanel({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto py-1.5 px-1.5 flex flex-col gap-0.5">
-        {filtered.length === 0 ? (
+        {filteredNotes.length > 0 && (
+          <>
+            <p className="px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Chat notes
+            </p>
+            {filteredNotes.map(note => (
+              <div
+                key={`note-${note.path}`}
+                onClick={() => handleNoteClick(note)}
+                title="Click to add to message · Double-click to open"
+                className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                  <StickyNote className="h-4 w-4 text-muted-foreground/70" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{note.label ?? 'Chat notes'}</p>
+                  <p className="text-xs text-muted-foreground truncate">{note.name} · {getRelativeTime(new Date(note.createdAt))}</p>
+                </div>
+              </div>
+            ))}
+            {filtered.length > 0 && (
+              <p className="px-2 pt-2 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Artifacts
+              </p>
+            )}
+          </>
+        )}
+        {filtered.length === 0 && filteredNotes.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-8">No results</p>
-        ) : (
+        ) : filtered.length === 0 ? null : (
           filtered.map(artifact => {
             const Icon = getArtifactIcon(artifact.type)
             const isSaved = savedArtifactIds.has(artifact.id)
             return (
               <div
                 key={artifact.id}
-                onClick={() => onArtifactClick?.(artifact)}
+                onClick={() => handleArtifactClick(artifact)}
+                title="Click to add to message · Double-click to open"
                 className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
               >
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -209,10 +289,10 @@ function ArtifactsPanel({
 // ── Right panel: Files tab ─────────────────────────────────────────────────────
 
 /**
- * "In this chat" panel — everything currently sitting under
- * `.chats/{chatId}/`: user uploads (`attachments/`) and materialized note
- * mirrors (`notes/`). Notes are read-only here — they're owned by their DB
- * message row.
+ * "In this chat" panel — user uploads sitting under
+ * `.chats/{chatId}/attachments/`. Note mirrors (`.chats/{id}/notes/`) are
+ * surfaced separately in the Artifacts panel as "Chat notes" and are not
+ * listed here.
  *
  * Sidebar uploads land in `.chats/{chatId}/attachments/` (not the workspace
  * library) so the file is scoped to this chat. Files queued for the next
@@ -226,6 +306,8 @@ function FilesPanel({
   uploading,
   onUpload,
   onAddFromLibrary,
+  onFileClick,
+  onFileStage,
 }: {
   stagedFiles: UploadedFile[]
   chatFiles: ServerFile[]
@@ -234,6 +316,10 @@ function FilesPanel({
   uploading: boolean
   onUpload: (entries: UploadEntry[]) => Promise<void>
   onAddFromLibrary: (item: ContextItem) => void
+  /** Double-click: open the file in detail view. */
+  onFileClick?: (file: ServerFile) => void
+  /** Single-click: stage the file on the next outgoing message. */
+  onFileStage?: (file: ServerFile) => void
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -243,6 +329,11 @@ function FilesPanel({
     await onUpload(entries)
     setPickerOpen(false)
   }
+
+  const handleFileClick = useClickOrDoubleClick<ServerFile>(
+    (file) => onFileStage?.(file),
+    (file) => onFileClick?.(file),
+  )
 
   // Staged ids are workspace-relative paths (`serverFile.path`), matching
   // ContextItem.id, so simple set membership works for the picker filter.
@@ -294,97 +385,101 @@ function FilesPanel({
             className="w-full h-7 pl-6 pr-2 rounded-md border bg-background text-xs outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring/30"
           />
         </div>
-        <div className="relative shrink-0">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs gap-1.5"
-            onClick={() => { setPickerOpen(v => !v); setPickerSearch('') }}
+        <Popover
+          open={pickerOpen}
+          onOpenChange={open => { setPickerOpen(open); if (!open) setPickerSearch('') }}
+        >
+          <PopoverTrigger asChild>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1.5 shrink-0"
+            >
+              <Plus className="h-3 w-3" />
+              Add
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={4}
+            className="w-72 p-0 rounded-lg overflow-hidden flex flex-col"
           >
-            <Plus className="h-3 w-3" />
-            Add
-          </Button>
-
-          {/* Inline dropdown picker */}
-          {pickerOpen && (
-            <div className="absolute right-0 top-full mt-1 w-72 rounded-lg border bg-background shadow-lg z-50 overflow-hidden flex flex-col">
-              <div className="flex items-center gap-2 px-3 py-2 border-b">
-                <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <input
-                  autoFocus
-                  value={pickerSearch}
-                  onChange={e => setPickerSearch(e.target.value)}
-                  onKeyDown={pickerNav.handleKeyDown}
-                  placeholder="Search files…"
-                  className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
-                />
-                <button onClick={() => setPickerOpen(false)} className="text-muted-foreground hover:text-foreground">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="overflow-y-auto max-h-52">
-                {available.length === 0 && (
-                  <p className="px-3 py-4 text-xs text-muted-foreground text-center">
-                    {pickerSearch ? 'No results' : 'All library items already added'}
-                  </p>
-                )}
-                {available.map((item, i) => {
-                  const Icon = CONTEXT_ICON[item.type] ?? FileText
-                  const isSelected = pickerNav.selectedIndex === i
-                  return (
-                    <button
-                      key={item.id}
-                      ref={pickerNav.itemRef(i)}
-                      onClick={() => addRef(item)}
-                      className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
-                    >
-                      <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="truncate">{item.name}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="border-t">
-                <button
-                  onClick={() => {
-                    setPickerOpen(false)
-                    openPicker()
-                  }}
-                  disabled={dropDisabled}
-                  data-testid="files-panel-upload-a-file"
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span>{uploading ? 'Uploading…' : 'Upload a file…'}</span>
-                </button>
-              </div>
+            <div className="flex items-center gap-2 px-3 py-2 border-b">
+              <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <input
+                autoFocus
+                value={pickerSearch}
+                onChange={e => setPickerSearch(e.target.value)}
+                onKeyDown={pickerNav.handleKeyDown}
+                placeholder="Search files…"
+                className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
+              />
+              <button onClick={() => setPickerOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
-          )}
-        </div>
+            <div className="overflow-y-auto max-h-52">
+              {available.length === 0 && (
+                <p className="px-3 py-4 text-xs text-muted-foreground text-center">
+                  {pickerSearch ? 'No results' : 'All library items already added'}
+                </p>
+              )}
+              {available.map((item, i) => {
+                const Icon = CONTEXT_ICON[item.type] ?? FileText
+                const isSelected = pickerNav.selectedIndex === i
+                return (
+                  <button
+                    key={item.id}
+                    ref={pickerNav.itemRef(i)}
+                    onClick={() => addRef(item)}
+                    className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
+                  >
+                    <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="truncate">{item.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="border-t">
+              <button
+                onClick={() => {
+                  setPickerOpen(false)
+                  openPicker()
+                }}
+                disabled={dropDisabled}
+                data-testid="files-panel-upload-a-file"
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <span>{uploading ? 'Uploading…' : 'Upload a file…'}</span>
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       <div className="flex-1 overflow-y-auto py-1.5 px-1.5 flex flex-col gap-2">
-        {/* Persistent chat-files list — everything under .chats/{id}/. */}
+        {/* Persistent chat-files list — uploads under .chats/{id}/attachments/. */}
         {filteredChatFiles.length > 0 && (
           <div className="flex flex-col gap-0.5">
             <p className="px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               In this chat
             </p>
-            {filteredChatFiles.map(file => {
-              const Icon = file.kind === 'note' ? StickyNote : FileText
-              return (
-                <div
-                  key={`chat-${file.path}`}
-                  className="group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors"
-                  title={file.kind === 'note' ? 'Note (read-only mirror of a chat note)' : undefined}
-                >
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm truncate">{file.name}</p>
-                  </div>
+            {filteredChatFiles.map(file => (
+              <button
+                key={`chat-${file.path}`}
+                type="button"
+                onClick={() => handleFileClick(file)}
+                disabled={!onFileClick && !onFileStage}
+                title="Click to add to message · Double-click to open"
+                className="group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors text-left disabled:cursor-default disabled:hover:bg-transparent"
+              >
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate">{file.name}</p>
                 </div>
-              )
-            })}
+              </button>
+            ))}
           </div>
         )}
 
@@ -413,11 +508,13 @@ export function ChatView({
   onFirstMessage,
   highlightMessageId,
   onAttachmentClick,
+  initialStagedItems,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const focusInputRef = useRef<(() => void) | null>(null)
-  const [rightTab, setRightTab] = useState<RightTab>('artifacts')
+  const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
+  const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
   const [panelOpen, setPanelOpen] = useState(true)
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
 
@@ -467,59 +564,48 @@ export function ChatView({
   )
 
   // Upload ownership lives at ChatView so the entire chat screen (not
-  // just the small input strip) can be a drop target.
+  // just the small input strip) can be a drop target. Both the outer
+  // (chat-pane) and inner (Files-panel) dropzones land files in the
+  // chat's `.chats/{id}/attachments/` — never the workspace library —
+  // so a drag-and-drop into the chat view never silently spills into
+  // the user's global library.
   const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
-  const [uploadLibraryFile, libraryUploadState] = useUploadLibraryFileMutation()
-  const isUploading = chatUploadState.isLoading || libraryUploadState.isLoading
+  const isUploading = chatUploadState.isLoading
   const hasRealChatId = !isNewChat
   const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([])
   // Sidebar Files-tab staging tray. Adds (upload or pick-from-library)
   // queue here; on send these merge into the message's `attachments[]`
   // and the tray is cleared. Removing only unstages — the underlying
   // file stays on disk in the library.
-  const [stagedFiles, setStagedFiles] = useState<UploadedFile[]>([])
+  // Seeded from `initialStagedItems` so the "Use in chat" affordance from
+  // a library item lands the file in the tray on the new-chat mount.
+  const [stagedFiles, setStagedFiles] = useState<UploadedFile[]>(() =>
+    (initialStagedItems ?? []).map(item => ({
+      id: item.id,
+      name: item.name,
+      path: item.id,
+      mime: item.mimeType,
+    }))
+  )
 
   const handleUpload = useCallback(async (entries: UploadEntry[]) => {
-    for (const { file, relativePath } of entries) {
-      // For library uploads of dropped folders, preserve the directory
-      // structure via `subpath`. Chat artifact uploads live in a flat
-      // per-chat folder, so we ignore the subpath there.
-      const relDir = relativePath.includes('/')
-        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
-        : ''
+    if (!hasRealChatId) {
+      toast.error('Send your first message before adding files')
+      return
+    }
+    for (const { file } of entries) {
       try {
-        if (hasRealChatId) {
-          const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
-          setPendingUploads(prev => [
-            ...prev,
-            {
-              id: `upload-${serverFile.path ?? Date.now()}`,
-              name: serverFile.name ?? file.name,
-              path: serverFile.path,
-              mime: serverFile.mime,
-              size: serverFile.size,
-            },
-          ])
-        } else if (chat.workspaceId) {
-          const serverFile = await uploadLibraryFile({
-            workspaceId: chat.workspaceId,
-            file,
-            subpath: relDir || undefined,
-          }).unwrap()
-          setPendingUploads(prev => [
-            ...prev,
-            {
-              id: `upload-${serverFile.path ?? Date.now()}`,
-              name: serverFile.name ?? file.name,
-              path: serverFile.path,
-              mime: serverFile.mime,
-              size: serverFile.size,
-            },
-          ])
-        } else {
-          toast.error('Cannot upload: no chat or workspace context')
-          return
-        }
+        const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
+        setPendingUploads(prev => [
+          ...prev,
+          {
+            id: `upload-${serverFile.path ?? Date.now()}`,
+            name: serverFile.name ?? file.name,
+            path: serverFile.path,
+            mime: serverFile.mime,
+            size: serverFile.size,
+          },
+        ])
         toast.success(`Uploaded ${file.name}`)
       } catch (err) {
         toast.error(`Upload failed: ${file.name}`, {
@@ -527,7 +613,7 @@ export function ChatView({
         })
       }
     }
-  }, [hasRealChatId, chat.id, chat.workspaceId, uploadChatArtifact, uploadLibraryFile])
+  }, [hasRealChatId, chat.id, uploadChatArtifact])
 
   const removePendingUpload = (id: string) =>
     setPendingUploads(prev => prev.filter(u => u.id !== id))
@@ -572,16 +658,51 @@ export function ChatView({
     }
   }, [hasRealChatId, chat.id, uploadChatArtifact])
 
+  const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
+
+  // Adding a library file to the chat does two things:
+  // (1) stage it for the next outgoing message (existing behavior — the
+  //     attachment ref carries the original library path so the agent
+  //     reads the file from its real location), and
+  // (2) symlink it into `.chats/{chatId}/attachments/` so it stays
+  //     visible in the "In this chat" sidebar after send. The pin is
+  //     idempotent server-side and best-effort here — staging still
+  //     works even if the pin call fails (e.g. on the new-chat stub).
   const addStagedFromLibrary = useCallback((item: ContextItem) => {
     setStagedFiles(prev =>
       prev.some(s => s.id === item.id)
         ? prev
         : [...prev, { id: item.id, name: item.name, path: item.id, mime: item.mimeType }],
     )
-  }, [])
+    if (hasRealChatId) {
+      pinChatLibraryRef({ chatId: chat.id, path: item.id })
+        .unwrap()
+        .catch(err => {
+          // RTK Query rejects with `{ status, data }` from fetchBaseQuery —
+          // not an Error — so reach into `data` for the server's message.
+          const data = (err as { data?: { message?: string } } | undefined)?.data
+          const status = (err as { status?: number | string } | undefined)?.status
+          const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+          toast.error(`Could not pin ${item.name}`, { description })
+        })
+    }
+  }, [hasRealChatId, chat.id, pinChatLibraryRef])
 
   const removeStaged = useCallback((id: string) => {
     setStagedFiles(prev => prev.filter(s => s.id !== id))
+  }, [])
+
+  // Stages a chat-scoped server file (`.chats/{id}/attachments/...` or
+  // `.chats/{id}/notes/...`). Unlike `addStagedFromLibrary`, no pin is
+  // attempted — the file already lives under the chat's directory so
+  // there's no library path to symlink in.
+  const addStagedChatFile = useCallback((file: ServerFile) => {
+    const displayName = file.label ?? file.name
+    setStagedFiles(prev =>
+      prev.some(s => s.id === file.path)
+        ? prev
+        : [...prev, { id: file.path, name: displayName, path: file.path, mime: file.mime, size: file.size }],
+    )
   }, [])
 
   // Library items for the workspace backing this chat. Used as the pool
@@ -596,19 +717,28 @@ export function ChatView({
     : []
 
   // Files actually parked in `.chats/{chatId}/`: user uploads + note
-  // mirrors. Drives the Files-tab "In this chat" section. Skipped on
+  // mirrors. Uploads drive the Files-tab "In this chat" list; note
+  // mirrors drive the Artifacts-tab "Chat notes" section. Skipped on
   // the new-chat stub since there's no chat directory yet.
   const { data: chatFilesResp } = useGetChatArtifactsQuery(
     { chatId: hasRealChatId ? chat.id : '', includeNotes: true },
     { skip: !hasRealChatId },
   )
   const chatFiles: ServerFile[] = chatFilesResp ?? []
+  // Notes (`.chats/{id}/notes/*.md`) surface in the Artifacts panel under
+  // a "Chat notes" section. The Files panel only shows real attachments.
+  const chatNotes = useMemo(() => chatFiles.filter(f => f.kind === 'note'), [chatFiles])
+  const chatAttachmentFiles = useMemo(() => chatFiles.filter(f => f.kind !== 'note'), [chatFiles])
 
   // Filter server messages to what the bubble stream renders. System trigger
   // rows (agent_turn / ai_note_request) are hidden — they drive the typing
-  // indicator via `hasPendingTrigger` below, not bubbles.
+  // indicator via `hasPendingTrigger` below, not bubbles. Note-content rows
+  // are also hidden — they surface in the Artifacts panel as "Chat notes",
+  // not as conversation turns.
   const messages: ServerMessage[] = useMemo(
-    () => (serverMsgs?.items ?? []).filter(m => m.role === 'user' || m.role === 'agent'),
+    () => (serverMsgs?.items ?? []).filter(
+      m => (m.role === 'user' || m.role === 'agent') && m.content.type !== 'note',
+    ),
     [serverMsgs],
   )
 
@@ -667,7 +797,12 @@ export function ChatView({
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
 
-      {/* ── Left column: header + messages + input ── */}
+      {/* ── Left column: header + messages + input ──
+          Dropzone stays enabled even before the first message is
+          sent: we still want to capture the drop (preventDefault, no
+          browser nav-to-file) and show an explanatory toast via
+          handleUpload. Dropping never spills into the workspace
+          library — chat drops are always chat-scoped. */}
       <FileDropZone
         onFiles={handleUpload}
         disabled={isUploading}
@@ -676,9 +811,7 @@ export function ChatView({
             ? 'Uploading…'
             : hasRealChatId
               ? 'Drop to attach to chat'
-              : chat.workspaceId
-                ? 'Drop to add to Library'
-                : 'Pick a workspace first'
+              : 'Send a message first to enable uploads'
         }
         className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden"
       >
@@ -788,7 +921,7 @@ export function ChatView({
           <div className="max-w-2xl mx-auto px-6 py-4">
             <ChatInput
               focusRef={focusInputRef}
-              onSend={(msg, uploads) => {
+              onSend={(msg, uploads, options) => {
                 // `uploads` already includes both pendingUploads (chat-input
                 // strip) and stagedFiles (sidebar tray) — both flow through
                 // ChatInput.extraUploads below. De-dupe by path so a file
@@ -811,12 +944,20 @@ export function ChatView({
                 setPendingUploads([])
                 setStagedFiles([])
                 if (isNewChat) {
-                  onFirstMessage?.(msg, newChatAgentId ?? undefined)
+                  onFirstMessage?.(
+                    msg,
+                    newChatAgentId ?? undefined,
+                    attachments.length > 0 ? attachments : undefined,
+                    options,
+                  )
                 } else {
                   postMessageMutation({
                     chatId: chat.id,
                     content: msg,
                     attachments: attachments.length > 0 ? attachments : undefined,
+                    kind: options?.kind,
+                    title: options?.title,
+                    executeAt: options?.executeAt,
                   })
                     .unwrap()
                     .catch(err => {
@@ -879,8 +1020,21 @@ export function ChatView({
           <div className="flex-1 overflow-hidden flex flex-col">
             {rightTab === 'artifacts' && (
               <ArtifactsPanel
+                chatId={chat.id}
                 artifacts={artifacts}
+                chatNotes={chatNotes}
                 onArtifactClick={onArtifactClick}
+                onArtifactStage={(artifact) => {
+                  // Workspace artifacts come from the library list — find the
+                  // matching ContextItem so addStagedFromLibrary can stage AND
+                  // pin (symlink into `.chats/{id}/attachments/`).
+                  const item = libraryItems.find(c => c.id === artifact.id)
+                  if (item) addStagedFromLibrary(item)
+                }}
+                onChatNoteClick={(note) =>
+                  onAttachmentClick?.({ path: note.path, name: note.label ?? note.name, mime: note.mime, size: note.size })
+                }
+                onChatNoteStage={addStagedChatFile}
                 onPrefillInput={(text) => setPrefillText(text)}
                 savedArtifactIds={savedArtifactIds}
                 onSaveArtifact={onSaveArtifact}
@@ -889,12 +1043,16 @@ export function ChatView({
             {rightTab === 'files' && (
               <FilesPanel
                 stagedFiles={stagedFiles}
-                chatFiles={chatFiles}
+                chatFiles={chatAttachmentFiles}
                 libraryItems={libraryItems}
                 hasRealChatId={hasRealChatId}
                 uploading={chatUploadState.isLoading}
                 onUpload={handleSidebarUpload}
                 onAddFromLibrary={addStagedFromLibrary}
+                onFileClick={(file) =>
+                  onAttachmentClick?.({ path: file.path, name: file.name, mime: file.mime, size: file.size })
+                }
+                onFileStage={addStagedChatFile}
               />
             )}
           </div>

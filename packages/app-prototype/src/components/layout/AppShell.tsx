@@ -5,7 +5,7 @@ import {
   LayoutGrid, Zap, FolderOpen, Plus, Search,
   SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
-  FileText, ImageIcon, Table, Globe, Play,
+  FileText, StickyNote,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -87,14 +87,11 @@ function getChatIcon(chat: Chat, artifacts: Artifact[]): LucideIcon {
     const artifact = artifacts.find(a => a.id === chat.artifactIds![0])
     if (artifact) return getArtifactIcon(artifact.type)
   }
-  const t = chat.title.toLowerCase()
-  if (t.match(/build|make|app|tracker|dashboard|tool|calculator/)) return Zap
-  if (t.match(/site|website|landing|portfolio/))                    return Globe
-  if (t.match(/image|design|logo|illustration|palette|visual/))    return ImageIcon
-  if (t.match(/spreadsheet|data|table|csv|metrics|numbers|chart/)) return Table
-  if (t.match(/run|schedule|automate|monitor|sync/))               return Play
-  if (t.match(/write|draft|plan|strategy|brief|report|email|doc|summary|summarise|summarize/)) return FileText
-  return MessageSquare
+  switch (chat.iconKind) {
+    case 'task':    return Zap
+    case 'ai_note': return StickyNote
+    default:        return MessageSquare
+  }
 }
 
 interface AppShellProps {

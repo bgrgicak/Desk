@@ -33,7 +33,9 @@ export function toContextItem(f: ServerFile, _workspaceId: string): ContextItem 
   return {
     id: f.path,
     type: inferType(f.mime),
-    name: f.name,
+    // Prefer the server's display label when present (e.g. "Chat notes")
+    // so notes don't surface the messageId-based filename as their title.
+    name: f.label ?? f.name,
     content: "",
     folder: undefined,
     folderId: folderIdForFile(f.path),

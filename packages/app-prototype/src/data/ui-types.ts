@@ -141,7 +141,7 @@ export interface TaskOccurrence {
   id: string
   startedAt: Date
   endedAt: Date
-  status: 'completed' | 'failed' | 'active'
+  status: 'completed' | 'failed' | 'active' | 'scheduled'
   statusText?: string
 }
 
@@ -213,6 +213,8 @@ export interface Run {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
+export type ChatKind = 'chat' | 'task' | 'ai_note'
+
 export interface Chat {
   id: string
   title: string
@@ -224,6 +226,11 @@ export interface Chat {
   unread?: boolean
   workspaceId?: string
   agentId?: string
+  /**
+   * Drives the chat-list icon. Newest non-chat message kind, falling back to
+   * `'chat'` when the chat has none.
+   */
+  iconKind?: ChatKind
 }
 
 // ── Settings / Connections (catalog of integrations the UI can render) ───────

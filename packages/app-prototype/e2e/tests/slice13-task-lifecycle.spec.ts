@@ -1,13 +1,11 @@
 /**
  * Slice 13 — Task lifecycle (pause / resume / cancel) + chat deep-link.
  *
- * Server-side, a user message POST also enqueues a scheduled
- * ai_note_request 30 min in the future (via runManager.scheduleAiNote).
- * With the memory schedule adapter, that row stays pending forever and
- * is the stable scheduled task we drive the panel against.
- *
- * (Same coverage as the original slice13-run-lifecycle; selectors and
- * URL paths track the runs → tasks rename.)
+ * Seeds a `kind='task'` self-firing message scheduled 24h in the future
+ * via the memory schedule adapter — the row stays pending forever and is
+ * the stable scheduled task we drive the panel against. (The previous
+ * ai_note_request fixture moved to `kind='ai_note'` and no longer
+ * surfaces on the Tasks page; tasks must be `kind='task'`.)
  */
 import { test, expect } from "../fixtures";
 
@@ -18,7 +16,7 @@ interface Seeded {
   chatTitle: string;
 }
 
-async function seedAiNoteTask(
+async function seedScheduledTask(
   serverUrl: string,
   token: string,
   chatTitle: string,
@@ -44,45 +42,27 @@ async function seedAiNoteTask(
   expect(chatRes.status).toBe(201);
   const chat = (await chatRes.json()) as { id: string };
 
+  const futureIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const postRes = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ content: "seed for ai_note_request" }),
+    body: JSON.stringify({
+      content: chatTitle,
+      kind: "task",
+      title: chatTitle,
+      executeAt: futureIso,
+    }),
   });
   expect(postRes.status).toBeGreaterThanOrEqual(200);
   expect(postRes.status).toBeLessThan(300);
-
-  const noteId = await pollForAiNoteRequest(serverUrl, token, chat.id);
-  if (!noteId) {
-    throw new Error("scheduleAiNote didn't surface an ai_note_request row");
-  }
+  const taskMsg = (await postRes.json()) as { id: string };
 
   return {
     chatId: chat.id,
-    messageId: noteId,
+    messageId: taskMsg.id,
     workspaceId: wsList[0].id,
     chatTitle,
   };
-}
-
-async function pollForAiNoteRequest(
-  serverUrl: string,
-  token: string,
-  chatId: string,
-): Promise<string | null> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const res = await fetch(`${serverUrl}/chats/${chatId}/messages`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const body = (await res.json()) as { items: Array<{ id: string; content: { type: string }; state?: string }> };
-    const row = body.items.find(
-      (m) => m.content.type === "ai_note_request" && m.state === "pending",
-    );
-    if (row) return row.id;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  return null;
 }
 
 async function readMessageState(
@@ -106,7 +86,7 @@ async function openTaskDetail(
   await page.getByRole("button", { name: /^Tasks$/ }).first().click();
   await page.getByTestId("tasks-view-list").click();
   await page.getByTestId(`task-row-${seeded.messageId}`).click();
-  await expect(page.getByText(/Scheduled for|Paused/).first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("task-status-trigger")).toBeVisible({ timeout: 5_000 });
 }
 
 test("task detail panel pauses, resumes, and cancels the server message", async ({
@@ -114,7 +94,7 @@ test("task detail panel pauses, resumes, and cancels the server message", async 
   serverUrl,
   token,
 }) => {
-  const seeded = await seedAiNoteTask(serverUrl, token, "Slice13 lifecycle");
+  const seeded = await seedScheduledTask(serverUrl, token, "Slice13 lifecycle");
   await openTaskDetail(loggedInPage, seeded);
 
   // Pause.
@@ -149,7 +129,7 @@ test("task detail chat tab links to originating chat with message deep-link", as
   serverUrl,
   token,
 }) => {
-  const seeded = await seedAiNoteTask(serverUrl, token, "Slice13 chat link");
+  const seeded = await seedScheduledTask(serverUrl, token, "Slice13 chat link");
   await openTaskDetail(loggedInPage, seeded);
 
   await loggedInPage.getByRole("button", { name: /^Chat$/ }).click();
@@ -167,7 +147,7 @@ test("scheduled-but-never-fired task hides the 'Last run' row", async ({
   serverUrl,
   token,
 }) => {
-  const seeded = await seedAiNoteTask(serverUrl, token, "Slice13 no last run");
+  const seeded = await seedScheduledTask(serverUrl, token, "Slice13 no last run");
   await openTaskDetail(loggedInPage, seeded);
 
   await expect(loggedInPage.getByText("Next run")).toBeVisible();

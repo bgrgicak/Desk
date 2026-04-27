@@ -155,6 +155,61 @@ test("chat Files-tab upload stages the file and the next message attaches it", a
   ).toBeVisible();
 });
 
+test("uploads on the new-chat screen are rejected with a toast — never spill into the library", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+
+  // Snapshot the workspace library before — we'll assert nothing new
+  // sneaks in.
+  const libBefore = (await (
+    await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+  ).json()) as { items: Array<{ name: string }> };
+  const namesBefore = new Set(libBefore.items.map((i) => i.name));
+
+  // Open a brand-new chat (no first message sent yet — there is no
+  // chat row, no `.chats/{id}/`, and no chat id to attach to).
+  await page.getByRole("button", { name: /^New chat$/i }).first().click();
+  await page.waitForLoadState("networkidle");
+
+  // Use the outer dropzone's hidden input. (Inner FilesPanel input is
+  // gated on hasRealChatId so it isn't usable here.) Picking a file via
+  // the outer input simulates a drop on the chat-pane drop zone.
+  const outerInput = page.locator('[data-testid="dropzone-file-input"]').first();
+  const guardFileName = `new-chat-no-spill-${Date.now()}.md`;
+  await outerInput.setInputFiles({
+    name: guardFileName,
+    mimeType: "text/markdown",
+    buffer: Buffer.from("must not land in library\n"),
+  });
+
+  // The user gets an explanatory toast — "Send your first message
+  // before adding files" — instead of a silent library upload.
+  await expect(
+    page.getByText(/send your first message before adding files/i),
+  ).toBeVisible({ timeout: 5_000 });
+
+  // Critical regression guard: nothing may have been written to the
+  // workspace library root (or anywhere in the library) as a side
+  // effect of the drop attempt.
+  const libAfter = (await (
+    await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+  ).json()) as { items: Array<{ name: string }> };
+  const newNames = libAfter.items
+    .map((i) => i.name)
+    .filter((n) => !namesBefore.has(n));
+  expect(newNames).not.toContain(guardFileName);
+  expect(newNames).toEqual([]);
+});
+
 test("attach picker mentions a library file and the next message attaches it", async ({
   loggedInPage: page,
   serverUrl,
@@ -225,6 +280,81 @@ test("attach picker mentions a library file and the next message attaches it", a
   const body = JSON.parse(sent.postData() ?? "{}") as {
     attachments?: Array<{ path: string; name: string }>;
   };
+  expect(body.attachments?.map((a) => a.name)).toContain(fileName);
+  expect(body.attachments?.map((a) => a.path)).toContain(fileName);
+});
+
+test("first message in a new chat carries @-mentioned library file", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+  request,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+
+  // Seed a uniquely-named library file so the attach picker has something
+  // to mention. Uniqueness lets us assert against the file regardless of
+  // what the seed user's library already holds.
+  const fileName = `new-chat-mention-${Date.now()}.md`;
+  const upload = await request.post(
+    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          name: fileName,
+          mimeType: "text/markdown",
+          buffer: Buffer.from("first-message attachment target\n"),
+        },
+      },
+    },
+  );
+  expect(upload.status()).toBe(201);
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+
+  // Open the new-chat screen — no chat row exists yet, so the first send
+  // path runs createChat → POST /chats/:id/messages back-to-back. The
+  // regression: the new-chat branch in ChatView dropped the uploads arg
+  // when calling onFirstMessage, so attachments[] never reached the wire
+  // for the first message even though the picker recorded the mention.
+  await page.getByRole("button", { name: /^New chat$/i }).first().click();
+  await page.waitForLoadState("networkidle");
+
+  await page.getByRole("button", { name: /^Add files$/ }).click();
+  await page.getByRole("button", { name: fileName }).click();
+
+  // Capture the create-chat POST so we can address the message POST by
+  // its concrete chat id (the route is /chats/<id>/messages, and we want
+  // to fail loudly if the first /messages POST is for a *different* chat
+  // than the one we just created).
+  const chatCreatePromise = page.waitForResponse(
+    (res) =>
+      res.request().method() === "POST" &&
+      res.url().endsWith("/chats") &&
+      res.status() === 201,
+  );
+  const messagePromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      /\/chats\/[^/]+\/messages$/.test(req.url()),
+  );
+
+  await page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first()
+    .fill("look at this on the very first message");
+  await page.keyboard.press("Enter");
+
+  const created = (await (await chatCreatePromise).json()) as { id: string };
+  const sent = await messagePromise;
+  expect(sent.url()).toContain(`/chats/${created.id}/messages`);
+
+  const body = JSON.parse(sent.postData() ?? "{}") as {
+    content: string;
+    attachments?: Array<{ path: string; name: string }>;
+  };
+  expect(body.content).toContain("very first message");
   expect(body.attachments?.map((a) => a.name)).toContain(fileName);
   expect(body.attachments?.map((a) => a.path)).toContain(fileName);
 });
@@ -303,6 +433,119 @@ test("attach picker mentions a library folder and the next message attaches the 
   expect(body.attachments?.find((a) => a.path === folderName)?.kind).toBe(
     "directory",
   );
+});
+
+test("library detail's 'Use in chat' starts a new chat with the file attached and pins it", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+  request,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+
+  // Seed a uniquely-named library file so we can assert against it
+  // regardless of what the seed user's library already holds.
+  const fileName = `use-in-chat-${Date.now()}.md`;
+  const upload = await request.post(
+    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          name: fileName,
+          mimeType: "text/markdown",
+          buffer: Buffer.from("use-in-chat target body\n"),
+        },
+      },
+    },
+  );
+  expect(upload.status()).toBe(201);
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+
+  // Navigate into the Library, open the seeded file's detail view, then
+  // click the "Use in chat" header button — the same affordance the user
+  // sees on a library file (e.g. a chat summary).
+  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.waitForLoadState("networkidle");
+  await page.getByText(fileName, { exact: true }).first().click();
+  await page.waitForLoadState("networkidle");
+
+  // Distinguish this header button from the row-level "Use in chat" the
+  // ContextList renders by anchoring it next to the Save/Download row.
+  const chatCreatePromise = page.waitForResponse(
+    (res) =>
+      res.request().method() === "POST" &&
+      res.url().endsWith("/chats") &&
+      res.status() === 201,
+  );
+  const messagePromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      /\/chats\/[^/]+\/messages$/.test(req.url()),
+  );
+  const pinPromise = page.waitForRequest(
+    (req) =>
+      req.method() === "POST" &&
+      /\/chats\/[^/]+\/library-refs$/.test(req.url()),
+  );
+
+  await page.getByRole("button", { name: /^Use in chat$/ }).first().click();
+
+  // The new-chat input tray should already show the file as a chip —
+  // it was seeded from `initialStagedItems` on mount. The tray renders
+  // a "Remove <name>" button per chip (same as upload chips).
+  await expect(
+    page.getByRole("button", { name: `Remove ${fileName}` }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // Send the first message. The new-chat path runs createChat → POST
+  // /chats/:id/messages back-to-back, then library-refs to pin.
+  await page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first()
+    .fill("look at the summary I just opened");
+  await page.keyboard.press("Enter");
+
+  const created = (await (await chatCreatePromise).json()) as { id: string };
+  const sent = await messagePromise;
+  expect(sent.url()).toContain(`/chats/${created.id}/messages`);
+
+  // (1) The file must ride on the first message as an attachment, with
+  //     its workspace-relative library path (NOT the .chats/.../ path —
+  //     that would mean we accidentally chat-uploaded it).
+  const body = JSON.parse(sent.postData() ?? "{}") as {
+    content: string;
+    attachments?: Array<{ path: string; name: string }>;
+  };
+  expect(body.attachments?.map((a) => a.name)).toContain(fileName);
+  expect(body.attachments?.map((a) => a.path)).toContain(fileName);
+
+  // (2) The file must also be pinned via library-refs so it appears in
+  //     the right-sidebar "In this chat" list — same behavior as the +
+  //     picker in the Files tab. Assert both the request fired and the
+  //     symlink lands in `.chats/{chatId}/attachments/`.
+  const pinReq = await pinPromise;
+  expect(pinReq.url()).toContain(`/chats/${created.id}/library-refs`);
+  const pinBody = JSON.parse(pinReq.postData() ?? "{}") as { path: string };
+  expect(pinBody.path).toBe(fileName);
+
+  // The pin is best-effort/async; poll the chat attachments list until
+  // the symlink shows up rather than racing it.
+  const expectedPinnedPath = `.chats/${created.id}/attachments/${fileName}`;
+  await expect
+    .poll(
+      async () => {
+        const res = await fetch(
+          `${serverUrl}/chats/${created.id}/attachments`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const list = (await res.json()) as Array<{ path: string }>;
+        return list.map((i) => i.path);
+      },
+      { timeout: 10_000 },
+    )
+    .toContain(expectedPinnedPath);
 });
 
 test("drop-zone overlay appears while files are being dragged", async ({

@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle, Zap, MessageSquare, Calendar, Clock, User,
   MoreHorizontal, ChevronRight, FileText, Plus, ExternalLink,
-  Globe, Table, ImageIcon, Play,
+  StickyNote,
   type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,15 +29,13 @@ const WS_NAME: Record<string, string> = {
   creative: 'Creative Lab',
 }
 
-// ── Chat goal icon (mirrors AppShell logic) ───────────────────────────────────
+// ── Chat goal icon — driven by the newest non-chat message kind. ─────────────
 function chatGoalIcon(chat: Chat): LucideIcon {
-  const t = chat.title.toLowerCase()
-  if (t.match(/build|make|app|tracker|dashboard|tool|calculator/)) return Zap
-  if (t.match(/site|website|landing|portfolio/))                    return Globe
-  if (t.match(/image|design|logo|illustration|palette|visual/))    return ImageIcon
-  if (t.match(/spreadsheet|data|table|csv|metrics|numbers|chart/)) return Table
-  if (t.match(/run|schedule|automate|monitor|sync/))               return Play
-  return FileText
+  switch (chat.iconKind) {
+    case 'task':    return Zap
+    case 'ai_note': return StickyNote
+    default:        return MessageSquare
+  }
 }
 
 // ── Source icon per item type ─────────────────────────────────────────────────

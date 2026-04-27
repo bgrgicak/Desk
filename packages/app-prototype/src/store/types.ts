@@ -50,7 +50,6 @@ export interface ServerAgent {
   name: string;
   instructions: string;
   model: string;
-  toolAllowlist: string[];
 }
 
 /** Membership row from `GET /workspaces/:id/agents`: agent + enrollment timestamp. */
@@ -77,6 +76,12 @@ export interface ServerChat {
   updatedAt: string;
   awaitingUser: boolean;
   unread: boolean;
+  /**
+   * Drives the chat-list icon. Set to the newest non-chat message kind, with
+   * `'chat'` as the fallback when the chat is empty or contains only chat
+   * messages. Only populated by /chats list responses.
+   */
+  iconKind?: "chat" | "task" | "ai_note";
 }
 
 export interface AttachmentRef {
@@ -106,6 +111,11 @@ export interface ServerMessage {
   startedAt?: string;
   endedAt?: string;
   updatedAt?: string;
+  /** Discriminates the message's surface — `chat` (default), `task`,
+   * or `ai_note`. The Tasks page filters on `task`. */
+  kind?: "chat" | "task" | "ai_note";
+  /** Display name for tasks; null/missing for ordinary chat messages. */
+  title?: string | null;
 }
 
 export interface ServerFile {
@@ -120,6 +130,12 @@ export interface ServerFile {
    * note from `.chats/{id}/notes/`. Library responses omit it.
    */
   kind?: "attachment" | "note";
+  /**
+   * Optional human-friendly label rendered alongside the raw file name.
+   * Notes carry "Chat notes" so the UI doesn't surface the messageId-based
+   * filename as the primary label.
+   */
+  label?: string;
 }
 
 /**
@@ -154,6 +170,10 @@ export interface MessagesFilter {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKind?: string[];
+  /** Message-kind discriminator (`task`, `ai_note`, `chat`). The Tasks
+   * page filters on `task`. Distinct from `contentKind` which targets
+   * `content.type`. */
+  kind?: ("chat" | "task" | "ai_note")[];
   since?: string;
   limit?: number;
   cursor?: string;

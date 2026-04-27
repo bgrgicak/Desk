@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   Routes,
   Route,
@@ -20,6 +20,7 @@ import { ContextDetail } from '@/components/context/ContextDetail'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
+import type { AttachmentRef } from '@/store/types'
 import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
@@ -30,8 +31,10 @@ import {
   useGetLibraryFileQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
+  usePinChatLibraryRefMutation,
   usePostChatMessageMutation,
   usePatchMessageMutation,
+  useRunMessageMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
@@ -51,8 +54,23 @@ import { toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
-import { logout } from '@/auth/auto-login'
-import { getSessionToken } from '@/auth/session'
+import { getSessionToken, logout } from '@/auth/session'
+
+// RTK Query rejects with `{ status, data: { code, message } }` from the
+// server, not Error instances — so the common `err instanceof Error ?
+// err.message : undefined` pattern silently drops the only useful detail.
+// Pull the server's `data.message` when present, falling back to Error.
+function extractApiError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'data' in err) {
+    const data = (err as { data?: unknown }).data
+    if (data && typeof data === 'object' && 'message' in data) {
+      const m = (data as { message?: unknown }).message
+      if (typeof m === 'string') return m
+    }
+  }
+  if (err instanceof Error) return err.message
+  return undefined
+}
 
 const NEW_CHAT_STUB: Chat = {
   id: NEW_CHAT_ID,
@@ -66,14 +84,13 @@ const NEW_CHAT_STUB: Chat = {
 }
 
 export default function App() {
-  // Sign-out clears the token before reload. Render the LoginScreen at
-  // the App root so AppInner's data hooks don't fire 401-storms during
-  // the logged-out state.
+  // No token → render the LoginScreen at the App root so AppInner's data
+  // hooks don't fire 401-storms during the logged-out state.
   if (!getSessionToken()) {
     return (
       <TooltipProvider>
         <Toaster position="bottom-right" />
-        <LoginScreen onLogin={() => undefined} />
+        <LoginScreen />
       </TooltipProvider>
     )
   }
@@ -160,13 +177,15 @@ function AppInner() {
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
+  const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
 
   const { data: tasksResp } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, scheduled: true },
+    { workspaceId: activeWorkspaceId, kind: ['task'] },
     { skip: !activeWorkspaceId },
   )
   const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, serverAgents ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
+  const [runMessageMutation] = useRunMessageMutation()
 
   // Agentation widget (Option+A)
   useEffect(() => {
@@ -247,21 +266,56 @@ function AppInner() {
     dispatch(markArtifactSaved(artifactId))
   }, [dispatch])
 
-  const handleComposeWithContext = useCallback((_items?: ContextItem[]) => {
+  // Library items the user picked via "Use in chat" — seeded into the
+  // new-chat input tray so they ride the first message as attachments,
+  // then pinned via library-refs once the chat exists so they show up in
+  // the right-sidebar "In this chat" list (mirrors the `+` picker).
+  //
+  // Held in a ref, not state, because two `goTo` calls in the same handler
+  // can produce an intermediate render that mounts ChatView with
+  // half-committed state. Refs are stable across renders, so ChatView's
+  // mount-time `useState` initializer always reads the current value.
+  const composeStagedItemsRef = useRef<ContextItem[]>([])
+
+  const handleComposeWithContext = useCallback((items?: ContextItem[]) => {
+    composeStagedItemsRef.current = items ?? []
     enterCompose()
   }, [enterCompose])
+
+  // Drop staged items once the user is no longer on the new-chat stub.
+  // After the first message is sent, `handleNewChatFirstMessage` clears
+  // the ref directly; this effect just covers the navigate-away-without-
+  // sending case so a later re-mount doesn't replay stale picks.
+  useEffect(() => {
+    if (selectedChatId !== NEW_CHAT_ID) {
+      composeStagedItemsRef.current = []
+    }
+  }, [selectedChatId])
 
   const handleSidebarChatClick = useCallback((chat: { id: string }) => {
     dispatch(markChatRead(chat.id))
     goTo({ chat: chat.id })
   }, [dispatch, goTo])
 
-  const handleNewChatFirstMessage = useCallback(async (message: string, agentId?: string) => {
+  const handleNewChatFirstMessage = useCallback(async (
+    message: string,
+    agentId?: string,
+    attachments?: AttachmentRef[],
+    options?: { kind?: 'task'; title?: string; executeAt?: string },
+  ) => {
     if (!activeWorkspaceId) return
+    // The workspace-agents query may not have resolved yet on first paint
+    // or right after a workspace switch. Distinguish "still loading" from
+    // "truly empty" so we don't tell the user to open Settings when the
+    // real problem is a not-yet-arrived response.
+    if (workspaceServerAgents === undefined) {
+      toast.error('Still loading workspace — try again in a moment')
+      return
+    }
     // Default to an agent that's actually enrolled in this workspace —
     // the global agents list can include agents the user disabled here,
     // and POST /chats 400s if the agent isn't a workspace member.
-    const pickedAgentId = agentId ?? workspaceServerAgents?.[0]?.id
+    const pickedAgentId = agentId ?? workspaceServerAgents[0]?.id
     if (!pickedAgentId) {
       toast.error('No agent enabled in this workspace', {
         description: 'Open Settings → Agents to enable one.',
@@ -269,6 +323,10 @@ function AppInner() {
       return
     }
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
+    // Capture the staged library items now and clear the ref immediately so
+    // a same-tick re-render of the new-chat stub can't re-seed stale picks.
+    const itemsToPin = composeStagedItemsRef.current
+    composeStagedItemsRef.current = []
     try {
       const newChat = await createChatMutation({
         workspaceId: activeWorkspaceId,
@@ -276,13 +334,25 @@ function AppInner() {
         title,
       }).unwrap()
       goTo({ chat: newChat.id })
-      await postMessageMutation({ chatId: newChat.id, content: message }).unwrap()
+      await postMessageMutation({
+        chatId: newChat.id,
+        content: message,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
+        kind: options?.kind,
+        title: options?.title,
+        executeAt: options?.executeAt,
+      }).unwrap()
+      // Best-effort pin: failure leaves the file usable as a message
+      // attachment, just absent from the right-sidebar "In this chat" list.
+      for (const item of itemsToPin) {
+        pinChatLibraryRefMutation({ chatId: newChat.id, path: item.id })
+          .unwrap()
+          .catch(() => {})
+      }
     } catch (err) {
-      toast.error('Failed to start chat', {
-        description: err instanceof Error ? err.message : undefined,
-      })
+      toast.error('Failed to start chat', { description: extractApiError(err) })
     }
-  }, [activeWorkspaceId, workspaceServerAgents, createChatMutation, postMessageMutation, goTo])
+  }, [activeWorkspaceId, workspaceServerAgents, createChatMutation, postMessageMutation, pinChatLibraryRefMutation, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
@@ -420,6 +490,7 @@ function AppInner() {
                 ? goTo({ view: 'context', item: null, folder: att.path })
                 : goTo({ item: att.path })
             }
+            initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />
         )}
 
@@ -471,25 +542,63 @@ function AppInner() {
             tasks={tasks}
             onTaskMove={async (task, newStatus) => {
               if (!task.chatId || !task.messageId) return
-              // UI status → server message PATCH:
-              //   todo       → state: 'pending', executeAt: null   (queued, not scheduled)
-              //   active     → server-only state, ignore drops onto Active
-              //   complete   → state: 'cancelled' (we collapse done into the same column;
-              //                                    server has no 'complete', and 'succeeded'
-              //                                    is reserved for real terminal output)
-              //   scheduled  → state: 'pending', leave executeAt alone
-              try {
-                if (newStatus === 'active') {
-                  toast.message('"Active" is set by the server when the task fires.')
-                  return
+              // UI column → server action:
+              //   active    → POST .../run (fires the agent now; server
+              //               flips state pending→running and back).
+              //   complete  → PATCH state:'cancelled' (terminal, allowed
+              //               from any non-running state).
+              //   todo      → PATCH executeAt+cron cleared and state:'pending'
+              //               so terminal rows (succeeded/failed/cancelled)
+              //               restore to the Todo column.
+              //   scheduled → PATCH state:'pending' + a default executeAt
+              //               (24h out) when the row has no schedule yet,
+              //               so the drop doesn't require a separate
+              //               "set a time" step. The user can edit the
+              //               time from the task detail panel.
+              if (newStatus === 'active') {
+                try {
+                  await runMessageMutation({
+                    chatId: task.chatId,
+                    messageId: task.messageId,
+                  }).unwrap()
+                } catch (err) {
+                  toast.error('Run failed', { description: extractApiError(err) })
                 }
-                const patch: { state?: 'pending' | 'cancelled'; executeAt?: string | null } = {}
-                if (newStatus === 'todo') { patch.state = 'pending'; patch.executeAt = null }
-                else if (newStatus === 'complete') { patch.state = 'cancelled' }
-                else if (newStatus === 'scheduled') { patch.state = 'pending' }
-                await patchMessageMutation({ chatId: task.chatId, messageId: task.messageId, patch }).unwrap()
+                return
+              }
+
+              const hasSchedule = !!task.scheduledFor || !!task.schedule
+
+              const patch: {
+                state?: 'pending' | 'cancelled'
+                executeAt?: string | null
+                cron?: string | null
+              } = {}
+
+              if (newStatus === 'complete') {
+                patch.state = 'cancelled'
+              } else if (newStatus === 'todo') {
+                patch.executeAt = null
+                patch.cron = null
+                patch.state = 'pending'
+              } else if (newStatus === 'scheduled') {
+                patch.state = 'pending'
+                if (!hasSchedule) {
+                  // Default to 24 hours out so the drop succeeds without a
+                  // separate "set a time" prompt. The user can fine-tune
+                  // from the task detail panel.
+                  patch.executeAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+                }
+              }
+
+              try {
+                await patchMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                  patch,
+                }).unwrap()
               } catch (err) {
-                toast.error('Move failed', { description: err instanceof Error ? err.message : undefined })
+                toast.error('Move failed', { description: extractApiError(err) })
               }
             }}
             onCreateTask={async (input) => {
@@ -507,17 +616,18 @@ function AppInner() {
                   agentId: pickedAgentId,
                   title: input.name.length > 50 ? input.name.slice(0, 50) + '…' : input.name,
                 }).unwrap()
-                const message = await postMessageMutation({
+                // Self-firing task message — server inserts one row with kind=task,
+                // schedules it via at-job if executeAt is set, fires immediately
+                // otherwise.
+                await postMessageMutation({
                   chatId: newChat.id,
                   content: input.description?.trim() ? `${input.name}\n\n${input.description}` : input.name,
+                  kind: 'task',
+                  title: input.name,
+                  executeAt: input.status === 'scheduled' && input.scheduledFor
+                    ? input.scheduledFor.toISOString()
+                    : undefined,
                 }).unwrap()
-                if (input.status === 'scheduled' && input.scheduledFor) {
-                  await patchMessageMutation({
-                    chatId: newChat.id,
-                    messageId: message.id,
-                    patch: { executeAt: input.scheduledFor.toISOString() },
-                  }).unwrap()
-                }
               } catch (err) {
                 toast.error('Failed to create task', {
                   description: err instanceof Error ? err.message : undefined,

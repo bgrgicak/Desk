@@ -40,7 +40,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { useCreateWorkspaceMutation, useDeleteWorkspaceMutation, useGetMeQuery, usePatchWorkspaceMutation } from '@/store/api'
-import { logout } from '@/auth/auto-login'
+import { logout } from '@/auth/session'
 import type { View } from './AppShell'
 
 function initialsOf(name: string): string {
