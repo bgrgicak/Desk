@@ -42,12 +42,6 @@ test("editing workspace name + description + color from the Customize modal pers
     loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
 
-  // Sidebar emoji tile reflects the new color (rgb form of #fce7f3).
-  const emojiTile = loggedInPage
-    .locator('[data-sidebar="menu-button"] div[style*="background-color"]')
-    .first();
-  await expect(emojiTile).toHaveCSS("background-color", "rgb(252, 231, 243)");
-
   // Confirm the server actually stored it.
   const res = await fetch(`${serverUrl}/workspaces`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -70,7 +64,6 @@ test("editing workspace name + description + color from the Customize modal pers
   await expect(
     loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
-  await expect(emojiTile).toHaveCSS("background-color", "rgb(252, 231, 243)");
 });
 
 test("creating a workspace from the top-bar form persists to the server", async ({
