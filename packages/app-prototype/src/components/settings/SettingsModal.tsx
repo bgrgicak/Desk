@@ -48,7 +48,9 @@ import {
 import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
-  MOCK_CONNECTIONS,
+  DEFAULT_BASE_URL_BY_KIND,
+  FALLBACK_MODELS_BY_PROVIDER,
+  MODEL_PROVIDER_BY_KIND,
   PROVIDER_KEY_BY_KIND,
   type Connection,
   type ConnectionKind,
@@ -125,6 +127,33 @@ function brandKindForProvider(provider: string): ConnectionKind | null {
   if (provider === 'anthropic') return 'claude'
   if (provider === 'openai')    return 'chatgpt'
   return null
+}
+
+// Connection kinds that the picker can actually configure (i.e. we have a
+// backend to persist them). Other catalog entries appear in the picker
+// but are disabled.
+function isFunctionalKind(kind: ConnectionKind): boolean {
+  return PROVIDER_KEY_BY_KIND[kind] !== undefined
+}
+
+// Build the connections list from the persisted provider keys. Only
+// kinds whose key is set show up — we don't fake "Claude is connected"
+// when no key has been saved.
+function deriveConnections(providerKeys: Record<string, string | null>): Connection[] {
+  const out: Connection[] = []
+  for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
+    if (providerKeys[envKey]) {
+      const meta = CONNECTION_CATALOG[kind]
+      out.push({
+        id: `conn-${kind}`,
+        kind,
+        name: meta.name,
+        baseUrl: DEFAULT_BASE_URL_BY_KIND[kind],
+        enabled: true,
+      })
+    }
+  }
+  return out
 }
 
 // ── Shared bits ──────────────────────────────────────────────────────────────
@@ -456,15 +485,6 @@ type AgentsFocus =
   | { mode: 'new' }
   | null
 
-function uniqueProviders(models: ModelRef[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const m of models) {
-    if (!seen.has(m.provider)) { seen.add(m.provider); out.push(m.provider) }
-  }
-  return out.sort((a, b) => a.localeCompare(b))
-}
-
 function providerLabel(provider: string): string {
   if (provider === 'anthropic') return 'Claude'
   if (provider === 'openai')    return 'ChatGPT'
@@ -472,12 +492,56 @@ function providerLabel(provider: string): string {
   return provider
 }
 
+// Returns models grouped by provider, merging /tools/models with fallback
+// catalogs for any provider whose key is configured. This keeps the
+// provider/model dropdowns functional even when the sandbox model
+// listing endpoint is empty or failing.
+function buildModelIndex(
+  apiModels: ModelRef[],
+  providerKeys: Record<string, string | null>,
+  currentModel: string,
+): Map<string, ModelRef[]> {
+  const byProvider = new Map<string, ModelRef[]>()
+  const seenIds = new Set<string>()
+
+  const add = (m: ModelRef) => {
+    if (seenIds.has(m.id)) return
+    seenIds.add(m.id)
+    const list = byProvider.get(m.provider) ?? []
+    list.push(m)
+    byProvider.set(m.provider, list)
+  }
+
+  for (const m of apiModels) add(m)
+
+  // Fallback models for providers whose key is configured but the API
+  // returned nothing (e.g. /tools/models is failing).
+  for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
+    const providerId = MODEL_PROVIDER_BY_KIND[kind]
+    if (!providerId) continue
+    if (!providerKeys[envKey]) continue
+    if (byProvider.has(providerId)) continue
+    const fallback = FALLBACK_MODELS_BY_PROVIDER[providerId] ?? []
+    for (const f of fallback) add({ provider: providerId, id: f.id, label: f.label })
+  }
+
+  // Always surface the agent's current model so editing an existing
+  // agent doesn't drop the selection if the model isn't in either list.
+  if (currentModel && !seenIds.has(currentModel)) {
+    const slash = currentModel.indexOf('/')
+    const provider = slash > 0 ? currentModel.slice(0, slash) : 'unknown'
+    add({ provider, id: currentModel, label: currentModel })
+  }
+
+  return byProvider
+}
+
 function AgentsList({
-  agents, models, enrolledIds, statusFilter, search,
+  agents, modelIndex, enrolledIds, statusFilter, search,
   onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled,
 }: {
   agents: ServerAgent[]
-  models: ModelRef[]
+  modelIndex: Map<string, ModelRef[]>
   enrolledIds: Set<string>
   statusFilter: StatusFilter
   search: string
@@ -517,7 +581,9 @@ function AgentsList({
   return (
     <div className="flex flex-col">
       {filtered.map((a, i) => {
-        const model = models.find(m => m.id === a.model)
+        const allModels: ModelRef[] = []
+        for (const ms of modelIndex.values()) allModels.push(...ms)
+        const model = allModels.find(m => m.id === a.model)
         const provider = model?.provider
         const enrolled = enrolledIds.has(a.id)
         return (
@@ -583,10 +649,10 @@ function AgentsList({
 }
 
 function AgentDetail({
-  agents, models, focus, busy, onSave, onCancel, onDelete,
+  agents, modelIndex, focus, busy, onSave, onCancel, onDelete,
 }: {
   agents: ServerAgent[]
-  models: ModelRef[]
+  modelIndex: Map<string, ModelRef[]>
   focus: Exclude<AgentsFocus, null>
   busy: boolean
   onSave: (v: { id?: string; name: string; model: string; instructions: string }) => void
@@ -594,10 +660,19 @@ function AgentDetail({
   onDelete: (id: string) => void
 }) {
   const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
-  const providers = uniqueProviders(models)
+  const providers = useMemo(
+    () => [...modelIndex.keys()].sort((a, b) => a.localeCompare(b)),
+    [modelIndex],
+  )
 
-  const initialModel  = existing?.model ?? models[0]?.id ?? ''
-  const initialModelRef = models.find(m => m.id === initialModel)
+  const flatModels = useMemo(() => {
+    const out: ModelRef[] = []
+    for (const ms of modelIndex.values()) out.push(...ms)
+    return out
+  }, [modelIndex])
+
+  const initialModel    = existing?.model ?? flatModels[0]?.id ?? ''
+  const initialModelRef = flatModels.find(m => m.id === initialModel)
   const initialProvider = initialModelRef?.provider ?? providers[0] ?? ''
 
   const [name, setName]                 = useState(existing?.name ?? '')
@@ -606,16 +681,15 @@ function AgentDetail({
   const [instructions, setInstructions] = useState(existing?.instructions ?? '')
 
   const modelOptions = useMemo(
-    () => models.filter(m => m.provider === provider),
-    [models, provider],
+    () => modelIndex.get(provider) ?? [],
+    [modelIndex, provider],
   )
 
   const handleProviderChange = (next: string) => {
     setProvider(next)
-    const stillValid = models.some(m => m.id === model && m.provider === next)
-    if (!stillValid) {
-      const first = models.find(m => m.provider === next)
-      setModel(first?.id ?? '')
+    const list = modelIndex.get(next) ?? []
+    if (!list.some(m => m.id === model)) {
+      setModel(list[0]?.id ?? '')
     }
   }
 
@@ -729,7 +803,7 @@ type ConnectionsFocus =
 
 function ConnectionsList({
   connections, statusFilter, search,
-  onOpen, onPickNew, onDelete, onDuplicate, onToggleEnabled,
+  onOpen, onPickNew, onDelete, onToggleEnabled,
 }: {
   connections: Connection[]
   statusFilter: StatusFilter
@@ -737,7 +811,6 @@ function ConnectionsList({
   onOpen: (id: string) => void
   onPickNew: () => void
   onDelete: (id: string) => void
-  onDuplicate: (id: string) => void
   onToggleEnabled: (id: string) => void
 }) {
   const q = search.trim().toLowerCase()
@@ -807,14 +880,11 @@ function ConnectionsList({
                   <DropdownMenuItem onSelect={() => onOpen(c.id)}>
                     <Pencil className="h-4 w-4" />Edit
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onDuplicate(c.id)}>
-                    <Copy className="h-4 w-4" />Duplicate
-                  </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() => onDelete(c.id)}
                     className="text-destructive focus:text-destructive"
                   >
-                    <Trash2 className="h-4 w-4" />Delete
+                    <Trash2 className="h-4 w-4" />Remove
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -826,7 +896,12 @@ function ConnectionsList({
   )
 }
 
-function ConnectionsPicker({ onPick }: { onPick: (kind: ConnectionKind) => void }) {
+function ConnectionsPicker({
+  configuredKinds, onPick,
+}: {
+  configuredKinds: Set<ConnectionKind>
+  onPick: (kind: ConnectionKind) => void
+}) {
   const [search, setSearch] = useState('')
   const q = search.trim().toLowerCase()
   const entries = (Object.entries(CONNECTION_CATALOG) as [ConnectionKind, typeof CONNECTION_CATALOG[ConnectionKind]][])
@@ -843,22 +918,45 @@ function ConnectionsPicker({ onPick }: { onPick: (kind: ConnectionKind) => void 
         <EmptyState title="No matches" body={`No connections match “${q}”.`} />
       ) : (
         <div className="grid grid-cols-3 gap-3">
-          {entries.map(([kind, meta], i) => (
-            <motion.button
-              key={kind}
-              initial={{ opacity: 0, scale: 0.97 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: i * 0.03, duration: 0.18, ease: 'easeOut' }}
-              onClick={() => onPick(kind)}
-              className="group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
-            >
-              <ConnectionGlyph kind={kind} size="lg" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{meta.name}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
-              </div>
-            </motion.button>
-          ))}
+          {entries.map(([kind, meta], i) => {
+            const functional = isFunctionalKind(kind)
+            const alreadyAdded = configuredKinds.has(kind)
+            const disabled = !functional || alreadyAdded
+            const badge = !functional
+              ? 'Coming soon'
+              : alreadyAdded
+                ? 'Added'
+                : null
+            return (
+              <motion.button
+                key={kind}
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.03, duration: 0.18, ease: 'easeOut' }}
+                onClick={() => !disabled && onPick(kind)}
+                disabled={disabled}
+                className={cn(
+                  'group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors',
+                  disabled
+                    ? 'cursor-not-allowed opacity-60'
+                    : 'hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none',
+                )}
+              >
+                <div className="flex w-full items-start justify-between gap-2">
+                  <ConnectionGlyph kind={kind} size="lg" />
+                  {badge && (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {badge}
+                    </span>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{meta.name}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
+                </div>
+              </motion.button>
+            )
+          })}
         </div>
       )}
     </div>
@@ -1189,7 +1287,6 @@ export function SettingsModal({
   const [removeWorkspaceAgent] = useRemoveWorkspaceAgentMutation()
 
   const agents = serverAgents ?? []
-  const modelList = models ?? []
   const enrolledIds = useMemo(
     () => new Set((workspaceAgents ?? []).map(a => a.id)),
     [workspaceAgents],
@@ -1240,6 +1337,15 @@ export function SettingsModal({
     }
   }
 
+  // Models are merged from /tools/models with hardcoded fallbacks for any
+  // provider whose key is configured — keeps provider/model dropdowns
+  // functional even when the sandbox model listing is empty or failing.
+  // Built later (we need providerKeys), but referenced here.
+  const editingAgentModel = (() => {
+    if (agentsFocus?.mode !== 'edit') return ''
+    return agents.find(a => a.id === agentsFocus.id)?.model ?? ''
+  })()
+
   const handleToggleAgentEnabled = async (agentId: string, next: boolean) => {
     try {
       if (next) await addWorkspaceAgent({ workspaceId: workspace.id, agentId }).unwrap()
@@ -1250,13 +1356,32 @@ export function SettingsModal({
   }
 
   // ── Connections state ─────────────────────────────────────────────────────
-  // The connection list itself is local-only; provider API keys (Claude /
-  // ChatGPT) are persisted via /me/providers.
+  // The connection list is derived from /me/providers — Claude / ChatGPT
+  // entries appear once their API key is saved. Other catalog kinds stay
+  // disabled in the picker until a backend lands.
   const { data: providerKeys } = useGetProviderKeysQuery()
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
 
+  const providerKeysMap = providerKeys ?? {}
+  const connections = useMemo(
+    () => deriveConnections(providerKeysMap),
+    [providerKeysMap],
+  )
+  const configuredKinds = useMemo(
+    () => new Set(connections.map(c => c.kind)),
+    [connections],
+  )
+
+  // Per-workspace availability for connections is local-only for now —
+  // a key being saved means the connection exists, this toggle gates
+  // whether agents in this workspace see it. State resets on remount.
+  const [connectionsDisabledLocal, setConnectionsDisabledLocal] = useState<Set<string>>(new Set())
+  const connectionsView = useMemo(
+    () => connections.map(c => ({ ...c, enabled: !connectionsDisabledLocal.has(c.id) })),
+    [connections, connectionsDisabledLocal],
+  )
+
   const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
-  const [connections, setConnections]                         = useState<Connection[]>(MOCK_CONNECTIONS)
   const [connectionsSearch, setConnectionsSearch]             = useState('')
   const [connectionsStatusFilter, setConnectionsStatusFilter] = useState<StatusFilter>('all')
 
@@ -1265,29 +1390,38 @@ export function SettingsModal({
     setConnectionsSearch('')
   }
 
-  const handleSaveConnection = (conn: Connection) => {
-    setConnections(prev => {
-      const exists = prev.some(c => c.id === conn.id)
-      return exists ? prev.map(c => c.id === conn.id ? conn : c) : [...prev, conn]
-    })
+  const handleSaveConnection = (_conn: Connection) => {
+    // Display-only fields like name / baseUrl aren't persisted yet — the
+    // API only stores the key. Save happens via the Apply button next to
+    // the API key field, so closing the detail is enough here.
     setConnectionsFocus(null)
   }
-  const handleDeleteConnection = (id: string) => {
-    setConnections(prev => prev.filter(c => c.id !== id))
+
+  const handleDeleteConnection = async (id: string) => {
+    const conn = connections.find(c => c.id === id)
+    if (!conn) { setConnectionsFocus(null); return }
+    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    if (envKey) {
+      try {
+        // Sending an empty string clears the key on the server — the row
+        // disappears from the list because deriveConnections() drops it.
+        await putProviderKeys({ [envKey]: '' }).unwrap()
+      } catch (err) {
+        toast.error('Could not remove connection', { description: describeApiError(err) })
+        return
+      }
+    }
     setConnectionsFocus(null)
   }
-  const handleDuplicateConnection = (id: string) => {
-    setConnections(prev => {
-      const source = prev.find(c => c.id === id)
-      if (!source) return prev
-      const copy: Connection = { ...source, id: `conn-${Date.now()}`, name: `${source.name} (copy)` }
-      const i = prev.findIndex(c => c.id === id)
-      return [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)]
-    })
-  }
+
   const handleToggleConnectionEnabled = (id: string) => {
-    setConnections(prev => prev.map(c => c.id === id ? { ...c, enabled: !c.enabled } : c))
+    setConnectionsDisabledLocal(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
   }
+
   const handleSaveProviderKey = async (envKey: string, value: string) => {
     try {
       await putProviderKeys({ [envKey]: value }).unwrap()
@@ -1295,6 +1429,11 @@ export function SettingsModal({
       toast.error('Could not save provider key', { description: describeApiError(err) })
     }
   }
+
+  const modelIndex = useMemo(
+    () => buildModelIndex(models ?? [], providerKeysMap, editingAgentModel),
+    [models, providerKeysMap, editingAgentModel],
+  )
 
   // ── Route key for page transitions ────────────────────────────────────────
   const routeKey = (() => {
@@ -1491,7 +1630,7 @@ export function SettingsModal({
               ) : activeSection === 'agents' && agentsFocus !== null ? (
                 <AgentDetail
                   agents={agents}
-                  models={modelList}
+                  modelIndex={modelIndex}
                   focus={agentsFocus}
                   busy={creatingAgent || patchingAgent}
                   onSave={handleSaveAgent}
@@ -1499,12 +1638,15 @@ export function SettingsModal({
                   onDelete={handleDeleteAgent}
                 />
               ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
-                <ConnectionsPicker onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })} />
+                <ConnectionsPicker
+                  configuredKinds={configuredKinds}
+                  onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
+                />
               ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
                 <ConnectionDetail
-                  connections={connections}
+                  connections={connectionsView}
                   focus={connectionsFocus}
-                  providerKeys={providerKeys ?? {}}
+                  providerKeys={providerKeysMap}
                   busySaveKey={savingKey}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
@@ -1526,7 +1668,7 @@ export function SettingsModal({
                       </div>
                       <AgentsList
                         agents={agents}
-                        models={modelList}
+                        modelIndex={modelIndex}
                         enrolledIds={enrolledIds}
                         statusFilter={agentsStatusFilter}
                         search={agentsSearch}
@@ -1550,13 +1692,12 @@ export function SettingsModal({
                         </div>
                       </div>
                       <ConnectionsList
-                        connections={connections}
+                        connections={connectionsView}
                         statusFilter={connectionsStatusFilter}
                         search={connectionsSearch}
                         onOpen={(id) => setConnectionsFocusAndReset({ mode: 'edit', id })}
                         onPickNew={() => setConnectionsFocusAndReset({ mode: 'picker' })}
                         onDelete={handleDeleteConnection}
-                        onDuplicate={handleDuplicateConnection}
                         onToggleEnabled={handleToggleConnectionEnabled}
                       />
                     </div>

@@ -1,7 +1,9 @@
-// Catalog + seed data for Settings → Connections.
-// Claude / ChatGPT entries here drive the API-key UI; their API keys are
-// persisted via /me/providers (see SettingsModal). Everything else is
-// prototype-level mock state until a real backend lands.
+// Catalog + types for Settings → Connections.
+//
+// Connection state is derived from the real backend (currently
+// `/me/providers` for Claude/ChatGPT). The other kinds are listed in the
+// catalog so they appear in the picker as a roadmap, but they're disabled
+// until a backend lands — there is no mock data seeded.
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt'
@@ -26,36 +28,50 @@ export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
   'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
 }
 
+// Maps a provider-style connection kind to the env key in /me/providers
+// where its API key is persisted. Kinds not in this map have no backend
+// yet and stay disabled in the picker.
+export const PROVIDER_KEY_BY_KIND: Partial<Record<ConnectionKind, string>> = {
+  claude: 'ANTHROPIC_API_KEY',
+  chatgpt: 'OPENAI_API_KEY',
+}
+
 export interface Connection {
   id: string
   kind: ConnectionKind
   name: string
-  // Local-only config for non-provider kinds. Claude/ChatGPT use the real
-  // /me/providers API; the field here is only used as a UI cache while the
-  // detail page is open.
-  apiKey?: string
   baseUrl?: string
   enabled: boolean
 }
 
-export const MOCK_CONNECTIONS: Connection[] = [
-  {
-    id: 'conn-claude',
-    kind: 'claude',
-    name: 'Claude',
-    baseUrl: 'https://api.anthropic.com',
-    enabled: true,
-  },
-  {
-    id: 'conn-chatgpt',
-    kind: 'chatgpt',
-    name: 'ChatGPT',
-    baseUrl: 'https://api.openai.com/v1',
-    enabled: true,
-  },
-]
+// Default base URLs surfaced in the connection detail form. Display only —
+// the server resolves the actual base URL from the provider key.
+export const DEFAULT_BASE_URL_BY_KIND: Partial<Record<ConnectionKind, string>> = {
+  claude: 'https://api.anthropic.com',
+  chatgpt: 'https://api.openai.com/v1',
+}
 
-export const PROVIDER_KEY_BY_KIND: Partial<Record<ConnectionKind, string>> = {
-  claude: 'ANTHROPIC_API_KEY',
-  chatgpt: 'OPENAI_API_KEY',
+// Provider id (as used by /tools/models and stored on agent.model) that a
+// connection kind authenticates. Used by the agent provider dropdown to
+// turn a configured connection into an available provider.
+export const MODEL_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>> = {
+  claude: 'anthropic',
+  chatgpt: 'openai',
+}
+
+// Baseline models per provider so the agent edit form is functional even
+// when /tools/models is empty (no key set yet) or the sandbox is failing
+// to enumerate. Real models from /tools/models are merged on top, keyed
+// by id.
+export const FALLBACK_MODELS_BY_PROVIDER: Record<string, { id: string; label: string }[]> = {
+  anthropic: [
+    { id: 'anthropic/claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+    { id: 'anthropic/claude-opus-4-20250514',   label: 'Claude Opus 4'   },
+    { id: 'anthropic/claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  ],
+  openai: [
+    { id: 'openai/gpt-4o',      label: 'GPT-4o'      },
+    { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini' },
+    { id: 'openai/gpt-4-turbo', label: 'GPT-4 Turbo' },
+  ],
 }
