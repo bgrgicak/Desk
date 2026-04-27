@@ -45,7 +45,7 @@ export async function insert(
       data.userId,
       data.name,
       data.instructions ?? "",
-      data.model ?? "claude-sonnet-4-20250514",
+      data.model ?? "opencode/big-pickle",
       JSON.stringify(data.toolAllowlist ?? []),
     ],
   );
