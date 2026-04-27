@@ -283,7 +283,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
-        model: agent?.model ?? "anthropic/claude-sonnet-4-5",
+        model: agent?.model ?? "opencode/big-pickle",
         instructions: agent?.instructions ?? "",
         userName,
       };

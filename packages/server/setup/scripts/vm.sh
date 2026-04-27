@@ -49,12 +49,37 @@ SET_EXPR=".mounts[0].location = \"$REPO_ROOT\" | .portForwards[0].hostPort = $PO
 # "" if the instance doesn't exist, else "Running" | "Stopped" | etc.
 vm_status() { limactl list --format '{{.Status}}' "$NAME" 2>/dev/null; }
 
+INSTALL_SH="${REPO_ROOT}/packages/server/setup/install.sh"
+
+# SHA-256 of install.sh, portable across macOS (shasum) and Linux (sha256sum).
+install_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$INSTALL_SH" | awk '{print $1}'
+  else
+    shasum -a 256 "$INSTALL_SH" | awk '{print $1}'
+  fi
+}
+
+# Returns 0 (true) when the VM's recorded hash differs from the current file.
+needs_provision() {
+  local current stored
+  current="$(install_hash)"
+  stored="$(limactl shell "$NAME" -- cat /etc/desk-server/provision-hash 2>/dev/null || true)"
+  [ "$current" != "$stored" ]
+}
+
+run_provision() { limactl shell "$NAME" sudo bash /desk/packages/server/setup/install.sh; }
+
 case "$cmd" in
   up)
     if limactl list --quiet | grep -qx "$NAME"; then
       with_kvm limactl start "$NAME"
     else
       with_kvm limactl start --name="$NAME" --set="$SET_EXPR" --tty=false "$CONFIG"
+    fi
+    if needs_provision; then
+      echo "==> install.sh changed since last provision — reprovisioning $NAME..."
+      run_provision
     fi
     ;;
   halt)
@@ -67,7 +92,7 @@ case "$cmd" in
     [ "$(vm_status)" = "Running" ] && limactl stop "$NAME"
     with_kvm limactl start "$NAME"
     ;;
-  provision)  limactl shell "$NAME" sudo bash /desk/packages/server/setup/install.sh ;;
+  provision)  run_provision ;;
   ssh)        limactl shell "$NAME" ;;
   ssh-desk)   limactl shell "$NAME" -- sudo -u desk bash ;;
   status)     limactl list "$NAME" ;;

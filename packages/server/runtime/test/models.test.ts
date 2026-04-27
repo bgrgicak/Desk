@@ -34,8 +34,8 @@ describe("listModels (fake sandbox)", () => {
   });
 
   it("filters by provider", async () => {
-    const models = await listModels("agt_test", "desk", { provider: "anthropic" });
+    const models = await listModels("agt_test", "desk", { provider: "opencode" });
     expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.provider === "anthropic")).toBe(true);
+    expect(models.every((m) => m.provider === "opencode")).toBe(true);
   });
 });

@@ -27,7 +27,14 @@ export async function listModels(
   const [firstWorkspace] = await queries.workspaces.list(pool);
   if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
 
-  const providerKeys = await resolveProviderKeys(pool);
+  let providerKeys: Record<string, string>;
+  try {
+    providerKeys = await resolveProviderKeys(pool);
+  } catch {
+    // Decryption failure (key rotation, corrupted data). Proceed with no keys
+    // so the sandbox can still list provider-agnostic models.
+    providerKeys = {};
+  }
 
   try {
     return await runtimeListModels(firstWorkspace.id, firstWorkspace.path, {

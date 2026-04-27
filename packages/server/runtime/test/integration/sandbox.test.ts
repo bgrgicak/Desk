@@ -20,7 +20,16 @@ function dockerAvailable(): boolean {
   }
 }
 
-const SKIP = !dockerAvailable();
+function sandboxImageAvailable(): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;

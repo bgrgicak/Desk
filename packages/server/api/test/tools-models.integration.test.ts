@@ -30,11 +30,20 @@ function dockerAvailable(): boolean {
   }
 }
 
-// `opencode models` returns an empty list when no provider key is set,
-// so the "anthropic must be present" assertions can't pass without a
-// real ANTHROPIC_API_KEY. Mirror the gating from runtime/opencode.test.ts.
-const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
-const SKIP = !dockerAvailable() || !HAS_KEY;
+// Free opencode models are always present — no API key required.
+// Gate only on Docker + sandbox image availability.
+function sandboxImageAvailable(): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const HAS_ANTHROPIC_KEY = !!process.env.ANTHROPIC_API_KEY;
+const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
+const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
@@ -94,7 +103,7 @@ beforeAll(async () => {
   process.env.DESK_HOME = home;
 
   // Provider keys are user-scoped now (M2). Enable the dev-only env seed
-  // so opencode inside the sandbox can see ANTHROPIC_API_KEY.
+  // so opencode inside the sandbox can see ANTHROPIC_API_KEY / OPENAI_API_KEY.
   process.env.DESK_DEV = "1";
   process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
   await seedProviderKeysFromEnv(pool);
@@ -158,7 +167,7 @@ afterAll(async () => {
 });
 
 describeIf("GET /tools/models (real Docker + opencode)", () => {
-  it("returns a bare array of { id, provider } from the real sandbox", async () => {
+  it("returns a bare array of { id, provider } including free opencode models", async () => {
     // Capture the seeded agent id so cleanup knows which container we might have created.
     const agentsRes = await httpJson("GET", "/agents", token);
     createdAgentId = (agentsRes.body as Array<{ id: string }>)[0].id;
@@ -168,19 +177,39 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
-    expect(body.some((m) => m.provider === "anthropic")).toBe(true);
+    // Free opencode models must always be present — no API key required.
+    expect(body.some((m) => m.provider === "opencode")).toBe(true);
     for (const m of body) {
       expect(m.id.startsWith(`${m.provider}/`)).toBe(true);
     }
   }, 90_000);
 
-  it("?provider=anthropic returns only anthropic models", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=anthropic", token);
+  it("?provider=opencode returns only opencode models", async () => {
+    const res = await httpJson("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
+    expect(body.every((m) => m.provider === "opencode")).toBe(true);
+  }, 60_000);
+
+  // Paid-provider tests — skipped when the corresponding key is absent.
+  const itIfAnthropic = HAS_ANTHROPIC_KEY ? it : it.skip;
+  itIfAnthropic("?provider=anthropic returns only anthropic models", async () => {
+    const res = await httpJson("GET", "/tools/models?provider=anthropic", token);
+    expect(res.status).toBe(200);
+    const body = res.body as Array<{ id: string; provider: string }>;
+    expect(body.length).toBeGreaterThan(0);
     expect(body.every((m) => m.provider === "anthropic")).toBe(true);
+  }, 60_000);
+
+  const itIfOpenAI = HAS_OPENAI_KEY ? it : it.skip;
+  itIfOpenAI("?provider=openai returns only openai models", async () => {
+    const res = await httpJson("GET", "/tools/models?provider=openai", token);
+    expect(res.status).toBe(200);
+    const body = res.body as Array<{ id: string; provider: string }>;
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((m) => m.provider === "openai")).toBe(true);
   }, 60_000);
 });
 

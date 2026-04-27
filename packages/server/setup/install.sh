@@ -47,6 +47,8 @@ if ! id desk &>/dev/null; then
   log "Creating desk user (UID 2000)"
   useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
 fi
+# desk needs docker group access to talk to dockerd (spawn/manage sandboxes).
+usermod -aG docker desk
 
 # ---------- 6. Postgres role + database ----------
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='desk'" | grep -q 1; then
@@ -171,6 +173,8 @@ log "Waiting for desk-server to respond"
 for i in $(seq 1 30); do
   if curl -sf http://127.0.0.1:8080/ | grep -q "hello world"; then
     log "desk-server is healthy"
+    # Stamp this script's hash so vm.sh / deploy tooling can detect drift.
+    sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}' > /etc/desk-server/provision-hash
     exit 0
   fi
   sleep 1
