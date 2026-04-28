@@ -208,20 +208,6 @@ export class Pool {
       ?? ":memory:";
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
-    // EXCLUSIVE locking keeps WAL's shared index ("wal-index") in process
-    // heap instead of an mmap'd `-shm` file. Two upsides for our
-    // single-writer-process architecture (the API is the only thing
-    // that opens this file; at/cron jobs route through
-    // /internal/messages/fire):
-    //   1. Skips the per-write trip through shared memory bookkeeping,
-    //      so writes are slightly faster.
-    //   2. Removes the mmap requirement on the underlying filesystem.
-    //      virtiofs handles mmap fine; 9p and reverse-sshfs do not. If
-    //      we ever fall back to 9p (e.g. virtiofs unavailable on a
-    //      target host), WAL coordination keeps working.
-    // See https://www.sqlite.org/wal.html ("Use of WAL Without
-    // Shared-Memory") for the SQLite-side rationale.
-    this.db.pragma("locking_mode = EXCLUSIVE");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("busy_timeout = 5000");
