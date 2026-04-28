@@ -208,6 +208,23 @@ export class Pool {
       ?? ":memory:";
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
+    // EXCLUSIVE locking keeps the WAL index ("wal-index") in process heap
+    // instead of an mmap'd `-shm` file. Two upsides for our
+    // single-writer-process architecture (the API is the only thing that
+    // opens this file; at/cron jobs route through /internal/messages/fire):
+    //   1. Removes the mmap requirement on the underlying filesystem, so
+    //      the DB works on virtiofs, 9p, or reverse-sshfs Lima mounts
+    //      without changing the durability contract.
+    //   2. Forces a single-opener invariant — a stray second process
+    //      gets SQLITE_BUSY at open time instead of silently writing
+    //      through a stale WAL view. Tests that simulate "server
+    //      restart" close the existing pool before opening a fresh one.
+    // Backup story: a host-side `sqlite3 .backup` CLI is blocked by the
+    // exclusive lock, so the API exposes /internal/backup → VACUUM INTO
+    // (runs on the live connection, no downtime). See BACKUP.md.
+    // SQLite docs: https://www.sqlite.org/wal.html ("Use of WAL Without
+    // Shared-Memory")
+    this.db.pragma("locking_mode = EXCLUSIVE");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("busy_timeout = 5000");

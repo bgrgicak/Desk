@@ -18,13 +18,38 @@ The Lima VM holds zero durable state; a `vm:reset` is non-destructive.
 
 ## Manual backup
 
-The DB is a single file. `sqlite3 .backup` produces a consistent snapshot
-without needing to checkpoint WAL or pause the server:
+The pool opens the DB with `locking_mode = EXCLUSIVE` (single-writer-process
+guarantee, plus 9p compatibility), which means a separate `sqlite3
+.backup` CLI run can't open the file while the server is up. Two
+options that both produce a consistent snapshot:
+
+### Online backup via the server (recommended — no downtime)
+
+The server exposes `POST /internal/backup` (loopback + bearer-token
+auth) that runs SQLite's `VACUUM INTO` on the live connection. From
+inside the VM:
 
 ```bash
-mkdir -p ~/Desk/backups
+T=$(sudo cat /etc/desk-server/internal-token)
+curl -sf -X POST -H "Authorization: Bearer $T" \
+  http://127.0.0.1:8080/internal/backup
+# → {"ok":true,"path":"/home/desk/Desk/backups/desk-2026-04-28-09-15-22.sqlite3","sizeBytes":...}
+```
+
+Default destination is `~/Desk/backups/desk-<UTC timestamp>.sqlite3` on
+the host mount, so backups ride your existing host-side filesystem
+backup. Pass `{"path": "..."}` in the body to override; the path must
+not already exist (`VACUUM INTO` refuses to overwrite).
+
+### Offline backup with the CLI
+
+Stop the server first so the EXCLUSIVE lock is released:
+
+```bash
+vm.sh halt
 sqlite3 ~/Desk/.database/desk.sqlite3 \
   ".backup '$HOME/Desk/backups/desk-$(date +%F).sqlite3'"
+vm.sh up
 ```
 
 The workspace tree is just files — back it up with whatever tool already

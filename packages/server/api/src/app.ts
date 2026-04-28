@@ -1,5 +1,7 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
+import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
 import { type Pool, type PoolClient } from "@desk/db";
 import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
@@ -62,6 +64,17 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
   const raw = await readRawBody(req);
   if (raw.length === 0) return {};
   return JSON.parse(raw.toString());
+}
+
+/**
+ * Default destination for `/internal/backup`. Lands next to the live DB
+ * inside `~/Desk/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of `~/Desk`. Uses
+ * UTC date so multi-region rsync targets don't fight over filenames.
+ */
+function defaultBackupPath(deskHome: string): string {
+  const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -248,6 +261,28 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(HEALTH_MESSAGE);
+      return;
+    }
+
+    // Online backup. The pool opens its DB with locking_mode=EXCLUSIVE,
+    // which blocks other connections (including a host-side
+    // `sqlite3 .backup` CLI) from opening the file. `VACUUM INTO` runs
+    // on the existing connection, produces a checkpointed snapshot,
+    // and works while the server is up — exactly what BACKUP.md needs.
+    //
+    // Path defaults to ${DESK_HOME}/Desk/backups/desk-<ISO date>.sqlite3
+    // (alongside the live DB, on the host mount). Request body may
+    // override with `{ "path": "..." }`; the path must not already
+    // exist (VACUUM INTO refuses to overwrite).
+    if (path === "/internal/backup" && method === "POST") {
+      requireInternal(req);
+      const body = await parseBody(req) as { path?: string };
+      const targetPath = body.path ?? defaultBackupPath(storage.home);
+      const targetDir = pathDirname(targetPath);
+      await fsMkdir(targetDir, { recursive: true });
+      pool.exec(`VACUUM INTO '${targetPath.replace(/'/g, "''")}'`);
+      const stat = await fsStat(targetPath);
+      sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
       return;
     }
 
