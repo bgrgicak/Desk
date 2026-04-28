@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, queries } from "@desk/db";
 import { generateId } from "@desk/shared";
 import {
@@ -31,11 +31,11 @@ function testConn(): string {
   return url.toString();
 }
 
-let pool: pg.Pool;
+let pool: Pool;
 let userId: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
+  const admin = new Pool({ connectionString: adminConn() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
@@ -47,7 +47,7 @@ beforeAll(async () => {
     await admin.end();
   }
 
-  pool = new pg.Pool({ connectionString: testConn() });
+  pool = new Pool({ connectionString: testConn() });
   try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
@@ -67,7 +67,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await pool?.end();
-  const admin = new pg.Pool({ connectionString: adminConn() });
+  const admin = new Pool({ connectionString: adminConn() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
@@ -134,7 +134,7 @@ describe("session store", () => {
     // closest in-process proxy for a process restart; verifySession must
     // still resolve the token.
     const token = await issueSession(pool, userId);
-    const fresh = new pg.Pool({ connectionString: testConn() });
+    const fresh = new Pool({ connectionString: testConn() });
     try {
       expect(await verifySession(fresh, token)).toBe(userId);
     } finally {

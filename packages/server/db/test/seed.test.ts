@@ -2,14 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { type Pool, type PoolClient } from "../src/pool.js";
 import { PROVIDER_KEY_VARS } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "./helpers/db.js";
 import { seedIfEmpty, seedProviderKeysFromEnv } from "../src/seed.js";
 import * as userSettings from "../src/queries/userSettings.js";
 import { resetSecretKeyCache } from "../src/encryption.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let keyDir: string;
 let savedProviderKeys: Record<string, string | undefined>;
 

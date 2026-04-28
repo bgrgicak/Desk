@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -65,7 +65,7 @@ function testConnectionString(): string {
   return url.toString();
 }
 
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
@@ -78,7 +78,7 @@ beforeAll(async () => {
   // Real Docker path: explicitly clear the fake driver.
   delete process.env.DESK_SANDBOX_DRIVER;
 
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
+  const admin = new Pool({ connectionString: adminConnectionString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -90,7 +90,7 @@ beforeAll(async () => {
     await admin.end();
   }
 
-  pool = new pg.Pool({ connectionString: testConnectionString() });
+  pool = new Pool({ connectionString: testConnectionString() });
   try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
@@ -153,7 +153,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
 
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
+  const admin = new Pool({ connectionString: adminConnectionString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,

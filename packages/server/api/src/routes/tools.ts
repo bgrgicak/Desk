@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
 import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@desk/runtime";
@@ -15,7 +15,7 @@ import { resolveProviderKeys } from "../providerKeys.js";
  * Foundation of host-initiated sandboxed tool calling per ARCHITECTURE.md §7.
  */
 export async function listModels(
-  pool: pg.Pool,
+  pool: Pool,
   opts: { provider?: string },
 ): Promise<ModelRef[]> {
   if (opts.provider !== undefined && !/^[A-Za-z0-9_.-]+$/.test(opts.provider)) {

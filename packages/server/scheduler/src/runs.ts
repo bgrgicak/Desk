@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import pg from "pg";
 import { Cron } from "croner";
+import { type Pool, type PoolClient } from "@desk/db";
 import {
   generateId,
   AgentEventSchema,
@@ -22,7 +22,7 @@ import {
 } from "@desk/runtime";
 
 export interface RunManagerOptions {
-  pool: pg.Pool;
+  pool: Pool;
   emit?: (event: WsEvent) => void;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
@@ -420,10 +420,12 @@ export function createRunManager(opts: RunManagerOptions) {
             [msg.chatId],
           );
           if (prev.rows[0]) {
-            const prevRow = prev.rows[0] as { id: string; content: { body?: string } };
-            if (typeof prevRow.content.body === "string") {
+            // SQLite returns JSON columns as TEXT; parse before reading.
+            const prevRow = prev.rows[0] as { id: string; content: string };
+            const parsed = JSON.parse(prevRow.content) as { body?: string };
+            if (typeof parsed.body === "string") {
               const home = resolveDeskHome();
-              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, prevRow.content.body).catch(() => { /* best-effort */ });
+              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }

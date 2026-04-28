@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import {
   ChatSchema,
   ValidationError,
@@ -8,7 +8,7 @@ import {
   type MessageKind,
 } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToChat(row: Record<string, unknown>): Chat {
   return ChatSchema.parse({
@@ -17,9 +17,10 @@ function rowToChat(row: Record<string, unknown>): Chat {
     agentId: row.agent_id,
     title: row.title,
     goal: row.goal ?? undefined,
-    updatedAt: (row.updated_at as Date).toISOString(),
-    awaitingUser: row.awaiting_user,
-    unread: row.unread,
+    updatedAt: row.updated_at as string,
+    // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
+    awaitingUser: !!row.awaiting_user,
+    unread: !!row.unread,
   });
 }
 

@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { generateId, type SandboxSession } from "@desk/shared";
 import { queries } from "@desk/db";
 
@@ -19,7 +19,7 @@ function hashToken(token: string): string {
 }
 
 export async function mintToken(
-  pool: pg.Pool,
+  pool: Pool,
   agentId: string,
   opts?: { runId?: string; workspaceId?: string },
 ): Promise<{ token: string; session: SandboxSession }> {
@@ -35,7 +35,7 @@ export async function mintToken(
 }
 
 export async function revokeToken(
-  pool: pg.Pool,
+  pool: Pool,
   sessionId: string,
 ): Promise<void> {
   await queries.sandboxSessions.revoke(pool, sessionId);

@@ -1,7 +1,7 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { WorkspaceSchema, slugifyWorkspaceName, type Workspace } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToWorkspace(row: Record<string, unknown>): Workspace {
   return WorkspaceSchema.parse({
@@ -12,7 +12,7 @@ function rowToWorkspace(row: Record<string, unknown>): Workspace {
     icon: row.icon,
     color: row.color ?? "",
     path: row.path,
-    createdAt: (row.created_at as Date).toISOString(),
+    createdAt: row.created_at as string,
   });
 }
 

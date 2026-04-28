@@ -1,7 +1,7 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { AgentSchema, type Agent } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToAgent(row: Record<string, unknown>): Agent {
   return AgentSchema.parse({

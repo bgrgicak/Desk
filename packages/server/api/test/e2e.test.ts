@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout, materializeNote } from "@desk/storage";
 import { createApp, type AppOptions } from "../src/app.js";
@@ -38,14 +38,14 @@ function testConnectionString(): string {
   return url.toString();
 }
 
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
 
 beforeAll(async () => {
   // Create test database
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
+  const admin = new Pool({ connectionString: adminConnectionString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -57,7 +57,7 @@ beforeAll(async () => {
     await admin.end();
   }
 
-  pool = new pg.Pool({ connectionString: testConnectionString() });
+  pool = new Pool({ connectionString: testConnectionString() });
 
   try {
     await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
@@ -100,7 +100,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
 
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
+  const admin = new Pool({ connectionString: adminConnectionString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -1010,7 +1010,7 @@ describe("API e2e (real Postgres)", () => {
  * → assistant message persisted → WS event. Auto-skips without ANTHROPIC_API_KEY.
  */
 describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic + Docker)", () => {
-  let realPool: pg.Pool;
+  let realPool: Pool;
   let realServer: http.Server;
   let realPort: number;
   let realHome: string;
@@ -1051,7 +1051,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
   }
 
   beforeAll(async () => {
-    const admin = new pg.Pool({ connectionString: (() => { const u = new URL(baseUrl()); u.pathname = "/postgres"; return u.toString(); })() });
+    const admin = new Pool({ connectionString: (() => { const u = new URL(baseUrl()); u.pathname = "/postgres"; return u.toString(); })() });
     try {
       await admin.query(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -1065,7 +1065,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
 
     const testUrl = new URL(baseUrl());
     testUrl.pathname = `/${realTestDbName}`;
-    realPool = new pg.Pool({ connectionString: testUrl.toString() });
+    realPool = new Pool({ connectionString: testUrl.toString() });
     try { await realPool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
 
     await runMigrations(realPool);
@@ -1123,7 +1123,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
     if (realPool) await realPool.end();
     if (realHome) await fs.rm(realHome, { recursive: true, force: true });
 
-    const admin = new pg.Pool({ connectionString: (() => { const u = new URL(baseUrl()); u.pathname = "/postgres"; return u.toString(); })() });
+    const admin = new Pool({ connectionString: (() => { const u = new URL(baseUrl()); u.pathname = "/postgres"; return u.toString(); })() });
     try {
       await admin.query(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,

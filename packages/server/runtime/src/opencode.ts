@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -32,7 +32,7 @@ export interface ExecRunOptions {
  * Mints a session token, projects mounts, runs OpenCode, then cleans up.
  */
 export async function execRun(
-  pool: pg.Pool,
+  pool: Pool,
   handle: SandboxHandle,
   opts: ExecRunOptions,
 ): Promise<ExecResult> {

@@ -10,7 +10,7 @@ Monorepo for the API server, the React app prototype, and the VM-based dev envir
 - **`packages/app-prototype/`** — React/Vite UI (talks to the API on the host).
 
 The server runs inside an Ubuntu VM provisioned by [Lima](https://lima-vm.io)
-so dev matches prod (real Postgres, Docker, `at`/`cron`). The Vite dev server
+so dev matches prod (real SQLite, Docker, `at`/`cron`). The Vite dev server
 runs on the host and proxies to the API forwarded out of the VM.
 
 ## Quick start

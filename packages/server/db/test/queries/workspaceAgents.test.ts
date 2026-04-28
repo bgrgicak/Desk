@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import pg from "pg";
+import { type Pool, type PoolClient } from "../../src/pool.js";
 import { generateId, NotFoundError, ValidationError } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
@@ -7,7 +7,7 @@ import * as users from "../../src/queries/users.js";
 import * as workspaces from "../../src/queries/workspaces.js";
 import * as workspaceAgents from "../../src/queries/workspaceAgents.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let userId: string;
 let workspaceId: string;
 let agent1: string;

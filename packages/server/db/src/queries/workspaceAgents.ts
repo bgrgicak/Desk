@@ -1,13 +1,13 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { WorkspaceAgentSchema, type WorkspaceAgent, NotFoundError } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToWorkspaceAgent(row: Record<string, unknown>): WorkspaceAgent {
   return WorkspaceAgentSchema.parse({
     workspaceId: row.workspace_id,
     agentId: row.agent_id,
-    addedAt: (row.added_at as Date).toISOString(),
+    addedAt: row.added_at as string,
   });
 }
 
@@ -19,8 +19,11 @@ export async function listForWorkspace(
   db: Queryable,
   workspaceId: string,
 ): Promise<WorkspaceAgent[]> {
+  // Tie-break by ROWID so rows added in the same millisecond keep their
+  // insertion order. SQLite's added_at default has ms precision but two
+  // calls in the same tick still collide; ROWID is monotonic per insert.
   const { rows } = await db.query(
-    "SELECT * FROM workspace_agents WHERE workspace_id = $1 ORDER BY added_at",
+    "SELECT * FROM workspace_agents WHERE workspace_id = $1 ORDER BY added_at, ROWID",
     [workspaceId],
   );
   return rows.map(rowToWorkspaceAgent);

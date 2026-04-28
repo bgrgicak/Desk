@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { queries } from "@desk/db";
 import {
   MESSAGE_KINDS,
@@ -45,7 +45,7 @@ function parseBool(name: string, raw: string): boolean {
  * returning an empty list.
  */
 export async function listMessages(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   query: URLSearchParams,
 ) {

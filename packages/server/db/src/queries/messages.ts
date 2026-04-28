@@ -1,25 +1,33 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { MessageSchema, type Message } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
+
+// SQLite stores JSON columns as TEXT; parse at the boundary. Postgres
+// JSONB used to do this for us automatically.
+function parseJson<T>(v: unknown): T | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return JSON.parse(v) as T;
+  return v as T;
+}
 
 function rowToMessage(row: Record<string, unknown>): Message {
   return MessageSchema.parse({
     id: row.id,
     chatId: row.chat_id,
     role: row.role,
-    content: row.content,
-    createdAt: (row.created_at as Date).toISOString(),
-    attachments: row.attachments ?? undefined,
+    content: parseJson(row.content),
+    createdAt: row.created_at as string,
+    attachments: parseJson(row.attachments),
     model: row.model ?? undefined,
-    executeAt: row.execute_at ? (row.execute_at as Date).toISOString() : undefined,
+    executeAt: row.execute_at ? row.execute_at as string : undefined,
     cron: row.cron ?? undefined,
     state: row.state ?? undefined,
     parentId: row.parent_id ?? undefined,
     agentId: row.agent_id ?? undefined,
-    startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
-    endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : undefined,
-    updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : undefined,
+    startedAt: row.started_at ? row.started_at as string : undefined,
+    endedAt: row.ended_at ? row.ended_at as string : undefined,
+    updatedAt: row.updated_at ? row.updated_at as string : undefined,
     kind: row.kind ?? "chat",
     title: row.title ?? null,
   });
@@ -36,25 +44,35 @@ export async function listByChat(
   opts?: { cursor?: string; limit?: number },
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
+  // Cursor is `<createdAtISO>|<id>` so paging stays stable when multiple
+  // messages share a ms-precision timestamp — without the id tiebreaker,
+  // `created_at > cursor` would skip every message that landed in the
+  // same tick as the cursor row.
   const params: unknown[] = [chatId, limit + 1];
   let whereClause = "chat_id = $1";
 
   if (opts?.cursor) {
-    whereClause += " AND created_at > $3";
-    params.push(new Date(opts.cursor));
+    const sep = opts.cursor.indexOf("|");
+    const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
+    whereClause += " AND (created_at, id) > ($3, $4)";
+    params.push(cursorIso);
+    params.push(cursorId);
   }
 
   const { rows } = await db.query(
-    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at LIMIT $2`,
+    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT $2`,
     params,
   );
 
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit).map(rowToMessage);
-  return {
-    items,
-    nextCursor: hasMore ? items[items.length - 1].createdAt : undefined,
-  };
+  let nextCursor: string | undefined;
+  if (hasMore && items.length > 0) {
+    const last = items[items.length - 1];
+    nextCursor = `${last.createdAt}|${last.id}`;
+  }
+  return { items, nextCursor };
 }
 
 export async function insert(
@@ -137,7 +155,7 @@ export async function claimPending(db: Queryable, id: string): Promise<boolean> 
  * PoolClient here — the lock has to be held end-to-end on one connection.
  */
 export async function startTaskRun(
-  pool: pg.Pool,
+  pool: Pool,
   args: {
     runId: string;
     taskId: string;

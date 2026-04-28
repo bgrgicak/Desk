@@ -1,8 +1,8 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { UnauthorizedError, UserSchema, type User } from "@desk/shared";
 import { hashPassword, verifyPassword, isLegacyHash } from "../passwords.js";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToUser(row: Record<string, unknown>): User {
   return UserSchema.parse({
@@ -11,7 +11,7 @@ function rowToUser(row: Record<string, unknown>): User {
     email: row.email,
     avatarPath: row.avatar_path ?? undefined,
     timezone: row.timezone ?? undefined,
-    createdAt: (row.created_at as Date).toISOString(),
+    createdAt: row.created_at as string,
   });
 }
 

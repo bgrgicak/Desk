@@ -36,11 +36,11 @@ async function insertArtifactMessage(
 }
 
 async function readContent(messageId: string): Promise<Record<string, unknown>> {
-  const { rows } = await ctx.pool.query(
+  const { rows } = await ctx.pool.query<{ content: string }>(
     "SELECT content FROM messages WHERE id = $1",
     [messageId],
   );
-  return rows[0].content;
+  return JSON.parse(rows[0].content) as Record<string, unknown>;
 }
 
 describe("reconcileArtifactRefs", () => {

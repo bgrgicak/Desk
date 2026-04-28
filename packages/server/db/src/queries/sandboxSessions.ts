@@ -1,7 +1,7 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { SandboxSessionSchema, type SandboxSession } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 function rowToSandboxSession(row: Record<string, unknown>): SandboxSession {
   return SandboxSessionSchema.parse({
@@ -9,8 +9,8 @@ function rowToSandboxSession(row: Record<string, unknown>): SandboxSession {
     agentId: row.agent_id,
     workspaceId: row.workspace_id ?? undefined,
     tokenHash: row.token_hash,
-    issuedAt: (row.issued_at as Date).toISOString(),
-    revokedAt: row.revoked_at ? (row.revoked_at as Date).toISOString() : undefined,
+    issuedAt: row.issued_at as string,
+    revokedAt: row.revoked_at ? row.revoked_at as string : undefined,
   });
 }
 

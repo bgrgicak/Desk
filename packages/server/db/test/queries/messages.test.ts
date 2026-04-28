@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import { type Pool, type PoolClient } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
@@ -8,7 +8,7 @@ import * as workspaces from "../../src/queries/workspaces.js";
 import * as chats from "../../src/queries/chats.js";
 import * as messages from "../../src/queries/messages.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let chatId: string;
 
 beforeAll(async () => {

@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { queries } from "@desk/db";
 import { UnauthorizedError, type Agent, type SandboxSession } from "@desk/shared";
 
@@ -25,7 +25,7 @@ export interface SandboxAuth {
 }
 
 export async function authenticateSandboxToken(
-  pool: pg.Pool,
+  pool: Pool,
   headerValue: string | undefined,
 ): Promise<SandboxAuth> {
   if (!headerValue) {

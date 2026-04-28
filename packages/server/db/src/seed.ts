@@ -1,9 +1,9 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "./pool.js";
 import { generateId, PROVIDER_KEY_VARS } from "@desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
 
-export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
+export async function seedIfEmpty(pool: Pool): Promise<void> {
   const { rows } = await pool.query("SELECT count(*)::int AS c FROM users");
   if (rows[0].c > 0) return;
 
@@ -65,7 +65,7 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
  *
  * Gated by DESK_DEV=1 so prod can never leak host env into the DB.
  */
-export async function seedProviderKeysFromEnv(pool: pg.Pool): Promise<void> {
+export async function seedProviderKeysFromEnv(pool: Pool): Promise<void> {
   if (process.env.DESK_DEV !== "1") return;
 
   const envKeys: Record<string, string> = {};

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { generateId, type WsEvent } from "@desk/shared";
 import { createRunManager } from "../src/runs.js";
@@ -11,7 +11,7 @@ import type { LogEvent } from "@desk/runtime";
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_scheduler_test_${workerId}`;
 
-let pool: pg.Pool;
+let pool: Pool;
 let agentId: string;
 let chatId: string;
 
@@ -33,8 +33,8 @@ function testConnectionString(): string {
   return url.toString();
 }
 
-function adminPool(): pg.Pool {
-  return new pg.Pool({ connectionString: adminConnectionString() });
+function adminPool(): Pool {
+  return new Pool({ connectionString: adminConnectionString() });
 }
 
 beforeAll(async () => {
@@ -50,7 +50,7 @@ beforeAll(async () => {
     await admin.end();
   }
 
-  pool = new pg.Pool({ connectionString: testConnectionString() });
+  pool = new Pool({ connectionString: testConnectionString() });
   try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
@@ -500,7 +500,7 @@ describe("scheduleAiNote", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].state).toBe("pending");
-    expect(new Date(rows[0].execute_at as Date).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(rows[0].execute_at as string).getTime()).toBeGreaterThan(Date.now());
   });
 
   it("cancels the previous ai_note_request before scheduling a new one", async () => {

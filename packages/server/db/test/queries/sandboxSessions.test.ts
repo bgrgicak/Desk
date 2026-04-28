@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import { type Pool, type PoolClient } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
 import * as sandboxSessions from "../../src/queries/sandboxSessions.js";
 import * as users from "../../src/queries/users.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let agentId: string;
 let userId: string;
 

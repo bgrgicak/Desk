@@ -32,12 +32,15 @@ if ! command -v node &>/dev/null; then
   apt-get install -y -qq nodejs >/dev/null
 fi
 
-# ---------- 4. Postgres 16 ----------
-if ! dpkg -l postgresql-16 &>/dev/null; then
-  log "Installing PostgreSQL 16"
-  apt-get install -y -qq postgresql-16 >/dev/null
+# ---------- 4. SQLite CLI (engine ships with better-sqlite3) ----------
+# better-sqlite3 statically links its own SQLite, so the npm dependency is
+# self-contained. The `sqlite3` CLI is here for ops access — backups
+# (`sqlite3 desk.db .backup …`), ad-hoc queries, schema inspection — and
+# adds nothing to the runtime cost.
+if ! command -v sqlite3 &>/dev/null; then
+  log "Installing sqlite3 CLI"
+  apt-get install -y -qq sqlite3 >/dev/null
 fi
-systemctl enable --now postgresql
 
 # Scheduler daemons the app relies on (used by @desk/scheduler).
 systemctl enable --now atd cron
@@ -67,15 +70,14 @@ chown -h desk:desk /home/desk
 # desk needs docker group access to talk to dockerd (spawn/manage sandboxes).
 usermod -aG docker desk
 
-# ---------- 6. Postgres role + database ----------
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='desk'" | grep -q 1; then
-  log "Creating Postgres role and database"
-  sudo -u postgres createuser --createdb desk
-fi
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='desk'" | grep -q 1; then
-  sudo -u postgres createdb -O desk desk
-fi
-sudo -u postgres psql -d desk -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+# ---------- 6. SQLite database directory ----------
+# The DB file lives at $DESK_HOME/Desk/desk.db and is created on first
+# server boot via the migration runner. The mount root (/home/desk/Desk)
+# is provisioned by Lima's host mount and owned by the desk user via the
+# UID-detection step above; we only need to make sure the directory
+# itself is in place when there's no host mount (production install).
+mkdir -p /home/desk/Desk
+chown desk:desk /home/desk/Desk
 
 # ---------- 7. Build & install the server ----------
 # Monorepo layout: @desk/api depends on workspace siblings (@desk/shared,
@@ -125,7 +127,7 @@ chown -R desk:desk /opt/desk-server
 log "Writing /etc/desk-server/env"
 mkdir -p /etc/desk-server
 cat > /etc/desk-server/env <<'ENVFILE'
-DATABASE_URL=postgresql:///desk?host=/var/run/postgresql
+DESK_DB_PATH=/home/desk/Desk/desk.db
 PORT=8080
 NODE_ENV=production
 # Seed credentials for the initial user. Change DESK_SEED_PASSWORD before first boot.
@@ -156,8 +158,7 @@ log "Writing desk-server.service"
 cat > /etc/systemd/system/desk-server.service <<'UNIT'
 [Unit]
 Description=Desk Server
-After=network.target postgresql.service
-Requires=postgresql.service
+After=network.target
 
 [Service]
 Type=simple

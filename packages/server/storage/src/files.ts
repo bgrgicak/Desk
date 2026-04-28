@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import {
   NotFoundError,
   MAX_UPLOAD_BYTES,
@@ -25,7 +25,7 @@ import { ID_PREFIXES } from "@desk/shared";
  * every workspace's files live under their own directory.
  */
 export interface StorageContext {
-  pool: pg.Pool;
+  pool: Pool;
   home: string;
 }
 

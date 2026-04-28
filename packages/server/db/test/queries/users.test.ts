@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import { type Pool, type PoolClient } from "../../src/pool.js";
 import { generateId, UnauthorizedError } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
 import { hashPassword } from "../../src/passwords.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 
 beforeAll(async () => {
   pool = await setupTestDb();

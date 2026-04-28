@@ -11,7 +11,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, queries, hashPassword } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -51,7 +51,7 @@ interface Seeded {
   messageId: string;
 }
 
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
@@ -151,7 +151,7 @@ function request(
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
+  const admin = new Pool({ connectionString: adminConn() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
@@ -163,7 +163,7 @@ beforeAll(async () => {
     await admin.end();
   }
 
-  pool = new pg.Pool({ connectionString: testConn() });
+  pool = new Pool({ connectionString: testConn() });
   try {
     await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
   } catch {
@@ -195,7 +195,7 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   delete process.env.DESK_HOME;
 
-  const admin = new pg.Pool({ connectionString: adminConn() });
+  const admin = new Pool({ connectionString: adminConn() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,

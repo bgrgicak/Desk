@@ -1,6 +1,6 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 export type KeyAccessAction = "read" | "write" | "delete";
 
@@ -20,10 +20,13 @@ export async function logKeyAccess(
   providers: string[],
   reason?: string,
 ): Promise<void> {
+  // SQLite stores arrays as JSON text — stringify at the boundary so the
+  // column always holds a valid JSON array (matched by the column DEFAULT
+  // '[]' and by the array deserialization in getKeyAccessLog).
   await db.query(
     `INSERT INTO provider_key_access_log (user_id, action, providers, reason)
      VALUES ($1, $2, $3, $4)`,
-    [userId, action, providers, reason ?? null],
+    [userId, action, JSON.stringify(providers), reason ?? null],
   );
 }
 
@@ -33,26 +36,29 @@ export async function getKeyAccessLog(
   limit = 100,
 ): Promise<KeyAccessEntry[]> {
   const { rows } = await db.query<{
-    id: string;
+    id: string | number;
     user_id: string;
     action: KeyAccessAction;
-    providers: string[];
+    providers: string;
     reason: string | null;
-    created_at: Date;
+    created_at: string;
   }>(
+    // Tie-break by id DESC so concurrent inserts within the same millisecond
+    // (common in tests, possible under load) sort deterministically by
+    // insertion order — the AUTOINCREMENT id is monotonic.
     `SELECT id, user_id, action, providers, reason, created_at
      FROM provider_key_access_log
      WHERE user_id = $1
-     ORDER BY created_at DESC
+     ORDER BY created_at DESC, id DESC
      LIMIT $2`,
     [userId, limit],
   );
   return rows.map((r) => ({
-    id: r.id,
+    id: String(r.id),
     userId: r.user_id,
     action: r.action,
-    providers: r.providers,
+    providers: JSON.parse(r.providers) as string[],
     reason: r.reason,
-    createdAt: r.created_at,
+    createdAt: new Date(r.created_at),
   }));
 }

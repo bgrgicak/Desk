@@ -1,7 +1,7 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "../pool.js";
 import { encryptJson, decryptJson } from "../encryption.js";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool | PoolClient;
 
 /**
  * Reads a user's provider keys. Returns an empty object if no row exists

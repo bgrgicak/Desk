@@ -3,8 +3,8 @@
  * Uses tickScheduled() directly to simulate the poll loop firing.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
 import { Cron } from "croner";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { generateId } from "@desk/shared";
 import { createRunManager } from "../../src/runs.js";
@@ -12,7 +12,7 @@ import { createRunManager } from "../../src/runs.js";
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_sched_cron_${workerId}`;
 
-let pool: pg.Pool;
+let pool: Pool;
 let chatId: string;
 
 function baseUrl(): string {
@@ -24,7 +24,7 @@ function baseUrl(): string {
 beforeAll(async () => {
   const adminUrl = new URL(baseUrl());
   adminUrl.pathname = "/postgres";
-  const admin = new pg.Pool({ connectionString: adminUrl.toString() });
+  const admin = new Pool({ connectionString: adminUrl.toString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -38,7 +38,7 @@ beforeAll(async () => {
 
   const url = new URL(baseUrl());
   url.pathname = `/${testDbName}`;
-  pool = new pg.Pool({ connectionString: url.toString() });
+  pool = new Pool({ connectionString: url.toString() });
   try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
   await runMigrations(pool);
 
@@ -72,7 +72,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   const adminUrl = new URL(baseUrl());
   adminUrl.pathname = "/postgres";
-  const admin = new pg.Pool({ connectionString: adminUrl.toString() });
+  const admin = new Pool({ connectionString: adminUrl.toString() });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,

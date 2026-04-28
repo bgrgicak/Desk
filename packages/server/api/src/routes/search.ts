@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { queries } from "@desk/db";
 import {
   workspaceRootPath,
@@ -70,7 +70,7 @@ async function walkFiles(
  * `showHidden` flips the library scope to include hidden files too.
  */
 export async function search(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   query: string,
   scope: "artifacts" | "chats" | "library" | "all" = "all",

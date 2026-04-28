@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -45,7 +45,7 @@ export interface MessageLifecycleOps {
  * that need to build a filesystem path from a bare chatId. Throws if the
  * chat is missing.
  */
-async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<string> {
+async function workspaceSlugForChat(pool: Pool, chatId: string): Promise<string> {
   const { rows } = await pool.query<{ path: string }>(
     `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
     [chatId],
@@ -54,18 +54,18 @@ async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<stri
   return rows[0].path;
 }
 
-export async function listChats(pool: pg.Pool, workspaceId: string) {
+export async function listChats(pool: Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
 }
 
-export async function getChat(pool: pg.Pool, id: string) {
+export async function getChat(pool: Pool, id: string) {
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
 
 export async function createChat(
-  pool: pg.Pool,
+  pool: Pool,
   data: { workspaceId: string; agentId: string; title: string; goal?: string },
 ) {
   return queries.chats.insert(pool, {
@@ -75,7 +75,7 @@ export async function createChat(
 }
 
 export async function patchChat(
-  pool: pg.Pool,
+  pool: Pool,
   id: string,
   data: { title?: string; goal?: string; agentId?: string },
 ) {
@@ -85,7 +85,7 @@ export async function patchChat(
 }
 
 export async function listMessages(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   opts?: { cursor?: string },
 ) {
@@ -117,7 +117,7 @@ const SendMessageSchema = z.object({
 });
 
 export async function sendMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
@@ -203,7 +203,7 @@ export async function sendMessage(
  * note and take the plain DB update path.
  */
 export async function patchMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
@@ -289,7 +289,7 @@ export async function patchMessage(
  * is already running: returns the current row without firing twice.
  */
 export async function runMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   messageId: string,
   ops: MessageLifecycleOps,
@@ -337,7 +337,7 @@ export async function getNoteHistory(
  * returns 404.
  */
 export async function deleteMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
@@ -476,7 +476,7 @@ export async function listAttachments(
  * caller can broadcast the event correctly.
  */
 export async function deleteChat(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   emit: (event: WsEvent) => void,

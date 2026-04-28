@@ -1,6 +1,6 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
@@ -36,7 +36,7 @@ import {
 type RunManager = ReturnType<typeof createRunManager>;
 
 export interface AppOptions {
-  pool: pg.Pool;
+  pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
   /** The userId to broadcast events to (v1: single user). */

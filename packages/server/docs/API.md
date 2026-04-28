@@ -110,7 +110,7 @@ Lists chats in one of the caller's workspaces.
 Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
-2. Drops the chat row from Postgres; `ON DELETE CASCADE` removes its messages.
+2. Drops the chat row from SQLite; `ON DELETE CASCADE` removes its messages.
 3. Moves the chat's on-disk subtree `~/Desk/workspaces/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 

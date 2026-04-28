@@ -1,4 +1,4 @@
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 
 const ADMIN_BASE_URL =
   process.env.DESK_E2E_DATABASE_URL ??
@@ -15,7 +15,7 @@ export function testDbUrl(dbName: string): string {
 }
 
 export async function createTestDatabase(dbName: string): Promise<void> {
-  const admin = new pg.Pool({ connectionString: ADMIN_BASE_URL });
+  const admin = new Pool({ connectionString: ADMIN_BASE_URL });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -26,7 +26,7 @@ export async function createTestDatabase(dbName: string): Promise<void> {
   } finally {
     await admin.end();
   }
-  const pool = new pg.Pool({ connectionString: testDbUrl(dbName) });
+  const pool = new Pool({ connectionString: testDbUrl(dbName) });
   try {
     await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
   } finally {
@@ -35,7 +35,7 @@ export async function createTestDatabase(dbName: string): Promise<void> {
 }
 
 export async function dropTestDatabase(dbName: string): Promise<void> {
-  const admin = new pg.Pool({ connectionString: ADMIN_BASE_URL });
+  const admin = new Pool({ connectionString: ADMIN_BASE_URL });
   try {
     await admin.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,

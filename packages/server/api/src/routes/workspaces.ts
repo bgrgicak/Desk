@@ -1,9 +1,9 @@
-import pg from "pg";
+import { type Pool, type PoolClient } from "@desk/db";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@desk/storage";
 
-export async function listWorkspaces(pool: pg.Pool, userId?: string) {
+export async function listWorkspaces(pool: Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);
   return queries.workspaces.list(pool);
 }
@@ -21,7 +21,7 @@ export async function listWorkspaces(pool: pg.Pool, userId?: string) {
  * collision so two workspaces can't share a directory.
  */
 export async function createWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   home: string,
   data: { name: string; description?: string; icon?: string; color?: string },
@@ -41,7 +41,7 @@ export async function createWorkspace(
   return ws;
 }
 
-export async function getWorkspace(pool: pg.Pool, id: string) {
+export async function getWorkspace(pool: Pool, id: string) {
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
   return ws;
@@ -54,7 +54,7 @@ export async function getWorkspace(pool: pg.Pool, id: string) {
  * All other changes are pure metadata and skip the filesystem op.
  */
 export async function patchWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   home: string,
   id: string,
   data: { name?: string; description?: string; icon?: string; color?: string },
@@ -85,7 +85,7 @@ export async function patchWorkspace(
  * Refuses to delete the user's last workspace — the app requires at least one.
  */
 export async function deleteWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   home: string,
   userId: string,
   id: string,
@@ -106,7 +106,7 @@ export async function deleteWorkspace(
 }
 
 /** Lists agents enabled in a workspace, ordered by enrollment time. */
-export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
+export async function listWorkspaceAgents(pool: Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
   const memberships = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
@@ -121,7 +121,7 @@ export async function listWorkspaceAgents(pool: pg.Pool, workspaceId: string) {
 
 /** Adds an agent to a workspace. Validates that the agent belongs to the workspace's owner. */
 export async function addAgentToWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   workspaceId: string,
   agentId: string,
 ) {
@@ -138,7 +138,7 @@ export async function addAgentToWorkspace(
 }
 
 export async function removeAgentFromWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   workspaceId: string,
   agentId: string,
 ) {

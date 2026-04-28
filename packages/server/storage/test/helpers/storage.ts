@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool, type PoolClient } from "@desk/db";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { generateId } from "@desk/shared";
 import { ensureLayout, ensureWorkspaceLayout } from "../../src/layout.js";
@@ -27,12 +27,12 @@ function testConnectionString(): string {
   return url.toString();
 }
 
-function adminPool(): pg.Pool {
-  return new pg.Pool({ connectionString: adminConnectionString() });
+function adminPool(): Pool {
+  return new Pool({ connectionString: adminConnectionString() });
 }
 
 export interface TestStorageContext {
-  pool: pg.Pool;
+  pool: Pool;
   home: string;
   workspaceId: string;
   workspaceSlug: string;
@@ -53,7 +53,7 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
     await admin.end();
   }
 
-  const pool = new pg.Pool({ connectionString: testConnectionString() });
+  const pool = new Pool({ connectionString: testConnectionString() });
 
   try {
     await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
