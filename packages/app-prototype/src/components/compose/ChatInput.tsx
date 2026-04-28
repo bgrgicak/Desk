@@ -5,16 +5,14 @@ import {
   Zap, ImageIcon, Table, Globe, Play, Target, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
+import { inferGoal as inferGoalShared, type GoalKey as SharedGoalKey } from '@desk/shared'
 import {
   ComposerPickers,
   type ComposerPickersHandle,
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
 
-type GoalKey =
-  | 'app' | 'document' | 'image' | 'data' | 'site' | 'run'
-  | 'task' | 'scheduled'
-  | null
+type GoalKey = SharedGoalKey | null
 
 interface Goal {
   key: GoalKey
@@ -57,17 +55,13 @@ function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined
 }
 
 function inferGoal(text: string): GoalKey {
-  const lower = text.toLowerCase().trim()
-  if (!lower) return null
-  if (lower.match(/\b(every|daily|weekly|monthly|each (day|morning|week)|at \d|tomorrow|tonight|next (week|month)|cron)\b/)) return 'scheduled'
-  if (lower.match(/\b(todo|to do|task|remind me|follow up|chase|finish|complete by|due)\b/)) return 'task'
-  if (lower.match(/build|make|app|tracker|dashboard|tool|calculator/)) return 'app'
-  if (lower.match(/site|website|landing|portfolio|page/))              return 'site'
-  if (lower.match(/image|design|logo|illustration|palette|visual|photo|picture/)) return 'image'
-  if (lower.match(/spreadsheet|data|table|csv|metrics|numbers|chart|graph/))      return 'data'
-  if (lower.match(/run|check|monitor|scan|sync|automate|watch/))                  return 'run'
-  if (lower.match(/write|draft|create|plan|strategy|brief|report|email|agenda|notes|document|summary|summarise|summarize/)) return 'document'
-  if (lower.length > 10) return 'document'
+  const matched = inferGoalShared(text)
+  if (matched) return matched
+  // Compose-only fallback: if the user has typed a meaningful chunk of
+  // text but nothing matched, lean toward "document" so the composer
+  // shows a useful placeholder. The chat list keeps null in this case
+  // to avoid tagging every conversation as a doc.
+  if (text.toLowerCase().trim().length > 10) return 'document'
   return null
 }
 

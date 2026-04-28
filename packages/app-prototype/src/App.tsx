@@ -55,6 +55,7 @@ import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
+import { usePrefs } from '@/hooks/use-prefs'
 
 // RTK Query rejects with `{ status, data: { code, message } }` from the
 // server, not Error instances — so the common `err instanceof Error ?
@@ -103,9 +104,10 @@ export default function App() {
 }
 
 // Landing route — waits for the workspace list, then redirects into the
-// first workspace's Desk. Anything unrecognised also lands here.
+// first workspace's default view. Anything unrecognised also lands here.
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
+  const { defaultView } = usePrefs()
   if (!serverWorkspaces || serverWorkspaces.length === 0) {
     return (
       <TooltipProvider>
@@ -114,7 +116,7 @@ function AppBoot() {
       </TooltipProvider>
     )
   }
-  return <Navigate to={buildPath(serverWorkspaces[0].id, 'desk')} replace />
+  return <Navigate to={buildPath(serverWorkspaces[0].id, defaultView)} replace />
 }
 
 function AppInner() {
@@ -125,6 +127,7 @@ function AppInner() {
 
   const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'desk'
   const activeWorkspaceId = wsId
+  const { defaultView } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
@@ -247,10 +250,15 @@ function AppInner() {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
 
+  // Workspace switch lands on the user's default view rather than carrying
+  // over the current one — the avatar click is a "go home in workspace X"
+  // action, not "navigate within this view to workspace X". `goTo` falls
+  // back to the activeView when no view is passed, so we explicitly pass
+  // the pref here.
   const handleSelectWorkspace = useCallback((id: string) => {
     dispatch(setTodaySheetOpen(false))
-    goTo({ wsId: id })
-  }, [goTo, dispatch])
+    goTo({ wsId: id, view: defaultView })
+  }, [goTo, dispatch, defaultView])
 
   const handleNavigateWorkspace = useCallback((id: string, view: WorkspaceNavView) => {
     goTo({ wsId: id, view })

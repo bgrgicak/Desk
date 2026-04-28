@@ -35,14 +35,59 @@ import { toContextItem } from '@/store/selectors/library'
 import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
-import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
+import type { AgentLogEntry, AttachmentRef, MessageContent, ServerFile, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useClickOrDoubleClick } from '@/hooks/use-click-or-double-click'
+import { usePrefs } from '@/hooks/use-prefs'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+// Content types that don't render as bubbles. `agent_turn` and
+// `ai_note_request` are scheduling slots (drive the typing indicator);
+// `note` surfaces in the Artifacts panel as "Chat notes".
+const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
+  'agent_turn',
+  'ai_note_request',
+  'note',
+])
+
+// Tool-related surfaces hidden when developer mode is off.
+const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
+  'toolCall',
+  'toolResult',
+])
+
+/** True if an events log carries any text the user would want to read in
+ *  non-dev mode — `text` events and unparsed-stdout fallbacks (used by
+ *  drivers that don't emit JSON events). Mirrors the chunking rules in
+ *  MessageBubble's EventsView so the visibility decision matches what the
+ *  bubble would actually render. */
+function eventsHasUserText(log: AgentLogEntry[]): boolean {
+  let sawEvent = false
+  for (const entry of log) {
+    if (entry.kind === 'event') {
+      sawEvent = true
+      if (entry.event.type === 'text') {
+        const t = entry.event.part?.text
+        if (typeof t === 'string' && t.trim().length > 0) return true
+      }
+    } else if (entry.kind === 'unparsed' && !sawEvent) {
+      if (entry.line.trim().length > 0) return true
+    }
+  }
+  return false
+}
+
+function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
+  if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
+  if (developerMode) return true
+  if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
+  if (m.content.type === 'events') return eventsHasUserText(m.content.log)
+  return true
+}
 
 const STARTER_CHIPS = [
   'Draft a project brief',
@@ -730,16 +775,15 @@ export function ChatView({
   const chatNotes = useMemo(() => chatFiles.filter(f => f.kind === 'note'), [chatFiles])
   const chatAttachmentFiles = useMemo(() => chatFiles.filter(f => f.kind !== 'note'), [chatFiles])
 
-  // Filter server messages to what the bubble stream renders. System trigger
-  // rows (agent_turn / ai_note_request) are hidden — they drive the typing
-  // indicator via `hasPendingTrigger` below, not bubbles. Note-content rows
-  // are also hidden — they surface in the Artifacts panel as "Chat notes",
-  // not as conversation turns.
+  // Filter server messages to what the bubble stream renders. Scheduling
+  // triggers (agent_turn / ai_note_request) drive the typing indicator via
+  // `hasPendingTrigger` below, not bubbles. Notes surface in the Artifacts
+  // panel as "Chat notes", not as conversation turns. When developer mode
+  // is off, tool-call surfaces are also hidden (see `isMessageVisible`).
+  const { developerMode } = usePrefs()
   const messages: ServerMessage[] = useMemo(
-    () => (serverMsgs?.items ?? []).filter(
-      m => (m.role === 'user' || m.role === 'agent') && m.content.type !== 'note',
-    ),
-    [serverMsgs],
+    () => (serverMsgs?.items ?? []).filter(m => isMessageVisible(m, developerMode)),
+    [serverMsgs, developerMode],
   )
 
   const lastInitialAssistantId = useMemo(() => {
@@ -755,7 +799,6 @@ export function ChatView({
   // aren't responses to the user's last message.
   const hasPendingTrigger = (serverMsgs?.items ?? []).some(
     m =>
-      m.role === 'system' &&
       m.content.type === 'agent_turn' &&
       (m.state === 'pending' || m.state === 'running'),
   )
@@ -895,6 +938,7 @@ export function ChatView({
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
                   isNew={showNewBadge && msg.id === lastInitialAssistantId}
                   onAttachmentClick={onAttachmentClick}
+                  developerMode={developerMode}
                 />
                 {/* Inline artifact cards after the last initial assistant message */}
                 {artifacts.length > 0 && msg.id === lastInitialAssistantId && (

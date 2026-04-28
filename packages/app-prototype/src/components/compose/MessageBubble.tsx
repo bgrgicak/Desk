@@ -11,6 +11,10 @@ interface MessageBubbleProps {
   fallbackModel?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
+  /** When false, internal tool-call/stderr entries inside `events` content
+   *  are stripped — only the agent's text reply surfaces. ChatView already
+   *  filters out fully-tool `events` rows at the list level. */
+  developerMode?: boolean
 }
 
 export function MessageBubble({
@@ -19,6 +23,7 @@ export function MessageBubble({
   isNew = false,
   fallbackModel,
   onAttachmentClick,
+  developerMode = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = message.model ?? fallbackModel ?? 'Agent'
@@ -72,12 +77,12 @@ export function MessageBubble({
           ))}
         </div>
       )}
-      <MessageContentView content={message.content} />
+      <MessageContentView content={message.content} developerMode={developerMode} />
     </div>
   )
 }
 
-function MessageContentView({ content }: { content: MessageContent }) {
+function MessageContentView({ content, developerMode }: { content: MessageContent; developerMode: boolean }) {
   switch (content.type) {
     case 'text':
       return (
@@ -88,10 +93,13 @@ function MessageContentView({ content }: { content: MessageContent }) {
     case 'artifactRef':
       return <ArtifactRefRow path={content.path} name={content.name} />
     case 'events':
-      return <EventsView log={content.log} />
+      return <EventsView log={content.log} developerMode={developerMode} />
     case 'toolCall':
+      // Filtered upstream when developerMode is false; defensive guard here.
+      if (!developerMode) return null
       return <ToolCallChip toolName={content.toolName} args={content.args} />
     case 'toolResult':
+      if (!developerMode) return null
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'note':
     case 'ai_note_request':
@@ -167,11 +175,13 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log }: { log: AgentLogEntry[] }) {
+function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMode: boolean }) {
   // Render entries in log order (old → new). Consecutive text deltas and
   // consecutive stderr lines fold into single chunks so streaming chat
   // doesn't fragment into dozens of tiny paragraphs, but tool calls /
   // results still appear between the text that preceded and followed them.
+  // When developer mode is off, only text chunks survive — tool events and
+  // stderr are dropped so the user sees just the agent's reply.
   type Chunk =
     | { kind: 'text'; text: string }
     | { kind: 'event'; entry: AgentLogEntry }
@@ -197,11 +207,11 @@ function EventsView({ log }: { log: AgentLogEntry[] }) {
       if (entry.event.type === 'text') {
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
-      } else {
+      } else if (developerMode) {
         chunks.push({ kind: 'event', entry })
       }
     } else if (entry.kind === 'stderr') {
-      appendStderr(entry.line)
+      if (developerMode) appendStderr(entry.line)
     } else if (!sawEvent) {
       // Unparsed stdout from drivers that don't emit JSON events (fake
       // driver, plain-text tests) — treat as text-like output.

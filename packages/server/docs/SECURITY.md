@@ -13,6 +13,8 @@ The AES key is loaded by `packages/server/db/src/encryption.ts` → `ensureSecre
 
 **Risk**: if the key file fallback is used, it lives on the same filesystem as the encrypted database. A full-disk backup or host compromise yields both. Mitigated by setting `DESK_SECRET_KEY` in production.
 
+**Dev**: `npm run dev` (via `packages/server/setup/scripts/dev.sh`) persists `DESK_SECRET_KEY` in the host's gitignored `.env` and injects it into the VM's `/etc/desk-server/env`. On first run it migrates any existing `/home/desk/secret.key` into `.env` so previously encrypted rows still decrypt; afterwards the key is decoupled from VM disk lifecycle, surviving `vm:reset`, `vm:destroy`, and snapshot restores.
+
 **Generate a key**:
 ```bash
 openssl rand -base64 32

@@ -74,7 +74,43 @@ if ! rolldown_binding_ok; then
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
-# 3. Kill any stale process holding port 5173 from a previous run.
+# 3. Ensure DESK_SECRET_KEY is persisted on the host and injected into the VM.
+#
+#    The DB encryption module (packages/server/db/src/encryption.ts) prefers
+#    DESK_SECRET_KEY (base64 32 bytes) over its on-disk fallback at
+#    /home/desk/secret.key. The fallback lives on the VM disk, which means
+#    any state desync between the VM and the user_settings.provider_keys_encrypted
+#    blob — a stray reprovision, snapshot restore, or hand-deleted file —
+#    silently changes the key and breaks decryption. Pin the key to host
+#    .env (gitignored) so it survives every VM operation.
+ENV_FILE="${REPO_ROOT}/.env"
+desk_secret_key=""
+if [ -f "$ENV_FILE" ]; then
+  desk_secret_key="$(grep -E '^DESK_SECRET_KEY=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | sed -E 's/^DESK_SECRET_KEY=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
+fi
+if [ -z "$desk_secret_key" ]; then
+  # Migrate an existing VM-side key file so previously encrypted rows still
+  # decrypt. Falls through to fresh generation if there's nothing to import.
+  existing_b64="$("$VM_SH" exec 'sudo test -f /home/desk/secret.key && sudo base64 -w0 /home/desk/secret.key 2>/dev/null || true' 2>/dev/null | tr -d ' \r\n')"
+  if [ -n "$existing_b64" ]; then
+    echo "==> Importing existing /home/desk/secret.key into ${ENV_FILE}"
+    desk_secret_key="$existing_b64"
+  else
+    echo "==> Generating DESK_SECRET_KEY (32 bytes, base64) → ${ENV_FILE}"
+    desk_secret_key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+  fi
+  touch "$ENV_FILE"
+  # `$(...)` strips trailing \n, so non-empty output ⇒ file doesn't end in newline.
+  if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then
+    printf '\n' >> "$ENV_FILE"
+  fi
+  printf 'DESK_SECRET_KEY=%s\n' "$desk_secret_key" >> "$ENV_FILE"
+fi
+echo "==> Syncing DESK_SECRET_KEY into VM /etc/desk-server/env"
+"$VM_SH" exec "sudo install -d /etc/desk-server && sudo touch /etc/desk-server/env && sudo sed -i '/^DESK_SECRET_KEY=/d' /etc/desk-server/env && echo 'DESK_SECRET_KEY=${desk_secret_key}' | sudo tee -a /etc/desk-server/env >/dev/null"
+
+# 4. Kill any stale process holding port 5173 from a previous run.
 if lsof -ti :5173 >/dev/null 2>&1; then
   echo "==> Port 5173 in use — killing stale process…"
   lsof -ti :5173 | xargs kill -9 2>/dev/null || true

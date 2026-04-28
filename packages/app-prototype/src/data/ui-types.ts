@@ -213,7 +213,17 @@ export interface Run {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
-export type ChatKind = 'chat' | 'task' | 'ai_note'
+export type ChatKind = 'chat' | 'task' | 'task_run'
+
+export type ChatGoalKind =
+  | 'app'
+  | 'document'
+  | 'image'
+  | 'data'
+  | 'site'
+  | 'run'
+  | 'task'
+  | 'scheduled'
 
 export interface Chat {
   id: string
@@ -227,10 +237,15 @@ export interface Chat {
   workspaceId?: string
   agentId?: string
   /**
-   * Drives the chat-list icon. Newest non-chat message kind, falling back to
-   * `'chat'` when the chat has none.
+   * Drives the chat-list icon (fallback signal). Newest user-action
+   * message kind, falling back to `'chat'`.
    */
-  iconKind?: ChatKind
+  kind?: ChatKind
+  /**
+   * Drives the chat-list icon (primary signal when set). Inferred from
+   * the newest user-role text message — `app` / `data` / `site` / etc.
+   */
+  goalKind?: ChatGoalKind | null
 }
 
 // ── Settings / Connections (catalog of integrations the UI can render) ───────

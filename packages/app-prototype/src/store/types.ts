@@ -4,7 +4,7 @@
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 
-export type MessageRole = "user" | "agent" | "system" | "tool";
+export type MessageRole = "user" | "agent" | "system";
 export type MessageState =
   | "pending"
   | "running"
@@ -77,11 +77,27 @@ export interface ServerChat {
   awaitingUser: boolean;
   unread: boolean;
   /**
-   * Drives the chat-list icon. Set to the newest non-chat message kind, with
-   * `'chat'` as the fallback when the chat is empty or contains only chat
-   * messages. Only populated by /chats list responses.
+   * Drives the chat-list icon (fallback signal). Newest user-action
+   * message kind (`task` / `task_run`), with `'chat'` as the fallback.
+   * `ai_note` is auto-emitted on every chat turn and is treated as a
+   * fallback. Only populated by /chats list responses.
    */
-  iconKind?: "chat" | "task" | "ai_note";
+  kind?: "chat" | "task" | "task_run";
+  /**
+   * Drives the chat-list icon (primary signal when set). Inferred from
+   * the newest user-role text message — `app` / `data` / `site` / etc.
+   * Null when no user text exists or no heuristic matches.
+   */
+  goalKind?:
+    | "app"
+    | "document"
+    | "image"
+    | "data"
+    | "site"
+    | "run"
+    | "task"
+    | "scheduled"
+    | null;
 }
 
 export interface AttachmentRef {

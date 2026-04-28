@@ -1122,9 +1122,13 @@ function ConnectionDetail({
 
 // ── Preferences ──────────────────────────────────────────────────────────────
 
-type DefaultView = 'desk' | 'chats' | 'context'
+// Mirrors `RouteView` from `@/router/nav`. The pref offered 'chats' for a
+// while, but there is no Chats route — chats are URL params layered onto
+// any top-level view — so picking it had no effect. `loadPrefs` migrates
+// stored 'chats' values to 'desk' on load.
+type DefaultView = 'desk' | 'tasks' | 'context'
 
-interface PrefsShape {
+export interface PrefsShape {
   autoSave: boolean
   defaultView: DefaultView
   showBadges: boolean
@@ -1142,13 +1146,19 @@ function prefsKey(userId: string): string {
   return `desk.prefs.${userId}`
 }
 
+const VALID_VIEWS: readonly DefaultView[] = ['desk', 'tasks', 'context']
+
 export function loadPrefs(userId: string | undefined): PrefsShape {
   if (!userId) return PREFS_DEFAULTS
   try {
     const raw = localStorage.getItem(prefsKey(userId))
     if (!raw) return PREFS_DEFAULTS
     const parsed = JSON.parse(raw) as Partial<PrefsShape>
-    return { ...PREFS_DEFAULTS, ...parsed }
+    const merged = { ...PREFS_DEFAULTS, ...parsed }
+    if (!VALID_VIEWS.includes(merged.defaultView)) {
+      merged.defaultView = PREFS_DEFAULTS.defaultView
+    }
+    return merged
   } catch {
     return PREFS_DEFAULTS
   }
@@ -1158,6 +1168,8 @@ function savePrefs(userId: string | undefined, prefs: PrefsShape): void {
   if (!userId) return
   try {
     localStorage.setItem(prefsKey(userId), JSON.stringify(prefs))
+    // Notify subscribers in the same tab — `storage` events only cross tabs.
+    window.dispatchEvent(new CustomEvent('desk:prefs-changed'))
   } catch {
     /* ignore */
   }
@@ -1193,15 +1205,15 @@ function PreferencesSection() {
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
     { value: 'desk',    label: 'Desk'    },
-    { value: 'chats',   label: 'Chats'   },
+    { value: 'tasks',   label: 'Tasks'   },
     { value: 'context', label: 'Library' },
   ]
 
   return (
     <div className="flex flex-col">
       <PreferenceRow
-        title="Auto-save artifacts"
-        description="Automatically save artifacts created in chats to your Desk."
+        title="Auto-save library edits"
+        description="Automatically save changes while editing files in your Library."
       >
         <Switch
           data-testid="prefs-auto-save"
@@ -1223,7 +1235,7 @@ function PreferencesSection() {
 
       <PreferenceRow
         title="Default view"
-        description="The view shown when you switch to this workspace."
+        description="The view you land on after sign-in and when switching workspaces."
       >
         <div className="flex rounded-md border overflow-hidden">
           {VIEW_OPTIONS.map(opt => (

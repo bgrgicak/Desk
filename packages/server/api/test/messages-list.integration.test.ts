@@ -172,7 +172,7 @@ async function insertMessage(
   owner: SeededUser,
   data: {
     chatId: string;
-    role: "user" | "agent" | "system" | "tool";
+    role: "user" | "agent" | "system";
     content: unknown;
     state?: string | null;
     executeAt?: string | null;
