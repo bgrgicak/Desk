@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPool, withTx } from "../src/pool.js";
+import { createPool, transact } from "../src/pool.js";
 import { runMigrations } from "../src/migrate.js";
 
 let tmpDir: string;
@@ -68,33 +68,60 @@ describe("pool path resolution", () => {
   });
 });
 
-describe("pool concurrent transactions", () => {
-  it("serializes overlapping withTx callers", async () => {
-    // Pre-fix regression: the second caller threw "Nested transactions
-    // are not supported" because beginTx was synchronous and the JS-level
-    // guard had no queue. The pool now serializes via a FIFO so callers
-    // wait for the current owner to commit/rollback.
+describe("transact", () => {
+  it("prevents lost updates from overlapping callers", async () => {
+    // Each `transact` runs synchronously to completion via
+    // db.transaction(), so even when callers race through Promise.allSettled
+    // they serialize at the engine layer (better-sqlite3 wraps the
+    // callback in BEGIN/COMMIT before any other JS gets to run).
     const pool = createPool({ path: ":memory:" });
     pool.exec("CREATE TABLE counts (n INTEGER)");
-    await pool.query("INSERT INTO counts (n) VALUES (0)");
+    pool.querySync("INSERT INTO counts (n) VALUES (0)");
 
     const bump = (delta: number) =>
-      withTx(pool, async (c) => {
-        const { rows } = await c.query<{ n: number }>("SELECT n FROM counts");
-        await c.query("UPDATE counts SET n = $1", [rows[0].n + delta]);
+      transact(pool, (c) => {
+        const { rows } = c.querySync<{ n: number }>("SELECT n FROM counts");
+        c.querySync("UPDATE counts SET n = $1", [rows[0].n + delta]);
         return rows[0].n + delta;
       });
 
-    // Without serialization, both reads see 0 → final count is 1, not 5.
     const results = await Promise.allSettled([
-      bump(1),
-      bump(2),
-      bump(2),
+      Promise.resolve().then(() => bump(1)),
+      Promise.resolve().then(() => bump(2)),
+      Promise.resolve().then(() => bump(2)),
     ]);
     const rejected = results.filter((r) => r.status === "rejected");
     expect(rejected).toEqual([]);
-    const { rows } = await pool.query<{ n: number }>("SELECT n FROM counts");
-    expect(rows[0].n).toBe(5);
+    expect(pool.querySync<{ n: number }>("SELECT n FROM counts").rows[0].n).toBe(5);
     await pool.end();
+  });
+
+  it("rejects async callbacks at runtime", () => {
+    // The Sync<T> type rejects async callbacks at compile time; this
+    // covers `as`-cast / untyped escapes. Callers that try to hold a
+    // tx across an `await` get a clear error pointing at the pattern
+    // documented in pool.ts.
+    const pool = createPool({ path: ":memory:" });
+    expect(() =>
+      transact(
+        pool,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (async () => {}) as any,
+      ),
+    ).toThrow(/synchronous/);
+    pool.end();
+  });
+
+  it("rolls back on thrown exception", () => {
+    const pool = createPool({ path: ":memory:" });
+    pool.exec("CREATE TABLE t (v INTEGER)");
+    expect(() =>
+      transact(pool, (c) => {
+        c.querySync("INSERT INTO t VALUES (1)");
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    expect(pool.querySync<{ c: number }>("SELECT count(*) AS c FROM t").rows[0].c).toBe(0);
+    pool.end();
   });
 });

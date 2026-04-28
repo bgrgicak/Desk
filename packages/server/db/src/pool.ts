@@ -163,19 +163,34 @@ function execQuery<T>(
 }
 
 /**
- * Drop-in replacement for `pg.Pool` shaped just enough to keep the existing
- * query layer compiling without a full rewrite. better-sqlite3 is
- * synchronous; `query` returns a resolved Promise so callers keep awaiting.
+ * SQLite-backed pool, shaped to keep the existing pg-style query layer
+ * compiling. better-sqlite3 is synchronous; `query` wraps the result in
+ * a resolved Promise so callers can keep their `await` syntax.
+ *
+ * # Transaction model
+ *
+ * Transactions are SYNCHRONOUS. Use `transact(pool, fn)`; the callback
+ * must not `await`. better-sqlite3 cannot guarantee atomicity across
+ * async boundaries on a shared connection — the BEGIN/COMMIT sequence
+ * happens on one connection, and any sibling handler's query lands on
+ * the same connection while the event loop is yielded.
+ *
+ * For "read state, call external service, update state" patterns, do
+ * NOT hold a transaction across the I/O. Use compare-and-swap:
+ *
+ *   const before = (await pool.query("SELECT state FROM x WHERE id=?", [id])).rows[0];
+ *   const decision = await externalService(before);
+ *   const { rowCount } = await pool.query(
+ *     "UPDATE x SET state=? WHERE id=? AND state=?",
+ *     [decision, id, before.state],
+ *   );
+ *   if (!rowCount) { // state changed under us — re-read or fail }
+ *
+ * Inside a `transact` callback, use `pool.querySync(...)` (sync).
+ * Outside, use `pool.query(...)` (Promise).
  */
 export class Pool {
   private readonly db: BetterSqlite3Db;
-  private inTransaction = false;
-  // Concurrent transaction requests queue here. The pool wraps a single
-  // SQLite connection (better-sqlite3 is synchronous) so only one
-  // transaction can be open at a time — without this queue, two callers
-  // racing into BEGIN both throw "cannot start a transaction within a
-  // transaction" and the loser's rollback compounds the failure.
-  private readonly txQueue: Array<() => void> = [];
 
   constructor(config?: PoolConfig) {
     // Resolution order: explicit `path` → explicit `connectionString`
@@ -198,6 +213,9 @@ export class Pool {
     this.db.pragma("temp_store = MEMORY");
   }
 
+  /** Async query — for use OUTSIDE transactions. The result is already
+   * synchronously available; the Promise wrapper keeps existing `await`
+   * call sites unchanged. */
   query<T = Record<string, unknown>>(
     sql: string,
     params: unknown[] = [],
@@ -205,10 +223,20 @@ export class Pool {
     return Promise.resolve(execQuery<T>(this.db, sql, params));
   }
 
+  /** Sync query — for use INSIDE a `transact` callback. Same translation
+   * and parameter-binding pipeline as `query`, just without the Promise. */
+  querySync<T = Record<string, unknown>>(
+    sql: string,
+    params: unknown[] = [],
+  ): QueryResult<T> {
+    return execQuery<T>(this.db, sql, params);
+  }
+
   /**
    * pg.Pool compat: returns a "client". With SQLite there's no real
-   * pooling, so the same Pool object is its own client. Use `withTx` for
-   * transactions — it serializes concurrent acquirers via the tx queue.
+   * pooling, so the same Pool object is its own client. New code
+   * should call `query` / `querySync` directly; this is here for any
+   * remaining pg-shaped call sites.
    */
   async connect(): Promise<PoolClient> {
     return this as unknown as PoolClient;
@@ -224,45 +252,6 @@ export class Pool {
 
   async end(): Promise<void> {
     this.db.close();
-  }
-
-  /**
-   * Acquires the transaction lock and issues `BEGIN IMMEDIATE`. If another
-   * caller already owns the lock, queues until they call commitTx/rollbackTx.
-   * `withTx` is the preferred entrypoint; this is exposed for code that
-   * needs to drive BEGIN/COMMIT manually (rare — `migrate.ts` is the one
-   * legitimate caller, where boot is single-threaded).
-   */
-  async beginTx(): Promise<void> {
-    if (!this.inTransaction) {
-      this.inTransaction = true;
-      this.db.exec("BEGIN IMMEDIATE");
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      this.txQueue.push(() => {
-        this.inTransaction = true;
-        this.db.exec("BEGIN IMMEDIATE");
-        resolve();
-      });
-    });
-  }
-
-  commitTx(): void {
-    this.db.exec("COMMIT");
-    this.releaseTx();
-  }
-
-  rollbackTx(): void {
-    if (!this.inTransaction) return;
-    this.db.exec("ROLLBACK");
-    this.releaseTx();
-  }
-
-  private releaseTx(): void {
-    this.inTransaction = false;
-    const next = this.txQueue.shift();
-    if (next) next();
   }
 
   /** Multi-statement script execution. Bypasses translateSql. */
@@ -304,17 +293,38 @@ export function createPool(config?: PoolConfig): Pool {
   return new Pool(config);
 }
 
-export async function withTx<T>(
-  pool: Pool,
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
-  await pool.beginTx();
+/**
+ * Excludes Promise from the callback's return type so async callbacks
+ * fail to compile. The runtime check below is the second line of defense
+ * (e.g. for callers using `as`-casts or untyped JavaScript).
+ */
+type Sync<T> = T extends Promise<unknown> ? never : T;
+
+/**
+ * Run `fn` inside a synchronous SQLite transaction (BEGIN IMMEDIATE).
+ * The callback must be sync — see the file header for the rationale and
+ * the compare-and-swap pattern for async I/O around state changes.
+ *
+ * On exception, the transaction is rolled back and the exception
+ * propagates. better-sqlite3's `db.transaction` handles the BEGIN /
+ * COMMIT / ROLLBACK plumbing and supports nested calls via savepoints.
+ */
+export function transact<T>(pool: Pool, fn: (db: Pool) => Sync<T>): T {
+  const wrapped = pool.raw().transaction(() => fn(pool));
   try {
-    const result = await fn(pool);
-    pool.commitTx();
-    return result;
+    return wrapped.immediate() as T;
   } catch (err) {
-    pool.rollbackTx();
+    // better-sqlite3 throws "Transaction function cannot return a promise"
+    // when the callback returned a thenable. Re-throw with an actionable
+    // message pointing at the file header so the fix path is obvious.
+    if (err instanceof Error && /promise/i.test(err.message)) {
+      throw new Error(
+        "transact() callback must be synchronous — never `await` inside. " +
+          "Move async work outside the transaction or use compare-and-swap. " +
+          "See pool.ts header for the pattern.",
+        { cause: err },
+      );
+    }
     throw err;
   }
 }

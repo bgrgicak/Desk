@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Pool } from "./pool.js";
+import { Pool, transact } from "./pool.js";
 
 const MIGRATIONS_DIR = path.resolve(
   import.meta.dirname,
@@ -10,11 +10,8 @@ const MIGRATIONS_DIR = path.resolve(
 
 /**
  * Apply pending SQL migrations from `migrations/` in lexical filename
- * order. Each file runs inside its own transaction; the schema_migrations
- * table tracks which versions have applied.
- *
- * SQLite-flavored: uses `pool.exec()` for multi-statement scripts and
- * `pool.query()` for the bookkeeping insert.
+ * order. Each file runs inside its own synchronous transaction; the
+ * schema_migrations table tracks which versions have applied.
  */
 export async function runMigrations(pool: Pool): Promise<void> {
   pool.exec(`
@@ -39,16 +36,15 @@ export async function runMigrations(pool: Pool): Promise<void> {
     if (appliedSet.has(version)) continue;
 
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf-8");
-    await pool.beginTx();
     try {
-      pool.exec(sql);
-      await pool.query(
-        "INSERT INTO schema_migrations (version) VALUES (?)",
-        [version],
-      );
-      pool.commitTx();
+      transact(pool, (p) => {
+        p.exec(sql);
+        p.querySync(
+          "INSERT INTO schema_migrations (version) VALUES (?)",
+          [version],
+        );
+      });
     } catch (err) {
-      pool.rollbackTx();
       throw new Error(`Migration ${file} failed: ${err}`);
     }
   }

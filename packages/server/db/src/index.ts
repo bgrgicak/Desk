@@ -1,4 +1,4 @@
-export { createPool, withTx, Pool } from "./pool.js";
+export { createPool, transact, Pool } from "./pool.js";
 export type { PoolConfig, PoolClient } from "./pool.js";
 export { runMigrations } from "./migrate.js";
 export { seedIfEmpty } from "./seed.js";

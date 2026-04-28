@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient, withTx } from "../pool.js";
+import { type Pool, type PoolClient, transact } from "../pool.js";
 import { MessageSchema, type Message } from "@desk/shared";
 
 type Queryable = Pool | PoolClient;
@@ -151,10 +151,11 @@ export async function claimPending(db: Queryable, id: string): Promise<boolean> 
  * `running` state with `started_at = now()`. Returns the run row, or null
  * if the task is missing / not a task / already firing.
  *
- * Pool-only: drives a transaction via `withTx` so concurrent fires
- * serialize through the pool's tx queue (single SQLite connection).
- * The "in-flight" check committed by the winner makes the loser see the
- * new running run and bail with `null`.
+ * Pool-only: runs the lock check, in-flight check, INSERT, and chat
+ * touch inside a synchronous `transact`. better-sqlite3's
+ * `db.transaction` (BEGIN IMMEDIATE) plus SQLite's file lock serialize
+ * concurrent fires; the in-flight check committed by the winner makes
+ * the loser see the new running run and bail with `null`.
  */
 export async function startTaskRun(
   pool: Pool,
@@ -168,20 +169,20 @@ export async function startTaskRun(
     model?: string | null;
   },
 ): Promise<Message | null> {
-  return withTx(pool, async (client) => {
-    const lock = await client.query(
+  return transact(pool, (client): Message | null => {
+    const lock = client.querySync(
       `SELECT id FROM messages WHERE id = $1 AND kind = 'task'`,
       [args.taskId],
     );
     if (lock.rowCount === 0) return null;
-    const inFlight = await client.query(
+    const inFlight = client.querySync(
       `SELECT 1 FROM messages
        WHERE parent_id = $1 AND kind = 'task_run' AND state IN ('pending', 'running')
        LIMIT 1`,
       [args.taskId],
     );
     if ((inFlight.rowCount ?? 0) > 0) return null;
-    const ins = await client.query(
+    const ins = client.querySync(
       `INSERT INTO messages (
          id, chat_id, role, content, parent_id, kind,
          state, started_at, agent_id, model
@@ -198,12 +199,12 @@ export async function startTaskRun(
       ],
     );
     // Mark the parent task as running so the kanban moves the card to Active.
-    await client.query(
+    client.querySync(
       `UPDATE messages SET state = 'running', updated_at = now()
        WHERE id = $1 AND kind = 'task'`,
       [args.taskId],
     );
-    await client.query(
+    client.querySync(
       "UPDATE chats SET updated_at = now() WHERE id = $1",
       [args.chatId],
     );

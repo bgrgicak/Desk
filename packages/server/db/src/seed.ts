@@ -1,4 +1,4 @@
-import { type Pool, withTx } from "./pool.js";
+import { type Pool, transact } from "./pool.js";
 import { generateId, PROVIDER_KEY_VARS } from "@desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
@@ -16,16 +16,18 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
   const agentId = generateId("agent");
   const workspaceId = generateId("workspace");
 
+  // hashPassword is the only async work — done before the tx so the
+  // tx callback stays synchronous.
   const passwordHash = await hashPassword(password);
 
-  await withTx(pool, async (client) => {
-    await client.query(
+  transact(pool, (client) => {
+    client.querySync(
       `INSERT INTO users (id, username, password_hash, email)
        VALUES ($1, $2, $3, $4)`,
       [userId, username, passwordHash, `${username}@desk.local`],
     );
 
-    await client.query(
+    client.querySync(
       `INSERT INTO agents (id, user_id, name, instructions, model)
        VALUES ($1, $2, $3, $4, $5)`,
       [
@@ -37,13 +39,13 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
       ],
     );
 
-    await client.query(
+    client.querySync(
       `INSERT INTO workspaces (id, user_id, name, path)
        VALUES ($1, $2, $3, $4)`,
       [workspaceId, userId, "Desk", "desk"],
     );
 
-    await client.query(
+    client.querySync(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
        VALUES ($1, $2)`,
       [workspaceId, agentId],
