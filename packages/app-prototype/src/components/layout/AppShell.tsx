@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
-  LayoutGrid, Zap, FolderOpen, Plus, Search,
-  SlidersHorizontal,
+  LayoutGrid, Zap, FolderOpen, Plus,
+  ListFilter, SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
   FileText,
   ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
@@ -46,6 +46,13 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
+import { Button } from '@/components/ui/button'
+import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
@@ -55,9 +62,12 @@ import {
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
   useSearchQuery,
+  useGetAgentsQuery,
 } from '@/store/api'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
+import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
 
 export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
@@ -80,6 +90,8 @@ const LOADING_WORKSPACE: WorkspaceInfo = {
 }
 
 const CHATS_PER_PAGE = 10
+
+const EMPTY_FILTER: ChatFilterValues = { goalKind: null, agentId: null, updatesOnly: false, artifactsOnly: false }
 
 function sortedChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
@@ -129,7 +141,6 @@ interface AppShellProps {
   activeWorkspaceId: string
   onSelectWorkspace: (id: string) => void
   onGlobalToday: () => void
-  onNavigateWorkspace: (id: string, view: WorkspaceNavView) => void
   // ── Today sheet ──
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
@@ -155,7 +166,6 @@ export function AppShell({
   activeWorkspaceId,
   onSelectWorkspace,
   onGlobalToday,
-  onNavigateWorkspace,
   todaySheetOpen = false,
   onTodaySheetClose,
   onSignOut,
@@ -171,9 +181,30 @@ export function AppShell({
     { q: chatSearchQuery.trim(), scope: 'all' },
     { skip: !searchEnabled },
   )
+
+  const [appliedFilter, setAppliedFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
+  const [pendingFilter, setPendingFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const hasActiveFilter =
+    appliedFilter.goalKind !== null ||
+    appliedFilter.agentId !== null ||
+    appliedFilter.updatesOnly ||
+    appliedFilter.artifactsOnly
+
+  const { data: agents = [] } = useGetAgentsQuery()
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined)
+
+  const appDispatch = useAppDispatch()
+  const pendingSettingsSection = useAppSelector(s => s.ui.pendingSettingsSection)
+  useEffect(() => {
+    if (!pendingSettingsSection) return
+    setSettingsInitialSection(pendingSettingsSection)
+    setSettingsOpen(true)
+    appDispatch(setPendingSettingsSection(null))
+  }, [pendingSettingsSection, appDispatch])
   const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
 
   // Server-backed workspaces. The WorkspaceBar/Settings components still
@@ -190,9 +221,16 @@ export function AppShell({
   const activeWorkspace =
     displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
 
-  const allChats        = sortedChats(chats)
-  const visibleChats    = allChats.slice(0, chatPage * CHATS_PER_PAGE)
-  const hasMore         = allChats.length > visibleChats.length
+  const allChats = sortedChats(chats)
+  const filteredChats = allChats.filter(chat => {
+    if (appliedFilter.goalKind && chat.goalKind !== appliedFilter.goalKind) return false
+    if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
+    if (appliedFilter.updatesOnly && !(chat.unread && !readChatIds.has(chat.id))) return false
+    if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
+    return true
+  })
+  const visibleChats = filteredChats.slice(0, chatPage * CHATS_PER_PAGE)
+  const hasMore      = filteredChats.length > visibleChats.length
 
   return (
     <div className="flex flex-col h-dvh overflow-hidden bg-muted bg-cover bg-center" style={{ '--topbar-height': '51px', backgroundImage: 'url(/background2.jpg)' } as React.CSSProperties}>
@@ -267,8 +305,6 @@ export function AppShell({
           todayUnreadCount={unreadCount}
           onGlobalToday={onGlobalToday}
           onSelectWorkspace={onSelectWorkspace}
-          onNavigate={onNavigateWorkspace}
-          onCompose={onCompose}
           onSignOut={onSignOut}
         />
 
@@ -302,14 +338,35 @@ export function AppShell({
             <div className="flex items-center justify-between px-2 mt-3">
               <span className="text-xs font-medium text-foreground/70">Recent AI chats</span>
               <div className="flex items-center gap-0.5">
-                <button
-                  onClick={() => setChatSearchOpen(true)}
-                  title="Search chats"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
+                <Popover
+                  open={filterOpen}
+                  onOpenChange={(open) => {
+                    if (!open) setPendingFilter(appliedFilter)
+                    setFilterOpen(open)
+                  }}
                 >
-                  <Search className="h-3.5 w-3.5" />
-                  <span className="sr-only">Search chats</span>
-                </button>
+                  <PopoverTrigger asChild>
+                    <button
+                      title="Filter chats"
+                      className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
+                    >
+                      <ListFilter className="h-3.5 w-3.5" />
+                      <span className="sr-only">Filter chats</span>
+                      {hasActiveFilter && (
+                        <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-auto p-0">
+                    <ChatFilterPopover
+                      agents={agents}
+                      values={pendingFilter}
+                      onChange={setPendingFilter}
+                      onApply={() => { setAppliedFilter(pendingFilter); setFilterOpen(false) }}
+                      onCancel={() => { setPendingFilter(appliedFilter); setFilterOpen(false) }}
+                    />
+                  </PopoverContent>
+                </Popover>
                 <button
                   onClick={onCompose}
                   title="New chat"
@@ -326,6 +383,18 @@ export function AppShell({
           <SidebarContent ref={sidebarScrollRef}>
             <SidebarGroup className="px-2 py-0">
               <SidebarGroupContent className="pb-10">
+                {hasActiveFilter && filteredChats.length === 0 && (
+                  <div className="flex flex-col items-center gap-2 pt-12 px-4 text-center">
+                    <p className="text-xs text-muted-foreground">No chats found. Try adjusting your filters.</p>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => { setAppliedFilter(EMPTY_FILTER); setPendingFilter(EMPTY_FILTER) }}
+                    >
+                      Clear filters
+                    </Button>
+                  </div>
+                )}
                 <SidebarMenu>
                   {visibleChats.map(chat => {
                     const ChatIcon = getChatIcon(chat)
@@ -438,6 +507,7 @@ export function AppShell({
         onOpenChange={setSettingsOpen}
         workspace={activeWorkspace}
         canDeleteWorkspace={workspaces.length > 1}
+        initialSection={settingsInitialSection}
         onUpdateWorkspace={updated => {
           void patchWorkspaceMutation({
             id: updated.id,

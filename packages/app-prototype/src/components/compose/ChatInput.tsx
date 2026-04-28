@@ -129,6 +129,11 @@ interface ChatInputProps {
    * so the text survives navigation and reloads. Cleared on submit.
    */
   draftKey?: string
+  /** Hide the agent/model picker entirely. Used by surfaces with a fixed
+   * global model (e.g. the global Ask AI palette). */
+  hideAgentPicker?: boolean
+  /** Skip the library dropdown and open a native file picker on click. */
+  directUpload?: boolean
 }
 
 const DRAFT_STORAGE_PREFIX = 'chatDraft:'
@@ -164,6 +169,8 @@ export function ChatInput({
   onRemoveExtraUpload,
   uploadInProgress = false,
   draftKey,
+  hideAgentPicker = false,
+  directUpload = false,
 }: ChatInputProps) {
   // chatId is part of the public prop surface (callers pass it for
   // upload routing) but ChatInput itself doesn't read it — touch it
@@ -505,6 +512,8 @@ export function ChatInput({
           onAttachmentPick={insertMention}
           onOpenUploadPicker={onOpenUploadPicker}
           uploadInProgress={uploadInProgress}
+          hideAgentPicker={hideAgentPicker}
+          directUpload={directUpload}
         />
 
       </div>

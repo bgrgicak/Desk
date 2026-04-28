@@ -1305,6 +1305,9 @@ interface SettingsModalProps {
   onDeleteWorkspace: () => void
   /** Called when the user clicks "Chat now" on an agent. Receives the agent id. */
   onChatWithAgent?: (agentId: string) => void
+  /** Optional section to focus when the modal opens. Re-applied on every
+   * open so deep-links from the global palette land on the right page. */
+  initialSection?: NavSection
 }
 
 export function SettingsModal({
@@ -1315,8 +1318,13 @@ export function SettingsModal({
   onUpdateWorkspace,
   onDeleteWorkspace,
   onChatWithAgent,
+  initialSection,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<NavSection>('workspace')
+  const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
+
+  useEffect(() => {
+    if (open && initialSection) setActiveSection(initialSection)
+  }, [open, initialSection])
 
   // ── Agents state ──────────────────────────────────────────────────────────
   const { data: serverAgents } = useGetAgentsQuery()
