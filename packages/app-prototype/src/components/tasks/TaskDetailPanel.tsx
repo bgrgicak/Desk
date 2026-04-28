@@ -589,7 +589,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
       )}
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent size="sm" onPointerDownOutside={() => setDeleteDialogOpen(false)}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete &ldquo;{task.name}&rdquo;?</AlertDialogTitle>
             <AlertDialogDescription>
