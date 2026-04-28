@@ -1212,8 +1212,8 @@ function PreferencesSection() {
   return (
     <div className="flex flex-col">
       <PreferenceRow
-        title="Auto-save artifacts"
-        description="Automatically save artifacts created in chats to your Desk."
+        title="Auto-save library edits"
+        description="Automatically save changes while editing files in your Library."
       >
         <Switch
           data-testid="prefs-auto-save"

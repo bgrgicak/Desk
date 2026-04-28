@@ -58,6 +58,10 @@ import { TextFileEditor } from './TextFileEditor'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { usePrefs } from '@/hooks/use-prefs'
+
+const AUTO_SAVE_DEBOUNCE_MS = 1_000
+const SAVED_BADGE_TTL_MS = 2_000
 
 interface ContextDetailProps {
   item: ContextItem
@@ -197,6 +201,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const isDirty = isTextEditable && editorValue != null && editorValue !== previewText
 
   const [saveLibraryContent, saveState] = useSaveLibraryContentMutation()
+  const [savedAt, setSavedAt] = useState<number | null>(null)
   const handleSave = useCallback(async () => {
     if (!activeWorkspaceId || !isDirty || editorValue == null) return
     try {
@@ -207,12 +212,37 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         contentType: item.mimeType || 'text/plain',
       }).unwrap()
       setPreviewText(editorValue)
+      setSavedAt(Date.now())
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
         description: err instanceof Error ? err.message : undefined,
       })
     }
   }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, saveLibraryContent])
+
+  // Auto-save: when the pref is on, debounce a save after the last
+  // edit. The Save button stays available as a "save now" affordance.
+  const { autoSave } = usePrefs()
+  useEffect(() => {
+    if (!autoSave || !isDirty || saveState.isLoading) return
+    const t = window.setTimeout(handleSave, AUTO_SAVE_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [autoSave, isDirty, saveState.isLoading, handleSave])
+
+  // Drop the "Saved" badge after a moment so the button reverts to its
+  // idle "Save" label.
+  useEffect(() => {
+    if (savedAt == null) return
+    const t = window.setTimeout(() => setSavedAt(null), SAVED_BADGE_TTL_MS)
+    return () => window.clearTimeout(t)
+  }, [savedAt])
+
+  const showSavedBadge = !isDirty && !saveState.isLoading && savedAt != null
+  const saveLabel = saveState.isLoading
+    ? 'Saving…'
+    : showSavedBadge
+    ? 'Saved'
+    : 'Save'
 
   // "Related artifacts" — the server has no explicit artifact-to-context
   // relation yet. We hydrate against the library and filter by the ids
@@ -317,9 +347,13 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                   className="text-xs"
                   onClick={handleSave}
                   disabled={!isDirty || saveState.isLoading}
+                  data-testid="library-save"
+                  data-save-state={
+                    saveState.isLoading ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
+                  }
                 >
                   <Save className="h-3.5 w-3.5 mr-1.5" />
-                  {saveState.isLoading ? 'Saving…' : 'Save'}
+                  {saveLabel}
                 </Button>
               )}
 
