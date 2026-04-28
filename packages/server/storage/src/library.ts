@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import ignore, { type Ignore } from "ignore";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { workspaceRootPath, trashDir, resolveHostPath } from "./layout.js";
@@ -14,7 +14,7 @@ import {
 } from "./files.js";
 
 export interface LibraryContext {
-  pool: pg.Pool;
+  pool: Pool;
   home: string;
 }
 

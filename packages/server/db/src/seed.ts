@@ -4,7 +4,9 @@ import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
 
 export async function seedIfEmpty(pool: Pool): Promise<void> {
-  const { rows } = await pool.query("SELECT count(*)::int AS c FROM users");
+  const { rows } = await pool.query<{ c: number }>(
+    "SELECT count(*) AS c FROM users",
+  );
   if (rows[0].c > 0) return;
 
   const username = process.env.DESK_SEED_USERNAME ?? "desk";

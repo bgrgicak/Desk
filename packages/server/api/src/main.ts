@@ -102,7 +102,9 @@ async function main(): Promise<void> {
   retentionTimer.unref();
 
   // Broadcast targets the single v1 user.
-  const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
+  const { rows } = await pool.query<{ id: string }>(
+    "SELECT id FROM users LIMIT 1",
+  );
   const broadcastUserId: string | undefined = rows[0]?.id;
 
   const runManager = createRunManager({
