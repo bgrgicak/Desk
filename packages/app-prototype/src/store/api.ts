@@ -461,13 +461,14 @@ export const api = createApi({
     // ── Library ───────────────────────────────────────────────────────
     getLibrary: build.query<
       ListLibraryResponse,
-      { workspaceId?: string; cursor?: string; limit?: number } | void
+      { workspaceId?: string; cursor?: string; limit?: number; showHidden?: boolean } | void
     >({
       query: (arg) => {
         const p = new URLSearchParams();
         if (arg?.workspaceId) p.set("workspaceId", arg.workspaceId);
         if (arg?.cursor) p.set("cursor", arg.cursor);
         if (arg?.limit !== undefined) p.set("limit", String(arg.limit));
+        if (arg?.showHidden) p.set("showHidden", "true");
         const qs = p.toString();
         return qs ? `/library?${qs}` : "/library";
       },

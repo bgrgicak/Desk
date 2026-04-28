@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload,
@@ -75,10 +75,11 @@ import {
 } from '@/store/api'
 import { downloadLibraryFile } from '@/store/library-download'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
-import { toFolderList } from '@/store/selectors/library'
+import { toContextItem, toFolderList } from '@/store/selectors/library'
 import { iconForItem } from '@/data/file-kind'
 import { toast } from 'sonner'
 import { usePersistedState } from '@/hooks/use-persisted-state'
+import { usePrefs } from '@/hooks/use-prefs'
 
 interface ContextListProps {
   items: ContextItem[]
@@ -87,7 +88,7 @@ interface ContextListProps {
 }
 
 type ViewMode = 'list' | 'grid'
-type TypeFilter = 'all' | 'folder' | 'file' | 'link' | 'note'
+type TypeFilter = 'all' | 'folder' | 'file' | 'link' | 'note' | 'hidden'
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -97,11 +98,38 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'link', label: 'Links' },
 ]
 
+// Dev-only filter: surfaces dot-prefixed library entries the server hides
+// from normal listings (agent artifacts, `.opencode/`, drafts, etc.).
+const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', label: 'Hidden' }
+
+/** True when any path segment starts with `.` — matches the server's
+ *  hidden-skip rule (search.ts) so we can locally separate hidden entries
+ *  from the showHidden=true superset returned by the API. */
+function isHiddenPath(p: string): boolean {
+  return p.split('/').some(seg => seg.startsWith('.'))
+}
+
 export function ContextList({ items, onItemClick, onCompose }: ContextListProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
   const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  const { developerMode, loaded: prefsLoaded } = usePrefs()
+  // Reset the persisted 'hidden' filter when developer mode flips off — the
+  // chip wouldn't render and the user would otherwise see an empty list with
+  // no obvious way back. Wait for prefs to actually load: on first paint the
+  // user query hasn't resolved yet, so `developerMode` is the default `false`
+  // and would otherwise clobber a persisted 'hidden' selection.
+  useEffect(() => {
+    if (!prefsLoaded) return
+    if (!developerMode && typeFilter === 'hidden') setTypeFilter('all')
+  }, [prefsLoaded, developerMode, typeFilter, setTypeFilter])
+  const isHiddenMode = developerMode && typeFilter === 'hidden'
+  const filterChips = useMemo(
+    () => (developerMode ? [...TYPE_FILTERS, HIDDEN_FILTER] : TYPE_FILTERS),
+    [developerMode],
+  )
 
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   // Folder selection lives in the URL (?folder=<workspace-relative-path>) so
@@ -115,10 +143,22 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const [createLibraryFolder] = useCreateLibraryFolderMutation()
   const [createLibraryLink] = useCreateLibraryLinkMutation()
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
+  // Hidden mode pulls the showHidden=true superset directly so we can render
+  // dot-prefixed entries that the parent's items prop excludes by default.
   const { data: libraryResp } = useGetLibraryQuery(
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    activeWorkspaceId
+      ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) }
+      : undefined,
     { skip: !activeWorkspaceId },
   )
+
+  const effectiveItems: ContextItem[] = useMemo(() => {
+    if (!isHiddenMode) return items
+    if (!activeWorkspaceId) return []
+    return (libraryResp?.items ?? [])
+      .filter(f => isHiddenPath(f.path))
+      .map(f => toContextItem(f, activeWorkspaceId))
+  }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
 
   /**
    * Delete dialog targets can be files/notes (ContextItem) or folders.
@@ -344,16 +384,20 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
 
   // Get folders + items in current location
   const childFolders = getChildFolders(folders, currentFolderId)
-  const folderItems = getItemsInFolder(currentFolderId, items)
+  const folderItems = getItemsInFolder(currentFolderId, effectiveItems)
 
-  // Apply filters
-  const showFolders = typeFilter === 'all' || typeFilter === 'folder'
+  // Apply filters. Hidden mode is its own slice — surfaces every dot-prefixed
+  // entry (file or folder) regardless of mime kind, so the user can also
+  // navigate into hidden subtrees like `.opencode/`.
+  const showFolders = typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden'
   const filteredFolders = showFolders
-    ? childFolders.filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    ? childFolders
+        .filter(f => !isHiddenMode || isHiddenPath(f.id))
+        .filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : []
 
   const filteredItems = folderItems
-    .filter(i => typeFilter === 'all' || typeFilter === i.type)
+    .filter(i => typeFilter === 'all' || typeFilter === 'hidden' || typeFilter === i.type)
     .filter(() => typeFilter !== 'folder')
     .filter(i => !searchQuery || i.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime())
@@ -406,7 +450,9 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
     })
     clearSelection()
     setSearchQuery('')
-    setTypeFilter('all')
+    // Don't reset the type filter on navigation — it's a persisted user
+    // choice. Forcing it back to 'all' (and writing 'all' to localStorage)
+    // makes any chosen filter feel like it randomly drops itself.
   }
 
   // Compose with the entire current folder's contents
@@ -473,7 +519,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
         actions={<div className="flex items-center gap-2">
           {/* Type filter pills */}
           <div className="flex items-center rounded-lg border p-0.5">
-            {TYPE_FILTERS.map(f => (
+            {filterChips.map(f => (
               <button
                 key={f.value}
                 onClick={() => setTypeFilter(f.value)}
@@ -838,7 +884,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                   </div>
                   <div className="flex flex-col items-center text-center pt-4 pb-1">
                     <FolderIcon className="h-8 w-8 text-muted-foreground/40 mb-3 fill-muted-foreground/15" />
-                    <p className="text-sm font-medium text-foreground line-clamp-2 mb-1">{folder.name}</p>
+                    <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{folder.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {itemCount} {itemCount === 1 ? 'item' : 'items'}
                     </p>
@@ -913,7 +959,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                   </div>
                   <div className="flex flex-col items-center text-center pt-4 pb-1">
                     <Icon className="h-8 w-8 text-muted-foreground/40 mb-3" />
-                    <p className="text-sm font-medium text-foreground line-clamp-2 mb-1">{item.name}</p>
+                    <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{item.name}</p>
                     <p className="text-xs text-muted-foreground">{getRelativeTime(item.addedAt)}</p>
                   </div>
                 </motion.div>
