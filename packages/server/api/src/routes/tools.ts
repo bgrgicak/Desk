@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
 import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@desk/runtime";

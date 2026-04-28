@@ -34,5 +34,8 @@
   },
   "devDependencies": {
     "nx": "22.6.5"
+  },
+  "engines": {
+    "node": "^22.0.0"
   }
 }

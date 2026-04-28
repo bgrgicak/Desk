@@ -44,8 +44,8 @@ npx playwright install chromium  # only if you'll run Playwright on the host
    `hello world`.
 2. [setup/dev-provision.sh](setup/dev-provision.sh) — dev-only tweaks. Sets a
    known password on the `desk` Postgres role and adds md5 auth so tests
-   running as `bero` can connect over TCP (peer auth for the prod `desk` user
-   is preserved). Adds `bero` to the `docker` group. Builds the
+   running as `desk` can connect over TCP (peer auth for the prod `desk` user
+   is preserved). Adds `desk` to the `docker` group. Builds the
    `desk/sandbox:v1` image. Installs Playwright Chromium inside the VM.
 
 Guest port `8080` is forwarded to a host port derived from `DESK_INSTANCE`

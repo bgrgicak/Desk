@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { generateId, type SandboxSession } from "@desk/shared";
 import { queries } from "@desk/db";
 

@@ -29,7 +29,7 @@ async function insertArtifactMessage(
   const content = { type: "artifactRef", path: filePath, name: path.basename(filePath), ...extra };
   await ctx.pool.query(
     `INSERT INTO messages (id, chat_id, role, content)
-     VALUES ($1, $2, 'agent', $3)`,
+     VALUES (?, ?, 'agent', ?)`,
     [id, ctx.chatId, JSON.stringify(content)],
   );
   return id;
@@ -37,7 +37,7 @@ async function insertArtifactMessage(
 
 async function readContent(messageId: string): Promise<Record<string, unknown>> {
   const { rows } = await ctx.pool.query<{ content: string }>(
-    "SELECT content FROM messages WHERE id = $1",
+    "SELECT content FROM messages WHERE id = ?",
     [messageId],
   );
   return JSON.parse(rows[0].content) as Record<string, unknown>;

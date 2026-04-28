@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";

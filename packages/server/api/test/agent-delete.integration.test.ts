@@ -11,7 +11,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, type PoolClient } from "@desk/db";
+import { Pool } from "@desk/db";
 import { runMigrations, queries, hashPassword } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -20,32 +20,11 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_agent_delete_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
 let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 let alphaToken: string;
 let alphaUserId: string;
 let alphaWorkspaceId: string;
@@ -110,20 +89,9 @@ async function seedUser(suffix: string): Promise<{
 }
 
 beforeAll(async () => {
-  const admin = new Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-agent-delete-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-agent-delete-"));
@@ -151,18 +119,8 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 async function insertAgent(userId: string, name: string): Promise<string> {
@@ -185,7 +143,7 @@ describe("DELETE /agents/:id", () => {
     const agentId  = await insertAgent(alphaUserId, "disposable");
     await pool.query(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
-       VALUES ($1, $2)`,
+       VALUES (?, ?)`,
       [alphaWorkspaceId, agentId],
     );
 
@@ -202,14 +160,14 @@ describe("DELETE /agents/:id", () => {
     expect(del.status).toBe(200);
     expect(del.body).toEqual({ ok: true });
 
-    const agentRows = await pool.query("SELECT id FROM agents WHERE id = $1", [agentId]);
+    const agentRows = await pool.query("SELECT id FROM agents WHERE id = ?", [agentId]);
     expect(agentRows.rowCount).toBe(0);
 
-    const chatRows = await pool.query("SELECT id FROM chats WHERE id = $1", [chatId]);
+    const chatRows = await pool.query("SELECT id FROM chats WHERE id = ?", [chatId]);
     expect(chatRows.rowCount).toBe(0);
 
     const wsAgentRows = await pool.query(
-      "SELECT * FROM workspace_agents WHERE agent_id = $1",
+      "SELECT * FROM workspace_agents WHERE agent_id = ?",
       [agentId],
     );
     expect(wsAgentRows.rowCount).toBe(0);
@@ -229,7 +187,7 @@ describe("DELETE /agents/:id", () => {
     expect(res.body).toMatchObject({ code: "VALIDATION" });
 
     // Row is still there.
-    const rows = await pool.query("SELECT id FROM agents WHERE id = $1", [onlyAgentId]);
+    const rows = await pool.query("SELECT id FROM agents WHERE id = ?", [onlyAgentId]);
     expect(rows.rowCount).toBe(1);
 
     // Sanity: once a sibling exists, deletion is allowed.
@@ -254,7 +212,7 @@ describe("DELETE /agents/:id", () => {
     expect(res.status).toBe(404);
 
     // Alpha's row is untouched.
-    const rows = await pool.query("SELECT id FROM agents WHERE id = $1", [foreignAgentId]);
+    const rows = await pool.query("SELECT id FROM agents WHERE id = ?", [foreignAgentId]);
     expect(rows.rowCount).toBe(1);
 
     await queries.agents.remove(pool, foreignAgentId);

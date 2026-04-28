@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { resolveHostPath, workspaceRootPath } from "./layout.js";
 
 /**
@@ -31,7 +31,7 @@ export async function reconcileArtifactRefs(
      FROM messages m
      JOIN chats c ON c.id = m.chat_id
      JOIN workspaces w ON w.id = c.workspace_id
-     WHERE m.content->>'type' = 'artifactRef'`,
+     WHERE json_extract(m.content, '$.type') = 'artifactRef'`,
   );
 
   // SQLite stores JSON columns as TEXT; parse here so the rest of the
@@ -74,7 +74,7 @@ export async function reconcileArtifactRefs(
         const cleared = { ...row.content };
         delete cleared.missing;
         await pool.query(
-          `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+          `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
           [JSON.stringify(cleared), row.id],
         );
       }
@@ -87,7 +87,7 @@ export async function reconcileArtifactRefs(
       const updated = { ...row.content, path: rel };
       delete updated.missing;
       await pool.query(
-        `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+        `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
         [JSON.stringify(updated), row.id],
       );
       stats.repaired++;
@@ -107,7 +107,7 @@ async function markMissing(
 ): Promise<void> {
   const next = { ...content, missing: true };
   await pool.query(
-    `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+    `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     [JSON.stringify(next), messageId],
   );
 }

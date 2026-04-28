@@ -1,18 +1,16 @@
-import { type Pool, type PoolClient } from "../pool.js";
+import { type Pool } from "../pool.js";
 import { encryptJson, decryptJson } from "../encryption.js";
-
-type Queryable = Pool | PoolClient;
 
 /**
  * Reads a user's provider keys. Returns an empty object if no row exists
  * or the stored payload is empty.
  */
 export async function getProviderKeys(
-  db: Queryable,
+  db: Pool,
   userId: string,
 ): Promise<Record<string, string>> {
   const { rows } = await db.query(
-    "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = $1",
+    "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = ?",
     [userId],
   );
   if (rows.length === 0) return {};
@@ -26,17 +24,17 @@ export async function getProviderKeys(
  * Upserts the user_settings row.
  */
 export async function setProviderKeys(
-  db: Queryable,
+  db: Pool,
   userId: string,
   keys: Record<string, string>,
 ): Promise<void> {
   const payload = encryptJson(keys);
   await db.query(
     `INSERT INTO user_settings (user_id, provider_keys_encrypted, updated_at)
-     VALUES ($1, $2, now())
+     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      ON CONFLICT (user_id) DO UPDATE
        SET provider_keys_encrypted = EXCLUDED.provider_keys_encrypted,
-           updated_at = now()`,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
     [userId, payload],
   );
 }
@@ -47,7 +45,7 @@ export async function setProviderKeys(
  * preserved.
  */
 export async function mergeProviderKeys(
-  db: Queryable,
+  db: Pool,
   userId: string,
   patch: Record<string, string | null>,
 ): Promise<Record<string, string>> {
@@ -73,11 +71,11 @@ export type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
  * no row exists or the column is null.
  */
 export async function getProviderMeta(
-  db: Queryable,
+  db: Pool,
   userId: string,
 ): Promise<ProviderMetaMap> {
   const { rows } = await db.query(
-    "SELECT provider_meta_encrypted FROM user_settings WHERE user_id = $1",
+    "SELECT provider_meta_encrypted FROM user_settings WHERE user_id = ?",
     [userId],
   );
   if (rows.length === 0) return {};
@@ -92,7 +90,7 @@ export async function getProviderMeta(
  * A null entry removes that provider's metadata entirely.
  */
 export async function mergeProviderMeta(
-  db: Queryable,
+  db: Pool,
   userId: string,
   patch: Record<string, ProviderMetaEntry | null>,
 ): Promise<ProviderMetaMap> {
@@ -107,10 +105,10 @@ export async function mergeProviderMeta(
   const payload = encryptJson(current);
   await db.query(
     `INSERT INTO user_settings (user_id, provider_meta_encrypted, updated_at)
-     VALUES ($1, $2, now())
+     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      ON CONFLICT (user_id) DO UPDATE
        SET provider_meta_encrypted = EXCLUDED.provider_meta_encrypted,
-           updated_at = now()`,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
     [userId, payload],
   );
   return current;

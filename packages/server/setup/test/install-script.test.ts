@@ -36,15 +36,23 @@ describe("install.sh static checks", () => {
     expect(script).toContain("DESK_RUN_BIN=");
   });
 
-  it("reuses the existing UID holder as the service user when the host UID is taken", () => {
-    // Lima creates a `<host-login>` user mirroring the host login at the
-    // host UID, so `useradd --uid $HOST_UID` always fails. The script
-    // must detect that and reuse the existing account as the systemd
-    // User= — virtiofs doesn't reliably honor POSIX ACLs from inside
-    // the guest, so a UID-2000 + setfacl fallback would fail under load.
-    expect(script).toContain("SERVICE_USER");
-    expect(script).toMatch(/getent passwd[^\n]*DESK_UID/);
-    expect(script).toMatch(/User=\$SERVICE_USER/);
+  it("creates `desk` at UID 2000 as the systemd service user", () => {
+    // The service always runs as `desk`; anyone debugging the running
+    // process should see a predictable name regardless of how the VM
+    // was provisioned.
+    expect(script).toMatch(/useradd[^\n]*--uid 2000[^\n]*desk\b/);
+    expect(script).toMatch(/^User=desk$/m);
+  });
+
+  it("pre-creates desk-owned subdirs under /home/desk/Desk", () => {
+    // Mount root ownership is host-driven and can't be chown'd from
+    // inside the VM (chown EINVAL on virtiofs/9p). Pre-creating each
+    // top-level subdir as desk:desk gives the service write access
+    // without requiring write on the mount root itself.
+    for (const sub of [".database", ".tmp", ".trash", "workspaces", "backups"]) {
+      expect(script).toContain(sub);
+    }
+    expect(script).toMatch(/chown desk:desk/);
   });
 });
 

@@ -21,7 +21,7 @@ beforeAll(async () => {
   const wsId = generateId("workspace");
   await workspaces.insert(pool, { id: wsId, userId, name: "W", path: `w-${wsId.slice(-6)}` });
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
     [wsId, agentId],
   );
   chatId = generateId("chat");
@@ -81,7 +81,7 @@ describe("startTaskRun concurrency", () => {
 
     // Exactly one task_run row exists for the parent task.
     const { rows } = await pool.query(
-      "SELECT id FROM messages WHERE parent_id = $1 AND kind = 'task_run'",
+      "SELECT id FROM messages WHERE parent_id = ? AND kind = 'task_run'",
       [taskId],
     );
     expect(rows).toHaveLength(1);

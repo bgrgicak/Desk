@@ -1,6 +1,4 @@
-import { type Pool, type PoolClient } from "../pool.js";
-
-type Queryable = Pool | PoolClient;
+import { type Pool } from "../pool.js";
 
 export type KeyAccessAction = "read" | "write" | "delete";
 
@@ -14,7 +12,7 @@ export interface KeyAccessEntry {
 }
 
 export async function logKeyAccess(
-  db: Queryable,
+  db: Pool,
   userId: string,
   action: KeyAccessAction,
   providers: string[],
@@ -25,13 +23,13 @@ export async function logKeyAccess(
   // '[]' and by the array deserialization in getKeyAccessLog).
   await db.query(
     `INSERT INTO provider_key_access_log (user_id, action, providers, reason)
-     VALUES ($1, $2, $3, $4)`,
+     VALUES (?, ?, ?, ?)`,
     [userId, action, JSON.stringify(providers), reason ?? null],
   );
 }
 
 export async function getKeyAccessLog(
-  db: Queryable,
+  db: Pool,
   userId: string,
   limit = 100,
 ): Promise<KeyAccessEntry[]> {
@@ -48,9 +46,9 @@ export async function getKeyAccessLog(
     // insertion order — the AUTOINCREMENT id is monotonic.
     `SELECT id, user_id, action, providers, reason, created_at
      FROM provider_key_access_log
-     WHERE user_id = $1
+     WHERE user_id = ?
      ORDER BY created_at DESC, id DESC
-     LIMIT $2`,
+     LIMIT ?`,
     [userId, limit],
   );
   return rows.map((r) => ({

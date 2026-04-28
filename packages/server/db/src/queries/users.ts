@@ -1,8 +1,6 @@
-import { type Pool, type PoolClient } from "../pool.js";
+import { type Pool } from "../pool.js";
 import { UnauthorizedError, UserSchema, type User } from "@desk/shared";
 import { hashPassword, verifyPassword, isLegacyHash } from "../passwords.js";
-
-type Queryable = Pool | PoolClient;
 
 function rowToUser(row: Record<string, unknown>): User {
   return UserSchema.parse({
@@ -15,28 +13,28 @@ function rowToUser(row: Record<string, unknown>): User {
   });
 }
 
-export async function findById(db: Queryable, id: string): Promise<User | null> {
-  const { rows } = await db.query("SELECT * FROM users WHERE id = $1", [id]);
+export async function findById(db: Pool, id: string): Promise<User | null> {
+  const { rows } = await db.query("SELECT * FROM users WHERE id = ?", [id]);
   return rows.length ? rowToUser(rows[0]) : null;
 }
 
-export async function findByUsername(db: Queryable, username: string): Promise<User | null> {
-  const { rows } = await db.query("SELECT * FROM users WHERE username = $1", [username]);
+export async function findByUsername(db: Pool, username: string): Promise<User | null> {
+  const { rows } = await db.query("SELECT * FROM users WHERE username = ?", [username]);
   return rows.length ? rowToUser(rows[0]) : null;
 }
 
-export async function findByEmail(db: Queryable, email: string): Promise<User | null> {
-  const { rows } = await db.query("SELECT * FROM users WHERE email = $1", [email]);
+export async function findByEmail(db: Pool, email: string): Promise<User | null> {
+  const { rows } = await db.query("SELECT * FROM users WHERE email = ?", [email]);
   return rows.length ? rowToUser(rows[0]) : null;
 }
 
 export async function insert(
-  db: Queryable,
+  db: Pool,
   data: { id: string; username: string; passwordHash: string; email: string; avatarPath?: string },
 ): Promise<User> {
   const { rows } = await db.query(
     `INSERT INTO users (id, username, password_hash, email, avatar_path)
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES (?, ?, ?, ?, ?)
      RETURNING *`,
     [data.id, data.username, data.passwordHash, data.email, data.avatarPath ?? null],
   );
@@ -44,43 +42,42 @@ export async function insert(
 }
 
 export async function updateProfile(
-  db: Queryable,
+  db: Pool,
   id: string,
   data: { username?: string; email?: string; avatarPath?: string },
 ): Promise<User | null> {
   const sets: string[] = [];
   const params: unknown[] = [];
-  let idx = 1;
 
   if (data.username !== undefined) {
-    sets.push(`username = $${idx++}`);
+    sets.push(`username = ?`);
     params.push(data.username);
   }
   if (data.email !== undefined) {
-    sets.push(`email = $${idx++}`);
+    sets.push(`email = ?`);
     params.push(data.email);
   }
   if (data.avatarPath !== undefined) {
-    sets.push(`avatar_path = $${idx++}`);
+    sets.push(`avatar_path = ?`);
     params.push(data.avatarPath);
   }
   if (sets.length === 0) return findById(db, id);
 
   params.push(id);
   const { rows } = await db.query(
-    `UPDATE users SET ${sets.join(", ")} WHERE id = $${idx} RETURNING *`,
+    `UPDATE users SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
     params,
   );
   return rows.length ? rowToUser(rows[0]) : null;
 }
 
 export async function updatePassword(
-  db: Queryable,
+  db: Pool,
   id: string,
   passwordHash: string,
 ): Promise<boolean> {
   const { rowCount } = await db.query(
-    "UPDATE users SET password_hash = $1 WHERE id = $2",
+    "UPDATE users SET password_hash = ? WHERE id = ?",
     [passwordHash, id],
   );
   return (rowCount ?? 0) > 0;
@@ -92,23 +89,25 @@ export async function updatePassword(
  * `X-Client-Timezone` header without a DB write storm.
  */
 export async function setTimezoneIfChanged(
-  db: Queryable,
+  db: Pool,
   id: string,
   timezone: string,
 ): Promise<void> {
+  // The timezone value is bound twice — once for the SET, once in the
+  // WHERE guard — so it's repeated in the params array.
   await db.query(
-    `UPDATE users SET timezone = $1
-     WHERE id = $2 AND (timezone IS DISTINCT FROM $1)`,
-    [timezone, id],
+    `UPDATE users SET timezone = ?
+     WHERE id = ? AND (timezone IS DISTINCT FROM ?)`,
+    [timezone, id, timezone],
   );
 }
 
 export async function getPasswordHash(
-  db: Queryable,
+  db: Pool,
   id: string,
 ): Promise<string | null> {
   const { rows } = await db.query(
-    "SELECT password_hash FROM users WHERE id = $1",
+    "SELECT password_hash FROM users WHERE id = ?",
     [id],
   );
   return rows.length ? (rows[0].password_hash as string) : null;
@@ -120,7 +119,7 @@ export async function getPasswordHash(
  * on successful login.
  */
 export async function login(
-  db: Queryable,
+  db: Pool,
   username: string,
   password: string,
 ): Promise<User | null> {
@@ -146,7 +145,7 @@ export async function login(
  * wrong.
  */
 export async function setPassword(
-  db: Queryable,
+  db: Pool,
   id: string,
   currentPassword: string,
   newPassword: string,

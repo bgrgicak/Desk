@@ -59,6 +59,10 @@ function getExt(name: string): string {
   return name.slice(i + 1).toLowerCase()
 }
 
+function hasRealExtension(name: string): boolean {
+  return name.includes('.', 1)
+}
+
 export function fileKindFrom(name: string, mimeType?: string | null): FileKind {
   const mime = (mimeType ?? '').toLowerCase()
   const ext = getExt(name)
@@ -70,6 +74,7 @@ export function fileKindFrom(name: string, mimeType?: string | null): FileKind {
   if (mime.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio'
   if (mime.startsWith('text/') || TEXTUAL_APP_MIMES.has(mime)) return 'text'
   if (CODE_EXTS.has(ext) || PLAIN_TEXT_EXTS.has(ext) || SPREADSHEET_EXTS.has(ext)) return 'text'
+  if (!hasRealExtension(name)) return 'text'
   return 'unknown'
 }
 

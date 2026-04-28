@@ -25,17 +25,19 @@ if ! command -v docker &>/dev/null; then
 fi
 systemctl enable --now docker
 
-# ---------- 3. Node 22 (NodeSource) ----------
-# Pin to the same major version the developer host runs (Node 22 LTS).
-# `setup_lts.x` would track NodeSource's "current LTS" which has shifted
-# to Node 24 — that mismatch matters because the host-mounted /desk
-# tree is shared across host and VM, and `npm ci` overwrites
+# ---------- 3. Node (NodeSource) ----------
+# Pin to the major version named in `.nvmrc` — the project's single source
+# of truth for Node. Same pin matters across both sides because the
+# host-mounted /desk tree is shared, and `npm ci` overwrites
 # better-sqlite3's `build/Release/better_sqlite3.node` with a binary
 # compiled for whatever version of Node ran it last. Mismatched ABIs
 # fail with NODE_MODULE_VERSION errors when the other side tries to
-# load the file. Pinning both sides to Node 22 keeps the prebuilt
-# binary cross-compatible.
-NODE_MAJOR=22
+# load the file.
+NODE_MAJOR="$(awk -F. 'NR==1{gsub(/^v/,"",$1); print $1}' /desk/.nvmrc)"
+if [ -z "$NODE_MAJOR" ]; then
+  echo "ERROR: could not read major version from /desk/.nvmrc" >&2
+  exit 1
+fi
 if ! command -v node &>/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" != "$NODE_MAJOR" ]; then
   log "Installing Node.js $NODE_MAJOR.x"
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
@@ -55,66 +57,41 @@ fi
 # Scheduler daemons the app relies on (used by @desk/scheduler).
 systemctl enable --now atd cron
 
-# ---------- 5. Service user identity ----------
-# When /home/desk/Desk is a virtiofs mount from the host, files inside
-# it are owned by the host user's UID (Lima's virtiofs doesn't remap
-# UIDs by default). The service user must match that UID, otherwise it
-# can't write to the mount — and virtiofs doesn't reliably honor POSIX
-# ACLs from inside the guest, so a UID-2000 + setfacl fallback fails
-# with EACCES under load.
-#
-# Strategy: pick a service user whose UID matches the mount owner.
-#   - Mount present and the host UID is unclaimed: create `desk` at it.
-#   - Mount present and the host UID is already claimed (Lima creates a
-#     `<host-login>` user mirroring the host login at host UID): reuse
-#     that account as the service user — it already owns the mount.
-#   - No mount (real prod install): create `desk` at the historical
-#     UID 2000.
-SERVICE_USER=desk
-DESK_UID=2000
-if mountpoint -q /home/desk/Desk 2>/dev/null; then
-  DESK_UID="$(stat -c %u /home/desk/Desk)"
-  log "Detected host UID $DESK_UID from /home/desk/Desk mount"
-  EXISTING="$(getent passwd "$DESK_UID" | cut -d: -f1)"
-  if [ -n "$EXISTING" ] && [ "$EXISTING" != "desk" ]; then
-    SERVICE_USER="$EXISTING"
-    log "UID $DESK_UID already held by '$EXISTING' — reusing as the service user"
-  fi
+# ---------- 5. Service user (always `desk`, UID 2000) ----------
+# The systemd unit runs as `desk` regardless of how the VM was created.
+# Anyone debugging "why is desk-server running as user X?" should never
+# have to find the answer in this script.
+if ! id desk &>/dev/null; then
+  log "Creating desk user (UID 2000)"
+  useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
 fi
-
-if [ "$SERVICE_USER" = "desk" ] && ! id desk &>/dev/null; then
-  log "Creating desk user (UID $DESK_UID)"
-  useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
-fi
-
-# /home/desk exists already (Lima provisions it as the parent of the
-# virtiofs mount). Make sure the service user can resolve paths through
-# it without owning it — chmod 755 is enough since the service only
-# needs traverse access to reach /home/desk/Desk.
+# /home/desk is local VM filesystem (not the mount). Mode 0755 lets desk
+# traverse it to reach the mount at /home/desk/Desk.
 chmod 755 /home/desk
-# Service user needs docker group access to talk to dockerd (spawn /
-# manage sandboxes).
-usermod -aG docker "$SERVICE_USER"
+# desk needs docker group access to talk to dockerd (spawn / manage
+# sandboxes).
+usermod -aG docker desk
 
-# ---------- 6. SQLite database directory ----------
-# The DB lives at $DESK_HOME/Desk/.database/desk.sqlite3 (plus its WAL
-# and SHM companions next to it) and is created on first server boot
-# via the migration runner. The dotfile parent keeps the DB file out
-# of any in-app library listing of ~/Desk — it's not a security
-# boundary, just visual hygiene; file mode 0600 enforced by pool.ts is
-# the real guard.
+# ---------- 6. Layout under /home/desk/Desk ----------
+# Pre-create every top-level subdirectory the server might write to and
+# hand ownership to `desk` so it doesn't need write access on the mount
+# root itself (which can't be chown'd through the 9p mount on the host).
+# With `securityModel: mapped-xattr` (set in lima.yaml), the guest's
+# chown stores ownership in xattrs on the host — desk genuinely owns
+# these dirs and can write/chmod its own files normally, including the
+# WAL/journal files SQLite creates next to desk.sqlite3.
 #
-# Skip the chown of the mount root /home/desk/Desk when it's a virtiofs
-# mount — virtiofs rejects chown with EINVAL and kills the provision.
-# Ownership of the mount root is host-driven and the UID match above
-# already lets the service user write through it. The .database
-# subdirectory is created *inside* the mount, so it's a regular dir we
-# can chown freely.
-mkdir -p /home/desk/Desk/.database
-chown "$SERVICE_USER:$SERVICE_USER" /home/desk/Desk/.database
-if ! mountpoint -q /home/desk/Desk 2>/dev/null; then
-  chown "$SERVICE_USER:$SERVICE_USER" /home/desk/Desk
-fi
+# After this step:
+#   /home/desk/Desk             host-owned, mode 0755 (traverse only)
+#   /home/desk/Desk/.database/  desk-owned, holds desk.sqlite3 + WAL
+#   /home/desk/Desk/.tmp/       desk-owned, scratch space
+#   /home/desk/Desk/.trash/     desk-owned, soft-deleted workspaces
+#   /home/desk/Desk/workspaces/ desk-owned, parent of per-workspace dirs
+#   /home/desk/Desk/backups/    desk-owned, /internal/backup destination
+for sub in .database .tmp .trash workspaces backups; do
+  mkdir -p "/home/desk/Desk/$sub"
+  chown desk:desk "/home/desk/Desk/$sub"
+done
 
 # ---------- 7. Build & install the server ----------
 # Monorepo layout: @desk/api depends on workspace siblings (@desk/shared,
@@ -163,7 +140,7 @@ test -L /opt/desk-server/node_modules/@desk/shared || {
   echo "ERROR: expected @desk/shared to be a symlink under /opt/desk-server/node_modules/@desk/" >&2
   exit 1
 }
-chown -R "$SERVICE_USER:$SERVICE_USER" /opt/desk-server
+chown -R "desk:desk" /opt/desk-server
 
 # ---------- 8. Environment file ----------
 log "Writing /etc/desk-server/env"
@@ -192,11 +169,11 @@ log "Generating /etc/desk-server/internal-token"
 if [[ ! -f /etc/desk-server/internal-token ]]; then
   ( umask 077 && openssl rand -hex 32 > /etc/desk-server/internal-token )
 fi
-chown "$SERVICE_USER:$SERVICE_USER" /etc/desk-server/internal-token
+chown "desk:desk" /etc/desk-server/internal-token
 chmod 0600 /etc/desk-server/internal-token
 
 # ---------- 9. Systemd unit ----------
-log "Writing desk-server.service (User=$SERVICE_USER)"
+log "Writing desk-server.service (User=desk)"
 cat > /etc/systemd/system/desk-server.service <<UNIT
 [Unit]
 Description=Desk Server
@@ -208,7 +185,7 @@ EnvironmentFile=/etc/desk-server/env
 WorkingDirectory=/opt/desk-server/packages/server/api
 ExecStart=/usr/bin/node /opt/desk-server/packages/server/api/dist/main.js
 Restart=always
-User=$SERVICE_USER
+User=desk
 
 [Install]
 WantedBy=multi-user.target

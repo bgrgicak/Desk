@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { NotFoundError } from "@desk/shared";
 import type { Workspace, Agent, Chat, Message } from "@desk/shared";

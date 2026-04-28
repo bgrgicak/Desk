@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@desk/storage";
@@ -98,7 +98,7 @@ export async function deleteWorkspace(
       "Cannot delete the last workspace; create another one first.",
     );
   }
-  await pool.query(`DELETE FROM workspaces WHERE id = $1`, [id]);
+  await pool.query(`DELETE FROM workspaces WHERE id = ?`, [id]);
   await trashWorkspaceDir(home, ws.path).catch(() => {
     // Best-effort; DB state is already gone.
   });

@@ -2,7 +2,7 @@
 # Dev-only provisioning. Runs AFTER install.sh inside the Lima VM.
 # Sets up the environment needed to run the test suite against real backends:
 #   - sandbox-cli built and desk/sandbox:v1 image built for the runtime tests
-#   - docker group on the `bero` user so the test runner can reach dockerd
+#   - docker group on the `desk` user so the test runner can reach dockerd
 #
 # Safe to re-run. Not intended for production hosts — production doesn't
 # need the sandbox image installed via this path.
@@ -37,11 +37,11 @@ if ! grep -qE "^${SWAPFILE}\s" /etc/fstab; then
 fi
 
 # ---------- 1. Docker group for the login user ----------
-# Lima's default user is `bero`. Give it docker access so test runs don't
+# Lima's default user is `desk`. Give it docker access so test runs don't
 # need root/sudo to talk to dockerd.
-if id bero &>/dev/null; then
-  log "Adding bero to the docker group"
-  sudo usermod -aG docker bero
+if id desk &>/dev/null; then
+  log "Adding desk to the docker group"
+  sudo usermod -aG docker desk
 fi
 
 # ---------- 3. Monorepo install + builds ----------

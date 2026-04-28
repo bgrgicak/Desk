@@ -4,7 +4,6 @@ import * as path from "node:path";
 import * as net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createTestDatabase, dropTestDatabase, testDbUrl } from "./db";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
@@ -19,7 +18,8 @@ const SERVER_ENTRY = path.join(
 
 export interface DiskServer {
   url: string;
-  dbName: string;
+  /** Filesystem path to the SQLite DB the spawned server is using. */
+  dbPath: string;
   home: string;
   port: number;
   pid: number;
@@ -69,8 +69,11 @@ export async function startDeskServer(
       /[^a-z0-9_]/gi,
       "",
     );
-  const dbName = `desk_app_e2e_${runId}`.toLowerCase();
-  await createTestDatabase(dbName);
+
+  // Per-run sqlite file under a unique temp dir so parallel runs (and the
+  // VM) don't trample each other.
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), `desk-app-e2e-db-${runId}-`));
+  const dbPath = path.join(dbDir, "test.sqlite3");
 
   const home = await fs.mkdtemp(path.join(os.tmpdir(), `desk-app-e2e-${runId}-`));
   const port = await pickFreePort();
@@ -79,7 +82,11 @@ export async function startDeskServer(
     ...process.env,
     NODE_ENV: "test",
     PORT: String(port),
-    DATABASE_URL: testDbUrl(dbName),
+    // The api server reads DESK_DB_PATH and creates the file on first
+    // open via better-sqlite3. No admin DB or migration ceremony needed
+    // — main.ts runs migrations against an empty file the same way it
+    // does in production.
+    DESK_DB_PATH: dbPath,
     DESK_HOME: home,
     // The encryption module's default secret-key path is /home/desk/secret.key,
     // which the host user can't write to. Pin it inside DESK_HOME so the
@@ -113,7 +120,7 @@ export async function startDeskServer(
     await waitForHealth(`${url}/`);
   } catch (e) {
     child.kill("SIGKILL");
-    await dropTestDatabase(dbName).catch(() => undefined);
+    await fs.rm(dbDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rm(home, { recursive: true, force: true }).catch(() => undefined);
     throw e;
   }
@@ -130,9 +137,9 @@ export async function startDeskServer(
         if (child.exitCode === null) child.kill("SIGKILL");
       }, 3000);
     });
-    await dropTestDatabase(dbName).catch(() => undefined);
+    await fs.rm(dbDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rm(home, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  return { url, dbName, home, port, pid: child.pid ?? -1, stop };
+  return { url, dbPath, home, port, pid: child.pid ?? -1, stop };
 }

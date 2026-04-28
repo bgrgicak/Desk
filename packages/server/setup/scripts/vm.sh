@@ -81,12 +81,21 @@ needs_provision() {
 
 run_provision() { limactl shell "$NAME" sudo bash /desk/packages/server/setup/install.sh; }
 
+# Lima won't create a missing host mount path — make sure the directory
+# exists before `limactl start` mounts it. install.sh inside the VM
+# pre-creates and chowns the layout subdirs (lima.yaml configures the
+# mount with securityModel: mapped-xattr, so guest-side chown is
+# honored).
+prep_desk_home() {
+  mkdir -p "$DESK_HOME_HOST"
+}
+
 case "$cmd" in
   up)
-    # Ensure the host-side Desk dir exists before Lima tries to mount it.
-    # Lima won't create missing host paths and will fail the start if the
-    # location doesn't exist.
-    mkdir -p "$DESK_HOME_HOST"
+    # Ensure the host-side Desk dir tree exists with the right perms
+    # before Lima tries to mount it. See prep_desk_home for the full
+    # rationale.
+    prep_desk_home
     if limactl list --quiet | grep -qx "$NAME"; then
       with_kvm limactl start "$NAME"
     else
@@ -116,7 +125,7 @@ case "$cmd" in
   reset)
     # Note: this destroys VM state but leaves $DESK_HOME_HOST on the host
     # untouched — that's the whole point of the host mount.
-    mkdir -p "$DESK_HOME_HOST"
+    prep_desk_home
     limactl delete --force "$NAME" || true
     with_kvm limactl start --name="$NAME" --set="$SET_EXPR" --tty=false "$CONFIG"
     ;;

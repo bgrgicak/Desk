@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { type Pool, type PoolClient } from "../../src/pool.js";
+import { type Pool } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
@@ -23,7 +23,7 @@ beforeAll(async () => {
   // Enable the agent in the workspace so chats referencing it are valid under M3.
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+     VALUES (?, ?) ON CONFLICT DO NOTHING`,
     [wsId, agentId],
   );
 });
@@ -244,13 +244,13 @@ describe("chats queries", () => {
     // Enable the agent in the new workspace so the chat insert validation passes.
     await pool.query(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
-       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+       VALUES (?, ?) ON CONFLICT DO NOTHING`,
       [wsId2, agentId],
     );
     const chatId2 = generateId("chat");
     await chats.insert(pool, { id: chatId2, workspaceId: wsId2, agentId, title: "Will be deleted" });
 
-    await pool.query("DELETE FROM workspaces WHERE id = $1", [wsId2]);
+    await pool.query("DELETE FROM workspaces WHERE id = ?", [wsId2]);
     const chat = await chats.findById(pool, chatId2);
     expect(chat).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -47,7 +47,7 @@ export interface MessageLifecycleOps {
  */
 async function workspaceSlugForChat(pool: Pool, chatId: string): Promise<string> {
   const { rows } = await pool.query<{ path: string }>(
-    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
+    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = ?`,
     [chatId],
   );
   if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
@@ -349,7 +349,7 @@ export async function deleteMessage(
 
   const slug = await workspaceSlugForChat(pool, chatId);
 
-  await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+  await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
 
   // Move log file to trash if present.
   const logPath = path.join(
@@ -487,7 +487,7 @@ export async function deleteChat(
   const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
-  await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+  await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
 
   if (ws) {
     await trashChatDirectories(storage.home, ws.path, chatId).catch(() => {

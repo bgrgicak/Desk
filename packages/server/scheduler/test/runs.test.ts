@@ -2,56 +2,21 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, type PoolClient } from "@desk/db";
+import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { generateId, type WsEvent } from "@desk/shared";
 import { createRunManager } from "../src/runs.js";
 import type { LogEvent } from "@desk/runtime";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_scheduler_test_${workerId}`;
-
 let pool: Pool;
 let agentId: string;
 let chatId: string;
-
-function baseUrl(): string {
-  return process.env.DESK_TEST_DATABASE_URL
-    ?? process.env.DATABASE_URL
-    ?? "postgresql://desk:desk@127.0.0.1:55432/desk";
-}
-
-function adminConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = "/postgres";
-  return url.toString();
-}
-
-function testConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-function adminPool(): Pool {
-  return new Pool({ connectionString: adminConnectionString() });
-}
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = adminPool();
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new Pool({ connectionString: testConnectionString() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scheduler-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
@@ -66,13 +31,13 @@ beforeAll(async () => {
 
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+     VALUES (?, ?) ON CONFLICT DO NOTHING`,
     [workspaceId, agentId],
   );
 
   chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, workspaceId, agentId, "Test Chat"],
   );
 
@@ -83,23 +48,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (pool) await pool.end();
-  const admin = adminPool();
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
 async function insertPendingMessage(content: unknown): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state)
-     VALUES ($1, $2, 'system', $3, 'pending')`,
+     VALUES (?, ?, 'system', ?, 'pending')`,
     [id, chatId, JSON.stringify(content)],
   );
   return id;
@@ -109,7 +65,7 @@ async function insertTask(opts: { content: unknown; cron?: string; executeAt?: s
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state, kind, cron, execute_at)
-     VALUES ($1, $2, $3, $4, 'pending', 'task', $5, $6)`,
+     VALUES (?, ?, ?, ?, 'pending', 'task', ?, ?)`,
     [
       id,
       chatId,
@@ -125,8 +81,8 @@ async function insertTask(opts: { content: unknown; cron?: string; executeAt?: s
 async function listTaskRuns(taskId: string): Promise<Array<{ id: string; state: string; startedAt: Date | null; endedAt: Date | null }>> {
   const { rows } = await pool.query(
     `SELECT id, state, started_at, ended_at FROM messages
-     WHERE parent_id = $1 AND kind = 'task_run'
-     ORDER BY started_at ASC NULLS LAST, id ASC`,
+     WHERE parent_id = ? AND kind = 'task_run'
+     ORDER BY started_at IS NULL, started_at ASC, id ASC`,
     [taskId],
   );
   return rows.map((r) => ({
@@ -255,7 +211,7 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     const userId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content)
-       VALUES ($1, $2, 'user', $3)`,
+       VALUES (?, ?, 'user', ?)`,
       [userId, chatId, JSON.stringify({ type: "text", text: "resolve me please" })],
     );
 
@@ -479,7 +435,7 @@ execRunFn: async (_id, _a, _p, onLog) => {
 describe("scheduleAiNote", () => {
   async function clearNotes(): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      `DELETE FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
       [chatId],
     );
   }
@@ -495,7 +451,7 @@ describe("scheduleAiNote", () => {
 
     const { rows } = await pool.query(
       `SELECT id, state, execute_at FROM messages
-       WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+       WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
       [chatId],
     );
     expect(rows).toHaveLength(1);
@@ -509,13 +465,13 @@ describe("scheduleAiNote", () => {
 
     await mgr.scheduleAiNote(chatId);
     const first = (await pool.query(
-      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
       [chatId],
     )).rows[0].id as string;
 
     await mgr.scheduleAiNote(chatId);
     const after = (await pool.query(
-      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
       [chatId],
     )).rows;
     expect(after).toHaveLength(1);
@@ -529,7 +485,7 @@ describe("cancelMessage", () => {
     await mgr.scheduleAiNote(chatId);
 
     const { rows } = await pool.query(
-      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
       [chatId],
     );
     const messageId = rows[0].id as string;

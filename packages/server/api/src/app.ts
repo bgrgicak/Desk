@@ -2,7 +2,7 @@ import { createServer as httpCreateServer, type IncomingMessage, type ServerResp
 import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, join as pathJoin } from "node:path";
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";

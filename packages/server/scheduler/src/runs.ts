@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import {
   generateId,
   AgentEventSchema,
@@ -305,7 +305,7 @@ export function createRunManager(opts: RunManagerOptions) {
        FROM chats c
        JOIN workspaces w ON w.id = c.workspace_id
        LEFT JOIN users u ON u.id = w.user_id
-       WHERE c.id = $1`,
+       WHERE c.id = ?`,
       [msg.chatId],
     );
     const ctxRow = ctxRows[0];
@@ -415,7 +415,7 @@ export function createRunManager(opts: RunManagerOptions) {
           const { snapshotNote } = await import("@desk/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
-             WHERE chat_id = $1 AND content->>'type' = 'note'
+             WHERE chat_id = ? AND json_extract(content, '$.type') = 'note'
              ORDER BY created_at DESC LIMIT 1`,
             [msg.chatId],
           );
@@ -454,6 +454,13 @@ export function createRunManager(opts: RunManagerOptions) {
       return { fired: true, childIds: [] };
     } catch (err) {
       logStream.end();
+      // Test-shutdown race: an at-job fires after the test's afterAll has
+      // closed the pool. Any DB write below would just throw "connection
+      // is not open" again. Swallow silently — the test is already
+      // tearing down and the row state is irrelevant past this point.
+      if (isPoolClosed(err)) {
+        return { fired: true, childIds: [] };
+      }
       // eslint-disable-next-line no-console
       console.error(`fireMessage ${messageId} failed:`, err);
       await queries.messages.finalizeExecution(pool, runId, "failed");
@@ -503,9 +510,9 @@ export function createRunManager(opts: RunManagerOptions) {
       `SELECT id FROM messages
        WHERE state = 'pending'
          AND execute_at IS NOT NULL
-         AND execute_at <= now()
+         AND execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        ORDER BY execute_at
-       LIMIT $1`,
+       LIMIT ?`,
       [available],
     );
     await Promise.all(
@@ -530,7 +537,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
-    await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+    await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
   /** Schedules an ai_note refresh for the chat, deleting any prior ai_note rows first. */
@@ -550,7 +557,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function cancelAiNoteForChat(chatId: string): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = $1 AND kind = 'ai_note'`,
+      `DELETE FROM messages WHERE chat_id = ? AND kind = 'ai_note'`,
       [chatId],
     );
   }

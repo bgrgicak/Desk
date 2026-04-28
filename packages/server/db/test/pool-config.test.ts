@@ -19,11 +19,13 @@ afterEach(() => {
 });
 
 describe("pool path resolution", () => {
-  it("opens the file at DESK_DB_PATH when no explicit path/connectionString is passed", async () => {
+  it("opens the file at DESK_DB_PATH when no explicit path is passed", async () => {
     // Pre-fix regression: production main.ts called createPool with a
-    // hardcoded `connectionString`, which routed to a tmp-file via the
-    // test compat shim and silently bypassed DESK_DB_PATH. The DB
-    // ended up on tmpfs and was wiped on every vm:reset.
+    // hardcoded postgres connection string, which routed to a tmp-file
+    // via a now-deleted test compat shim and silently bypassed
+    // DESK_DB_PATH. The DB ended up on tmpfs and was wiped on every
+    // vm:reset. We keep this test as a guardrail against regressions
+    // in the resolution order.
     const dbPath = join(tmpDir, "desk.db");
     process.env.DESK_DB_PATH = dbPath;
 
@@ -47,25 +49,6 @@ describe("pool path resolution", () => {
     expect(existsSync(explicitPath)).toBe(true);
     expect(existsSync(envPath)).toBe(false);
   });
-
-  it("connectionString shim wins over DESK_DB_PATH (test isolation)", async () => {
-    // CI sets DESK_DB_PATH for the production code path. Tests that
-    // pass a connectionString rely on the per-string temp file for
-    // isolation — without this precedence every CI integration test
-    // would share one DB and trip over each other.
-    const envPath = join(tmpDir, "env.db");
-    process.env.DESK_DB_PATH = envPath;
-
-    const pool = createPool({
-      connectionString: "postgresql:///desk?host=/var/run/postgresql",
-    });
-    await runMigrations(pool);
-    await pool.end();
-
-    // The shim opens a hashed temp file under os.tmpdir(); DESK_DB_PATH
-    // is untouched.
-    expect(existsSync(envPath)).toBe(false);
-  });
 });
 
 describe("transact", () => {
@@ -81,7 +64,7 @@ describe("transact", () => {
     const bump = (delta: number) =>
       transact(pool, (c) => {
         const { rows } = c.querySync<{ n: number }>("SELECT n FROM counts");
-        c.querySync("UPDATE counts SET n = $1", [rows[0].n + delta]);
+        c.querySync("UPDATE counts SET n = ?", [rows[0].n + delta]);
         return rows[0].n + delta;
       });
 

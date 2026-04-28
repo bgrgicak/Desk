@@ -16,18 +16,26 @@ mounts:
   - location: "PLACEHOLDER_DESK_HOME"
     mountPoint: "/home/desk/Desk"
     writable: true
+    9p:
+      # mapped-xattr stores file ownership in xattrs on the host, so the
+      # guest can chown/chmod independently of the host user. With the
+      # default `none` / `passthrough` model, writes from the guest's
+      # `desk` user (UID 2000) get attributed to the host user that
+      # spawned qemu — files come back owned by that host user (mode
+      # 0644) and `desk` can't reopen them for write, breaking SQLite's
+      # WAL/journal recovery on the second boot.
+      securityModel: "mapped-xattr"
 
 # 9p over qemu's virtio-9p transport. virtiofs would be faster, but in
 # practice Lima's virtiofsd refuses guest-side ownership ops on the
 # mount (chown returns EINVAL) and silently maps host GIDs that the
-# guest can't translate to "nogroup" — so guest writes by the host-UID
-# user fail with EINVAL even when the file mode would allow them.
+# guest can't translate to "nogroup".
 #
-# 9p has neither problem. The trade-off it would normally bring —
-# missing mmap support — doesn't bite us: pool.ts opens the DB with
-# `locking_mode = EXCLUSIVE`, which keeps SQLite's WAL bookkeeping in
-# process heap instead of an mmap'd `-shm` file (see
-# https://www.sqlite.org/wal.html "Use of WAL Without Shared-Memory").
+# The trade-off 9p normally brings — missing mmap support — doesn't bite
+# us: pool.ts opens the DB with `locking_mode = EXCLUSIVE`, which keeps
+# SQLite's WAL bookkeeping in process heap instead of an mmap'd `-shm`
+# file (see https://www.sqlite.org/wal.html "Use of WAL Without
+# Shared-Memory").
 mountType: "9p"
 
 portForwards:

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import {
   NotFoundError,
   MAX_UPLOAD_BYTES,

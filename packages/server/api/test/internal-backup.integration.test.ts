@@ -20,32 +20,12 @@ import { createApp } from "../src/app.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { resetInternalTokenCache } from "../src/auth/internal.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL
-      ?? process.env.DATABASE_URL
-      ?? "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL
-      ?? process.env.DATABASE_URL
-      ?? "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/desk_internal_backup_${workerId}`;
-  return url.toString();
-}
-
 let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
 let token: string;
+let dbPath: string;
 
 async function pickPort(): Promise<number> {
   return new Promise((resolve) => {
@@ -58,7 +38,9 @@ async function pickPort(): Promise<number> {
 }
 
 beforeAll(async () => {
-  pool = new Pool({ connectionString: testConn() });
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-backup-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "backup-user";
@@ -89,6 +71,7 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await pool.end();
   await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
 describe("POST /internal/backup", () => {

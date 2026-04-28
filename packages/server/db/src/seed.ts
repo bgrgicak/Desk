@@ -23,13 +23,13 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
   transact(pool, (client) => {
     client.querySync(
       `INSERT INTO users (id, username, password_hash, email)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES (?, ?, ?, ?)`,
       [userId, username, passwordHash, `${username}@desk.local`],
     );
 
     client.querySync(
       `INSERT INTO agents (id, user_id, name, instructions, model)
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES (?, ?, ?, ?, ?)`,
       [
         agentId,
         userId,
@@ -41,13 +41,13 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
 
     client.querySync(
       `INSERT INTO workspaces (id, user_id, name, path)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES (?, ?, ?, ?)`,
       [workspaceId, userId, "Desk", "desk"],
     );
 
     client.querySync(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
-       VALUES ($1, $2)`,
+       VALUES (?, ?)`,
       [workspaceId, agentId],
     );
   });

@@ -1,7 +1,5 @@
-import { type Pool, type PoolClient } from "../pool.js";
+import { type Pool } from "../pool.js";
 import { AgentSchema, type Agent } from "@desk/shared";
-
-type Queryable = Pool | PoolClient;
 
 function rowToAgent(row: Record<string, unknown>): Agent {
   return AgentSchema.parse({
@@ -13,31 +11,31 @@ function rowToAgent(row: Record<string, unknown>): Agent {
   });
 }
 
-export async function list(db: Queryable): Promise<Agent[]> {
+export async function list(db: Pool): Promise<Agent[]> {
   const { rows } = await db.query("SELECT * FROM agents ORDER BY name");
   return rows.map(rowToAgent);
 }
 
-export async function listByUser(db: Queryable, userId: string): Promise<Agent[]> {
+export async function listByUser(db: Pool, userId: string): Promise<Agent[]> {
   const { rows } = await db.query(
-    "SELECT * FROM agents WHERE user_id = $1 ORDER BY name",
+    "SELECT * FROM agents WHERE user_id = ? ORDER BY name",
     [userId],
   );
   return rows.map(rowToAgent);
 }
 
-export async function findById(db: Queryable, id: string): Promise<Agent | null> {
-  const { rows } = await db.query("SELECT * FROM agents WHERE id = $1", [id]);
+export async function findById(db: Pool, id: string): Promise<Agent | null> {
+  const { rows } = await db.query("SELECT * FROM agents WHERE id = ?", [id]);
   return rows.length ? rowToAgent(rows[0]) : null;
 }
 
 export async function insert(
-  db: Queryable,
+  db: Pool,
   data: { id: string; userId: string; name: string; instructions?: string; model?: string },
 ): Promise<Agent> {
   const { rows } = await db.query(
     `INSERT INTO agents (id, user_id, name, instructions, model)
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES (?, ?, ?, ?, ?)
      RETURNING *`,
     [
       data.id,
@@ -51,37 +49,36 @@ export async function insert(
 }
 
 export async function updateMeta(
-  db: Queryable,
+  db: Pool,
   id: string,
   data: { name?: string; instructions?: string; model?: string },
 ): Promise<Agent | null> {
   const sets: string[] = [];
   const params: unknown[] = [];
-  let idx = 1;
 
   if (data.name !== undefined) {
-    sets.push(`name = $${idx++}`);
+    sets.push(`name = ?`);
     params.push(data.name);
   }
   if (data.instructions !== undefined) {
-    sets.push(`instructions = $${idx++}`);
+    sets.push(`instructions = ?`);
     params.push(data.instructions);
   }
   if (data.model !== undefined) {
-    sets.push(`model = $${idx++}`);
+    sets.push(`model = ?`);
     params.push(data.model);
   }
   if (sets.length === 0) return findById(db, id);
 
   params.push(id);
   const { rows } = await db.query(
-    `UPDATE agents SET ${sets.join(", ")} WHERE id = $${idx} RETURNING *`,
+    `UPDATE agents SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
     params,
   );
   return rows.length ? rowToAgent(rows[0]) : null;
 }
 
-export async function remove(db: Queryable, id: string): Promise<boolean> {
-  const { rowCount } = await db.query("DELETE FROM agents WHERE id = $1", [id]);
+export async function remove(db: Pool, id: string): Promise<boolean> {
+  const { rowCount } = await db.query("DELETE FROM agents WHERE id = ?", [id]);
   return (rowCount ?? 0) > 0;
 }

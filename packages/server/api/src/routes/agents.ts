@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "@desk/db";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError } from "@desk/shared";
 

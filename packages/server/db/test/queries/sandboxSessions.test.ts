@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { type Pool, type PoolClient } from "../../src/pool.js";
+import { type Pool } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
@@ -68,9 +68,9 @@ describe("sandboxSessions queries", () => {
       tokenHash: "temp_hash",
     });
 
-    await pool.query("DELETE FROM agents WHERE id = $1", [tempAgentId]);
+    await pool.query("DELETE FROM agents WHERE id = ?", [tempAgentId]);
 
-    const { rows } = await pool.query("SELECT * FROM sandbox_sessions WHERE id = $1", [tempSessionId]);
+    const { rows } = await pool.query("SELECT * FROM sandbox_sessions WHERE id = ?", [tempSessionId]);
     expect(rows).toHaveLength(0);
   });
 });
