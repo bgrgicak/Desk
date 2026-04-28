@@ -25,10 +25,20 @@ if ! command -v docker &>/dev/null; then
 fi
 systemctl enable --now docker
 
-# ---------- 3. Node LTS (NodeSource) ----------
-if ! command -v node &>/dev/null; then
-  log "Installing Node.js LTS"
-  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+# ---------- 3. Node 22 (NodeSource) ----------
+# Pin to the same major version the developer host runs (Node 22 LTS).
+# `setup_lts.x` would track NodeSource's "current LTS" which has shifted
+# to Node 24 — that mismatch matters because the host-mounted /desk
+# tree is shared across host and VM, and `npm ci` overwrites
+# better-sqlite3's `build/Release/better_sqlite3.node` with a binary
+# compiled for whatever version of Node ran it last. Mismatched ABIs
+# fail with NODE_MODULE_VERSION errors when the other side tries to
+# load the file. Pinning both sides to Node 22 keeps the prebuilt
+# binary cross-compatible.
+NODE_MAJOR=22
+if ! command -v node &>/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" != "$NODE_MAJOR" ]; then
+  log "Installing Node.js $NODE_MAJOR.x"
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
   apt-get install -y -qq nodejs >/dev/null
 fi
 
