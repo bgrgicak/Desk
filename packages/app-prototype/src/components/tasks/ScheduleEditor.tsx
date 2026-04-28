@@ -248,7 +248,7 @@ export function ScheduleEditor({
           )}
 
           <div className="flex gap-2">
-            <div className="space-y-1 flex-1">
+            <div className="space-y-1 flex-1 min-w-0">
               <label className="text-xs font-medium text-muted-foreground">Begin on</label>
               <Input
                 type="date"
@@ -257,8 +257,8 @@ export function ScheduleEditor({
                 onChange={e => setBeginDate(e.target.value)}
               />
             </div>
-            <div className="space-y-1 flex-1">
-              <label className="text-xs font-medium text-muted-foreground">End on</label>
+            <div className="space-y-1 flex-1 min-w-0">
+              <label className="text-xs font-medium text-muted-foreground">End on (optional)</label>
               <Input
                 type="date"
                 data-testid="schedule-end-date"
