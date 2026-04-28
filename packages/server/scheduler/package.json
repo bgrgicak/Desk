@@ -23,12 +23,10 @@
     "@desk/runtime": "*",
     "@desk/shared": "*",
     "@desk/storage": "*",
-    "croner": "^10.0.1",
-    "pg": "^8.13.0"
+    "croner": "^10.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/pg": "^8.11.0",
     "typescript": "^5.7.0",
     "vitest": "^3.1.0"
   }
