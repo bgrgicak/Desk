@@ -98,6 +98,8 @@ export function ScheduleEditor({
   const [recurHour, setRecurHour]   = useState(initialParsed?.hour ?? 9)
   const [weekday, setWeekday]       = useState(initialParsed?.weekday ?? 1)
   const [customCron, setCustomCron] = useState(initialParsed ? '' : (currentCron ?? ''))
+  const [beginDate, setBeginDate]   = useState(currentExecuteAt ? dateInputValue(currentExecuteAt) : '')
+  const [endDate, setEndDate]       = useState('')
 
   const recurTime = `${pad2(recurHour)}:${pad2(recurMinute)}`
 
@@ -110,7 +112,12 @@ export function ScheduleEditor({
     } else {
       const cron = buildCron(cadence, recurMinute, recurHour, weekday, customCron)
       if (!cron) return
-      void onSave({ executeAt: null, cron })
+      let executeAt: string | null = null
+      if (beginDate) {
+        const [y, m, d] = beginDate.split('-').map(Number)
+        executeAt = new Date(y, (m ?? 1) - 1, d ?? 1).toISOString()
+      }
+      void onSave({ executeAt, cron })
     }
   }
 
@@ -239,6 +246,27 @@ export function ScheduleEditor({
               </p>
             </div>
           )}
+
+          <div className="flex gap-2">
+            <div className="space-y-1 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">Begin on</label>
+              <Input
+                type="date"
+                data-testid="schedule-begin-date"
+                value={beginDate}
+                onChange={e => setBeginDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">End on</label>
+              <Input
+                type="date"
+                data-testid="schedule-end-date"
+                value={endDate}
+                onChange={e => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
         </div>
       )}
 

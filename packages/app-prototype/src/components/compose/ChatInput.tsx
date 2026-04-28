@@ -27,10 +27,8 @@ const GOALS: Goal[] = [
   { key: 'image',     label: 'New image',     Icon: ImageIcon,     placeholder: 'Describe the image you want to create...' },
   { key: 'data',      label: 'New data',      Icon: Table,         placeholder: 'What data do you want to track or analyse?' },
   { key: 'site',      label: 'New site',      Icon: Globe,         placeholder: 'Describe the site you want to build...' },
-  { key: 'run',       label: 'New run',       Icon: Play,          placeholder: 'What should run in the background?' },
   { key: 'task',      label: 'New task',      Icon: ListTodo,      placeholder: 'What needs to be done?' },
-  { key: 'scheduled', label: 'New scheduled', Icon: CalendarClock, placeholder: 'What should happen, and when?' },
-  { key: null,        label: 'No type',       Icon: Target,        placeholder: 'Ask anything, start a task, build something...' },
+  { key: null,        label: 'No goal',       Icon: Target,        placeholder: 'Ask anything, start a task, build something...' },
 ]
 
 /**
@@ -464,12 +462,12 @@ export function ChatInput({
                 ? <effectiveGoal.Icon className="h-3 w-3" />
                 : <Target className="h-3 w-3" />
               }
-              {effectiveGoal && effectiveGoal.key !== null ? effectiveGoal.label : 'No type'}
+              {effectiveGoal && effectiveGoal.key !== null ? effectiveGoal.label : 'No goal'}
               <ChevronDown className="h-3 w-3 opacity-60" />
             </button>
             {goalOpen && goalRect && createPortal(
               <div ref={goalDropRef} style={getDropdownStyle(goalRect, 208)} className={dropdownClass}>
-                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Message type</p>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your goal</p>
                 <div className="pb-1.5">
                   {GOALS.map(goal => {
                     const isSuggested = goal.key === suggestedGoal && suggestedGoal !== null

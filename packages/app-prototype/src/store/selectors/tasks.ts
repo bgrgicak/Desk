@@ -27,24 +27,10 @@ function nameFor(m: ServerMessage): string {
   return m.content.type;
 }
 
-/**
- * Maps a task message to its board column. The discriminator is the
- * schedule shape, not state alone:
- *   - `cron` set      → "active" (recurring tasks are always active)
- *   - state=running   → "active" (transient, while the agent fires)
- *   - state terminal  → "complete" (succeeded / failed / cancelled)
- *   - executeAt set   → "scheduled" (one-shot, hasn't fired yet)
- *   - otherwise       → "todo" (manual task, no schedule, no agent action)
- *
- * Manual tasks stay in "todo" until the user explicitly moves them — the
- * agent has no path to mutate their column-state, since unscheduled tasks
- * never fire.
- */
 function statusFor(m: ServerMessage): Task["status"] {
-  if (m.cron) return "active";
   if (m.state === "running") return "active";
   if (m.state === "succeeded" || m.state === "failed" || m.state === "cancelled") return "complete";
-  if (m.executeAt) return "scheduled";
+  if (m.executeAt || m.cron) return "scheduled";
   return "todo";
 }
 
@@ -113,7 +99,7 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
     agentName: agent?.name ?? "Agent",
     status,
     statusText: statusTextFor(m),
-    assigneeId: agent?.id,
+    assigneeId: m.assigneeId ?? agent?.id,
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,

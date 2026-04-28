@@ -635,6 +635,7 @@ function AppInner() {
                   executeAt: input.status === 'scheduled' && input.scheduledFor
                     ? input.scheduledFor.toISOString()
                     : undefined,
+                  cron: input.cron,
                 }).unwrap()
               } catch (err) {
                 toast.error('Failed to create task', {
