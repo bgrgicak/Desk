@@ -4,7 +4,7 @@
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 
-export type MessageRole = "user" | "agent" | "system" | "tool";
+export type MessageRole = "user" | "agent" | "system";
 export type MessageState =
   | "pending"
   | "running"

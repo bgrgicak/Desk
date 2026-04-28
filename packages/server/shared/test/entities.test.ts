@@ -110,7 +110,7 @@ describe("MessageSchema", () => {
   });
 
   it("parses toolResult content", () => {
-    const msg = { ...base, role: "tool", content: { type: "toolResult", toolName: "file.read", result: { content: "data" } } };
+    const msg = { ...base, role: "agent", content: { type: "toolResult", toolName: "file.read", result: { content: "data" } } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
