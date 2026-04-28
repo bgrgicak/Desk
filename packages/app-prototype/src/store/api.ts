@@ -353,6 +353,7 @@ export const api = createApi({
       invalidatesTags: (_r, _e, id) => [
         { type: "Chat", id },
         { type: "Chat", id: "LIST" },
+        { type: "Message", id: "CROSS" },
       ],
     }),
 
