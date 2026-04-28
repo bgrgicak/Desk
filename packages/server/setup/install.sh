@@ -45,45 +45,46 @@ fi
 # Scheduler daemons the app relies on (used by @desk/scheduler).
 systemctl enable --now atd cron
 
-# ---------- 5. desk system user ----------
-# When /home/desk/Desk is a virtiofs mount from the host, files inside it
-# are owned by the host user's UID (Lima's virtiofs doesn't remap UIDs by
-# default). To let the desk service write through the mount without ACL
-# gymnastics, match the desk user's UID to whatever owns the mount root.
-# When there's no mount (e.g. a real prod VM with no shared filesystem),
-# fall back to the historical UID 2000.
+# ---------- 5. Service user identity ----------
+# When /home/desk/Desk is a virtiofs mount from the host, files inside
+# it are owned by the host user's UID (Lima's virtiofs doesn't remap
+# UIDs by default). The service user must match that UID, otherwise it
+# can't write to the mount — and virtiofs doesn't reliably honor POSIX
+# ACLs from inside the guest, so a UID-2000 + setfacl fallback fails
+# with EACCES under load.
+#
+# Strategy: pick a service user whose UID matches the mount owner.
+#   - Mount present and the host UID is unclaimed: create `desk` at it.
+#   - Mount present and the host UID is already claimed (Lima creates a
+#     `<host-login>` user mirroring the host login at host UID): reuse
+#     that account as the service user — it already owns the mount.
+#   - No mount (real prod install): create `desk` at the historical
+#     UID 2000.
+SERVICE_USER=desk
 DESK_UID=2000
 if mountpoint -q /home/desk/Desk 2>/dev/null; then
   DESK_UID="$(stat -c %u /home/desk/Desk)"
   log "Detected host UID $DESK_UID from /home/desk/Desk mount"
-fi
-
-if ! id desk &>/dev/null; then
-  # Try the host-matched UID first; fall back to 2000 + ACLs if that
-  # UID is already taken by a Lima/Ubuntu system account (e.g. messagebus,
-  # systemd-resolve). UID 2000 is well clear of the system range so the
-  # fallback always succeeds; the ACL grant gives the desk user write
-  # access to the host-mounted tree without needing to chown across
-  # virtiofs (which the host owns).
-  if useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk 2>/dev/null; then
-    log "Created desk user (UID $DESK_UID)"
-  else
-    log "UID $DESK_UID unavailable — creating desk user at UID 2000 with ACLs on the mount"
-    apt-get install -y -qq acl >/dev/null
-    useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
-    if mountpoint -q /home/desk/Desk 2>/dev/null; then
-      setfacl -R -m u:desk:rwx /home/desk/Desk
-      setfacl -R -d -m u:desk:rwx /home/desk/Desk
-    fi
+  EXISTING="$(getent passwd "$DESK_UID" | cut -d: -f1)"
+  if [ -n "$EXISTING" ] && [ "$EXISTING" != "desk" ]; then
+    SERVICE_USER="$EXISTING"
+    log "UID $DESK_UID already held by '$EXISTING' — reusing as the service user"
   fi
 fi
-# Lima creates /home/desk as the parent of the /home/desk/Desk mount before
-# provision runs, so by the time useradd sees the dir it already exists and
-# is root-owned. Hand it back to the desk user (just the dir, not the mount
-# inside it — virtiofs ownership is host-driven).
-chown -h desk:desk /home/desk
-# desk needs docker group access to talk to dockerd (spawn/manage sandboxes).
-usermod -aG docker desk
+
+if [ "$SERVICE_USER" = "desk" ] && ! id desk &>/dev/null; then
+  log "Creating desk user (UID $DESK_UID)"
+  useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
+fi
+
+# /home/desk exists already (Lima provisions it as the parent of the
+# virtiofs mount). Make sure the service user can resolve paths through
+# it without owning it — chmod 755 is enough since the service only
+# needs traverse access to reach /home/desk/Desk.
+chmod 755 /home/desk
+# Service user needs docker group access to talk to dockerd (spawn /
+# manage sandboxes).
+usermod -aG docker "$SERVICE_USER"
 
 # ---------- 6. SQLite database directory ----------
 # The DB file lives at $DESK_HOME/Desk/desk.db and is created on first
@@ -91,8 +92,15 @@ usermod -aG docker desk
 # is provisioned by Lima's host mount and owned by the desk user via the
 # UID-detection step above; we only need to make sure the directory
 # itself is in place when there's no host mount (production install).
+#
+# Skip the chown when /home/desk/Desk is a virtiofs mount — virtiofs
+# rejects chown of the mount root with EINVAL, killing the provision.
+# Ownership of the mount root is host-driven and the UID match above
+# already ensures the desk user can write through it.
 mkdir -p /home/desk/Desk
-chown desk:desk /home/desk/Desk
+if ! mountpoint -q /home/desk/Desk 2>/dev/null; then
+  chown "$SERVICE_USER:$SERVICE_USER" /home/desk/Desk
+fi
 
 # ---------- 7. Build & install the server ----------
 # Monorepo layout: @desk/api depends on workspace siblings (@desk/shared,
@@ -129,6 +137,11 @@ for pkg in shared db storage runtime scheduler sandbox-cli api; do
   [ -d "$SRC/dist" ] && cp -a "$SRC/dist" "$DST/"
   [ -d "$SRC/bin" ] && cp -a "$SRC/bin" "$DST/"
   [ -d "$SRC/migrations" ] && cp -a "$SRC/migrations" "$DST/"
+  # @desk/runtime resolves sandbox skill markdown by walking back through
+  # the workspace tree (../../sandbox-cli/skill.md). Source files aren't
+  # otherwise needed in /opt/desk-server, so ship just the markdown the
+  # runtime opens at boot.
+  [ -f "$SRC/skill.md" ] && cp "$SRC/skill.md" "$DST/"
 done
 # Preserve the workspace symlinks that npm created under root node_modules/@desk/*.
 # `cp -a` copied them; just sanity-check one.
@@ -136,7 +149,7 @@ test -L /opt/desk-server/node_modules/@desk/shared || {
   echo "ERROR: expected @desk/shared to be a symlink under /opt/desk-server/node_modules/@desk/" >&2
   exit 1
 }
-chown -R desk:desk /opt/desk-server
+chown -R "$SERVICE_USER:$SERVICE_USER" /opt/desk-server
 
 # ---------- 8. Environment file ----------
 log "Writing /etc/desk-server/env"
@@ -165,12 +178,12 @@ log "Generating /etc/desk-server/internal-token"
 if [[ ! -f /etc/desk-server/internal-token ]]; then
   ( umask 077 && openssl rand -hex 32 > /etc/desk-server/internal-token )
 fi
-chown desk:desk /etc/desk-server/internal-token
+chown "$SERVICE_USER:$SERVICE_USER" /etc/desk-server/internal-token
 chmod 0600 /etc/desk-server/internal-token
 
 # ---------- 9. Systemd unit ----------
-log "Writing desk-server.service"
-cat > /etc/systemd/system/desk-server.service <<'UNIT'
+log "Writing desk-server.service (User=$SERVICE_USER)"
+cat > /etc/systemd/system/desk-server.service <<UNIT
 [Unit]
 Description=Desk Server
 After=network.target
@@ -181,7 +194,7 @@ EnvironmentFile=/etc/desk-server/env
 WorkingDirectory=/opt/desk-server/packages/server/api
 ExecStart=/usr/bin/node /opt/desk-server/packages/server/api/dist/main.js
 Restart=always
-User=desk
+User=$SERVICE_USER
 
 [Install]
 WantedBy=multi-user.target
