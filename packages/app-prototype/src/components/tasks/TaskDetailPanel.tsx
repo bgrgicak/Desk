@@ -13,6 +13,7 @@ import {
   Repeat,
   Pause,
   Play,
+  Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Command,
   CommandEmpty,
@@ -38,6 +49,7 @@ import {
   usePatchMessageMutation,
   useGetChatMessagesQuery,
   usePostChatMessageMutation,
+  useDeleteChatMutation,
 } from '@/store/api'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -147,8 +159,11 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const [showFullInstructions, setShowFullInstructions] = useState(false)
   const [isDescClamped, setIsDescClamped]     = useState(false)
 
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
   const { data: agents } = useGetAgentsQuery()
   const [patchMessage, patchState] = usePatchMessageMutation()
+  const [deleteChat] = useDeleteChatMutation()
 
   useEffect(() => {
     setShowAllHistory(false)
@@ -317,6 +332,15 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               <Check className="h-4 w-4" />
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            title="Delete task"
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onCollapse}>
             <X className="h-4 w-4" />
           </Button>
@@ -563,6 +587,30 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
           </div>
         </div>
       )}
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent onPointerDownOutside={() => setDeleteDialogOpen(false)}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete &ldquo;{task.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deleting this task will cancel any scheduled runs and permanently
+              clear the conversation history with the AI. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={async () => {
+                if (task.chatId) await deleteChat(task.chatId)
+                onCollapse()
+              }}
+            >
+              Delete task
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
