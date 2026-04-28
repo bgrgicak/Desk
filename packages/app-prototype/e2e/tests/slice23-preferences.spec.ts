@@ -17,13 +17,13 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
   // The "auto-save" switch defaults to checked. Toggle it OFF and
-  // pick a non-default view ("chats").
+  // pick a non-default view ("tasks").
   const autoSave = dialog.getByTestId("prefs-auto-save");
   await expect(autoSave).toHaveAttribute("data-state", "checked");
   await autoSave.click();
   await expect(autoSave).toHaveAttribute("data-state", "unchecked");
 
-  await dialog.getByTestId("prefs-default-view-chats").click();
+  await dialog.getByTestId("prefs-default-view-tasks").click();
 
   // Reload, re-open Customize → Preferences. The values must stick.
   await loggedInPage.reload();
@@ -35,8 +35,8 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   await expect(dialog.getByTestId("prefs-auto-save")).toHaveAttribute("data-state", "unchecked");
   // The selected view button has the active styling — assert via its
   // class containing the active-state classes.
-  const chatsButton = dialog.getByTestId("prefs-default-view-chats");
-  await expect(chatsButton).toHaveClass(/bg-foreground/);
+  const tasksButton = dialog.getByTestId("prefs-default-view-tasks");
+  await expect(tasksButton).toHaveClass(/bg-foreground/);
 
   // The persisted blob lives at desk.prefs.<userId>; assert the shape.
   const stored = await loggedInPage.evaluate(() => {
@@ -47,5 +47,5 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   expect(stored).not.toBeNull();
   const parsed = JSON.parse(stored!) as { autoSave: boolean; defaultView: string };
   expect(parsed.autoSave).toBe(false);
-  expect(parsed.defaultView).toBe("chats");
+  expect(parsed.defaultView).toBe("tasks");
 });
