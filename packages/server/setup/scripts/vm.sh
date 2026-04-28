@@ -8,6 +8,17 @@ NAME="desk-${INSTANCE}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 CONFIG="${REPO_ROOT}/lima.yaml"
 
+# Host-side path that gets mounted into the VM at /home/desk/Desk. The
+# default `dev` instance keeps the friendly stable `~/Desk` so a backup
+# tool can target one well-known directory. Other instances (typically
+# throwaway test VMs from RUN_VM_TESTS=1 suites) get suffixed paths so
+# they can't collide with the user's real data.
+if [ "$INSTANCE" = "dev" ]; then
+  DESK_HOME_HOST="$HOME/Desk"
+else
+  DESK_HOME_HOST="$HOME/Desk-${INSTANCE}"
+fi
+
 # Deterministic host port: 3000 + CRC32(instance) % 100, so an instance
 # name always maps to the same host port across restarts.
 PORT="$(python3 -c 'import zlib,sys; print(3000 + zlib.crc32(sys.argv[1].encode()) % 100)' "$INSTANCE")"
@@ -44,7 +55,7 @@ EOF
 cmd="${1:-}"
 shift || true
 
-SET_EXPR=".mounts[0].location = \"$REPO_ROOT\" | .portForwards[0].hostPort = $PORT"
+SET_EXPR=".mounts[0].location = \"$REPO_ROOT\" | .mounts[1].location = \"$DESK_HOME_HOST\" | .portForwards[0].hostPort = $PORT"
 
 # "" if the instance doesn't exist, else "Running" | "Stopped" | etc.
 vm_status() { limactl list --format '{{.Status}}' "$NAME" 2>/dev/null; }
@@ -72,6 +83,10 @@ run_provision() { limactl shell "$NAME" sudo bash /desk/packages/server/setup/in
 
 case "$cmd" in
   up)
+    # Ensure the host-side Desk dir exists before Lima tries to mount it.
+    # Lima won't create missing host paths and will fail the start if the
+    # location doesn't exist.
+    mkdir -p "$DESK_HOME_HOST"
     if limactl list --quiet | grep -qx "$NAME"; then
       with_kvm limactl start "$NAME"
     else
@@ -99,6 +114,9 @@ case "$cmd" in
   snapshot)   limactl snapshot create --tag clean-install "$NAME" ;;
   restore)    limactl snapshot apply --tag clean-install "$NAME" ;;
   reset)
+    # Note: this destroys VM state but leaves $DESK_HOME_HOST on the host
+    # untouched — that's the whole point of the host mount.
+    mkdir -p "$DESK_HOME_HOST"
     limactl delete --force "$NAME" || true
     with_kvm limactl start --name="$NAME" --set="$SET_EXPR" --tty=false "$CONFIG"
     ;;

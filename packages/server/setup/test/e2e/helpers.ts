@@ -25,6 +25,18 @@ export const VM_SH = resolve(
   "../../scripts/vm.sh",
 );
 
+/**
+ * Host-side path that vm.sh mounts into the VM at /home/desk/Desk.
+ * Mirrors the derivation in setup/scripts/vm.sh: the default `dev` instance
+ * uses `~/Desk` (stable, user-friendly path for the primary daily-driver
+ * VM); other instances use `~/Desk-${instance}` so test/throwaway VMs
+ * don't collide with the user's real data.
+ */
+export function getDeskHomeForInstance(instance: string): string {
+  const home = process.env.HOME ?? "";
+  return instance === "dev" ? `${home}/Desk` : `${home}/Desk-${instance}`;
+}
+
 function crc32(str: string): number {
   const table = makeCRC32Table();
   let crc = 0xffffffff;

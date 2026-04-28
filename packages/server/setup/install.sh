@@ -43,10 +43,27 @@ systemctl enable --now postgresql
 systemctl enable --now atd cron
 
 # ---------- 5. desk system user ----------
-if ! id desk &>/dev/null; then
-  log "Creating desk user (UID 2000)"
-  useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
+# When /home/desk/Desk is a virtiofs mount from the host, files inside it
+# are owned by the host user's UID (Lima's virtiofs doesn't remap UIDs by
+# default). To let the desk service write through the mount without ACL
+# gymnastics, match the desk user's UID to whatever owns the mount root.
+# When there's no mount (e.g. a real prod VM with no shared filesystem),
+# fall back to the historical UID 2000.
+DESK_UID=2000
+if mountpoint -q /home/desk/Desk 2>/dev/null; then
+  DESK_UID="$(stat -c %u /home/desk/Desk)"
+  log "Detected host UID $DESK_UID from /home/desk/Desk mount"
 fi
+
+if ! id desk &>/dev/null; then
+  log "Creating desk user (UID $DESK_UID)"
+  useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
+fi
+# Lima creates /home/desk as the parent of the /home/desk/Desk mount before
+# provision runs, so by the time useradd sees the dir it already exists and
+# is root-owned. Hand it back to the desk user (just the dir, not the mount
+# inside it — virtiofs ownership is host-driven).
+chown -h desk:desk /home/desk
 # desk needs docker group access to talk to dockerd (spawn/manage sandboxes).
 usermod -aG docker desk
 

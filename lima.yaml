@@ -13,6 +13,15 @@ mounts:
   - location: "PLACEHOLDER_REPO_ROOT"
     mountPoint: "/desk"
     writable: true
+  - location: "PLACEHOLDER_DESK_HOME"
+    mountPoint: "/home/desk/Desk"
+    writable: true
+
+# virtiofs is the only Lima mount type on Linux that honors fsync and
+# supports mmap correctly — both required once the SQLite DB lives on this
+# mount. Pinning here makes the durability contract explicit instead of
+# inheriting whatever default the local Lima version ships with.
+mountType: "virtiofs"
 
 portForwards:
   - guestPort: 8080
