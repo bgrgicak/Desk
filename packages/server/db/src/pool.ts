@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database, { type Database as BetterSqlite3Db } from "better-sqlite3";
@@ -207,10 +208,37 @@ export class Pool {
       ?? ":memory:";
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
+    // EXCLUSIVE locking keeps WAL's shared index ("wal-index") in process
+    // heap instead of an mmap'd `-shm` file. Two upsides for our
+    // single-writer-process architecture (the API is the only thing
+    // that opens this file; at/cron jobs route through
+    // /internal/messages/fire):
+    //   1. Skips the per-write trip through shared memory bookkeeping,
+    //      so writes are slightly faster.
+    //   2. Removes the mmap requirement on the underlying filesystem.
+    //      virtiofs handles mmap fine; 9p and reverse-sshfs do not. If
+    //      we ever fall back to 9p (e.g. virtiofs unavailable on a
+    //      target host), WAL coordination keeps working.
+    // See https://www.sqlite.org/wal.html ("Use of WAL Without
+    // Shared-Memory") for the SQLite-side rationale.
+    this.db.pragma("locking_mode = EXCLUSIVE");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("busy_timeout = 5000");
     this.db.pragma("temp_store = MEMORY");
+
+    // The DB holds password hashes, encrypted provider-key blobs, and
+    // session token hashes — anything that ends up readable to other
+    // local users is a credential-disclosure incident. Force 0600 on the
+    // file we just opened (and any pre-existing file we attached to);
+    // skip for in-memory / non-real paths.
+    if (path !== ":memory:" && !path.startsWith("file::memory:")) {
+      try {
+        chmodSync(path, 0o600);
+      } catch {
+        /* best-effort — racy with file creation, retried at next open */
+      }
+    }
   }
 
   /** Async query — for use OUTSIDE transactions. The result is already

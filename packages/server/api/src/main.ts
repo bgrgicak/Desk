@@ -27,11 +27,14 @@ import type { WsEvent } from "@desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 const DESK_HOME = resolveDeskHome();
-// install.sh sets DESK_DB_PATH=/home/desk/Desk/desk.db; for dev/test runs
-// without an env file, default to ${DESK_HOME}/Desk/desk.db so the DB
-// lands on the host-mounted tree (the whole point of the SQLite cutover).
+// install.sh sets DESK_DB_PATH=/home/desk/Desk/.database/desk.sqlite3;
+// for dev/test runs without an env file, default to that same dotfile
+// path so the DB lands on the host-mounted tree (the whole point of
+// the SQLite cutover) and stays out of any in-app library listing of
+// ~/Desk.
 const DESK_DB_PATH =
-  process.env.DESK_DB_PATH ?? path.join(DESK_HOME, "Desk", "desk.db");
+  process.env.DESK_DB_PATH
+  ?? path.join(DESK_HOME, "Desk", ".database", "desk.sqlite3");
 
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the

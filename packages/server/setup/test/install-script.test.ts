@@ -36,12 +36,15 @@ describe("install.sh static checks", () => {
     expect(script).toContain("DESK_RUN_BIN=");
   });
 
-  it("falls back to UID 2000 + ACLs if the host UID collides with a system user", () => {
-    // Without the fallback, useradd --uid $HOST_UID fails the whole
-    // provision when the host UID happens to clash with a Lima/Ubuntu
-    // system account (messagebus, systemd-resolve, etc).
-    expect(script).toMatch(/useradd[^\n]*--uid 2000/);
-    expect(script).toContain("setfacl");
+  it("reuses the existing UID holder as the service user when the host UID is taken", () => {
+    // Lima creates a `<host-login>` user mirroring the host login at the
+    // host UID, so `useradd --uid $HOST_UID` always fails. The script
+    // must detect that and reuse the existing account as the systemd
+    // User= — virtiofs doesn't reliably honor POSIX ACLs from inside
+    // the guest, so a UID-2000 + setfacl fallback would fail under load.
+    expect(script).toContain("SERVICE_USER");
+    expect(script).toMatch(/getent passwd[^\n]*DESK_UID/);
+    expect(script).toMatch(/User=\$SERVICE_USER/);
   });
 });
 

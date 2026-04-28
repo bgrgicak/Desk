@@ -87,17 +87,21 @@ chmod 755 /home/desk
 usermod -aG docker "$SERVICE_USER"
 
 # ---------- 6. SQLite database directory ----------
-# The DB file lives at $DESK_HOME/Desk/desk.db and is created on first
-# server boot via the migration runner. The mount root (/home/desk/Desk)
-# is provisioned by Lima's host mount and owned by the desk user via the
-# UID-detection step above; we only need to make sure the directory
-# itself is in place when there's no host mount (production install).
+# The DB lives at $DESK_HOME/Desk/.database/desk.sqlite3 (plus its WAL
+# and SHM companions next to it) and is created on first server boot
+# via the migration runner. The dotfile parent keeps the DB file out
+# of any in-app library listing of ~/Desk — it's not a security
+# boundary, just visual hygiene; file mode 0600 enforced by pool.ts is
+# the real guard.
 #
-# Skip the chown when /home/desk/Desk is a virtiofs mount — virtiofs
-# rejects chown of the mount root with EINVAL, killing the provision.
+# Skip the chown of the mount root /home/desk/Desk when it's a virtiofs
+# mount — virtiofs rejects chown with EINVAL and kills the provision.
 # Ownership of the mount root is host-driven and the UID match above
-# already ensures the desk user can write through it.
-mkdir -p /home/desk/Desk
+# already lets the service user write through it. The .database
+# subdirectory is created *inside* the mount, so it's a regular dir we
+# can chown freely.
+mkdir -p /home/desk/Desk/.database
+chown "$SERVICE_USER:$SERVICE_USER" /home/desk/Desk/.database
 if ! mountpoint -q /home/desk/Desk 2>/dev/null; then
   chown "$SERVICE_USER:$SERVICE_USER" /home/desk/Desk
 fi
@@ -155,7 +159,7 @@ chown -R "$SERVICE_USER:$SERVICE_USER" /opt/desk-server
 log "Writing /etc/desk-server/env"
 mkdir -p /etc/desk-server
 cat > /etc/desk-server/env <<'ENVFILE'
-DESK_DB_PATH=/home/desk/Desk/desk.db
+DESK_DB_PATH=/home/desk/Desk/.database/desk.sqlite3
 PORT=8080
 NODE_ENV=production
 # Seed credentials for the initial user. Change DESK_SEED_PASSWORD before first boot.
