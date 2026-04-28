@@ -133,12 +133,13 @@ describe("session store", () => {
     // the pool and opening a new one against the same database is the
     // closest in-process proxy for a process restart; verifySession must
     // still resolve the token.
+    //
+    // EXCLUSIVE locking_mode means we close before re-opening — concurrent
+    // pools against the same file collide on the lock. That matches the
+    // production constraint anyway (the API is the only DB opener).
     const token = await issueSession(pool, userId);
-    const fresh = new Pool({ connectionString: testConn() });
-    try {
-      expect(await verifySession(fresh, token)).toBe(userId);
-    } finally {
-      await fresh.end();
-    }
+    await pool.end();
+    pool = new Pool({ connectionString: testConn() });
+    expect(await verifySession(pool, token)).toBe(userId);
   });
 });
