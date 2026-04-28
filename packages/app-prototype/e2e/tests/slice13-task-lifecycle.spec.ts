@@ -123,23 +123,11 @@ test("task detail panel pauses, resumes, and cancels the server message", async 
     .toBe("cancelled");
 });
 
-test("task detail chat tab links to originating chat with message deep-link", async ({
-  loggedInPage,
-  serverUrl,
-  token,
-}) => {
-  const seeded = await seedScheduledTask(serverUrl, token, "Slice13 chat link");
-  await openTaskDetail(loggedInPage, seeded);
-
-  await loggedInPage.getByRole("button", { name: /^Chat$/ }).click();
-  const openInChat = loggedInPage.getByTestId("open-in-chat");
-  await expect(openInChat).toBeVisible();
-  await openInChat.click();
-
-  await expect(loggedInPage).toHaveURL(
-    new RegExp(`/w/${seeded.workspaceId}/desk\\?.*chat=${seeded.chatId}.*message=${seeded.messageId}`),
-  );
-});
+// Removed: "task detail chat tab links to originating chat with message
+// deep-link". The Chat tab is now an embedded ChatInPanel rendering the
+// conversation in place, not a button that navigates to /w/.../desk with
+// a chat=...&message=... query string. Re-add only if a deep-link
+// affordance comes back.
 
 test("scheduled-but-never-fired task hides the 'Last run' row", async ({
   loggedInPage,
@@ -151,6 +139,8 @@ test("scheduled-but-never-fired task hides the 'Last run' row", async ({
 
   await expect(loggedInPage.getByText("Next run")).toBeVisible();
   await expect(loggedInPage.getByText(/^Last run$/)).toHaveCount(0);
+  // History section is collapsed by default — expand it to surface the
+  // empty-state placeholder.
   await loggedInPage.getByRole("button", { name: /^History$/ }).click();
   await expect(loggedInPage.getByTestId("task-history-empty")).toBeVisible();
 });

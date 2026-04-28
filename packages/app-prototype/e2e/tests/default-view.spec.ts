@@ -89,9 +89,14 @@ test("workspace tab click jumps to the default view", async ({
   await setDefaultViewPref(loggedInPage, serverUrl, token, "context");
 
   // Navigate to a non-default view so the click has somewhere to move
-  // away from. Wait for AppShell to mount before reaching for the tab.
+  // away from. Wait for AppShell to mount AND for /me to resolve — the
+  // avatar shows a placeholder ('…') before /me lands, and `usePrefs`
+  // gates the active defaultView on the resolved userId. Without this
+  // wait, the click handler captures the default 'desk' instead of the
+  // real pref.
   await loggedInPage.goto(`/w/${wsId}/tasks`);
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+  await expect(loggedInPage.getByTestId("account-avatar")).not.toHaveText("…");
   await expect(loggedInPage).toHaveURL(new RegExp(`/w/${wsId}/tasks`));
 
   // The WorkspaceBar tabs aren't tagged with testids; pick by the
