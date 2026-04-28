@@ -263,7 +263,7 @@ export function WorkspaceBar({
                       }`}
                     >
                       <span className="text-base leading-none">{ws.emoji}</span>
-                      <span>{ws.name}</span>
+                      <span>{ws.name.length > 16 ? ws.name.slice(0, 16) + '…' : ws.name}</span>
                       {ws.unreadCount > 0 && (
                         <span className={`flex h-5 min-w-5 items-center justify-center rounded-full border px-1.5 text-xs font-medium ${
                           isActive
@@ -283,7 +283,7 @@ export function WorkspaceBar({
                     <ContextMenuSeparator />
                     <ContextMenuItem onSelect={() => startEditing(ws)}>
                       <Pencil className="h-4 w-4" />
-                      Edit
+                      Customize
                     </ContextMenuItem>
                     <ContextMenuItem
                       onSelect={() => deleteWorkspace(ws.id)}

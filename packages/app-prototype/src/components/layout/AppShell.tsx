@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
+import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
   LayoutGrid, Zap, FolderOpen, Plus, Search,
@@ -56,6 +57,7 @@ import {
   useSearchQuery,
 } from '@/store/api'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
+import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 
 export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
@@ -162,6 +164,7 @@ export function AppShell({
   const [chatPage, setChatPage] = useState(1)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
+  const [chatSearchValue, setChatSearchValue] = useState('')
   // Server-side search — live query when the palette has ≥2 chars.
   const searchEnabled = chatSearchQuery.trim().length >= 2
   const { data: searchResults } = useSearchQuery(
@@ -171,6 +174,7 @@ export function AppShell({
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
 
   // Server-backed workspaces. The WorkspaceBar/Settings components still
   // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
@@ -319,7 +323,7 @@ export function AppShell({
           </SidebarHeader>
 
           {/* ── Content: scrollable chat list ── */}
-          <SidebarContent>
+          <SidebarContent ref={sidebarScrollRef}>
             <SidebarGroup className="px-2 py-0">
               <SidebarGroupContent className="pb-10">
                 <SidebarMenu>
@@ -330,10 +334,10 @@ export function AppShell({
                         <SidebarMenuButton
                           isActive={chat.id === selectedChatId && !isDetailOpen}
                           onClick={() => onChatClick(chat)}
-                          className="pr-7 text-muted-foreground"
+                          className="pr-7 text-foreground/70"
                         >
                           <div className="relative shrink-0">
-                            <ChatIcon className="h-4 w-4 text-muted-foreground" />
+                            <ChatIcon className="h-4 w-4" />
                             {chat.unread && !readChatIds.has(chat.id) && (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
                             )}
@@ -376,7 +380,7 @@ export function AppShell({
           </SidebarContent>
 
           {/* ── Footer: Customize only ── */}
-          <SidebarFooter className="border-t">
+          <SidebarFooter className={cn('border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => setSettingsOpen(true)}>
@@ -389,7 +393,7 @@ export function AppShell({
         </Sidebar>
 
         {/* Main content */}
-        <SidebarInset className="rounded-xl overflow-hidden shadow-xs">
+        <SidebarInset className="rounded-xl overflow-hidden shadow-xs mr-2 mb-2 md:peer-data-[state=collapsed]:ml-2">
           <main className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
             {children}
           </main>
@@ -457,14 +461,16 @@ export function AppShell({
       {/* ── Chat search command palette ── */}
       <CommandDialog
         open={chatSearchOpen}
-        onOpenChange={(open) => { setChatSearchOpen(open); if (!open) setChatSearchQuery('') }}
+        onOpenChange={(open) => { setChatSearchOpen(open); if (!open) { setChatSearchQuery(''); setChatSearchValue('') } }}
         showCloseButton={false}
         className="top-[20%] translate-y-0"
+        value={chatSearchValue}
+        onValueChange={setChatSearchValue}
       >
         <CommandInput
           placeholder="Search chats and artifacts…"
           value={chatSearchQuery}
-          onValueChange={setChatSearchQuery}
+          onValueChange={(v) => { setChatSearchQuery(v); setChatSearchValue('') }}
         />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
@@ -477,8 +483,9 @@ export function AppShell({
                 return (
                   <CommandItem
                     key={chat.id}
-                    value={chat.title}
-                    onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery('') }}
+                    value={chat.id}
+                    keywords={[chat.title]}
+                    onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                   >
                     <ChatIcon className="h-4 w-4 text-muted-foreground" />
                     <span className="truncate">{chat.title}</span>
@@ -500,11 +507,13 @@ export function AppShell({
                     return (
                       <CommandItem
                         key={r.id}
-                        value={r.title}
+                        value={r.id}
+                        keywords={[r.title]}
                         onSelect={() => {
                           if (chat) onChatClick(chat)
                           setChatSearchOpen(false)
                           setChatSearchQuery('')
+                          setChatSearchValue('')
                         }}
                       >
                         <ChatIcon className="h-4 w-4 text-muted-foreground" />
@@ -520,7 +529,7 @@ export function AppShell({
                   .map(r => {
                     const artifact = artifacts.find(a => a.id === r.id)
                     if (!artifact) return (
-                      <CommandItem key={r.id} value={r.title}>
+                      <CommandItem key={r.id} value={r.id} keywords={[r.title]}>
                         <FileText className="h-4 w-4 text-muted-foreground" />
                         <span className="truncate">{r.title}</span>
                       </CommandItem>
@@ -529,8 +538,9 @@ export function AppShell({
                     return (
                     <CommandItem
                       key={artifact.id}
-                      value={artifact.name}
-                      onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery('') }}
+                      value={artifact.id}
+                      keywords={[artifact.name]}
+                      onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                     >
                       <ArtifactIcon className="h-4 w-4 text-muted-foreground" />
                       <span className="truncate">{artifact.name}</span>

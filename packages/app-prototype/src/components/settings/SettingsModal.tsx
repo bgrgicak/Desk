@@ -7,6 +7,14 @@ import {
   Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -57,6 +65,7 @@ import {
   type ConnectionKind,
 } from '@/data/connections'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
+import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 
 function describeApiError(err: unknown): string {
   if (err && typeof err === 'object') {
@@ -283,24 +292,6 @@ function EmptyState({
 
 // Sticky-footer scroll-shadow hook — top border on the footer fades in
 // once content is hidden behind it.
-function useScrolledUnder() {
-  const ref = useRef<HTMLDivElement>(null)
-  const [scrolledUnder, setScrolledUnder] = useState(false)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const update = () => {
-      setScrolledUnder(el.scrollHeight > el.clientHeight + el.scrollTop + 1)
-    }
-    update()
-    el.addEventListener('scroll', update)
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    return () => { el.removeEventListener('scroll', update); ro.disconnect() }
-  }, [])
-  return { ref, scrolledUnder }
-}
-
 // ── Brand glyph (used by both Agents and Connections) ───────────────────────
 
 function ConnectionGlyph({ kind, size = 'md' }: { kind: ConnectionKind; size?: 'sm' | 'md' | 'lg' }) {
@@ -684,6 +675,7 @@ function AgentDetail({
   const [provider, setProvider]         = useState(initialProvider)
   const [model, setModel]               = useState(initialModel)
   const [instructions, setInstructions] = useState(existing?.instructions ?? '')
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
 
   const modelOptions = useMemo(
     () => modelIndex.get(provider) ?? [],
@@ -730,13 +722,44 @@ function AgentDetail({
         </Field>
 
         <Field label="Model">
-          <SelectDropdown
-            value={model}
-            placeholder={provider ? 'Select model' : 'Pick a provider first'}
-            onChange={setModel}
-            disabled={!provider || modelOptions.length === 0}
-            options={modelOptions.map(m => ({ value: m.id, label: m.label ?? m.id }))}
-          />
+          <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
+            <PopoverTrigger asChild disabled={!provider || modelOptions.length === 0}>
+              <button
+                type="button"
+                disabled={!provider || modelOptions.length === 0}
+                className={cn(
+                  'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs text-left flex items-center justify-between gap-2 transition-colors',
+                  'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none',
+                  (!provider || modelOptions.length === 0) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
+                )}
+              >
+                <span className={cn('truncate', !model && 'text-muted-foreground')}>
+                  {(modelOptions.find(m => m.id === model)?.label ?? model) || (provider ? 'Select model' : 'Pick a provider first')}
+                </span>
+                <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
+              <Command>
+                <CommandInput placeholder="Search models…" />
+                <CommandList>
+                  <CommandEmpty>No models found.</CommandEmpty>
+                  <CommandGroup>
+                    {modelOptions.map(m => (
+                      <CommandItem
+                        key={m.id}
+                        value={m.id}
+                        keywords={[m.label ?? m.id]}
+                        onSelect={() => { setModel(m.id); setModelPickerOpen(false) }}
+                      >
+                        {m.label ?? m.id}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </Field>
 
         <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
@@ -1623,7 +1646,7 @@ export function SettingsModal({
                     'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/60',
+                      : 'text-foreground/70 hover:text-foreground hover:bg-muted/60',
                   )}
                 >
                   <Icon className="h-4 w-4 shrink-0" />

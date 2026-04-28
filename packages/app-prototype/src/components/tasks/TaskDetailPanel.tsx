@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
 import {
   X,
   AlertCircle,
@@ -9,10 +8,11 @@ import {
   Bot,
   Loader2,
   CheckCircle2,
-  MessageSquare,
+  Check,
+  Clock,
+  Repeat,
   Pause,
   Play,
-  Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -23,10 +23,25 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { Task, TaskOccurrence } from '@/data/ui-types'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import type { Task, TaskOccurrence, ChatMessage as ChatMessageType } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
-import { useGetAgentsQuery, usePatchMessageMutation } from '@/store/api'
-import { buildPath } from '@/router/nav'
+import {
+  useGetAgentsQuery,
+  usePatchMessageMutation,
+  useGetChatMessagesQuery,
+  usePostChatMessageMutation,
+} from '@/store/api'
+import { ChatMessage } from '@/components/compose/ChatMessage'
+import { ChatInput } from '@/components/compose/ChatInput'
+import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { StatusBadge, PriorityIcon, PRIORITY_LABELS } from './task-badges'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
@@ -57,16 +72,80 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
   }
 }
 
+function ChatInPanel({ chatId, agentName }: { chatId: string; agentName?: string }) {
+  const { data } = useGetChatMessagesQuery({ chatId })
+  const [postMessage] = usePostChatMessageMutation()
+  const [isSending, setIsSending] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Filter out the task message itself and system/tool messages; map to the
+  // ChatMessage shape used by the ChatMessage component.
+  const messages: ChatMessageType[] = (data?.items ?? [])
+    .filter(m => m.kind !== 'task' && (m.role === 'user' || m.role === 'agent'))
+    .map(m => ({
+      id: m.id,
+      role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
+      content: m.content.type === 'text' ? m.content.text
+             : m.content.type === 'note' ? m.content.body
+             : '',
+      timestamp: new Date(m.createdAt),
+    }))
+    .filter(m => m.content.length > 0)
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages.length])
+
+  async function handleSend(text: string) {
+    if (!text.trim() || isSending) return
+    setIsSending(true)
+    try {
+      await postMessage({ chatId, content: text.trim() }).unwrap()
+    } catch (err) {
+      toast.error('Failed to send', { description: describeApiError(err) })
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div className="space-y-6 p-4">
+          {messages.map((msg, i) => (
+            <ChatMessage
+              key={msg.id}
+              message={msg}
+              agentModel={agentName}
+              isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
+            />
+          ))}
+          <StatusIndicator text={null} isTyping={isSending} />
+        </div>
+      </div>
+      <div className="border-t p-3 shrink-0">
+        <ChatInput
+          onSend={(msg) => void handleSend(msg)}
+          placeholder="Ask a question or request changes…"
+          compact={true}
+          showGoalPicker={true}
+          draftKey={`task-chat:${chatId}`}
+        />
+      </div>
+    </div>
+  )
+}
+
 export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const descRef = useRef<HTMLParagraphElement>(null)
   const [activeTab, setActiveTab]             = usePersistedState<PanelTab>(`desk.task.${task.id}.tab`, 'details')
-  const [historyOpen, setHistoryOpen]         = useState(true)
+  const [historyOpen, setHistoryOpen]         = useState(false)
   const [showAllHistory, setShowAllHistory]   = useState(false)
   const [instructionsOpen, setInstructionsOpen] = useState(true)
   const [showFullInstructions, setShowFullInstructions] = useState(false)
   const [isDescClamped, setIsDescClamped]     = useState(false)
-  const navigate = useNavigate()
-  const { wsId = '' } = useParams<{ wsId: string }>()
 
   const { data: agents } = useGetAgentsQuery()
   const [patchMessage, patchState] = usePatchMessageMutation()
@@ -120,11 +199,6 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     if (next === 'scheduled') void transition('pending')
   }
 
-  const openInChat = () => {
-    if (!task.chatId || !wsId) return
-    navigate(buildPath(wsId, 'desk', { chat: task.chatId, message: task.messageId ?? null }))
-  }
-
   const busy = patchState.isLoading
   const assigneeAgent = agents?.find(a => a.id === task.assigneeId)
   const assigneeLabel = !task.assigneeId || task.assigneeId === 'user'
@@ -132,23 +206,41 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     : assigneeAgent?.name ?? task.agentName ?? 'Agent'
 
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [assigneePickerOpen, setAssigneePickerOpen] = useState(false)
 
   async function applySchedulePatch(patch: SchedulePatch) {
     if (!task.chatId || !task.messageId) {
       toast.error('This task is not wired to a server message yet')
       return
     }
+    const hasSchedule = patch.executeAt !== null || patch.cron !== null
     try {
-      // Server enforces state-transition rules (e.g. paused→pending only),
-      // so we only ride the schedule fields here. If the task was paused,
-      // the user can resume it separately via the Resume button.
       await patchMessage({
         chatId: task.chatId,
         messageId: task.messageId,
-        patch,
+        // When adding a schedule, also transition to pending so the server
+        // moves the task into the Scheduled column immediately.
+        patch: hasSchedule ? { ...patch, state: 'pending' } : patch,
       }).unwrap()
     } catch (err) {
-      toast.error('Couldn’t update schedule', { description: describeApiError(err) })
+      toast.error("Couldn't update schedule", { description: describeApiError(err) })
+    }
+  }
+
+  async function changeAssignee(newAssigneeId: string) {
+    setAssigneePickerOpen(false)
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: { assigneeId: newAssigneeId },
+      }).unwrap()
+    } catch (err) {
+      toast.error('Could not update assignee', { description: describeApiError(err) })
     }
   }
 
@@ -216,13 +308,13 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+              className="h-8 w-8 shrink-0"
               data-testid="task-cancel"
-              title="Cancel"
+              title="Complete"
               disabled={busy}
               onClick={() => void transition('cancelled')}
             >
-              <Trash2 className="h-4 w-4" />
+              <Check className="h-4 w-4" />
             </Button>
           )}
           <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onCollapse}>
@@ -233,25 +325,11 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
       {/* Chat tab */}
       {activeTab === 'chat' && (
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="rounded-lg border bg-muted/20 p-4">
-            <p className="text-sm text-foreground font-medium">Originating chat</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              This task was created in a chat. Open it to see the full conversation and jump to the scheduled message.
-            </p>
-            <Button
-              className="mt-3"
-              variant="outline"
-              size="sm"
-              data-testid="open-in-chat"
-              disabled={!task.chatId}
-              onClick={openInChat}
-            >
-              <MessageSquare className="mr-2 h-3.5 w-3.5" />
-              Open in chat
-            </Button>
-          </div>
-        </div>
+        task.chatId
+          ? <ChatInPanel chatId={task.chatId} agentName={task.agentName} />
+          : <div className="flex-1 flex items-center justify-center p-4">
+              <p className="text-xs text-muted-foreground text-center">No chat linked to this task yet.</p>
+            </div>
       )}
 
       {/* Details tab */}
@@ -268,14 +346,13 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
                 <span className="text-xs text-muted-foreground">Status</span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild disabled={busy}>
-                    <button data-testid="task-status-trigger" className="hover:opacity-70 transition-opacity disabled:opacity-50" disabled={busy}>
-                      {isPaused ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-px text-[11px] font-medium text-amber-700">
-                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-amber-500" />
+                    <button data-testid="task-status-trigger" className="inline-flex items-center gap-1.5 hover:opacity-70 transition-opacity disabled:opacity-50" disabled={busy}>
+                      <StatusBadge status={effectiveStatus} small />
+                      {isPaused && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2 py-px text-[11px] font-medium text-red-700">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-red-500" />
                           Paused
                         </span>
-                      ) : (
-                        <StatusBadge status={effectiveStatus} small />
                       )}
                     </button>
                   </DropdownMenuTrigger>
@@ -292,12 +369,48 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               {/* Assignee */}
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">Assignee</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-px text-[11px] font-medium text-foreground">
-                  {!task.assigneeId || task.assigneeId === 'user'
-                    ? <User className="h-3 w-3 text-muted-foreground shrink-0" />
-                    : <Bot className="h-3 w-3 text-muted-foreground shrink-0" />}
-                  {assigneeLabel}
-                </span>
+                <Popover open={assigneePickerOpen} onOpenChange={setAssigneePickerOpen}>
+                  <PopoverTrigger asChild disabled={busy}>
+                    <button
+                      className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-px text-[11px] font-medium text-foreground hover:opacity-70 transition-opacity disabled:opacity-50"
+                      disabled={busy}
+                    >
+                      {!task.assigneeId || task.assigneeId === 'user'
+                        ? <User className="h-3 w-3 text-muted-foreground shrink-0" />
+                        : <Bot className="h-3 w-3 text-muted-foreground shrink-0" />}
+                      {assigneeLabel}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="p-0 w-[180px]">
+                    <Command>
+                      <CommandInput placeholder="Search…" />
+                      <CommandList>
+                        <CommandEmpty>No results.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="user"
+                            keywords={['You', 'me']}
+                            onSelect={() => changeAssignee('user')}
+                          >
+                            <User className="h-3.5 w-3.5 mr-2 text-muted-foreground shrink-0" />
+                            You
+                          </CommandItem>
+                          {(agents ?? []).map(a => (
+                            <CommandItem
+                              key={a.id}
+                              value={a.id}
+                              keywords={[a.name]}
+                              onSelect={() => changeAssignee(a.id)}
+                            >
+                              <Bot className="h-3.5 w-3.5 mr-2 text-muted-foreground shrink-0" />
+                              {a.name}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               {/* Priority */}
@@ -318,9 +431,12 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
                   <PopoverTrigger asChild disabled={busy}>
                     <button
                       data-testid="task-schedule-trigger"
-                      className="text-xs text-foreground hover:opacity-70 transition-opacity disabled:opacity-50 underline-offset-4 hover:underline"
+                      className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-px text-[11px] font-medium text-foreground hover:opacity-70 transition-opacity disabled:opacity-50"
                       disabled={busy}
                     >
+                      {task.schedule
+                        ? <Repeat className="h-3 w-3 text-muted-foreground shrink-0" />
+                        : <Clock className="h-3 w-3 text-muted-foreground shrink-0" />}
                       {scheduleLabel}
                     </button>
                   </PopoverTrigger>

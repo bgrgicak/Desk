@@ -124,6 +124,7 @@ export interface ServerMessage {
   state?: MessageState;
   parentId?: string;
   agentId?: string;
+  assigneeId?: string;
   startedAt?: string;
   endedAt?: string;
   updatedAt?: string;

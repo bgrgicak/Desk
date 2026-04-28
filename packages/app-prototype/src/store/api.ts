@@ -412,6 +412,7 @@ export const api = createApi({
           executeAt: string | null;
           cron: string | null;
           title: string | null;
+          assigneeId: string | null;
         }>;
       }
     >({

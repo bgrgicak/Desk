@@ -1036,8 +1036,7 @@ export function ChatView({
       </FileDropZone>
 
       {/* ── Right panel: full-height, parallel to the entire left column ── */}
-      {panelOpen && (
-        <div className="w-[280px] shrink-0 flex flex-col border-l overflow-hidden">
+      <div className={`shrink-0 flex flex-col border-l overflow-hidden transition-all duration-300 ${panelOpen ? 'w-[280px]' : 'w-0 border-l-0'}`}>
           {/* Panel header — same height as the main header */}
           <div className="h-[52px] flex items-center justify-between px-3 border-b shrink-0">
             <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
@@ -1101,7 +1100,6 @@ export function ChatView({
             )}
           </div>
         </div>
-      )}
 
     </div>
   )
