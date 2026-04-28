@@ -36,6 +36,13 @@ test("search palette returns server results", async ({
 
   await loggedInPage.reload();
 
+  // Wait for the AppShell to mount before reaching for the palette
+  // button — CI is slow enough that the default `.click()` auto-wait
+  // sometimes hits the test's 30 s timeout before the React tree
+  // settles. The avatar shows up at the same time as the rest of the
+  // chrome.
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+
   // Open the global search / Ask AI palette.
   await loggedInPage.getByRole("button", { name: /Search.*Ask AI/i }).click();
 
