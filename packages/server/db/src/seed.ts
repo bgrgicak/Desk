@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "./pool.js";
+import { type Pool, withTx } from "./pool.js";
 import { generateId, PROVIDER_KEY_VARS } from "@desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
@@ -18,10 +18,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
 
   const passwordHash = await hashPassword(password);
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
+  await withTx(pool, async (client) => {
     await client.query(
       `INSERT INTO users (id, username, password_hash, email)
        VALUES ($1, $2, $3, $4)`,
@@ -51,14 +48,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
        VALUES ($1, $2)`,
       [workspaceId, agentId],
     );
-
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**

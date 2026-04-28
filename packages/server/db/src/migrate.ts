@@ -39,7 +39,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     if (appliedSet.has(version)) continue;
 
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf-8");
-    pool.beginTx();
+    await pool.beginTx();
     try {
       pool.exec(sql);
       await pool.query(

@@ -8,6 +8,7 @@
  * hosts the I/O boundary that systemd drives.
  */
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
 import {
   ensureLayout,
@@ -25,12 +26,20 @@ import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgresql:///desk?host=/var/run/postgresql";
 const DESK_HOME = resolveDeskHome();
+// install.sh sets DESK_DB_PATH=/home/desk/Desk/desk.db; for dev/test runs
+// without an env file, default to ${DESK_HOME}/Desk/desk.db so the DB
+// lands on the host-mounted tree (the whole point of the SQLite cutover).
+const DESK_DB_PATH =
+  process.env.DESK_DB_PATH ?? path.join(DESK_HOME, "Desk", "desk.db");
 
 async function main(): Promise<void> {
-  const pool = createPool({ connectionString: DATABASE_URL });
+  // better-sqlite3 doesn't create parent directories — make sure the
+  // tree exists before opening the file. On the VM this dir is the
+  // virtiofs mount root and already exists; on a fresh dev host it
+  // might not.
+  await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
+  const pool = createPool({ path: DESK_DB_PATH });
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);

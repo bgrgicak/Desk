@@ -1,4 +1,4 @@
-import { type Pool, type PoolClient } from "../pool.js";
+import { type Pool, type PoolClient, withTx } from "../pool.js";
 import { MessageSchema, type Message } from "@desk/shared";
 
 type Queryable = Pool | PoolClient;
@@ -151,8 +151,10 @@ export async function claimPending(db: Queryable, id: string): Promise<boolean> 
  * `running` state with `started_at = now()`. Returns the run row, or null
  * if the task is missing / not a task / already firing.
  *
- * Pool-only: opens a dedicated client for the transaction. Don't pass a
- * PoolClient here — the lock has to be held end-to-end on one connection.
+ * Pool-only: drives a transaction via `withTx` so concurrent fires
+ * serialize through the pool's tx queue (single SQLite connection).
+ * The "in-flight" check committed by the winner makes the loser see the
+ * new running run and bail with `null`.
  */
 export async function startTaskRun(
   pool: Pool,
@@ -166,27 +168,19 @@ export async function startTaskRun(
     model?: string | null;
   },
 ): Promise<Message | null> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return withTx(pool, async (client) => {
     const lock = await client.query(
-      `SELECT id FROM messages WHERE id = $1 AND kind = 'task' FOR UPDATE`,
+      `SELECT id FROM messages WHERE id = $1 AND kind = 'task'`,
       [args.taskId],
     );
-    if (lock.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if (lock.rowCount === 0) return null;
     const inFlight = await client.query(
       `SELECT 1 FROM messages
        WHERE parent_id = $1 AND kind = 'task_run' AND state IN ('pending', 'running')
        LIMIT 1`,
       [args.taskId],
     );
-    if ((inFlight.rowCount ?? 0) > 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if ((inFlight.rowCount ?? 0) > 0) return null;
     const ins = await client.query(
       `INSERT INTO messages (
          id, chat_id, role, content, parent_id, kind,
@@ -213,14 +207,8 @@ export async function startTaskRun(
       "UPDATE chats SET updated_at = now() WHERE id = $1",
       [args.chatId],
     );
-    await client.query("COMMIT");
     return rowToMessage(ins.rows[0]);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**

@@ -12,10 +12,12 @@ export interface PoolConfig {
   path?: string;
   /**
    * Test-only compatibility shim: tests written against the previous
-   * Postgres setup pass a `postgresql://…` connection string here. We
-   * ignore the value and open an in-memory SQLite database so the test's
-   * intent ("isolated DB for this run") is preserved without anyone
-   * needing to rewrite their setup blocks.
+   * Postgres setup pass a `postgresql://…` connection string here. The
+   * value is hashed into a per-process temp file so two pools opened
+   * with the same connection string see the same database (preserves
+   * the "fresh pool against the same DB" pattern). Production must
+   * pass `path` directly — passing a `connectionString` here silently
+   * routes the DB to /tmp regardless of DESK_DB_PATH.
    */
   connectionString?: string;
 }
@@ -168,8 +170,19 @@ function execQuery<T>(
 export class Pool {
   private readonly db: BetterSqlite3Db;
   private inTransaction = false;
+  // Concurrent transaction requests queue here. The pool wraps a single
+  // SQLite connection (better-sqlite3 is synchronous) so only one
+  // transaction can be open at a time — without this queue, two callers
+  // racing into BEGIN both throw "cannot start a transaction within a
+  // transaction" and the loser's rollback compounds the failure.
+  private readonly txQueue: Array<() => void> = [];
 
   constructor(config?: PoolConfig) {
+    // Resolution order: explicit `path` → explicit `connectionString`
+    // (test compat shim) → `DESK_DB_PATH` env (production default, set
+    // by install.sh) → `:memory:`. Both explicit forms beat env so
+    // tests that pass a connection string get the per-string temp file
+    // they expect even when CI sets DESK_DB_PATH.
     const path =
       config?.path
       ?? (config?.connectionString
@@ -194,8 +207,8 @@ export class Pool {
 
   /**
    * pg.Pool compat: returns a "client". With SQLite there's no real
-   * pooling, so the same Pool object is its own client. The transaction
-   * helper drives BEGIN/COMMIT/ROLLBACK on this same connection.
+   * pooling, so the same Pool object is its own client. Use `withTx` for
+   * transactions — it serializes concurrent acquirers via the tx queue.
    */
   async connect(): Promise<PoolClient> {
     return this as unknown as PoolClient;
@@ -213,24 +226,43 @@ export class Pool {
     this.db.close();
   }
 
-  beginTx(): void {
-    if (this.inTransaction) {
-      throw new Error("Nested transactions are not supported");
+  /**
+   * Acquires the transaction lock and issues `BEGIN IMMEDIATE`. If another
+   * caller already owns the lock, queues until they call commitTx/rollbackTx.
+   * `withTx` is the preferred entrypoint; this is exposed for code that
+   * needs to drive BEGIN/COMMIT manually (rare — `migrate.ts` is the one
+   * legitimate caller, where boot is single-threaded).
+   */
+  async beginTx(): Promise<void> {
+    if (!this.inTransaction) {
+      this.inTransaction = true;
+      this.db.exec("BEGIN IMMEDIATE");
+      return;
     }
-    this.db.exec("BEGIN IMMEDIATE");
-    this.inTransaction = true;
+    await new Promise<void>((resolve) => {
+      this.txQueue.push(() => {
+        this.inTransaction = true;
+        this.db.exec("BEGIN IMMEDIATE");
+        resolve();
+      });
+    });
   }
 
   commitTx(): void {
     this.db.exec("COMMIT");
-    this.inTransaction = false;
+    this.releaseTx();
   }
 
   rollbackTx(): void {
-    if (this.inTransaction) {
-      this.db.exec("ROLLBACK");
-      this.inTransaction = false;
-    }
+    if (!this.inTransaction) return;
+    this.db.exec("ROLLBACK");
+    this.releaseTx();
+  }
+
+  private releaseTx(): void {
+    this.inTransaction = false;
+    const next = this.txQueue.shift();
+    if (next) next();
   }
 
   /** Multi-statement script execution. Bypasses translateSql. */
@@ -276,7 +308,7 @@ export async function withTx<T>(
   pool: Pool,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  pool.beginTx();
+  await pool.beginTx();
   try {
     const result = await fn(pool);
     pool.commitTx();
