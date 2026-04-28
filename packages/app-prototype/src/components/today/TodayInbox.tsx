@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertTriangle, Zap, MessageSquare, Calendar, Clock, User,
   MoreHorizontal, ChevronRight, FileText, Plus, ExternalLink,
-  StickyNote,
+  ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,12 +29,25 @@ const WS_NAME: Record<string, string> = {
   creative: 'Creative Lab',
 }
 
-// ── Chat goal icon — driven by the newest non-chat message kind. ─────────────
+// ── Chat goal icon — picker-aligned goal first, kind fallback. ───────────────
+const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
+  app:       Zap,
+  document:  FileText,
+  image:     ImageIcon,
+  data:      Table,
+  site:      Globe,
+  run:       Play,
+  task:      ListTodo,
+  scheduled: CalendarClock,
+}
 function chatGoalIcon(chat: Chat): LucideIcon {
-  switch (chat.iconKind) {
-    case 'task':    return Zap
-    case 'ai_note': return StickyNote
-    default:        return MessageSquare
+  if (chat.goalKind) return GOAL_ICONS[chat.goalKind]
+  switch (chat.kind) {
+    case 'task':
+    case 'task_run':
+      return ListTodo
+    default:
+      return MessageSquare
   }
 }
 

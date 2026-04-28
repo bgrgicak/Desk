@@ -58,8 +58,8 @@ describe("chats queries", () => {
     expect(list.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("iconKind picks the newest non-chat kind, with chat as fallback", async () => {
-    // Chat A: starts as chat, later gets a task. iconKind should be 'task'.
+  it("kind picks the newest user-action kind; chat and ai_note are fallbacks", async () => {
+    // Chat A: starts as chat, later gets a task. kind should be 'task'.
     const chatA = generateId("chat");
     await chats.insert(pool, { id: chatA, workspaceId: wsId, agentId, title: "Chat → task" });
     await messages.insert(pool, {
@@ -78,7 +78,7 @@ describe("chats queries", () => {
     });
 
     // Chat B: starts as task, then plain chat replies. The task icon should
-    // stick because the newest non-chat kind is still 'task'.
+    // stick because chat is a fallback, not an action.
     const chatB = generateId("chat");
     await chats.insert(pool, { id: chatB, workspaceId: wsId, agentId, title: "Task → chat" });
     await messages.insert(pool, {
@@ -107,10 +107,115 @@ describe("chats queries", () => {
       kind: "chat",
     });
 
+    // Chat D: task plus a later ai_note — ai_note is auto-emitted by the
+    // scheduler on every turn, so it must NOT hijack the icon. kind stays
+    // 'task'.
+    const chatD = generateId("chat");
+    await chats.insert(pool, { id: chatD, workspaceId: wsId, agentId, title: "Task + ai_note" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatD,
+      role: "user",
+      content: { type: "text", text: "do the thing" },
+      kind: "task",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatD,
+      role: "system",
+      content: { type: "ai_note_request" },
+      kind: "ai_note",
+    });
+
+    // Chat E: only chat + ai_note → both are fallbacks → 'chat'.
+    const chatE = generateId("chat");
+    await chats.insert(pool, { id: chatE, workspaceId: wsId, agentId, title: "Chat + ai_note" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatE,
+      role: "user",
+      content: { type: "text", text: "hi" },
+      kind: "chat",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: chatE,
+      role: "system",
+      content: { type: "ai_note_request" },
+      kind: "ai_note",
+    });
+
     const list = await chats.listWithLatestMessage(pool, wsId);
-    expect(list.find((c) => c.id === chatA)?.iconKind).toBe("task");
-    expect(list.find((c) => c.id === chatB)?.iconKind).toBe("task");
-    expect(list.find((c) => c.id === chatC)?.iconKind).toBe("chat");
+    expect(list.find((c) => c.id === chatA)?.kind).toBe("task");
+    expect(list.find((c) => c.id === chatB)?.kind).toBe("task");
+    expect(list.find((c) => c.id === chatC)?.kind).toBe("chat");
+    expect(list.find((c) => c.id === chatD)?.kind).toBe("task");
+    expect(list.find((c) => c.id === chatE)?.kind).toBe("chat");
+  });
+
+  it("goalKind is inferred from the newest user-role text", async () => {
+    // 'craete a randon data table' — matches the data heuristic.
+    const dataChatId = generateId("chat");
+    await chats.insert(pool, {
+      id: dataChatId,
+      workspaceId: wsId,
+      agentId,
+      title: "Random data table",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: dataChatId,
+      role: "user",
+      content: { type: "text", text: "craete a randon data table" },
+      kind: "chat",
+    });
+    // Plus a system ai_note (the auto-emitted refresh) so we prove the
+    // user-role filter actually picks the user message, not the note.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: dataChatId,
+      role: "system",
+      content: { type: "ai_note_request" },
+      kind: "ai_note",
+    });
+
+    // Site chat — 'show me a portfolio'. (Avoid 'build/make/app' so the
+    // app heuristic doesn't fire first.)
+    const siteChatId = generateId("chat");
+    await chats.insert(pool, {
+      id: siteChatId,
+      workspaceId: wsId,
+      agentId,
+      title: "Portfolio site",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: siteChatId,
+      role: "user",
+      content: { type: "text", text: "show me a portfolio" },
+      kind: "chat",
+    });
+
+    // Plain "hi" — no heuristic match, goalKind stays null.
+    const plainChatId = generateId("chat");
+    await chats.insert(pool, {
+      id: plainChatId,
+      workspaceId: wsId,
+      agentId,
+      title: "Plain",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: plainChatId,
+      role: "user",
+      content: { type: "text", text: "hi" },
+      kind: "chat",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === dataChatId)?.goalKind).toBe("data");
+    expect(list.find((c) => c.id === siteChatId)?.goalKind).toBe("site");
+    expect(list.find((c) => c.id === plainChatId)?.goalKind).toBeNull();
   });
 
   it("updates meta", async () => {

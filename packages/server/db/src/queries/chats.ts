@@ -1,5 +1,12 @@
 import pg from "pg";
-import { ChatSchema, ValidationError, type Chat, type MessageKind } from "@desk/shared";
+import {
+  ChatSchema,
+  ValidationError,
+  inferGoal,
+  type Chat,
+  type GoalKey,
+  type MessageKind,
+} from "@desk/shared";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -19,13 +26,21 @@ function rowToChat(row: Record<string, unknown>): Chat {
 export interface ChatWithLastMessage extends Chat {
   lastMessageContent?: unknown;
   /**
-   * Kind that drives the chat-list icon. Defined as the newest message in the
-   * chat whose kind is not 'chat' — so a chat that started conversational and
-   * later spawned a task takes on the task icon, while a long-running task
-   * chat keeps its task icon even after follow-up chat replies. Falls back to
-   * 'chat' when every message is a plain chat message (or the chat is empty).
+   * Kind that drives the chat-list icon when no `goalKind` is inferred.
+   * Newest message kind in the chat that represents a user action —
+   * currently `task` and `task_run`. `chat` (conversation) and `ai_note`
+   * (system-scheduled note refresh, auto-emitted on every turn) are both
+   * treated as fallbacks so they don't hijack the icon. Falls back to
+   * 'chat' when no user-action messages exist.
    */
-  iconKind: MessageKind;
+  kind: MessageKind;
+  /**
+   * Inferred from the newest user-role text message — `app` / `data` /
+   * `site` / etc. When set, the sidebar prefers this over `kind` so a
+   * conversation about "create a data table" shows the data icon. Null
+   * when no user text exists or no heuristic matches.
+   */
+  goalKind: GoalKey | null;
 }
 
 export async function listWithLatestMessage(
@@ -35,22 +50,32 @@ export async function listWithLatestMessage(
   const { rows } = await db.query(
     `SELECT c.*,
             (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
+            (SELECT m.content->>'text' FROM messages m
+               WHERE m.chat_id = c.id
+                 AND m.role = 'user'
+                 AND m.kind IN ('chat', 'task')
+                 AND m.content->>'type' = 'text'
+               ORDER BY m.created_at DESC LIMIT 1) AS last_user_text,
             COALESCE(
               (SELECT m.kind FROM messages m
-                 WHERE m.chat_id = c.id AND m.kind <> 'chat'
+                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'ai_note')
                  ORDER BY m.created_at DESC LIMIT 1),
               'chat'
-            ) AS icon_kind
+            ) AS kind
      FROM chats c
      WHERE c.workspace_id = $1
      ORDER BY c.updated_at DESC`,
     [workspaceId],
   );
-  return rows.map((r) => ({
-    ...rowToChat(r),
-    lastMessageContent: r.last_message_content ?? undefined,
-    iconKind: r.icon_kind as MessageKind,
-  }));
+  return rows.map((r) => {
+    const lastUserText = r.last_user_text == null ? null : String(r.last_user_text);
+    return {
+      ...rowToChat(r),
+      lastMessageContent: r.last_message_content ?? undefined,
+      kind: r.kind as MessageKind,
+      goalKind: lastUserText ? inferGoal(lastUserText) : null,
+    };
+  });
 }
 
 export async function findById(db: Queryable, id: string): Promise<Chat | null> {

@@ -230,7 +230,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet and `iconKind` (newest non-chat message kind, falling back to `chat` — drives the chat-list icon)." } },
+          responses: { "200": { description: "Chat array with last-message snippet, `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `ai_note` fall back), and `goalKind` (`app`/`data`/`site`/etc. inferred from the newest user-role text — drives the sidebar icon when set, with `kind` as the fallback signal)." } },
         },
         post: {
           summary: "Create chat",

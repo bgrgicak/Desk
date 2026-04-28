@@ -5,7 +5,8 @@ import {
   LayoutGrid, Zap, FolderOpen, Plus, Search,
   SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
-  FileText, StickyNote,
+  FileText,
+  ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -82,15 +83,28 @@ function sortedChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
 }
 
-function getChatIcon(chat: Chat, artifacts: Artifact[]): LucideIcon {
-  if (chat.artifactIds?.[0]) {
-    const artifact = artifacts.find(a => a.id === chat.artifactIds![0])
-    if (artifact) return getArtifactIcon(artifact.type)
-  }
-  switch (chat.iconKind) {
-    case 'task':    return Zap
-    case 'ai_note': return StickyNote
-    default:        return MessageSquare
+// Picker-aligned icons for the inferred goal of the chat.
+// Source of truth: ChatInput's GOALS list — keep these in sync so the
+// sidebar mirrors what the user picked / typed about.
+const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
+  app:       Zap,
+  document:  FileText,
+  image:     ImageIcon,
+  data:      Table,
+  site:      Globe,
+  run:       Play,
+  task:      ListTodo,
+  scheduled: CalendarClock,
+}
+
+function getChatIcon(chat: Chat): LucideIcon {
+  if (chat.goalKind) return GOAL_ICONS[chat.goalKind]
+  switch (chat.kind) {
+    case 'task':
+    case 'task_run':
+      return ListTodo
+    default:
+      return MessageSquare
   }
 }
 
@@ -310,7 +324,7 @@ export function AppShell({
               <SidebarGroupContent className="pb-10">
                 <SidebarMenu>
                   {visibleChats.map(chat => {
-                    const ChatIcon = getChatIcon(chat, artifacts)
+                    const ChatIcon = getChatIcon(chat)
                     return (
                       <SidebarMenuItem key={chat.id}>
                         <SidebarMenuButton
@@ -459,7 +473,7 @@ export function AppShell({
           {!chatSearchQuery.trim() && (
             <CommandGroup heading="Recent chats">
               {allChats.slice(0, 5).map(chat => {
-                const ChatIcon = getChatIcon(chat, artifacts)
+                const ChatIcon = getChatIcon(chat)
                 return (
                   <CommandItem
                     key={chat.id}
@@ -482,7 +496,7 @@ export function AppShell({
                   .filter(r => r.type === 'chat')
                   .map(r => {
                     const chat = allChats.find(c => c.id === r.id)
-                    const ChatIcon = chat ? getChatIcon(chat, artifacts) : MessageSquare
+                    const ChatIcon = chat ? getChatIcon(chat) : MessageSquare
                     return (
                       <CommandItem
                         key={r.id}
