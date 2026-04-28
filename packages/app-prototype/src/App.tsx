@@ -11,7 +11,6 @@ import { toast } from 'sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
-import type { WorkspaceNavView } from '@/components/layout/WorkspaceBar'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
@@ -19,6 +18,8 @@ import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
+import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
+import { GlobalPalette } from '@/components/global-palette/GlobalPalette'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
 import type { AttachmentRef } from '@/store/types'
 import {
@@ -46,6 +47,7 @@ import {
   markUpdateRead,
   markChatRead,
   setPendingNewChatAgentId,
+  setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
@@ -260,10 +262,6 @@ function AppInner() {
     goTo({ wsId: id, view: defaultView })
   }, [goTo, dispatch, defaultView])
 
-  const handleNavigateWorkspace = useCallback((id: string, view: WorkspaceNavView) => {
-    goTo({ wsId: id, view })
-  }, [goTo])
-
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))
     dispatch(setArtifactBackLabel(backLabel ?? null))
@@ -427,6 +425,27 @@ function AppInner() {
   return (
     <TooltipProvider>
       <Toaster position="bottom-right" />
+      <GlobalPaletteProvider>
+      <GlobalPalette
+        activeWorkspaceId={activeWorkspaceId}
+        onNavigatePage={(t) => {
+          if (t.opensToday) {
+            dispatch(setTodaySheetOpen(true))
+            return
+          }
+          if (t.view) goTo({ view: t.view })
+        }}
+        onNavigateSettings={(t) => {
+          dispatch(setPendingSettingsSection(t.section))
+        }}
+        onNavigateWorkspace={(id) => goTo({ wsId: id, view: defaultView })}
+        onSelectChat={({ id, workspaceId }) => {
+          goTo({ wsId: workspaceId || activeWorkspaceId, chat: id })
+        }}
+        onSelectFile={({ path, workspaceId }) => {
+          goTo({ wsId: workspaceId || activeWorkspaceId, view: 'context', item: path })
+        }}
+      />
       <AppShell
         activeView={activeView}
         onViewChange={handleViewChange}
@@ -444,7 +463,6 @@ function AppInner() {
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
         onGlobalToday={handleGlobalToday}
-        onNavigateWorkspace={handleNavigateWorkspace}
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
@@ -653,6 +671,7 @@ function AppInner() {
           />
         )}
       </AppShell>
+      </GlobalPaletteProvider>
     </TooltipProvider>
   )
 }

@@ -38,6 +38,13 @@ interface ComposerPickersProps {
    * its FocusScope and DismissableLayer (otherwise the trap pulls focus
    * out of the search input). */
   portalContainer?: HTMLElement | null
+  /** Hide the agent/model picker entirely. Used by surfaces that don't
+   * give users a choice — e.g. the global Ask AI palette, which uses a
+   * single global model. */
+  hideAgentPicker?: boolean
+  /** Skip the library dropdown and open a native file picker on click.
+   * Used when the surface has no library to pick from. */
+  directUpload?: boolean
 }
 
 function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
@@ -68,9 +75,28 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
     uploadInProgress = false,
     className,
     portalContainer,
+    hideAgentPicker = false,
+    directUpload = false,
   },
   ref,
 ) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleDirectUploadClick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleFilesPicked = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const next: ComposerAttachment[] = Array.from(files).map((f, i) => ({
+      id: `upload:${Date.now()}_${i}_${f.name}`,
+      name: f.name,
+      kind: 'item',
+      type: 'file',
+    }))
+    onAttachmentsChange([...attachments, ...next])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [attachments, onAttachmentsChange])
   const portalTarget = portalContainer ?? (typeof document !== 'undefined' ? document.body : null)
   const { data: globalAgents } = useGetAgentsQuery(undefined, { skip: !!workspaceId })
   const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(workspaceId ?? '', { skip: !workspaceId })
@@ -196,7 +222,19 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
 
   return (
     <div className={`flex items-center gap-1.5 ${className ?? ''}`}>
-      {/* Agent picker */}
+      {directUpload && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={e => handleFilesPicked(e.target.files)}
+        />
+      )}
+
+      {/* Agent picker — hidden on surfaces with a fixed global model. */}
+      {!hideAgentPicker && (
+        <>
       <button
         type="button"
         ref={agentBtnRef}
@@ -251,12 +289,15 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         </div>,
         portalTarget ?? document.body,
       )}
+        </>
+      )}
 
       {/* Attachment picker */}
       <button
         type="button"
         ref={attachBtnRef}
         onClick={() => {
+          if (directUpload) { handleDirectUploadClick(); return }
           const rect = attachBtnRef.current?.getBoundingClientRect() ?? null
           setAttachRect(rect)
           setAttachOpen(v => !v)
@@ -266,10 +307,10 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         className={pickerBtnClass}
       >
         <Paperclip className="h-3 w-3" />
-        Add files
-        <ChevronDown className="h-3 w-3 opacity-60" />
+        {directUpload ? 'Attach file' : 'Add files'}
+        {!directUpload && <ChevronDown className="h-3 w-3 opacity-60" />}
       </button>
-      {attachOpen && attachRect && createPortal(
+      {!directUpload && attachOpen && attachRect && createPortal(
         <div ref={attachDropRef} data-composer-dropdown="" style={getDropdownStyle(attachRect, 288)} className={dropdownClass}>
           <div className="flex items-center gap-2 px-3 py-2 border-b">
             <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
