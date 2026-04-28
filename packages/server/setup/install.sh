@@ -59,8 +59,23 @@ if mountpoint -q /home/desk/Desk 2>/dev/null; then
 fi
 
 if ! id desk &>/dev/null; then
-  log "Creating desk user (UID $DESK_UID)"
-  useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
+  # Try the host-matched UID first; fall back to 2000 + ACLs if that
+  # UID is already taken by a Lima/Ubuntu system account (e.g. messagebus,
+  # systemd-resolve). UID 2000 is well clear of the system range so the
+  # fallback always succeeds; the ACL grant gives the desk user write
+  # access to the host-mounted tree without needing to chown across
+  # virtiofs (which the host owns).
+  if useradd --system --uid "$DESK_UID" --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk 2>/dev/null; then
+    log "Created desk user (UID $DESK_UID)"
+  else
+    log "UID $DESK_UID unavailable — creating desk user at UID 2000 with ACLs on the mount"
+    apt-get install -y -qq acl >/dev/null
+    useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
+    if mountpoint -q /home/desk/Desk 2>/dev/null; then
+      setfacl -R -m u:desk:rwx /home/desk/Desk
+      setfacl -R -d -m u:desk:rwx /home/desk/Desk
+    fi
+  fi
 fi
 # Lima creates /home/desk as the parent of the /home/desk/Desk mount before
 # provision runs, so by the time useradd sees the dir it already exists and

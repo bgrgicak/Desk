@@ -35,6 +35,14 @@ describe("install.sh static checks", () => {
   it("sets DESK_RUN_BIN in the env file so at/cron jobs can find desk-run", () => {
     expect(script).toContain("DESK_RUN_BIN=");
   });
+
+  it("falls back to UID 2000 + ACLs if the host UID collides with a system user", () => {
+    // Without the fallback, useradd --uid $HOST_UID fails the whole
+    // provision when the host UID happens to clash with a Lima/Ubuntu
+    // system account (messagebus, systemd-resolve, etc).
+    expect(script).toMatch(/useradd[^\n]*--uid 2000/);
+    expect(script).toContain("setfacl");
+  });
 });
 
 describe("dev-override.conf static checks", () => {
