@@ -44,21 +44,21 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
-import type { Task, TaskOccurrence, ChatMessage as ChatMessageType } from '@/data/ui-types'
+import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { buildPath } from '@/router/nav'
 import {
   useGetAgentsQuery,
   usePatchMessageMutation,
-  useGetChatMessagesQuery,
+  useRunMessageMutation,
   usePostChatMessageMutation,
   useDeleteChatMutation,
 } from '@/store/api'
-import { ChatMessage } from '@/components/compose/ChatMessage'
+import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
-import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { StatusBadge, PriorityIcon, PRIORITY_LABELS } from './task-badges'
 import { usePersistedState } from '@/hooks/use-persisted-state'
+import { usePrefs } from '@/hooks/use-prefs'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
 import { describeCron } from './schedule-utils'
 
@@ -90,32 +90,13 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
 
 function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
   const { wsId } = useParams<{ wsId: string }>()
-  const { data } = useGetChatMessagesQuery({ chatId })
+  const { data: agents } = useGetAgentsQuery()
+  const { developerMode } = usePrefs()
   const [postMessage] = usePostChatMessageMutation()
   const [isSending, setIsSending] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
 
   const chatUrl = wsId ? buildPath(wsId, 'desk', { chat: chatId, message: messageId ?? null }) : null
-
-  // Show user and agent text messages. Exclude task_run (execution record
-  // that duplicates the task definition) to match the full chat view.
-  const messages: ChatMessageType[] = (data?.items ?? [])
-    .filter(m => m.kind !== 'task_run' && (m.role === 'user' || m.role === 'agent'))
-    .map(m => ({
-      id: m.id,
-      role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
-      content: m.content.type === 'text' ? m.content.text
-             : m.content.type === 'note' ? m.content.body
-             : '',
-      timestamp: new Date(m.createdAt),
-    }))
-    .filter(m => m.content.length > 0)
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages.length])
+  const fallbackModel = agents?.find(a => a.name === agentName)?.model ?? agentName ?? 'Agent'
 
   async function handleSend(text: string) {
     if (!text.trim() || isSending) return
@@ -130,8 +111,12 @@ function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentNa
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
-      {chatUrl && (
+    <ChatThread
+      chatId={chatId}
+      fallbackModel={fallbackModel}
+      developerMode={developerMode}
+      isSending={isSending}
+      headerSlot={chatUrl && (
         <div className="px-3 pt-2 pb-1 shrink-0 flex justify-end border-b">
           <Link
             to={chatUrl}
@@ -143,34 +128,18 @@ function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentNa
           </Link>
         </div>
       )}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="space-y-6 p-4">
-          {messages.length === 0 && !isSending && (
-            <p className="text-xs text-muted-foreground text-center pt-4" data-testid="task-chat-empty">
-              No messages yet. Ask a question or request changes.
-            </p>
-          )}
-          {messages.map((msg, i) => (
-            <ChatMessage
-              key={msg.id}
-              message={msg}
-              agentModel={agentName}
-              isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-            />
-          ))}
-          <StatusIndicator text={null} isTyping={isSending} />
+      footerSlot={
+        <div className="border-t p-3 shrink-0">
+          <ChatInput
+            onSend={(msg) => void handleSend(msg)}
+            placeholder="Ask a question or request changes…"
+            compact={true}
+            showGoalPicker={false}
+            draftKey={`task-chat:${chatId}`}
+          />
         </div>
-      </div>
-      <div className="border-t p-3 shrink-0">
-        <ChatInput
-          onSend={(msg) => void handleSend(msg)}
-          placeholder="Ask a question or request changes…"
-          compact={true}
-          showGoalPicker={false}
-          draftKey={`task-chat:${chatId}`}
-        />
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -187,6 +156,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
   const { data: agents } = useGetAgentsQuery()
   const [patchMessage, patchState] = usePatchMessageMutation()
+  const [runMessage, runState] = useRunMessageMutation()
   const [deleteChat] = useDeleteChatMutation()
 
   useEffect(() => {
@@ -230,7 +200,13 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   function changeStatus(next: Task['status']) {
     if (next === task.status && !isPaused) return
     if (next === 'active') {
-      toast.message('"Active" is set by the server when the task fires.')
+      if (!task.chatId || !task.messageId) {
+        toast.error('This task is not wired to a server message yet')
+        return
+      }
+      void runMessage({ chatId: task.chatId, messageId: task.messageId })
+        .unwrap()
+        .catch(err => toast.error('Action failed', { description: describeApiError(err) }))
       return
     }
     if (next === 'todo')      void transition('pending', { executeAt: null })
@@ -238,7 +214,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     if (next === 'scheduled') void transition('pending')
   }
 
-  const busy = patchState.isLoading
+  const busy = patchState.isLoading || runState.isLoading
   const assigneeAgent = agents?.find(a => a.id === task.assigneeId)
   const assigneeLabel = !task.assigneeId || task.assigneeId === 'user'
     ? 'You'
@@ -405,7 +381,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44">
-                    {(['todo', 'scheduled', 'complete'] as Task['status'][]).map(s => (
+                    {(['todo', 'active', 'scheduled', 'complete'] as Task['status'][]).map(s => (
                       <DropdownMenuItem key={s} onSelect={() => changeStatus(s)} className="gap-2">
                         <StatusBadge status={s} />
                       </DropdownMenuItem>
