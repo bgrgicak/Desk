@@ -61,7 +61,22 @@ EOF
 cmd="${1:-}"
 shift || true
 
-SET_EXPR=".mounts[0].location = \"$REPO_ROOT\" | .mounts[1].location = \"$DESK_HOME_HOST\" | .portForwards[0].hostPort = $PORT"
+# Lima's mount drivers don't overlap cleanly across hosts:
+#   - macOS uses the VZ driver, which only accepts "virtiofs" or
+#     "reverse-sshfs" — it rejects "9p" at config validation time.
+#   - Linux uses the QEMU driver, where Lima's virtiofsd refuses
+#     guest-side chown on the mount root and mismaps host GIDs to
+#     "nogroup". 9p with mapped-xattr (set per-mount in lima.yaml) lets
+#     the desk user own its subdirs via xattrs on the host side.
+# So pick per host instead of hardcoding in lima.yaml. The per-mount
+# `9p:` block in lima.yaml is harmless on virtiofs hosts — Lima only
+# applies it when mountType matches.
+case "$(uname -s)" in
+  Darwin) MOUNT_TYPE="virtiofs" ;;
+  *)      MOUNT_TYPE="9p" ;;
+esac
+
+SET_EXPR=".mounts[0].location = \"$REPO_ROOT\" | .mounts[1].location = \"$DESK_HOME_HOST\" | .portForwards[0].hostPort = $PORT | .mountType = \"$MOUNT_TYPE\""
 
 # "" if the instance doesn't exist, else "Running" | "Stopped" | etc.
 vm_status() { limactl list --format '{{.Status}}' "$NAME" 2>/dev/null; }

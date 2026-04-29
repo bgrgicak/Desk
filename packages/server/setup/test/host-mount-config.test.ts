@@ -27,12 +27,11 @@ describe("lima.yaml host-Desk mount", () => {
     expect(yaml).toContain("PLACEHOLDER_DESK_HOME");
   });
 
-  it("pins mountType to a specific value (not whatever default Lima ships with)", () => {
-    // The exact mount type is a tuning choice — virtiofs on Linux honors
-    // fsync and supports mmap, 9p has historically been the cross-platform
-    // default. What matters is that it's pinned, so the durability
-    // contract doesn't drift with the local Lima version.
-    expect(yaml).toMatch(/^\s*mountType:\s*"?[a-z0-9]+"?\s*$/m);
+  it("does not hardcode mountType — vm.sh injects it per host", () => {
+    // Lima drivers don't overlap cleanly: macOS+VZ rejects 9p, and on
+    // Linux+QEMU virtiofs has chown bugs. vm.sh picks per host, so
+    // lima.yaml must not pin a value that would conflict on the other.
+    expect(yaml).not.toMatch(/^\s*mountType:\s*"?[a-z0-9]+"?\s*$/m);
   });
 });
 
@@ -57,6 +56,15 @@ describe("vm.sh PLACEHOLDER_DESK_HOME substitution", () => {
 
   it("creates the host Desk dir before starting the VM", () => {
     expect(sh).toMatch(/mkdir -p[^\n]*DESK_HOME_HOST/);
+  });
+
+  it("injects mountType per host: virtiofs on Darwin, 9p elsewhere", () => {
+    // macOS + Lima VZ driver rejects 9p; Linux + QEMU + virtiofsd refuses
+    // guest-side chown. Both branches must be present so a drift in either
+    // direction (e.g. someone deleting the case-switch) trips this test.
+    expect(sh).toMatch(/Darwin\)\s*MOUNT_TYPE="virtiofs"/);
+    expect(sh).toMatch(/MOUNT_TYPE="9p"/);
+    expect(sh).toMatch(/\.mountType\s*=\s*\\?"\$MOUNT_TYPE\\?"/);
   });
 });
 
