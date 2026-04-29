@@ -65,18 +65,18 @@ export function ArtifactInlineCard({ artifact, isSaved, onOpen, onSave }: Artifa
               className="flex items-center gap-1.5 text-xs font-medium bg-primary/60 text-primary-foreground rounded-md px-2.5 py-1 cursor-default"
             >
               <Check className="h-3 w-3" />
-              Saved to Desk
+              In Library
             </button>
           ) : (
             <button
               onClick={() => {
                 onSave?.()
-                toast.success(`"${artifact.name}" saved to your Desk`)
+                toast.success(`"${artifact.name}" moved to your Library`)
               }}
               className="flex items-center gap-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md px-2.5 py-1 hover:bg-primary/90 transition-colors"
             >
               <BookmarkPlus className="h-3 w-3" />
-              Save to Desk
+              Save to Library
             </button>
           )}
         </div>

@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { PanelRightClose, ChevronDown, ChevronRight } from 'lucide-react'
+import { PanelRightClose, ChevronDown, ChevronRight, Bot, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useMockChat } from '@/hooks/use-mock-chat'
 import { usePersistedState } from '@/hooks/use-persisted-state'
-import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate } from '@/data/ui-types'
+import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate, ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 
 type PanelTab = 'chat' | 'details'
@@ -18,6 +18,7 @@ interface ConversationPanelProps {
   onCollapse?: () => void
   collapsed?: boolean
   artifact?: Artifact
+  item?: ContextItem
   update?: ArtifactUpdate | null
   isUpdateRead?: boolean
   onDismissUpdate?: (id: string) => void
@@ -30,15 +31,17 @@ export function ConversationPanel({
   onCollapse,
   collapsed = false,
   artifact,
+  item,
   update,
   transitionFrom,
 }: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const tabKey = artifact ? `desk.artifact.${artifact.id}.tab` : null
+  const tabKey = artifact ? `desk.artifact.${artifact.id}.tab` : item ? `library.item.${item.id}.tab` : null
   const [activeTab, setActiveTab] = usePersistedState<PanelTab>(tabKey, 'chat')
   const [detailsSectionOpen, setDetailsSectionOpen] = useState(true)
   const [notesSectionOpen, setNotesSectionOpen] = useState(true)
   const [artifactNotes, setArtifactNotes] = useState('')
+  const [itemNotes, setItemNotes] = useState('')
 
   const updateMsg = update ? {
     id: `update-${update.id}`,
@@ -125,20 +128,19 @@ export function ConversationPanel({
             </div>
           </div>
           <div className="border-t p-3 shrink-0">
-            <p className="text-[10px] text-muted-foreground/60 mb-2 leading-none">Changes in this conversation won't affect other chats.</p>
             <ChatInput
               onSend={(msg) => sendMessage(msg)}
               placeholder="Ask to make changes..."
               compact={true}
               showGoalPicker={true}
-              draftKey={artifact ? `artifact:${artifact.id}` : undefined}
+              draftKey={artifact ? `artifact:${artifact.id}` : item ? `library:${item.id}` : undefined}
             />
           </div>
         </>
       )}
 
       {/* Details tab */}
-      {activeTab === 'details' && artifact && (
+      {activeTab === 'details' && (artifact || item) && (
         <div className="flex-1 overflow-y-auto">
           {/* Notes for AI */}
           <div className="border-b">
@@ -154,11 +156,11 @@ export function ConversationPanel({
             {notesSectionOpen && (
               <div className="px-4 pb-4">
                 <p className="text-xs text-muted-foreground mb-2">
-                  Extra context the AI will see when working on this artifact.
+                  Extra context the AI will see when working on this file.
                 </p>
                 <textarea
-                  value={artifactNotes}
-                  onChange={e => setArtifactNotes(e.target.value)}
+                  value={item ? itemNotes : artifactNotes}
+                  onChange={e => item ? setItemNotes(e.target.value) : setArtifactNotes(e.target.value)}
                   placeholder="e.g., Always keep the tone formal."
                   className="w-full min-h-[80px] rounded-lg border bg-background shadow-xs px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
                 />
@@ -166,7 +168,7 @@ export function ConversationPanel({
             )}
           </div>
 
-          {/* Details */}
+          {/* About */}
           <div className="border-b">
             <button
               onClick={() => setDetailsSectionOpen(v => !v)}
@@ -179,28 +181,73 @@ export function ConversationPanel({
             </button>
             {detailsSectionOpen && (
               <div className="px-4 pb-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Type</span>
-                  <span className="text-xs text-foreground capitalize">{artifact.type}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Agent</span>
-                  <span className="text-xs text-foreground">{artifact.agentName}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Model</span>
-                  <span className="text-xs text-foreground">{artifact.agentModel}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Created</span>
-                  <span className="text-xs text-foreground">
-                    {artifact.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Updated</span>
-                  <span className="text-xs text-foreground">{getRelativeTime(artifact.updatedAt)}</span>
-                </div>
+                {item ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Created by</span>
+                      <div className="flex items-center gap-1.5">
+                        {item.uploadedBy === 'user' ? (
+                          <>
+                            <User className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-xs text-foreground">You</span>
+                          </>
+                        ) : (
+                          <>
+                            <Bot className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-xs text-foreground">{item.agentName ?? 'Claude'}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Added</span>
+                      <span className="text-xs text-foreground">
+                        {item.addedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                    </div>
+                    {item.lastAccessed && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Last accessed</span>
+                        <span className="text-xs text-foreground">{getRelativeTime(item.lastAccessed)}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Type</span>
+                      <span className="text-xs text-foreground capitalize">{item.type}</span>
+                    </div>
+                    {item.fileSize && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Size</span>
+                        <span className="text-xs text-foreground">{item.fileSize}</span>
+                      </div>
+                    )}
+                  </>
+                ) : artifact ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Type</span>
+                      <span className="text-xs text-foreground capitalize">{artifact.type}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Agent</span>
+                      <span className="text-xs text-foreground">{artifact.agentName}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Model</span>
+                      <span className="text-xs text-foreground">{artifact.agentModel}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Created</span>
+                      <span className="text-xs text-foreground">
+                        {artifact.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Updated</span>
+                      <span className="text-xs text-foreground">{getRelativeTime(artifact.updatedAt)}</span>
+                    </div>
+                  </>
+                ) : null}
               </div>
             )}
           </div>

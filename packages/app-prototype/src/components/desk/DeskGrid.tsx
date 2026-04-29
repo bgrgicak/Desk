@@ -9,9 +9,28 @@ import {
   BreadcrumbPage,
 } from '@/components/ui/breadcrumb'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { ArtifactCard } from './ArtifactCard'
+import { LibraryCard } from '@/components/library/LibraryCard'
+import { ArtifactThumbnail } from './ArtifactThumbnail'
 import { ArtifactCreationSheet, type ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
-import type { Artifact, ArtifactType, ArtifactUpdate } from '@/data/ui-types'
+import type { Artifact, ArtifactType, ArtifactUpdate, ContextItem } from '@/data/ui-types'
+
+/** Adapts an Artifact into the minimal ContextItem shape LibraryCard expects.
+ *  Desk's surface only shows AI-created artifacts, so `uploadedBy` is always
+ *  'ai'. */
+function artifactToContextItem(a: Artifact): ContextItem {
+  return {
+    id: a.id,
+    type: 'file',
+    name: a.name,
+    content: '',
+    folderId: null,
+    addedAt: a.createdAt,
+    usedBy: [],
+    uploadedBy: 'ai',
+    agentName: a.agentName,
+    relatedArtifactIds: [],
+  }
+}
 
 interface DeskGridProps {
   artifacts: Artifact[]
@@ -26,7 +45,7 @@ interface DeskGridProps {
 
 type FilterType = 'all' | ArtifactType
 
-export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipToChat, workspaceId, updates, readUpdateIds, onDismissUpdate }: DeskGridProps) {
+export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipToChat, workspaceId }: DeskGridProps) {
   const [filter, setFilter] = usePersistedState<FilterType>('desk.deskGrid.filter', 'all')
   const [searchQuery, setSearchQuery] = useState('')
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -119,19 +138,16 @@ export function DeskGrid({ artifacts, onArtifactClick, onCreateArtifact, onSkipT
       ) : (
         <div className="flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filtered.map((artifact, i) => {
-              const update = (updates ?? []).find(u => u.artifactId === artifact.id && !(readUpdateIds ?? new Set()).has(u.id))
-              return (
-                <ArtifactCard
-                  key={artifact.id}
-                  artifact={artifact}
-                  onClick={() => onArtifactClick(artifact)}
-                  index={i}
-                  update={update}
-                  onDismissUpdate={onDismissUpdate}
-                />
-              )
-            })}
+            {filtered.map((artifact, i) => (
+              <LibraryCard
+                key={artifact.id}
+                item={artifactToContextItem(artifact)}
+                layout="grid"
+                index={i}
+                thumbnail={<ArtifactThumbnail artifact={artifact} />}
+                onClick={() => onArtifactClick(artifact)}
+              />
+            ))}
           </div>
         </div>
       )}
