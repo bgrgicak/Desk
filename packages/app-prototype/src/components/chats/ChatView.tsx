@@ -314,15 +314,15 @@ function ArtifactsPanel({
                       {isSaved ? (
                         <DropdownMenuItem disabled>
                           <Check className="h-3.5 w-3.5 mr-2" />
-                          Saved to Desk
+                          In Library
                         </DropdownMenuItem>
                       ) : (
                         <DropdownMenuItem onClick={() => {
                           onSaveArtifact?.(artifact.id)
-                          toast.success(`"${artifact.name}" saved to your Desk`)
+                          toast.success(`"${artifact.name}" moved to your Library`)
                         }}>
                           <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
-                          Save to Desk
+                          Save to Library
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem

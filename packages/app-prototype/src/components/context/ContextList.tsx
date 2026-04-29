@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload,
-  ClipboardPaste,
   PenLine,
   FilePlus,
   FolderOpen,
@@ -17,6 +16,13 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Sparkles,
+  Shapes,
+  FileText,
+  StickyNote,
+  Link2,
+  EyeOff,
+  type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -45,6 +51,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,7 +89,8 @@ import {
 import { downloadLibraryFile } from '@/store/library-download'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { toContextItem, toFolderList } from '@/store/selectors/library'
-import { iconForItem } from '@/data/file-kind'
+import { LibraryCard } from '@/components/library/LibraryCard'
+import { ArtifactCreationSheet, type ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
 import { toast } from 'sonner'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
@@ -85,10 +99,15 @@ interface ContextListProps {
   items: ContextItem[]
   onItemClick: (item: ContextItem) => void
   onCompose: (attachedItems?: ContextItem[]) => void
+  onPinItem?: (item: ContextItem) => void
+  onUnpinItem?: (item: ContextItem) => void
+  onCreateArtifact?: (input: ArtifactCreateInput) => Promise<void>
+  onSkipToChat?: (agentId?: string) => Promise<void>
 }
 
 type ViewMode = 'list' | 'grid'
 type TypeFilter = 'all' | 'folder' | 'file' | 'link' | 'note' | 'hidden'
+type ByFilter = 'all' | 'me' | 'ai'
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -97,6 +116,21 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'note', label: 'Notes' },
   { value: 'link', label: 'Links' },
 ]
+
+const BY_FILTERS: { value: ByFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'me', label: 'By me' },
+  { value: 'ai', label: 'By AI' },
+]
+
+const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
+  all: Shapes,
+  folder: FolderIcon,
+  file: FileText,
+  note: StickyNote,
+  link: Link2,
+  hidden: EyeOff,
+}
 
 // Dev-only filter: surfaces dot-prefixed library entries the server hides
 // from normal listings (agent artifacts, `.opencode/`, drafts, etc.).
@@ -109,9 +143,10 @@ function isHiddenPath(p: string): boolean {
   return p.split('/').some(seg => seg.startsWith('.'))
 }
 
-export function ContextList({ items, onItemClick, onCompose }: ContextListProps) {
+export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
+  const [byFilter, setByFilter] = usePersistedState<ByFilter>('desk.context.byFilter', 'all')
   const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
@@ -315,6 +350,9 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
     clearSelection()
   }
 
+  // Artifact creation sheet
+  const [createSheetOpen, setCreateSheetOpen] = useState(false)
+
   // New folder dialog
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -389,7 +427,12 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   // Apply filters. Hidden mode is its own slice — surfaces every dot-prefixed
   // entry (file or folder) regardless of mime kind, so the user can also
   // navigate into hidden subtrees like `.opencode/`.
-  const showFolders = typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden'
+  // Authorship filter narrows to user-uploaded vs AI-created items. Folders
+  // don't carry authorship metadata, so they're hidden whenever the filter is
+  // active — otherwise they'd misleadingly appear in a "By me" / "By AI" view.
+  const showFolders =
+    (typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden') &&
+    byFilter === 'all'
   const filteredFolders = showFolders
     ? childFolders
         .filter(f => !isHiddenMode || isHiddenPath(f.id))
@@ -399,6 +442,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
   const filteredItems = folderItems
     .filter(i => typeFilter === 'all' || typeFilter === 'hidden' || typeFilter === i.type)
     .filter(() => typeFilter !== 'folder')
+    .filter(i => byFilter === 'all' || (byFilter === 'ai' ? i.uploadedBy === 'ai' : i.uploadedBy === 'user'))
     .filter(i => !searchQuery || i.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime())
 
@@ -517,14 +561,14 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
           </Breadcrumb>
         }
         actions={<div className="flex items-center gap-2">
-          {/* Type filter pills */}
+          {/* Authorship filter pills */}
           <div className="flex items-center rounded-lg border p-0.5">
-            {filterChips.map(f => (
+            {BY_FILTERS.map(f => (
               <button
                 key={f.value}
-                onClick={() => setTypeFilter(f.value)}
+                onClick={() => setByFilter(f.value)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  typeFilter === f.value
+                  byFilter === f.value
                     ? 'bg-muted text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
@@ -533,6 +577,37 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               </button>
             ))}
           </div>
+
+          {/* Type dropdown */}
+          {(() => {
+            const TypeIcon = TYPE_FILTER_ICONS[typeFilter]
+            const currentLabel = typeFilter === 'all' ? 'All' : filterChips.find(f => f.value === typeFilter)?.label ?? 'All'
+            return (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 h-8 rounded-md border px-2.5 text-xs font-medium hover:bg-accent/30 transition-colors"
+                  >
+                    <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-muted-foreground">{currentLabel}</span>
+                    <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-40">
+                  {filterChips.map(f => {
+                    const FIcon = TYPE_FILTER_ICONS[f.value]
+                    return (
+                      <DropdownMenuItem key={f.value} onSelect={() => setTypeFilter(f.value)}>
+                        <FIcon className="h-4 w-4 text-muted-foreground" />
+                        {f.label}
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          })()}
 
           {/* Search */}
           <div className="relative">
@@ -545,11 +620,6 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               className="h-8 w-40 rounded-md border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 transition-all"
             />
           </div>
-
-          {/* New folder */}
-          <Button variant="outline" size="icon" className="h-8 w-8" title="New folder" onClick={() => setFolderDialogOpen(true)}>
-            <FolderPlus className="h-4 w-4" />
-          </Button>
 
           {/* View toggle */}
           <div className="flex items-center rounded-lg border p-0.5">
@@ -571,22 +641,32 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
           {/* Add dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="default" className="gap-1.5 text-xs">
+              <Button size="sm" variant="default" className="gap-1.5 text-xs" data-testid="library-add-button">
                 Add
                 <ChevronDown className="h-3 w-3 ml-0.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+              {onCreateArtifact && (
+                <>
+                  <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)} data-testid="library-create-ai-artifact"><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)} data-testid="library-create-folder"><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>}
       />
 
       {/* ── Body ── */}
+      <ContextMenu>
+      <ContextMenuTrigger asChild>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {totalCount === 0 ? (
@@ -608,13 +688,22 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" className="gap-1.5">
                     Add
+                    <ChevronDown className="h-3 w-3 ml-0.5" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />Create file</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+                <DropdownMenuContent align="center" className="w-44">
+                  {onCreateArtifact && (
+                    <>
+                      <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)}><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)}><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -721,98 +810,25 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
               })}
 
               {/* Items */}
-              {filteredItems.map((item, i) => {
-                const Icon = iconForItem(item)
-                const isSelected = selectedIds.has(item.id)
-                return (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, y: 5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: (filteredFolders.length + i) * 0.02 }}
-                    className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors group cursor-pointer ${
-                      isSelected ? 'bg-primary/5 border border-primary/10' : 'hover:bg-muted/50 border border-transparent'
-                    }`}
-                    onClick={() => onItemClick(item)}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={() => toggleSelect(item.id)}
-                      className="h-4 w-4"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                    <div
-                      className="flex items-center gap-3 flex-1 min-w-0"
-                    >
-                      <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
-                        {item.usedBy.length > 0 && (
-                          <p className="text-xs text-muted-foreground">
-                            Used by {item.usedBy.join(', ')}
-                            {item.lastAccessed && ` · ${getRelativeTime(item.lastAccessed)}`}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <span className="text-xs text-muted-foreground shrink-0 w-20 text-right capitalize">
-                      {item.type}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0 w-20 text-right">
-                      {getRelativeTime(item.addedAt)}
-                    </span>
-                    <div className="flex items-center gap-1 justify-end shrink-0 w-[140px] ml-10">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onCompose([item])
-                        }}
-                      >
-                        Use in chat
-                      </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            data-testid={`library-item-menu-${item.name}`}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <MoreHorizontal className="h-3.5 w-3.5" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40">
-                          <DropdownMenuItem onClick={() => onCompose([item])}>
-                            <MessageSquarePlus className="h-4 w-4 mr-2" />
-                            Use in chat
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDownload(item)}>
-                            <Download className="h-4 w-4 mr-2" />
-                            Download
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
-                          >
-                            <FolderPlus className="h-4 w-4 mr-2" />
-                            Move to folder
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </motion.div>
-                )
-              })}
+              {filteredItems.map((item, i) => (
+                <LibraryCard
+                  key={item.id}
+                  item={item}
+                  layout="list"
+                  index={filteredFolders.length + i}
+                  selected={selectedIds.has(item.id)}
+                  onSelectChange={() => toggleSelect(item.id)}
+                  onClick={() => onItemClick(item)}
+                  onUseInChat={() => onCompose([item])}
+                  onDownload={() => handleDownload(item)}
+                  onMove={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                  onDelete={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                  isPinned={item.pinned}
+                  onPin={onPinItem ? () => onPinItem(item) : undefined}
+                  onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                  isDraggable={!!onPinItem}
+                />
+              ))}
             </div>
           </div>
         ) : (
@@ -894,77 +910,26 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
             })}
 
             {/* Item cards */}
-            {filteredItems.map((item, i) => {
-              const Icon = iconForItem(item)
-              const isSelected = selectedIds.has(item.id)
-              return (
-                <motion.div
-                  key={item.id}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: (filteredFolders.length + i) * 0.03 }}
-                  className={`group relative rounded-xl border bg-background p-4 cursor-pointer hover:shadow-sm transition-all ${
-                    isSelected ? 'ring-2 ring-primary/30 border-primary/20' : 'border-border'
-                  }`}
-                  onClick={() => onItemClick(item)}
-                >
-                  <div
-                    className={`absolute top-2 left-2 transition-opacity ${isSelected || hasSelection ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={() => toggleSelect(item.id)}
-                      className="h-4 w-4 bg-background/80 backdrop-blur"
-                    />
-                  </div>
-                  <div className="absolute top-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-6 w-6 bg-background/80 backdrop-blur"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onCompose([item])
-                      }}
-                    >
-                      <MessageSquarePlus className="h-3 w-3" />
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="icon" className="h-6 w-6 bg-background/80 backdrop-blur" onClick={(e) => e.stopPropagation()}>
-                          <MoreHorizontal className="h-3 w-3" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-40">
-                        <DropdownMenuItem onClick={() => onCompose([item])}>
-                          <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleDownload(item)}>
-                          <Download className="h-4 w-4 mr-2" />Download
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
-                        >
-                          <FolderPlus className="h-4 w-4 mr-2" />Move to folder
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onClick={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="flex flex-col items-center text-center pt-4 pb-1">
-                    <Icon className="h-8 w-8 text-muted-foreground/40 mb-3" />
-                    <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{item.name}</p>
-                    <p className="text-xs text-muted-foreground">{getRelativeTime(item.addedAt)}</p>
-                  </div>
-                </motion.div>
-              )
-            })}
+            {filteredItems.map((item, i) => (
+              <LibraryCard
+                key={item.id}
+                item={item}
+                layout="grid"
+                index={filteredFolders.length + i}
+                selected={selectedIds.has(item.id)}
+                hasSelection={hasSelection}
+                onSelectChange={() => toggleSelect(item.id)}
+                onClick={() => onItemClick(item)}
+                onUseInChat={() => onCompose([item])}
+                onDownload={() => handleDownload(item)}
+                onMove={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                onDelete={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
+                isPinned={item.pinned}
+                onPin={onPinItem ? () => onPinItem(item) : undefined}
+                onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                isDraggable={!!onPinItem}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -1031,6 +996,22 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
           )}
         </AnimatePresence>
       </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        {onCreateArtifact && (
+          <>
+            <ContextMenuItem onSelect={() => setCreateSheetOpen(true)}><Sparkles className="h-4 w-4 mr-2" />AI artifact</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />New file</ContextMenuItem>
+        <ContextMenuItem onSelect={() => setFolderDialogOpen(true)}><FolderPlus className="h-4 w-4 mr-2" />New folder</ContextMenuItem>
+        <ContextMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><Link2 className="h-4 w-4 mr-2" />New link</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={openPicker}><Upload className="h-4 w-4 mr-2" />Upload file</ContextMenuItem>
+        <ContextMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Upload folder</ContextMenuItem>
+      </ContextMenuContent>
+      </ContextMenu>
 
       {/* New folder dialog */}
       <Dialog open={folderDialogOpen} onOpenChange={(open) => {
@@ -1282,6 +1263,21 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+          {onCreateArtifact && (
+            <ArtifactCreationSheet
+              open={createSheetOpen}
+              onOpenChange={setCreateSheetOpen}
+              workspaceId={activeWorkspaceId}
+              onCreateArtifact={async (input) => {
+                setCreateSheetOpen(false)
+                await onCreateArtifact(input)
+              }}
+              onSkipToChat={async (agentId) => {
+                setCreateSheetOpen(false)
+                await onSkipToChat?.(agentId)
+              }}
+            />
+          )}
         </div>
       )}
     </FileDropZone>

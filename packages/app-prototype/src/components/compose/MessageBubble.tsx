@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
+import { MarkdownContent } from '@/components/MarkdownContent'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -88,11 +89,7 @@ export function MessageBubble({
 function MessageContentView({ content, developerMode }: { content: MessageContent; developerMode: boolean }) {
   switch (content.type) {
     case 'text':
-      return (
-        <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-          {content.text}
-        </p>
-      )
+      return <MarkdownContent text={content.text} />
     case 'artifactRef':
       return <ArtifactRefRow path={content.path} name={content.name} />
     case 'events':
@@ -236,11 +233,7 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
       {chunks.map((c, i) => {
         if (c.kind === 'text') {
           if (!c.text.trim()) return null
-          return (
-            <p key={i} className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-              {c.text.trim()}
-            </p>
-          )
+          return <MarkdownContent key={i} text={c.text.trim()} />
         }
         if (c.kind === 'event') {
           return <EventRow key={i} entry={c.entry} />
