@@ -94,12 +94,10 @@ test("POST /chats/:id/messages with kind=task creates a task and lists under ?ki
   const schedBody = (await schedRes.json()) as { items: Array<{ id: string }> };
   expect(schedBody.items.some((m) => m.id === created.id)).toBe(true);
 
-  // UI sanity: open Tasks page in list view. The card text is
-  // m.title ?? firstLine(content), so a task with `title='Audit Q2'`
-  // renders the title rather than the content body.
+  // UI sanity: open Tasks page. The card text is m.title ?? firstLine(content),
+  // so a task with `title='Audit Q2'` renders the title rather than the content body.
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
-  await loggedInPage.getByTestId("tasks-view-list").click();
   await expect(
     loggedInPage.getByText("Audit Q2").first(),
   ).toBeVisible({ timeout: 10_000 });
