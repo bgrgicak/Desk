@@ -175,6 +175,7 @@ export function ScheduleEditor({
                   <button
                     key={i}
                     type="button"
+                    data-testid={`schedule-weekday-${i}`}
                     onClick={() => toggleWeekday(i)}
                     className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${
                       p.weekdays.includes(i)
@@ -197,6 +198,7 @@ export function ScheduleEditor({
                 type="number"
                 min={1}
                 max={28}
+                data-testid="schedule-month-day"
                 value={p.day}
                 onChange={e => patch({ day: Math.min(28, Math.max(1, Number(e.target.value))) })}
               />
