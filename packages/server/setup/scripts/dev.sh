@@ -105,12 +105,20 @@ fi
 # require() resolution out from under it.
 if [ "$host_installed" = "1" ]; then
   echo "==> Re-syncing VM node_modules shadow"
+  # Stop the bind mount so /desk/node_modules shows the host (macOS/Linux)
+  # tree. rsync copies it verbatim to the VM-local shadow — including any
+  # macOS Mach-O native binaries that are invalid ELF on Linux.
+  # After remounting, rebuild better-sqlite3 from source inside the VM so
+  # the shadow always has a Linux ELF binary regardless of host platform.
   "$VM_SH" exec "
     sudo systemctl stop desk-node_modules.mount &&
     sudo rsync -a --delete /desk/node_modules/ /home/desk/vm-node_modules/ &&
     sudo chown -R desk:desk /home/desk/vm-node_modules &&
     sudo systemctl start desk-node_modules.mount &&
-    sudo systemctl reset-failed desk-server || true
+    echo '==> Rebuilding better-sqlite3 for Linux inside VM' &&
+    cd /desk && sudo npm rebuild --build-from-source better-sqlite3 &&
+    sudo chown -R desk:desk /home/desk/vm-node_modules/better-sqlite3/build &&
+    sudo systemctl restart desk-server || true
   "
 fi
 
