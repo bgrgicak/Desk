@@ -105,14 +105,15 @@ async function insertPendingMessage(content: unknown): Promise<string> {
   return id;
 }
 
-async function insertTask(opts: { content: unknown; cron?: string; executeAt?: string }): Promise<string> {
+async function insertTask(opts: { content: unknown; cron?: string; executeAt?: string; role?: string }): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state, kind, cron, execute_at)
-     VALUES ($1, $2, 'user', $3, 'pending', 'task', $4, $5)`,
+     VALUES ($1, $2, $3, $4, 'pending', 'task', $5, $6)`,
     [
       id,
       chatId,
+      opts.role ?? "user",
       JSON.stringify(opts.content),
       opts.cron ?? null,
       opts.executeAt ? new Date(opts.executeAt) : null,
@@ -352,6 +353,52 @@ execRunFn: async () => ({ exitCode: 1 }),
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("failed");
+  });
+
+  it("user-created unscheduled task: parent state stays pending after run (user controls status)", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "user todo" },
+      // no executeAt, no cron — plain user-created task
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("agent-created unscheduled task: parent state transitions to terminal after run", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "agent todo" },
+      role: "agent",
+      // no executeAt, no cron
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("succeeded");
+    expect(parent?.executeAt).toBeUndefined();
   });
 
   it("declines to start a second concurrent run for the same task", async () => {

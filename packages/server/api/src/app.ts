@@ -272,7 +272,7 @@ export function createApp(opts: AppOptions): Server {
       const sendBody = { kind: "task", ...body };
       delete (sendBody as { chatId?: string }).chatId;
 
-      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent);
+      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, userMessage);
       return;
     }

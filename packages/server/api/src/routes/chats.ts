@@ -121,6 +121,7 @@ export async function sendMessage(
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
+  opts?: { role?: "user" | "agent" | "system" },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -151,7 +152,7 @@ export async function sendMessage(
     const message = await queries.messages.insert(pool, {
       id: messageId,
       chatId,
-      role: "user",
+      role: opts?.role ?? "user",
       content: { type: "text", text: data.content },
       attachments,
       kind,

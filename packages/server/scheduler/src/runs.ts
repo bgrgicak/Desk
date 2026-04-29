@@ -477,6 +477,10 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
+    // User-created unscheduled tasks: only the user should change status.
+    // Server/agent-created tasks (role !== 'user') and user-scheduled one-shots
+    // (executeAt set at fire time) may be auto-transitioned by the server.
+    if (task.role === "user" && !task.executeAt) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
       state: terminal,
       executeAt: null,
