@@ -55,6 +55,14 @@ export interface FileRef {
   mime: string;
   size: number;
   createdAt: string;
+  /** ID of the agent that *last* created or edited this file, if known. */
+  agentId?: string;
+  /** ID of the agent that *originally* created this file, if known. Stays
+   * stable even after subsequent human or agent edits — used by the
+   * Library UI to show a "by AI" provenance label. */
+  creatorAgentId?: string;
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean;
 }
 
 /** Extension-to-mime guesser used when the caller didn't provide one. */
@@ -362,6 +370,60 @@ export async function pinLibraryFileToChat(
     size: stat.size,
     createdAt: stat.birthtime.toISOString(),
   };
+}
+
+/**
+ * Promotes a chat attachment from `.chats/{chatId}/attachments/` into the
+ * primary workspace library (optionally inside `destSubpath`). The original
+ * location is replaced with a symlink to the new path so the chat's
+ * `listAttachments()` continues to surface the file.
+ *
+ * `attachmentName` must be a basename — the source is always
+ * `.chats/{chatId}/attachments/{attachmentName}`. Rejects when the source is
+ * already a symlink (i.e. a previously-pinned library file): a chat-pinned
+ * library reference is already in the library, so re-saving is meaningless.
+ *
+ * Name collisions in the destination directory are resolved by suffixing
+ * `-1`, `-2`, …, mirroring `uploadArtifact`'s scheme.
+ */
+export async function saveChatAttachmentToLibrary(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  attachmentName: string,
+  destSubpath?: string,
+): Promise<FileRef> {
+  if (path.basename(attachmentName) !== attachmentName) {
+    throw new ValidationError(`Invalid attachment name: ${attachmentName}`);
+  }
+  rejectHiddenName(attachmentName);
+
+  const sub = validateLibrarySubpath(destSubpath);
+  const root = workspaceRootPath(ctx.home, slug);
+  const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+  const srcAbs = path.join(attDir, attachmentName);
+
+  const srcStat = await fs.lstat(srcAbs).catch(() => null);
+  if (!srcStat) throw new NotFoundError(`Attachment not found: ${attachmentName}`);
+  if (srcStat.isSymbolicLink()) {
+    throw new ValidationError(
+      `Attachment is already a library reference: ${attachmentName}`,
+    );
+  }
+  if (!srcStat.isFile()) throw new ValidationError(`Not a file: ${attachmentName}`);
+
+  const destDir = sub ? path.join(root, sub) : root;
+  await fs.mkdir(destDir, { recursive: true });
+  const destAbs = await uniqueDestPath(destDir, attachmentName);
+
+  await fs.rename(srcAbs, destAbs);
+  // Best-effort: leave a symlink at the old path so the chat still shows
+  // the file via `listAttachments`. If the symlink can't be created the
+  // save still succeeded — the chat sidebar will just lose the row.
+  await fs.symlink(destAbs, srcAbs).catch(() => {});
+
+  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
+  return fileRefFromDisk(ctx.home, slug, relPath);
 }
 
 /**

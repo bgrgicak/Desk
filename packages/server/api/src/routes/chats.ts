@@ -13,6 +13,7 @@ import {
   materializeNote,
   notesDir,
   pinLibraryFileToChat,
+  saveChatAttachmentToLibrary,
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
@@ -601,3 +602,37 @@ export async function pinLibraryFile(
   return file;
 }
 
+/**
+ * Promotes a chat attachment from `.chats/{chatId}/attachments/` into the
+ * primary workspace library. The original location becomes a symlink to the
+ * new path, so the chat's "In this chat" sidebar continues to surface the
+ * file. `attachmentName` is a basename (e.g. `chart.png`); `destSubpath`
+ * (optional) is a workspace-root-relative library folder.
+ */
+export async function saveAttachmentToLibrary(
+  storage: StorageContext,
+  chatId: string,
+  attachmentName: string,
+  destSubpath: string | undefined,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const file = await saveChatAttachmentToLibrary(
+    storage,
+    ws.path,
+    chatId,
+    attachmentName,
+    destSubpath,
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: file.path, op: "added" },
+  });
+
+  return file;
+}

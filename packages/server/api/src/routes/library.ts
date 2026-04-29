@@ -30,10 +30,26 @@ async function resolveSlug(ctx: StorageContext, workspaceId: string): Promise<st
 export async function list(
   ctx: StorageContext,
   workspaceId: string,
-  opts?: { cursor?: string; limit?: number; showHidden?: boolean },
+  opts?: { cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean },
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
-  return listLibrary(ctx, slug, opts);
+  const [result, authors, pinnedPaths] = await Promise.all([
+    listLibrary(ctx, slug, opts),
+    queries.libraryFileAuthors.listByWorkspace(ctx.pool, workspaceId),
+    queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
+  ]);
+  for (const item of result.items) {
+    const author = authors.get(item.path);
+    if (author) {
+      item.agentId = author.agentId;
+      if (author.creatorAgentId) item.creatorAgentId = author.creatorAgentId;
+    }
+    if (pinnedPaths.has(item.path)) item.pinned = true;
+  }
+  if (opts?.pinned) {
+    result.items = result.items.filter((item) => item.pinned);
+  }
+  return result;
 }
 
 /**
@@ -166,6 +182,11 @@ export async function move(
 ): Promise<{ kind: "file" | "folder"; path: string }> {
   const slug = await resolveSlug(ctx, workspaceId);
   const result = await moveLibraryEntry(ctx, slug, from, to);
+  if (result.kind === "file") {
+    await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, from, to);
+  } else {
+    await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, from, to);
+  }
   emit({
     type: "library.changed",
     payload: { workspaceId, path: to, op: "moved" },
@@ -189,6 +210,22 @@ export async function remove(
     type: "library.changed",
     payload: { workspaceId, path: relPath, op: "removed" },
   });
+}
+
+export async function pin(
+  ctx: StorageContext,
+  workspaceId: string,
+  filePath: string,
+): Promise<void> {
+  await queries.libraryPins.pin(ctx.pool, workspaceId, filePath);
+}
+
+export async function unpin(
+  ctx: StorageContext,
+  workspaceId: string,
+  filePath: string,
+): Promise<void> {
+  await queries.libraryPins.unpin(ctx.pool, workspaceId, filePath);
 }
 
 export { readFile };

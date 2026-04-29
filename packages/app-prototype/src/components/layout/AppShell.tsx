@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
-  LayoutGrid, Zap, FolderOpen, Plus,
+  Pin, PinOff, Zap, FolderOpen, Plus,
   ListFilter, SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
   FileText,
@@ -51,12 +51,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { Button } from '@/components/ui/button'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
-import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import type { Chat, Artifact, InboxItem, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
+import { iconForItem } from '@/data/file-kind'
+import { DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
   useGetWorkspacesQuery,
   usePatchWorkspaceMutation,
@@ -69,13 +70,12 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
 
-export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
+export type View = 'today' | 'pinned' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
 const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
-  { view: 'desk',    icon: LayoutGrid,  label: 'Desk'    },
-  { view: 'tasks',   icon: Zap,         label: 'Tasks'   },
-  { view: 'context', icon: FolderOpen,  label: 'Library' },
+  { view: 'context', icon: FolderOpen, label: 'Library' },
+  { view: 'tasks',   icon: Zap,        label: 'Tasks'   },
 ]
 
 // Fallback used only while the /workspaces query is in flight — the real
@@ -90,6 +90,7 @@ const LOADING_WORKSPACE: WorkspaceInfo = {
 }
 
 const CHATS_PER_PAGE = 10
+const PINNED_PER_PAGE = 5
 
 const EMPTY_FILTER: ChatFilterValues = { goalKind: null, agentId: null, updatesOnly: false, artifactsOnly: false }
 
@@ -133,7 +134,6 @@ interface AppShellProps {
   onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
   unreadCount?: number
-  deskUnreadCount?: number
   readChatIds?: Set<string>
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void
@@ -146,6 +146,11 @@ interface AppShellProps {
   onTodaySheetClose?: () => void
   onSignOut?: () => void
   onChatWithAgent?: (agentId: string) => void
+  pinnedItems?: ContextItem[]
+  onPinnedItemClick?: (item: ContextItem) => void
+  onPinItem?: (itemId: string) => void
+  onUnpinItem?: (item: ContextItem) => void
+  selectedItemId?: string | null
 }
 
 export function AppShell({
@@ -159,7 +164,6 @@ export function AppShell({
   onChatClick,
   onDeleteChat,
   unreadCount = 0,
-  deskUnreadCount = 0,
   readChatIds = new Set(),
   isDetailOpen = false,
   onArtifactClick,
@@ -170,8 +174,21 @@ export function AppShell({
   onTodaySheetClose,
   onSignOut,
   onChatWithAgent,
+  pinnedItems = [],
+  onPinnedItemClick,
+  onPinItem,
+  onUnpinItem,
+  selectedItemId,
 }: AppShellProps) {
   const [chatPage, setChatPage] = useState(1)
+  const [pinnedPage, setPinnedPage] = useState(1)
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
+  const [chatsCollapsed, setChatsCollapsed] = useState(false)
+  const [isDraggingLibraryItem, setIsDraggingLibraryItem] = useState(false)
+  const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
+  const pinnedDropCounter = useRef(0)
+  const [isInsetDropOver, setIsInsetDropOver] = useState(false)
+  const insetDropCounter = useRef(0)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
   const [chatSearchValue, setChatSearchValue] = useState('')
@@ -206,6 +223,74 @@ export function AppShell({
     appDispatch(setPendingSettingsSection(null))
   }, [pendingSettingsSection, appDispatch])
   const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
+
+  // Detect library item drags globally so the pinned section can show a dropzone.
+  useEffect(() => {
+    const handleDragStart = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes(DRAG_TYPE_LIBRARY_ITEM)) {
+        setIsDraggingLibraryItem(true)
+      }
+    }
+    const handleDragEnd = () => {
+      setIsDraggingLibraryItem(false)
+      setIsPinnedDropOver(false)
+      pinnedDropCounter.current = 0
+    }
+    document.addEventListener('dragstart', handleDragStart)
+    document.addEventListener('dragend', handleDragEnd)
+    return () => {
+      document.removeEventListener('dragstart', handleDragStart)
+      document.removeEventListener('dragend', handleDragEnd)
+    }
+  }, [])
+
+  const handlePinnedDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    e.preventDefault()
+    pinnedDropCounter.current += 1
+    setIsPinnedDropOver(true)
+  }
+  const handlePinnedDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+  const handlePinnedDragLeave = () => {
+    pinnedDropCounter.current = Math.max(0, pinnedDropCounter.current - 1)
+    if (pinnedDropCounter.current === 0) setIsPinnedDropOver(false)
+  }
+  const handlePinnedDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    pinnedDropCounter.current = 0
+    setIsPinnedDropOver(false)
+    setIsDraggingLibraryItem(false)
+    const itemId = e.dataTransfer.getData(DRAG_TYPE_LIBRARY_ITEM)
+    if (itemId) onPinItem?.(itemId)
+  }
+
+  const handleInsetDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
+    e.preventDefault()
+    insetDropCounter.current += 1
+    setIsInsetDropOver(true)
+  }
+  const handleInsetDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+  const handleInsetDragLeave = () => {
+    insetDropCounter.current = Math.max(0, insetDropCounter.current - 1)
+    if (insetDropCounter.current === 0) setIsInsetDropOver(false)
+  }
+  const handleInsetDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    insetDropCounter.current = 0
+    setIsInsetDropOver(false)
+    const itemId = e.dataTransfer.getData(DRAG_TYPE_PINNED_ITEM)
+    const item = pinnedItems.find(i => i.id === itemId)
+    if (item) onUnpinItem?.(item)
+  }
 
   // Server-backed workspaces. The WorkspaceBar/Settings components still
   // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
@@ -325,19 +410,105 @@ export function AppShell({
                     <Icon className="h-4 w-4" />
                     <span>{label}</span>
                   </SidebarMenuButton>
-                  {view === 'desk' && deskUnreadCount > 0 && (
-                    <SidebarMenuBadge className="text-muted-foreground text-xs font-medium !top-1/2 !-translate-y-1/2 mr-1">
-                      {deskUnreadCount}
-                    </SidebarMenuBadge>
-                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
 
-            {/* "Recent AI chats" label + search + new chat buttons */}
-            <div className="flex items-center justify-between px-2 mt-3">
-              <span className="text-xs font-medium text-foreground/70">Recent AI chats</span>
-              <div className="flex items-center gap-0.5">
+            {/* ── Pinned items section ── */}
+            <div
+              className="mt-3"
+              onDragEnter={handlePinnedDragEnter}
+              onDragOver={handlePinnedDragOver}
+              onDragLeave={handlePinnedDragLeave}
+              onDrop={handlePinnedDrop}
+            >
+              <div className="group flex items-center px-2 mb-2 gap-1">
+                <span className="text-xs font-medium text-foreground/70">Pinned</span>
+                <button
+                  onClick={() => setPinnedCollapsed(c => !c)}
+                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
+                  aria-label={pinnedCollapsed ? 'Expand Pinned' : 'Collapse Pinned'}
+                >
+                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${pinnedCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+              </div>
+              {!pinnedCollapsed && (
+                isDraggingLibraryItem ? (
+                  <div className={`mx-2 rounded-lg border border-dashed p-4 min-h-[52px] flex items-center justify-center transition-colors ${
+                    isPinnedDropOver
+                      ? 'border-primary/40 bg-primary/5'
+                      : 'border-foreground/20 bg-foreground/5'
+                  }`}>
+                    <p className="text-xs text-muted-foreground">Drop here to pin</p>
+                  </div>
+                ) : pinnedItems.length === 0 ? (
+                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
+                    <p className="text-xs text-muted-foreground">
+                      Pin or drag items from Library to see them here.
+                    </p>
+                  </div>
+                ) : (
+                  <SidebarMenu>
+                    {pinnedItems.slice(0, pinnedPage * PINNED_PER_PAGE).map(item => {
+                      const ItemIcon = iconForItem(item)
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            isActive={item.id === selectedItemId}
+                            onClick={() => onPinnedItemClick?.(item)}
+                            className="text-foreground/70"
+                            draggable
+                            onDragStart={(e: React.DragEvent) => {
+                              e.dataTransfer.effectAllowed = 'move'
+                              e.dataTransfer.setData(DRAG_TYPE_PINNED_ITEM, item.id)
+                            }}
+                          >
+                            <ItemIcon className="h-4 w-4 shrink-0" />
+                            <span className="truncate">{item.name}</span>
+                          </SidebarMenuButton>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <SidebarMenuAction showOnHover onClick={e => e.stopPropagation()} className="!right-2">
+                                <MoreHorizontal />
+                                <span className="sr-only">Item options</span>
+                              </SidebarMenuAction>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent side="right" align="start" className="w-36">
+                              <DropdownMenuItem onClick={() => onUnpinItem?.(item)}>
+                                <PinOff className="h-4 w-4 mr-2" />
+                                Unpin
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                    {pinnedItems.length > pinnedPage * PINNED_PER_PAGE && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton onClick={() => setPinnedPage(p => p + 1)} className="text-muted-foreground">
+                          <ChevronDown className="h-4 w-4 shrink-0" />
+                          <span>Show more</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                  </SidebarMenu>
+                )
+              )}
+            </div>
+
+            {/* Chats label + filter + new chat buttons */}
+            <div className="group flex items-center justify-between px-2 mt-3">
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-foreground/70">Chats</span>
+                <button
+                  onClick={() => setChatsCollapsed(c => !c)}
+                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
+                  aria-label={chatsCollapsed ? 'Expand Chats' : 'Collapse Chats'}
+                >
+                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${chatsCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+              </div>
+              <div className={`flex items-center gap-0.5 ${chatsCollapsed ? 'invisible pointer-events-none' : ''}`}>
                 <Popover
                   open={filterOpen}
                   onOpenChange={(open) => {
@@ -381,18 +552,26 @@ export function AppShell({
 
           {/* ── Content: scrollable chat list ── */}
           <SidebarContent ref={sidebarScrollRef}>
-            <SidebarGroup className="px-2 py-0">
+            {!chatsCollapsed && <SidebarGroup className="px-2 py-0">
               <SidebarGroupContent className="pb-10">
-                {hasActiveFilter && filteredChats.length === 0 && (
-                  <div className="flex flex-col items-center gap-2 pt-12 px-4 text-center">
-                    <p className="text-xs text-muted-foreground">No chats found. Try adjusting your filters.</p>
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => { setAppliedFilter(EMPTY_FILTER); setPendingFilter(EMPTY_FILTER) }}
-                    >
-                      Clear filters
-                    </Button>
+                {filteredChats.length === 0 && (
+                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
+                    {hasActiveFilter ? (
+                      <p className="text-xs text-muted-foreground">
+                        No chats found.{' '}
+                        <button
+                          className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors"
+                          onClick={() => { setAppliedFilter(EMPTY_FILTER); setPendingFilter(EMPTY_FILTER) }}
+                        >
+                          Clear filters
+                        </button>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        <button onClick={onCompose} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors">Start a chat</button>
+                        {' '}with an AI agent to see it here.
+                      </p>
+                    )}
                   </div>
                 )}
                 <SidebarMenu>
@@ -445,7 +624,7 @@ export function AppShell({
                   )}
                 </SidebarMenu>
               </SidebarGroupContent>
-            </SidebarGroup>
+            </SidebarGroup>}
           </SidebarContent>
 
           {/* ── Footer: Customize only ── */}
@@ -462,9 +641,22 @@ export function AppShell({
         </Sidebar>
 
         {/* Main content */}
-        <SidebarInset className="rounded-xl overflow-hidden shadow-xs mr-2 mb-2 md:peer-data-[state=collapsed]:ml-2">
-          <main className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
+        <SidebarInset
+          className="rounded-xl overflow-hidden shadow-xs mr-2 mb-2 md:peer-data-[state=collapsed]:ml-2"
+          onDragEnter={handleInsetDragEnter}
+          onDragOver={handleInsetDragOver}
+          onDragLeave={handleInsetDragLeave}
+          onDrop={handleInsetDrop}
+        >
+          <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
             {children}
+            {isInsetDropOver && (
+              <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 backdrop-blur-[1px]">
+                <p className="text-sm font-medium text-primary/70 bg-background/80 rounded-md px-3 py-2 shadow-sm">
+                  Drop here to unpin
+                </p>
+              </div>
+            )}
           </main>
         </SidebarInset>
 
@@ -480,11 +672,6 @@ export function AppShell({
             >
               <div className="relative">
                 <Icon className="h-5 w-5" />
-                {view === 'desk' && deskUnreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-medium text-primary-foreground">
-                    {deskUnreadCount}
-                  </span>
-                )}
               </div>
               <span className="text-[10px] font-medium">{label}</span>
             </button>

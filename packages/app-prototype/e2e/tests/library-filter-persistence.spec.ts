@@ -1,6 +1,6 @@
 /**
- * Regression: Library filter chips (All/Folders/Files/Notes/Links + Hidden)
- * are persisted in localStorage and must survive both folder navigation and
+ * Regression: Library type filter (All/Folders/Files/Notes/Links + Hidden)
+ * is persisted in localStorage and must survive both folder navigation and
  * a hard refresh. Two prior bugs:
  *
  *   1. `navigateToFolder` reset typeFilter to 'all' on every folder click,
@@ -9,8 +9,25 @@
  *      `me` query resolved. A reset effect that watched `developerMode`
  *      saw `false`, treated the persisted 'hidden' value as illegal, and
  *      clobbered it back to 'all' on every page load.
+ *
+ * The filter is rendered as a dropdown — its trigger
+ * (`data-testid="library-type-filter"`) shows the current selection's label.
+ * "Active" is therefore expressed as the trigger's text content, not a
+ * pill-style class.
  */
+import type { Page } from "@playwright/test";
 import { test, expect } from "../fixtures";
+
+async function pickTypeFilter(page: Page, label: string): Promise<void> {
+  await page.getByTestId("library-type-filter").click();
+  await page.getByRole("menuitem", { name: new RegExp(`^${label}$`) }).click();
+}
+
+async function expectTypeFilter(page: Page, label: string): Promise<void> {
+  await expect(page.getByTestId("library-type-filter")).toHaveText(
+    new RegExp(label),
+  );
+}
 
 async function ensureFolder(
   serverUrl: string,
@@ -57,33 +74,26 @@ test("type filter survives folder navigation", async ({
   await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
 
   // Use the Folders filter so the row we want to click stays visible.
-  await loggedInPage.getByRole("button", { name: /^Folders$/ }).click();
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Folders$/ }),
-  ).toHaveClass(/bg-muted/);
+  await pickTypeFilter(loggedInPage, "Folders");
+  await expectTypeFilter(loggedInPage, "Folders");
 
   // Click into the folder — typeFilter must NOT reset to 'all'.
   await loggedInPage.getByText(folder, { exact: true }).first().click();
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Folders$/ }),
-  ).toHaveClass(/bg-muted/);
+  await expectTypeFilter(loggedInPage, "Folders");
 });
 
 test("type filter survives a hard refresh", async ({ loggedInPage }) => {
   await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
 
-  await loggedInPage.getByRole("button", { name: /^Files$/ }).click();
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Files$/ }),
-  ).toHaveClass(/bg-muted/);
+  await pickTypeFilter(loggedInPage, "Files");
+  await expectTypeFilter(loggedInPage, "Files");
 
   await loggedInPage.reload();
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Files$/ }),
-  ).toHaveClass(/bg-muted/);
+  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await expectTypeFilter(loggedInPage, "Files");
 });
 
-test("Hidden chip survives a hard refresh when developer mode is on", async ({
+test("Hidden filter survives a hard refresh when developer mode is on", async ({
   loggedInPage,
   serverUrl,
   token,
@@ -103,16 +113,12 @@ test("Hidden chip survives a hard refresh when developer mode is on", async ({
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
 
-  // Hidden chip is dev-only; if developerMode survives, it renders. If the
-  // persisted typeFilter survives, it's the active one.
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Hidden$/ }),
-  ).toHaveClass(/bg-muted/);
+  // Hidden is dev-only; if developerMode survives, it remains a valid choice.
+  // If the persisted typeFilter survives, the trigger displays "Hidden".
+  await expectTypeFilter(loggedInPage, "Hidden");
 
   // A second refresh — the prior bug rewrote 'hidden' → 'all' on every load.
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
-  await expect(
-    loggedInPage.getByRole("button", { name: /^Hidden$/ }),
-  ).toHaveClass(/bg-muted/);
+  await expectTypeFilter(loggedInPage, "Hidden");
 });

@@ -57,9 +57,10 @@ test("desk grid renders a library artifact", async ({
     "# slice 8\n\nlook, a desk artifact",
   );
 
-  await loggedInPage.reload();
+  // 'tasks' is the post-trunk default landing view, so navigate to /desk
+  // explicitly — that's the surface this slice covers.
+  await loggedInPage.goto(`/w/${ws[0].id}/desk`);
 
-  // Desk is the default landing view.
   await expect(
     loggedInPage.getByText(/slice8-note\.md/).first(),
   ).toBeVisible({ timeout: 10_000 });

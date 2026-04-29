@@ -481,7 +481,7 @@ export const api = createApi({
     // ── Library ───────────────────────────────────────────────────────
     getLibrary: build.query<
       ListLibraryResponse,
-      { workspaceId?: string; cursor?: string; limit?: number; showHidden?: boolean } | void
+      { workspaceId?: string; cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean } | void
     >({
       query: (arg) => {
         const p = new URLSearchParams();
@@ -489,6 +489,7 @@ export const api = createApi({
         if (arg?.cursor) p.set("cursor", arg.cursor);
         if (arg?.limit !== undefined) p.set("limit", String(arg.limit));
         if (arg?.showHidden) p.set("showHidden", "true");
+        if (arg?.pinned) p.set("pinned", "true");
         const qs = p.toString();
         return qs ? `/library?${qs}` : "/library";
       },
@@ -612,6 +613,48 @@ export const api = createApi({
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
+    // Promotes a chat-scoped attachment to the primary workspace library.
+    // The original `.chats/{chatId}/attachments/{name}` becomes a symlink
+    // pointing at the new library path so the chat's "In this chat" list
+    // continues to surface the file.
+    saveChatAttachmentToLibrary: build.mutation<
+      ServerFile,
+      { chatId: string; name: string; destSubpath?: string }
+    >({
+      query: ({ chatId, name, destSubpath }) => ({
+        url: `/chats/${chatId}/save-to-library`,
+        method: "POST",
+        body: { name, ...(destSubpath ? { destSubpath } : {}) },
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "ChatArtifact", id: `CHAT_${chatId}` },
+        { type: "LibraryFile", id: "LIST" },
+      ],
+    }),
+
+    // ── Library pins ─────────────────────────────────────────────────
+    pinLibraryItem: build.mutation<
+      { ok: true },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/workspaces/${workspaceId}/library-pins`,
+        method: "POST",
+        body: { path },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
+    unpinLibraryItem: build.mutation<
+      { ok: true },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/workspaces/${workspaceId}/library-pins`,
+        method: "DELETE",
+        body: { path },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
 
     // ── Search ────────────────────────────────────────────────────────
     search: build.query<
@@ -677,6 +720,9 @@ export const {
   useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
   usePinChatLibraryRefMutation,
+  useSaveChatAttachmentToLibraryMutation,
+  usePinLibraryItemMutation,
+  useUnpinLibraryItemMutation,
   useSearchQuery,
   useGetModelsQuery,
 } = api;

@@ -425,6 +425,26 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Library pin routes
+    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "POST") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const filePath = typeof body?.path === "string" ? body.path : "";
+      if (!filePath) throw new ValidationError("Missing 'path' in body");
+      await libraryRoutes.pin(storage, segments[1], filePath);
+      sendJson(res, 201, { ok: true });
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "DELETE") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const filePath = typeof body?.path === "string" ? body.path : "";
+      if (!filePath) throw new ValidationError("Missing 'path' in body");
+      await libraryRoutes.unpin(storage, segments[1], filePath);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     // Agent routes
     if (path === "/agents" && method === "GET") {
       const result = await agentRoutes.listAgents(pool, userId);
@@ -591,6 +611,27 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 201, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "save-to-library" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
+      const attachmentName = typeof body?.name === "string" ? body.name : "";
+      if (!attachmentName) {
+        throw new ValidationError("Missing 'name' in body");
+      }
+      const destSubpath =
+        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
+          ? body.destSubpath
+          : undefined;
+      const result = await chatRoutes.saveAttachmentToLibrary(
+        storage,
+        segments[1],
+        attachmentName,
+        destSubpath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
 
     // Library routes. Because library files live at arbitrary nested paths
     // on the filesystem, we pass the workspace-relative path via ?path=...
@@ -601,8 +642,9 @@ export function createApp(opts: AppOptions): Server {
       const cursor = query.get("cursor") ?? undefined;
       const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
       const showHidden = query.get("showHidden") === "true";
+      const pinned = query.get("pinned") === "true";
       const result = wsId
-        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden })
+        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden, pinned })
         : { items: [] };
       sendJson(res, 200, result);
       return;

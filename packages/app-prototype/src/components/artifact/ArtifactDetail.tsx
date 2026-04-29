@@ -179,17 +179,17 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
                   className="h-8 gap-1.5 text-xs"
                   onClick={() => {
                     onSave?.()
-                    toast.success(`"${name}" saved to your Desk`)
+                    toast.success(`"${name}" moved to your Library`)
                   }}
                 >
                   <BookmarkPlus className="h-3.5 w-3.5" />
-                  Save to Desk
+                  Save to Library
                 </Button>
               )}
               {transitionFrom && isSaved && (
                 <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled>
                   <Check className="h-3.5 w-3.5" />
-                  Saved
+                  In Library
                 </Button>
               )}
 

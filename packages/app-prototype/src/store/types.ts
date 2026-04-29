@@ -153,6 +153,14 @@ export interface ServerFile {
    * filename as the primary label.
    */
   label?: string;
+  /** ID of the agent that last created or edited this file, if known. */
+  agentId?: string;
+  /** ID of the agent that *originally* created this file. Stays stable
+   * even after subsequent edits, so the Library UI can show a durable
+   * "by AI" provenance label. */
+  creatorAgentId?: string;
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean;
 }
 
 /**

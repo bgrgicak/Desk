@@ -138,7 +138,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
   )
   const folders = workspaceId ? toFolderList(libraryResp?.folders ?? [], workspaceId) : []
   const libraryItems: ContextItem[] = workspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, workspaceId))
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, workspaceId, serverAgents ?? []))
     : []
 
   const activeAgent =

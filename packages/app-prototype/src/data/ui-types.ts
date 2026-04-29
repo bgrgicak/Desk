@@ -122,6 +122,12 @@ export interface ContextItem {
   addedAt: Date
   usedBy: string[]
   uploadedBy: 'user' | 'ai'
+  /** Display name of the agent that originally created this file, when
+   * `uploadedBy === 'ai'`. Used to show an inline provenance badge on
+   * library cards. */
+  agentName?: string
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean
   lastAccessed?: Date
   relatedArtifactIds: string[]
   fileSize?: string
