@@ -419,14 +419,18 @@ describe("API e2e (real Postgres)", () => {
 
     const content = "hello artifact world";
 
-    // Upload artifact to chat via multipart/form-data
+    // Upload artifact by sending a multipart message with an attachment
+    // part — uploads ride on POST /chats/{id}/messages now, not a
+    // standalone attachments endpoint. The user-message row carries the
+    // resulting AttachmentRef in `attachments[]`.
     const uploadRes = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/attachments`,
+      `/chats/${chat.id}/messages`,
       token,
       [
+        { name: "content", body: Buffer.from("here's a file") },
         {
-          name: "file",
+          name: "attachment",
           filename: "round-trip.txt",
           contentType: "text/plain",
           body: Buffer.from(content),
@@ -434,7 +438,8 @@ describe("API e2e (real Postgres)", () => {
       ],
     );
     expect(uploadRes.status).toBe(201);
-    const chatFile = uploadRes.body as { id: string; name: string; class: string; mime: string };
+    const userMessage = uploadRes.body as { attachments: Array<{ path: string; name: string; mime: string }> };
+    const chatFile = userMessage.attachments[0];
     expect(chatFile.path).toMatch(/^\.chats\//);
     expect(chatFile.name).toBe("round-trip.txt");
     expect(chatFile.mime).toBe("text/plain");
@@ -724,12 +729,17 @@ describe("API e2e (real Postgres)", () => {
     });
     const chat = chatRes.body as { id: string };
 
-    // Drop one user attachment in `.chats/{id}/attachments/`.
+    // Drop one user attachment in `.chats/{id}/attachments/` by sending
+    // a multipart message — the attachment endpoint was deleted; uploads
+    // now ride on POST /chats/{id}/messages.
     const upRes = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/attachments`,
+      `/chats/${chat.id}/messages`,
       token,
-      [{ name: "file", filename: "notes-spec.txt", contentType: "text/plain", body: Buffer.from("hi") }],
+      [
+        { name: "content", body: Buffer.from("note attachment") },
+        { name: "attachment", filename: "notes-spec.txt", contentType: "text/plain", body: Buffer.from("hi") },
+      ],
     );
     expect(upRes.status).toBe(201);
 
@@ -763,49 +773,6 @@ describe("API e2e (real Postgres)", () => {
     expect(note?.path).toBe(`.chats/${chat.id}/notes/${fakeMessageId}.md`);
   });
 
-  it("POST /chats/:id/attachments rejects JSON body with 400", async () => {
-    const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
-    const agentsRes = await request("GET", "/agents", token);
-    const agents = agentsRes.body as Array<{ id: string }>;
-
-    const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
-      agentId: agents[0].id,
-      title: "Multipart Only Chat",
-    });
-    const chat = chatRes.body as { id: string };
-
-    const res = await request("POST", `/chats/${chat.id}/attachments`, token, {
-      name: "x.txt",
-      mime: "text/plain",
-      contentBase64: Buffer.from("hi").toString("base64"),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /chats/:id/attachments returns 400 when 'file' part is missing", async () => {
-    const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
-    const agentsRes = await request("GET", "/agents", token);
-    const agents = agentsRes.body as Array<{ id: string }>;
-
-    const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
-      agentId: agents[0].id,
-      title: "Missing File Chat",
-    });
-    const chat = chatRes.body as { id: string };
-
-    const res = await requestMultipart(
-      "POST",
-      `/chats/${chat.id}/attachments`,
-      token,
-      [{ name: "notfile", body: Buffer.from("oops") }],
-    );
-    expect(res.status).toBe(400);
-  });
-
   // Gap 6: Fuzzy search returns uploaded artifact and chat
   it("fuzzy search returns known artifact and chat IDs", async () => {
     const wsRes = await request("GET", "/workspaces", token);
@@ -822,18 +789,19 @@ describe("API e2e (real Postgres)", () => {
 
     const uploadRes = await requestMultipart(
       "POST",
-      `/chats/${chat.id}/attachments`,
+      `/chats/${chat.id}/messages`,
       token,
       [
+        { name: "content", body: Buffer.from("searchable file") },
         {
-          name: "file",
+          name: "attachment",
           filename: "SearchableArtifactName.txt",
           contentType: "text/plain",
           body: Buffer.from("data"),
         },
       ],
     );
-    const file = (uploadRes.body as { path: string });
+    const file = (uploadRes.body as { attachments: Array<{ path: string }> }).attachments[0];
 
     // Search artifacts — file id is now the workspace-relative path
     const artRes = await request("GET", "/search?q=SearchableArtifact&scope=artifacts", token);
