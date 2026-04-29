@@ -41,6 +41,13 @@ fi
 if ! command -v node &>/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" != "$NODE_MAJOR" ]; then
   log "Installing Node.js $NODE_MAJOR.x"
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+  # If a different major is already installed, plain `apt install nodejs`
+  # silently no-ops because apt won't downgrade across the version-pinned
+  # NodeSource repos. Remove first so the install always picks up the
+  # candidate from the repo we just configured.
+  if command -v node &>/dev/null; then
+    apt-get remove -y -qq nodejs >/dev/null
+  fi
   apt-get install -y -qq nodejs >/dev/null
 fi
 
@@ -65,8 +72,13 @@ if ! id desk &>/dev/null; then
   log "Creating desk user (UID 2000)"
   useradd --system --uid 2000 --create-home --home-dir /home/desk --shell /usr/sbin/nologin desk
 fi
-# /home/desk is local VM filesystem (not the mount). Mode 0755 lets desk
-# traverse it to reach the mount at /home/desk/Desk.
+# /home/desk is local VM filesystem (not the mount itself — that's mounted
+# at /home/desk/Desk). Lima creates this dir as a mount target during boot,
+# before this script runs, so it lands as root:root and `useradd
+# --create-home` above is a no-op on it. Chown to desk so the user actually
+# owns its own home — without this, npm/npx can't create ~/.npm and the
+# systemd unit crashes with EACCES on first `npx tsx ...`.
+chown desk:desk /home/desk
 chmod 755 /home/desk
 # desk needs docker group access to talk to dockerd (spawn / manage
 # sandboxes).
