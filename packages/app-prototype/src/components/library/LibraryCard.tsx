@@ -23,6 +23,9 @@ import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
 
+export const DRAG_TYPE_LIBRARY_ITEM = 'application/x-library-item'
+export const DRAG_TYPE_PINNED_ITEM  = 'application/x-pinned-item'
+
 export type LibraryCardLayout = 'list' | 'grid'
 
 interface LibraryCardProps {
@@ -43,6 +46,7 @@ interface LibraryCardProps {
   isPinned?: boolean
   onPin?: () => void
   onUnpin?: () => void
+  isDraggable?: boolean
 }
 
 /**
@@ -66,10 +70,16 @@ export function LibraryCard({
   isPinned,
   onPin,
   onUnpin,
+  isDraggable,
 }: LibraryCardProps) {
   const Icon = iconForItem(item)
   const showAgent = item.uploadedBy === 'ai'
   const agentLabel = item.agentName ?? 'AI'
+
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, item.id)
+  }
 
   const menu = (
     <DropdownMenu>
@@ -134,9 +144,11 @@ export function LibraryCard({
         initial={{ opacity: 0, y: 5 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.02 }}
+        draggable={isDraggable ? true : undefined}
+        onDragStart={isDraggable ? handleDragStart : undefined}
         className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors group cursor-pointer ${
           selected ? 'bg-primary/5 border border-primary/10' : 'hover:bg-muted/50 border border-transparent'
-        }`}
+        } ${isDraggable ? 'active:cursor-grabbing' : ''}`}
       >
         {onSelectChange && (
           <Checkbox
@@ -196,6 +208,8 @@ export function LibraryCard({
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ delay: index * 0.03 }}
+      draggable={isDraggable ? true : undefined}
+      onDragStart={isDraggable ? handleDragStart : undefined}
       className={`group relative rounded-xl border bg-background cursor-pointer hover:shadow-sm transition-all overflow-hidden ${
         selected ? 'ring-2 ring-primary/30 border-primary/20' : 'border-border'
       }`}

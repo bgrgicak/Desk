@@ -826,6 +826,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                   isPinned={item.pinned}
                   onPin={onPinItem ? () => onPinItem(item) : undefined}
                   onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                  isDraggable={!!onPinItem}
                 />
               ))}
             </div>
@@ -926,6 +927,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 isPinned={item.pinned}
                 onPin={onPinItem ? () => onPinItem(item) : undefined}
                 onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                isDraggable={!!onPinItem}
               />
             ))}
           </div>

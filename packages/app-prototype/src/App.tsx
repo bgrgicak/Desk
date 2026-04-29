@@ -517,6 +517,9 @@ function AppInner() {
         pinnedItems={pinnedItems}
         selectedItemId={effectiveItemPath}
         onPinnedItemClick={(item) => goTo({ view: 'context', item: item.id })}
+        onPinItem={(itemId) => {
+          if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: itemId })
+        }}
         onUnpinItem={(item) => {
           if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
         }}
