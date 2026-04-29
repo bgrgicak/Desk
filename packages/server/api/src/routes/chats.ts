@@ -143,7 +143,9 @@ export async function sendMessage(
     const messageId = generateId("message");
     let executeAt = data.executeAt ?? null;
     if (data.cron && !executeAt) {
-      executeAt = new Cron(data.cron).nextRun()!.toISOString();
+      const next = new Cron(data.cron).nextRun();
+      if (!next) return sendError(res, 400, `cron expression "${data.cron}" has no future occurrences`);
+      executeAt = next.toISOString();
     }
     const message = await queries.messages.insert(pool, {
       id: messageId,
@@ -192,10 +194,9 @@ export async function sendMessage(
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
- * State transitions delegate to the run manager so the OS-level at/cron
- * entry is actually removed or re-installed; content-only patches (e.g.
- * user editing a note body) snapshot the prior note and take the plain
- * DB update path.
+ * State transitions delegate to the run manager (pause/resume/cancel);
+ * content-only patches (e.g. user editing a note body) snapshot the prior
+ * note and take the plain DB update path.
  */
 export async function patchMessage(
   pool: pg.Pool,
@@ -223,8 +224,7 @@ export async function patchMessage(
   // The only forbidden destination is from 'running' — that's claimed
   // atomically by fireMessage and a manual flip would race with the
   // executor. Every other transition (terminal → pending for a re-run,
-  // paused → cancelled, …) is fair game; the lifecycle ops reconcile
-  // OS-level at/cron entries.
+  // paused → cancelled, …) is fair game.
   if (stateTransition && current.state === "running") {
     throw new ValidationError(
       `cannot patch state of a running message; cancel or wait for it to finish`,
@@ -248,11 +248,8 @@ export async function patchMessage(
     }
   }
 
-  // Lifecycle transitions route through the scheduler so OS-level at/cron
-  // entries are added/removed in sync with the DB state. We apply non-state
-  // fields (content, executeAt, cron) first so the lifecycle op observes
-  // the new schedule when it re-installs at/cron — e.g. `pending + executeAt:null`
-  // resumes the row but rescheduleMessage's at-job install correctly no-ops.
+  // Apply non-state fields first so the lifecycle op observes the new
+  // schedule when it runs (e.g. resumeMessage sees the updated execute_at).
   if (stateTransition && lifecycleOps) {
     const preTransition = { ...data };
     delete preTransition.state;
@@ -267,9 +264,8 @@ export async function patchMessage(
     return updated;
   }
 
-  // Non-transition path. Apply DB update, then if executeAt or cron changed,
-  // sync the OS-level at/cron entry. Without this, clearing executeAt would
-  // leave a stale at-job that fires on a now-orphaned schedule.
+  // Non-transition path: apply the DB update, then if the schedule changed,
+  // let rescheduleMessage recompute execute_at from the new cron expression.
   const updated = await queries.messages.updateMessage(pool, messageId, data);
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
   if (lifecycleOps && (data.executeAt !== undefined || data.cron !== undefined)) {
@@ -282,11 +278,10 @@ export async function patchMessage(
 
 /**
  * Runs a task message on demand. Used by the kanban "drag to Active"
- * gesture: forces the row back to `pending`, drops any pending OS-level
- * at/cron entry, then dispatches the agent. Re-fires terminal rows
- * (succeeded/failed/cancelled) too — the column drop is the user's
- * "do it again, now" intent. Idempotent if the row is already running:
- * returns the current row without firing twice.
+ * gesture: forces the row back to `pending` then dispatches the agent.
+ * Re-fires terminal rows (succeeded/failed/cancelled) too — the column
+ * drop is the user's "do it again, now" intent. Idempotent if the row
+ * is already running: returns the current row without firing twice.
  */
 export async function runMessage(
   pool: pg.Pool,
@@ -333,10 +328,8 @@ export async function getNoteHistory(
 }
 
 /**
- * Deletes a message. Cancels any at/cron scheduler entry this message
- * owned via scheduler_ref. Idempotent — deleting an already-gone
- * message returns 404; deleting with no scheduler_ref just removes
- * the row.
+ * Deletes a message. Idempotent — deleting an already-gone message
+ * returns 404.
  */
 export async function deleteMessage(
   pool: pg.Pool,

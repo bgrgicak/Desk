@@ -70,9 +70,10 @@ test("schedule editor sets a daily cron", async ({ loggedInPage, serverUrl, toke
     { timeout: 5_000 },
   ).toBe("0 9 * * *");
 
-  // The one-shot executeAt should be cleared when switching to cron.
+  // With DB-poll scheduling, setting a cron expression also advances executeAt
+  // to the next occurrence so the poll loop knows when to fire.
   const msg = await readMessage(serverUrl, token, seeded.chatId, seeded.messageId);
-  expect(msg?.executeAt ?? null).toBeNull();
+  expect(msg?.executeAt).toBeDefined();
 });
 
 test("schedule editor sets a weekly cron on Wednesday", async ({ loggedInPage, serverUrl, token }) => {
@@ -80,9 +81,10 @@ test("schedule editor sets a weekly cron on Wednesday", async ({ loggedInPage, s
   await openScheduleEditor(loggedInPage, seeded);
 
   await loggedInPage.getByTestId("schedule-unit").selectOption("weeks");
-  // Deselect default Monday (index 1), select Wednesday (index 3)
-  await loggedInPage.getByTestId("schedule-weekday-1").click();
+  // Add Wednesday first, then deselect Monday — the guard prevents removing
+  // the last selected weekday, so Wednesday must be selected before Monday is removed.
   await loggedInPage.getByTestId("schedule-weekday-3").click();
+  await loggedInPage.getByTestId("schedule-weekday-1").click();
   await loggedInPage.getByTestId("schedule-recur-time").fill("10:00");
   await loggedInPage.getByTestId("schedule-save").click();
 

@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     process.env.DESK_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
     10,
   );
-  runManager.startPolling(POLL_INTERVAL_MS);
+  const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
 
   const server = createApp({
     pool,
@@ -135,6 +135,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);
+    clearInterval(pollTimer);
+    clearInterval(retentionTimer);
     clearConnections();
     server.close();
     await pool.end();

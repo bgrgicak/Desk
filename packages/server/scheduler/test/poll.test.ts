@@ -145,9 +145,6 @@ describe("cron tasks", () => {
 
     await rm.tickScheduled();
 
-    // Wait for the async fire to complete
-    await new Promise((r) => setTimeout(r, 200));
-
     const task = await queries.messages.findById(pool, taskId);
     expect(task?.state).toBe("pending");
     expect(task?.executeAt).toBeDefined();
@@ -166,12 +163,31 @@ describe("cron tasks", () => {
 
     const expectedNext = new Cron(cronExpr).nextRun()!;
     await rm.tickScheduled();
-    await new Promise((r) => setTimeout(r, 200));
 
     const task = await queries.messages.findById(pool, taskId);
-    // Allow 5s tolerance for test execution time
     const diff = Math.abs(new Date(task!.executeAt!).getTime() - expectedNext.getTime());
     expect(diff).toBeLessThan(5000);
+  });
+
+  it("execute_at advances even when the task run fails (exit code 1)", async () => {
+    const rm = createRunManager({
+      pool,
+      execRunFn: async () => ({ exitCode: 1 }),
+    });
+    const taskId = generateId("message");
+    const cronExpr = "0 8 * * *";
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, execute_at, cron, kind)
+       VALUES ($1, $2, 'user', $3, 'pending', now() - interval '1 second', $4, 'task')`,
+      [taskId, chatId, JSON.stringify({ type: "text", text: "daily failing" }), cronExpr],
+    );
+
+    await rm.tickScheduled();
+
+    const task = await queries.messages.findById(pool, taskId);
+    expect(task?.state).toBe("pending");
+    expect(task?.executeAt).toBeDefined();
+    expect(new Date(task!.executeAt!).getTime()).toBeGreaterThan(Date.now());
   });
 });
 
@@ -203,7 +219,6 @@ describe("concurrency cap", () => {
     }
 
     await rm.tickScheduled();
-    await new Promise((r) => setTimeout(r, 300)); // let all in-flight finish
 
     expect(concurrentPeak).toBeLessThanOrEqual(3);
   });
@@ -294,7 +309,6 @@ describe("pause / resume / cancel", () => {
 
     // Now tickScheduled should pick it up
     await rm.tickScheduled();
-    await new Promise((r) => setTimeout(r, 200));
     const after = await queries.messages.findById(pool, id);
     expect(after?.state).toBe("succeeded");
   });

@@ -39,7 +39,9 @@ export interface RunManagerOptions {
 }
 
 function computeNextRun(cronExpr: string): string {
-  return new Cron(cronExpr).nextRun()!.toISOString();
+  const next = new Cron(cronExpr).nextRun();
+  if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
+  return next.toISOString();
 }
 
 export function createRunManager(opts: RunManagerOptions) {
@@ -475,7 +477,7 @@ export function createRunManager(opts: RunManagerOptions) {
     return timer;
   }
 
-  /** Cancels a pending scheduled message without deleting it: transitions state to 'cancelled'. */
+  /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
     await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
   }

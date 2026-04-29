@@ -16,7 +16,6 @@ import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter } from "@desk/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -47,7 +46,6 @@ let pool: pg.Pool;
 let server: http.Server;
 let port: number;
 let home: string;
-let adapter: ReturnType<typeof createMemoryAdapter>;
 
 beforeAll(async () => {
   const admin = new pg.Pool({ connectionString: adminConnectionString() });
@@ -82,10 +80,8 @@ beforeAll(async () => {
   process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
 
   const storage = { pool, home };
-  adapter = createMemoryAdapter();
   const runManager = createRunManager({
     pool,
-    adapter,
     execRunFn: async (_runId, _agentId, _prompt, onLog) => {
       onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "fake response" });
       return { exitCode: 0 };
