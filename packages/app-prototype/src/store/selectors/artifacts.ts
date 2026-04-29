@@ -1,5 +1,5 @@
 import type { Artifact } from "@/data/ui-types";
-import type { ServerAgent, ServerFile } from "../types";
+import type { ServerFile } from "../types";
 
 function artifactType(mime: string, name: string): Artifact["type"] {
   if (mime.startsWith("image/")) return "image";
@@ -20,15 +20,14 @@ function artifactType(mime: string, name: string): Artifact["type"] {
   return "document";
 }
 
-export function toArtifactFromFile(f: ServerFile, agents: ServerAgent[]): Artifact {
+export function toArtifactFromFile(f: ServerFile): Artifact {
   const created = new Date(f.createdAt);
-  const agent = agents.find((a) => a.id === f.agentId);
   return {
     id: f.path,
     name: f.name,
     type: artifactType(f.mime, f.name),
-    agentName: agent?.name ?? "Agent",
-    agentModel: agent?.model ?? "",
+    agentName: "Agent",
+    agentModel: "",
     createdAt: created,
     updatedAt: created,
     content: "",

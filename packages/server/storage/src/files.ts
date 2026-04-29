@@ -55,7 +55,6 @@ export interface FileRef {
   mime: string;
   size: number;
   createdAt: string;
-  agentId?: string;
 }
 
 /** Extension-to-mime guesser used when the caller didn't provide one. */
