@@ -61,12 +61,6 @@ export function createRunManager(opts: RunManagerOptions) {
     return rows[0]?.id as string;
   }
 
-  async function resolveUserIdForWorkspace(workspaceId: string): Promise<string | null> {
-    if (!workspaceId) return null;
-    const ws = await queries.workspaces.findById(pool, workspaceId);
-    return ws?.userId ?? null;
-  }
-
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
     const home = resolveDeskHome();
     const dir = path.join(home, "Desk", "workspaces", workspaceSlug, ".chats", chatId, "logs");
@@ -257,24 +251,30 @@ export function createRunManager(opts: RunManagerOptions) {
     const { prompt, attachments } = await derivePromptInputs(msg);
     const outputKind = outputContentTypeFor(msg);
 
-    // Resolve the workspace slug and agent id in one JOIN'd round-trip.
-    // The slug threads through the sandbox driver (mount plan, agent file,
-    // chat attachments) and the per-chat log directory; extra findById
-    // calls add latency that makes fire-and-forget callers racy.
+    // Single JOIN resolves workspace slug, agent, user, and timezone in one round-trip.
     const { rows: ctxRows } = await pool.query<{
       workspace_id: string;
       workspace_path: string;
-      agent_id: string;
+      agent_id: string | null;
+      user_id: string | null;
+      username: string | null;
+      timezone: string | null;
     }>(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id
-       FROM chats c JOIN workspaces w ON w.id = c.workspace_id
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
+              u.id AS user_id, u.username, u.timezone
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+       LEFT JOIN users u ON u.id = w.user_id
        WHERE c.id = $1`,
       [msg.chatId],
     );
     const ctxRow = ctxRows[0];
-    const workspaceIdPre = ctxRow?.workspace_id ?? (await firstWorkspaceId());
+    const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
     const workspaceSlug = ctxRow?.workspace_path ?? "desk";
-    const chatAgentIdPre = ctxRow?.agent_id;
+    const chatAgentId = ctxRow?.agent_id ?? null;
+    const userId = ctxRow?.user_id ?? null;
+    const userName = ctxRow?.username ?? "User";
+    const userTimezone = ctxRow?.timezone ?? undefined;
 
     const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${runId}.log`);
@@ -296,12 +296,7 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
-      const agentId = msg.agentId ?? chatAgentIdPre ?? (await getDefaultAgentId());
-      const workspaceId = workspaceIdPre;
-      const userId = await resolveUserIdForWorkspace(workspaceId);
-      const userRow = userId ? await queries.users.findById(pool, userId) : null;
-      const userName = userRow?.username ?? "User";
-      const userTimezone = userRow?.timezone;
+      const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId
         ? await queries.userSettings.getProviderKeys(pool, userId)
         : {};

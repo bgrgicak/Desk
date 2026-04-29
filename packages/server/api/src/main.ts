@@ -17,7 +17,7 @@ import {
   resolveDeskHome,
 } from "@desk/storage";
 import { queries } from "@desk/db";
-import { createRunManager, reconcile, sweepStaleRuns } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { auditSandboxMounts } from "@desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
@@ -112,26 +112,11 @@ async function main(): Promise<void> {
     },
   });
 
-  // Fire any messages that became due while the server was down.
-  try {
-    await reconcile(pool, runManager);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("scheduler reconcile failed:", err);
-  }
-
-  // Periodic sweep: fire any messages that become due while the server is up.
-  const SWEEP_INTERVAL_MS = parseInt(
-    process.env.DESK_SCHEDULER_SWEEP_INTERVAL_MS ?? "300000",
+  const POLL_INTERVAL_MS = parseInt(
+    process.env.DESK_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
     10,
   );
-  const sweepTimer = setInterval(() => {
-    void sweepStaleRuns(pool, runManager).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.error("scheduler sweep failed:", err);
-    });
-  }, SWEEP_INTERVAL_MS);
-  sweepTimer.unref();
+  runManager.startPolling(POLL_INTERVAL_MS);
 
   const server = createApp({
     pool,

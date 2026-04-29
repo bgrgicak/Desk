@@ -1,22 +1,19 @@
 /**
- * Integration test for the cron-backed recurring-message scheduler path.
- * Uses the in-memory ScheduleAdapter (no real cron daemon needed) and
- * exercises fireMessage directly.
+ * Integration test for the DB-poll-based recurring-message scheduler path.
+ * Uses tickScheduled() directly to simulate the poll loop firing.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
+import { Cron } from "croner";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { generateId } from "@desk/shared";
 import { createRunManager } from "../../src/runs.js";
-import { createMemoryAdapter } from "../../src/scheduleAdapter.js";
-import type { LogEvent } from "@desk/runtime";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_sched_cron_${workerId}`;
 
 let pool: pg.Pool;
 let chatId: string;
-let home: string;
 
 function baseUrl(): string {
   return process.env.DESK_TEST_DATABASE_URL
@@ -55,8 +52,7 @@ beforeAll(async () => {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   const agentId = agentRows[0].id as string;
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [workspaceId, agentId],
   );
 
@@ -66,12 +62,10 @@ beforeAll(async () => {
     [chatId, workspaceId, agentId, "Cron Test"],
   );
 
-  home = (await import("node:fs/promises")).mkdtemp
-    ? await (await import("node:fs/promises")).mkdtemp(
-        (await import("node:path")).join((await import("node:os")).tmpdir(), "desk-cron-"),
-      )
-    : "/tmp/desk-cron";
-  process.env.DESK_HOME = home;
+  const tmpHome = await (await import("node:fs/promises")).mkdtemp(
+    (await import("node:path")).join((await import("node:os")).tmpdir(), "desk-cron-"),
+  );
+  process.env.DESK_HOME = tmpHome;
 });
 
 afterAll(async () => {
@@ -90,51 +84,48 @@ afterAll(async () => {
   }
 });
 
-describe("recurring cron scheduling via fireMessage", () => {
-  it("repeated fireMessage calls simulate cron firing multiple times", async () => {
-    let fireCount = 0;
+describe("DB poll scheduler — cron tasks", () => {
+  it("a cron task with past execute_at fires on tickScheduled and advances to next occurrence", async () => {
+    const cronExpr = "*/15 * * * *";
+    const taskId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, execute_at, cron, kind)
+       VALUES ($1, $2, 'user', $3, 'pending', now() - interval '1 second', $4, 'task')`,
+      [taskId, chatId, JSON.stringify({ type: "text", text: "recurring" }), cronExpr],
+    );
+
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async (messageId: string, _a, _p, onLog: (e: LogEvent) => void) => {
-        fireCount++;
-        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: `fire ${fireCount}` });
-        return { exitCode: 0 };
-      },
-    });
-
-    // Two independent pending messages (simulating two cron firings).
-    for (let i = 0; i < 2; i++) {
-      const id = generateId("message");
-      await pool.query(
-        `INSERT INTO messages (id, chat_id, role, content, state)
-         VALUES ($1, $2, 'system', $3, 'pending')`,
-        [id, chatId, JSON.stringify({ type: "text", text: `tick ${i}` })],
-      );
-      await mgr.fireMessage(id);
-    }
-    expect(fireCount).toBe(2);
-  });
-
-  it("cancelMessage removes a pending message's at entry", async () => {
-    const adapter = createMemoryAdapter();
-    const mgr = createRunManager({
-      pool,
-      adapter,
       execRunFn: async () => ({ exitCode: 0 }),
     });
 
-    await mgr.scheduleAiNote(chatId);
-    const { rows } = await pool.query(
-      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request' AND state = 'pending'`,
-      [chatId],
-    );
-    const messageId = rows[0].id as string;
+    const expectedNext = new Cron(cronExpr).nextRun()!;
+    await mgr.tickScheduled();
 
-    const beforeAt = (await adapter.listAt()).length;
-    await mgr.cancelMessage(messageId);
-    const afterAt = (await adapter.listAt()).length;
-    expect(afterAt).toBeLessThan(beforeAt);
-    expect(await queries.messages.findById(pool, messageId)).toBeNull();
+    const task = await queries.messages.findById(pool, taskId);
+    expect(task?.state).toBe("pending");
+    expect(task?.executeAt).toBeDefined();
+    const diff = Math.abs(new Date(task!.executeAt!).getTime() - expectedNext.getTime());
+    expect(diff).toBeLessThan(5000);
+  });
+
+  it("a one-shot task fires and transitions to succeeded", async () => {
+    const taskId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, execute_at, kind)
+       VALUES ($1, $2, 'user', $3, 'pending', now() - interval '1 second', 'task')`,
+      [taskId, chatId, JSON.stringify({ type: "text", text: "one-shot" })],
+    );
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+
+    await mgr.tickScheduled();
+
+    const task = await queries.messages.findById(pool, taskId);
+    expect(task?.state).toBe("succeeded");
+    expect(task?.executeAt).toBeUndefined();
   });
 });
