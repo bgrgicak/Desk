@@ -7,6 +7,7 @@ import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
+import { requireInternal } from "./auth/internal.js";
 import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {

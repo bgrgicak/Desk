@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { createApp } from "../src/app.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { resetInternalTokenCache } from "../src/auth/internal.js";
@@ -58,7 +58,6 @@ beforeAll(async () => {
 
   const runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async () => ({ exitCode: 0 }),
   });
   server = createApp({ pool, storage: { pool, home }, runManager });

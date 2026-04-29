@@ -412,13 +412,6 @@ export function createRunManager(opts: RunManagerOptions) {
       return { fired: true, childIds: [] };
     } catch (err) {
       logStream.end();
-      // Test-shutdown race: an at-job fires after the test's afterAll has
-      // closed the pool. Any DB write below would just throw "connection
-      // is not open" again. Swallow silently — the test is already
-      // tearing down and the row state is irrelevant past this point.
-      if (isPoolClosed(err)) {
-        return { fired: true, childIds: [] };
-      }
       // eslint-disable-next-line no-console
       console.error(`fireMessage ${messageId} failed:`, err);
       await queries.messages.finalizeExecution(pool, runId, "failed");
