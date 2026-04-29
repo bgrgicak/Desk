@@ -43,8 +43,13 @@ test("search palette returns server results", async ({
   // chrome.
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  // Open the global search / Ask AI palette.
-  await loggedInPage.getByRole("button", { name: /Search.*Ask AI/i }).click();
+  // Open the global palette by clicking the navbar Search·Ask AI button.
+  // (The same control responds to Cmd+K, but headless Chromium on Linux
+  // doesn't reliably deliver Meta+K to the window keydown listener — the
+  // button click is the deterministic path.)
+  await loggedInPage
+    .getByRole("button", { name: /Search.*Ask AI/i })
+    .click();
 
   // Type enough to trigger the server query.
   await loggedInPage.getByPlaceholder(/Ask a question or search/).fill("searchableMoose");
