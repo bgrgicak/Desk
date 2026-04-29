@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Link2, StickyNote, Paperclip, Plus, X,
-  PanelRight, PanelRightClose, ExternalLink, Sparkles,
+  PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -169,6 +169,7 @@ function ArtifactsPanel({
   savedArtifactIds = new Set(),
   onSaveArtifact,
   onDeleteArtifact,
+  onDeleteChatNote,
 }: {
   chatId: string
   artifacts: Artifact[]
@@ -187,11 +188,13 @@ function ArtifactsPanel({
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
   onDeleteArtifact?: (artifact: Artifact) => void
+  onDeleteChatNote?: (note: ServerFile) => void
 }) {
   const filterKey = chatId && chatId !== NEW_CHAT_ID ? `desk.chat.${chatId}.artifactFilter` : null
   const [filter, setFilter] = usePersistedState<ArtifactFilter>(filterKey, 'all')
   const [search, setSearch] = useState('')
   const [deletingArtifact, setDeletingArtifact] = useState<Artifact | null>(null)
+  const [deletingNote, setDeletingNote] = useState<ServerFile | null>(null)
 
   const filtered = artifacts.filter(a => {
     if (filter !== 'all' && a.type !== filter) return false
@@ -267,9 +270,42 @@ function ArtifactsPanel({
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
                   <StickyNote className="h-4 w-4 text-muted-foreground/70" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 relative overflow-hidden">
                   <p className="text-sm font-medium truncate">{note.label ?? 'Chat notes'}</p>
                   <p className="text-xs text-muted-foreground truncate">{note.name} · {getRelativeTime(new Date(note.createdAt))}</p>
+                  <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={e => { e.stopPropagation(); onChatNoteStage?.(note) }}
+                    title="Add to message"
+                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        onClick={e => e.stopPropagation()}
+                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => onChatNoteClick?.(note)}>
+                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                        Open
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setDeletingNote(note)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             ))}
@@ -285,6 +321,7 @@ function ArtifactsPanel({
         ) : filtered.length === 0 ? null : (
           filtered.map(artifact => {
             const Icon = getArtifactIcon(artifact.type)
+            const isSaved = savedArtifactIds.has(artifact.id)
             return (
               <div
                 key={artifact.id}
@@ -322,6 +359,20 @@ function ArtifactsPanel({
                         <ExternalLink className="h-3.5 w-3.5 mr-2" />
                         Open
                       </DropdownMenuItem>
+                      {isSaved ? (
+                        <DropdownMenuItem disabled>
+                          <Check className="h-3.5 w-3.5 mr-2" />
+                          Saved to Desk
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => {
+                          onSaveArtifact?.(artifact.id)
+                          toast.success(`"${artifact.name}" saved to your Desk`)
+                        }}>
+                          <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
+                          Save to Desk
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         onClick={() => setDeletingArtifact(artifact)}
@@ -339,12 +390,14 @@ function ArtifactsPanel({
       </div>
 
       <AlertDialog
-        open={deletingArtifact !== null}
-        onOpenChange={open => { if (!open) setDeletingArtifact(null) }}
+        open={deletingArtifact !== null || deletingNote !== null}
+        onOpenChange={open => { if (!open) { setDeletingArtifact(null); setDeletingNote(null) } }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{deletingArtifact?.name}"?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Delete "{deletingArtifact?.name ?? deletingNote?.label ?? deletingNote?.name}"?
+            </AlertDialogTitle>
             <AlertDialogDescription>
               This artifact will be permanently removed from your Desk. This action cannot be undone.
             </AlertDialogDescription>
@@ -355,7 +408,9 @@ function ArtifactsPanel({
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (deletingArtifact) onDeleteArtifact?.(deletingArtifact)
+                if (deletingNote) onDeleteChatNote?.(deletingNote)
                 setDeletingArtifact(null)
+                setDeletingNote(null)
               }}
             >
               Delete
