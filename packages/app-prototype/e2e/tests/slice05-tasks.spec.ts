@@ -64,10 +64,6 @@ test("tasks page shows scheduled server messages", async ({
   // Navigate to tasks view — click the "Tasks" sidebar item.
   await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
 
-  // Switch to list view — the default board / calendar views don't
-  // render the message text inline at small widths.
-  await loggedInPage.getByTestId("tasks-view-list").click();
-
   // The task's name is derived from the first line of content.
   await expect(
     loggedInPage.getByText("Slice5 task placeholder").first(),

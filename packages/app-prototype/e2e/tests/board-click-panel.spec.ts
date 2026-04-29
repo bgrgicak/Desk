@@ -40,7 +40,6 @@ test("clicking a task card on the board opens the detail panel in the right side
 
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
-  await loggedInPage.getByTestId("tasks-view-board").click();
 
   const card = loggedInPage.getByText("Board click target").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
