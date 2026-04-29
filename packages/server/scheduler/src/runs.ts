@@ -2,16 +2,16 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { type Pool } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
 import {
   generateId,
   AgentEventSchema,
   type AgentLogEntry,
   type Message,
   type WsEvent,
-} from "@desk/shared";
-import { queries } from "@desk/db";
-import { resolveDeskHome } from "@desk/storage";
+} from "@agent-desk/shared";
+import { queries } from "@agent-desk/db";
+import { resolveDeskHome } from "@agent-desk/storage";
 import {
   createOrReuse,
   execRun as runtimeExecRun,
@@ -19,7 +19,7 @@ import {
   createDriver,
   type LogEvent,
   type AgentFileInput,
-} from "@desk/runtime";
+} from "@agent-desk/runtime";
 
 export interface RunManagerOptions {
   pool: Pool;
@@ -370,7 +370,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // When the run produced a new note, snapshot the previous note
         // (if any) so a bad rewrite doesn't silently erase user edits.
         if (outputKind === "note") {
-          const { snapshotNote } = await import("@desk/storage");
+          const { snapshotNote } = await import("@agent-desk/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
              WHERE chat_id = ? AND json_extract(content, '$.type') = 'note'
@@ -402,7 +402,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // note alongside its own files. Best-effort — the DB row is the
         // source of truth.
         if (content.type === "note") {
-          const { materializeNote } = await import("@desk/storage");
+          const { materializeNote } = await import("@agent-desk/storage");
           const home = resolveDeskHome();
           await materializeNote(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }

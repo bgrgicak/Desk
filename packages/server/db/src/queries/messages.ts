@@ -1,5 +1,5 @@
 import { type Pool, transact } from "../pool.js";
-import { MessageSchema, type Message } from "@desk/shared";
+import { MessageSchema, type Message } from "@agent-desk/shared";
 
 // SQLite stores JSON columns as TEXT; parse at the boundary. Postgres
 // JSONB used to do this for us automatically.

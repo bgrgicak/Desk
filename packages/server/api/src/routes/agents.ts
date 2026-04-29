@@ -1,6 +1,6 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
 
 export async function listAgents(pool: Pool, userId: string) {
   return queries.agents.listByUser(pool, userId);

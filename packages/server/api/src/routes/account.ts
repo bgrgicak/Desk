@@ -1,6 +1,6 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
 
 type ProviderMetaEntry = { name?: string };
 type ProviderMetaMap  = Record<string, ProviderMetaEntry>;

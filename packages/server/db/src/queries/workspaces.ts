@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { WorkspaceSchema, slugifyWorkspaceName, type Workspace } from "@desk/shared";
+import { WorkspaceSchema, slugifyWorkspaceName, type Workspace } from "@agent-desk/shared";
 
 function rowToWorkspace(row: Record<string, unknown>): Workspace {
   return WorkspaceSchema.parse({

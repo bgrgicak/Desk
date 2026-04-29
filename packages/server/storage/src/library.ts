@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { type Pool } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
 import ignore, { type Ignore } from "ignore";
-import { NotFoundError, ValidationError } from "@desk/shared";
+import { NotFoundError, ValidationError } from "@agent-desk/shared";
 import { workspaceRootPath, trashDir, resolveHostPath } from "./layout.js";
 import {
   uploadArtifact,

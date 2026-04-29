@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { UnauthorizedError, UserSchema, type User } from "@desk/shared";
+import { UnauthorizedError, UserSchema, type User } from "@agent-desk/shared";
 import { hashPassword, verifyPassword, isLegacyHash } from "../passwords.js";
 
 function rowToUser(row: Record<string, unknown>): User {

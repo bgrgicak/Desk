@@ -1,7 +1,7 @@
-import { type Pool } from "@desk/db";
-import { NotFoundError, ValidationError } from "@desk/shared";
-import { queries } from "@desk/db";
-import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@desk/runtime";
+import { type Pool } from "@agent-desk/db";
+import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { queries } from "@agent-desk/db";
+import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@agent-desk/runtime";
 import { resolveProviderKeys } from "../providerKeys.js";
 
 /**

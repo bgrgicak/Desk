@@ -5,7 +5,7 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have one command — `desk task schedule` — and three reasons to reach
+You have one command — `desk-agent task schedule` — and three reasons to reach
 for it:
 
 1. **The user asked for a reminder, recurring report, or follow-up.**
@@ -18,7 +18,7 @@ for it:
    as the prompt.
 
 If you just need to reply to the user *now*, write to stdout — that's the
-chat reply channel. Don't use `desk task schedule` for plain replies.
+chat reply channel. Don't use `desk-agent task schedule` for plain replies.
 
 ## How to use it (action bias)
 
@@ -32,7 +32,7 @@ Anti-pattern (do not do this):
 >  Plan: …. Confirm and I'll run it."
 
 Pattern (do this):
-> *runs* `desk task schedule --chat … --at "2026-04-27T18:51:00Z" "Hello there"`
+> *runs* `desk-agent task schedule --chat … --at "2026-04-27T18:51:00Z" "Hello there"`
 > *replies* "Scheduled for today at 20:51 Europe/Berlin — 'Hello there'."
 
 ## Environment
@@ -46,7 +46,7 @@ The runtime sets these for you. Don't echo, log, or alter them.
 - Success: JSON message row on stdout, exit 0.
 - Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit.
 
-## desk task schedule
+## desk-agent task schedule
 
 Create a task message in a chat. The task can be:
 - **Scheduled** (`--at <iso8601>`): fires once at the given instant.
@@ -54,7 +54,7 @@ Create a task message in a chat. The task can be:
 - **Manual** (neither): sits as a TODO on the Tasks board.
 
 ```
-desk task schedule --chat <id> [--title <text>] [--at <iso> | --cron <expr>] [--kind <kind>] <content>
+desk-agent task schedule --chat <id> [--title <text>] [--at <iso> | --cron <expr>] [--kind <kind>] <content>
 ```
 
 `--at` and `--cron` are mutually exclusive. If you pass both, the command
@@ -65,7 +65,7 @@ errors out — pick one.
 Recurring — weekday standup reminder at 09:00:
 
 ```
-desk task schedule --chat ch_abc \
+desk-agent task schedule --chat ch_abc \
     --title "Daily standup" \
     --cron "0 9 * * 1-5" \
     "Post the standup template to #team-engineering"
@@ -74,7 +74,7 @@ desk task schedule --chat ch_abc \
 One-shot — fires once at a specific time:
 
 ```
-desk task schedule --chat ch_abc \
+desk-agent task schedule --chat ch_abc \
     --title "Review migration PR" \
     --at "2026-05-01T15:00:00Z" \
     "Review the schema migration PR before the merge freeze"
@@ -83,7 +83,7 @@ desk task schedule --chat ch_abc \
 Manual — no schedule, sits on the Tasks board until the user runs it:
 
 ```
-desk task schedule --chat ch_abc \
+desk-agent task schedule --chat ch_abc \
     --title "Summarize Q1 metrics" \
     "Pull the Q1 numbers from the deck and produce a 1-pager"
 ```

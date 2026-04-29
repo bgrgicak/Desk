@@ -11,7 +11,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { workspaceRootPath } from "@desk/storage";
+import { workspaceRootPath } from "@agent-desk/storage";
 import { SKILLS_MARKDOWN } from "./skills.js";
 
 export interface AgentFileInput {
@@ -89,7 +89,7 @@ You can mention instructions below the line.
 
 ## Scheduling — act first, ask never
 
-When the user asks to schedule a task, RUN \`desk task schedule\`
+When the user asks to schedule a task, RUN \`desk-agent task schedule\`
 immediately. Don't ask for confirmation. Don't list options. Don't
 restate the plan. Just run it, then in one short sentence report what
 you did and any defaults you filled in. The user can correct the result
@@ -110,7 +110,7 @@ an unambiguous instant. ${input.userTimezone
 
 Worked example (assume timezone known, today is 2026-04-27):
 - User: "Schedule a task for 20:51 that says Hello there."
-- You: \`desk task schedule --chat <chatId> --title "Greet at 20:51" --at "<utc>Z" "Hello there"\`
+- You: \`desk-agent task schedule --chat <chatId> --title "Greet at 20:51" --at "<utc>Z" "Hello there"\`
 - Then reply: "Scheduled for today at 20:51${input.userTimezone ? ` ${input.userTimezone}` : ""} — 'Hello there'."
 
 Only ask the user FIRST if the request is genuinely incomplete (no

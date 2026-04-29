@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { generateId } from "@desk/shared";
+import { generateId } from "@agent-desk/shared";
 import { uploadArtifact } from "../src/files.js";
 import { reconcileArtifactRefs } from "../src/reconcile.js";
 import {

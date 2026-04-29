@@ -1,12 +1,12 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 import {
   MESSAGE_KINDS,
   MESSAGE_STATES,
   ValidationError,
   type MessageKind,
   type MessageState,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;

@@ -1,12 +1,12 @@
 {
-  "name": "@desk/runtime",
+  "name": "@agent-desk/runtime",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "@desk/dev": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": { "@agent-desk/dev": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
   "scripts": {
     "build": "tsc",
@@ -15,9 +15,9 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@desk/shared": "*",
-    "@desk/db": "*",
-    "@desk/storage": "*",
+    "@agent-desk/shared": "*",
+    "@agent-desk/db": "*",
+    "@agent-desk/storage": "*",
     "dockerode": "^4.0.0"
   },
   "devDependencies": {

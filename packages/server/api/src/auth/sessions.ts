@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 
 const TOKEN_PREFIX = "ses_";
 const TOKEN_BYTES = 32;

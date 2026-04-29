@@ -7,9 +7,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { Pool } from "@desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@desk/db";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { generateId } from "@agent-desk/shared";
 import { createRunManager } from "../../src/runs.js";
 
 let pool: Pool;

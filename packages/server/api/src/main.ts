@@ -4,43 +4,40 @@
  * Reads runtime config from env, wires up storage + scheduler + run manager,
  * starts the HTTP + WS server on $PORT, and runs migrations + seed on boot.
  *
- * Kept tiny on purpose — real behaviour lives in `app.ts`. This file only
- * hosts the I/O boundary that systemd drives.
+ * Kept tiny on purpose — real behaviour lives in `app.ts`. This file is the
+ * I/O boundary the host launcher (`dev.sh` / `desk start`) drives.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
+import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@agent-desk/db";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   enforceLogRetention,
   reconcileArtifactRefs,
   resolveDeskHome,
-} from "@desk/storage";
-import { queries } from "@desk/db";
-import { createRunManager } from "@desk/scheduler";
-import { auditSandboxMounts } from "@desk/runtime";
+} from "@agent-desk/storage";
+import { queries } from "@agent-desk/db";
+import { createRunManager } from "@agent-desk/scheduler";
+import { auditSandboxMounts } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
-import type { WsEvent } from "@desk/shared";
+import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 const DESK_HOME = resolveDeskHome();
-// install.sh sets DESK_DB_PATH=/home/desk/Desk/.database/desk.sqlite3;
-// for dev/test runs without an env file, default to that same dotfile
-// path so the DB lands on the host-mounted tree (the whole point of
-// the SQLite cutover) and stays out of any in-app library listing of
-// ~/Desk.
+// Default to ~/Desk/.database/desk.sqlite3. Dotfile parent so the DB
+// stays out of any in-app library listing of ~/Desk; tests override
+// DESK_DB_PATH to a per-run mkdtemp path.
 const DESK_DB_PATH =
   process.env.DESK_DB_PATH
   ?? path.join(DESK_HOME, "Desk", ".database", "desk.sqlite3");
 
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the
-  // tree exists before opening the file. On the VM this dir is the
-  // virtiofs mount root and already exists; on a fresh dev host it
-  // might not.
+  // tree exists before opening the file (a fresh ~/Desk doesn't have
+  // .database yet).
   await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
   const pool = createPool({ path: DESK_DB_PATH });
 
@@ -60,8 +57,8 @@ async function main(): Promise<void> {
   if (!process.env.DESK_HOME) {
     // eslint-disable-next-line no-console
     console.warn(
-      "DESK_HOME is not set explicitly. Falling back to $HOME or /home/desk; " +
-        "set DESK_HOME in /etc/desk-server/env to pin the on-disk root.",
+      "DESK_HOME is not set explicitly. Falling back to $HOME; " +
+        "set DESK_HOME to pin the on-disk root.",
     );
   }
   const drift = await auditSandboxMounts(DESK_HOME);

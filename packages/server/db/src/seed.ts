@@ -1,5 +1,5 @@
 import { type Pool, transact } from "./pool.js";
-import { generateId, PROVIDER_KEY_VARS } from "@desk/shared";
+import { generateId, PROVIDER_KEY_VARS } from "@agent-desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
 

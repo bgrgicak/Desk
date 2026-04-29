@@ -1,10 +1,10 @@
 {
-  "name": "@desk/sandbox-cli",
+  "name": "@agent-desk/sandbox-cli",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "desk": "dist/desk.js"
+    "desk-agent": "dist/desk.js"
   },
   "scripts": {
     "build": "node build.mjs",

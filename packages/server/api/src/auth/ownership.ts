@@ -1,7 +1,7 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { NotFoundError } from "@desk/shared";
-import type { Workspace, Agent, Chat, Message } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { NotFoundError } from "@agent-desk/shared";
+import type { Workspace, Agent, Chat, Message } from "@agent-desk/shared";
 
 /**
  * Ownership checks for per-request authorization. Each helper returns the

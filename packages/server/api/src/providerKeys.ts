@@ -1,5 +1,5 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 
 /**
  * Resolves the provider API keys that should populate the sandbox env.

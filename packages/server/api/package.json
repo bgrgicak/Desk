@@ -1,5 +1,5 @@
 {
-  "name": "@desk/api",
+  "name": "@agent-desk/api",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@desk/dev": "./src/index.ts",
+      "@agent-desk/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
@@ -21,11 +21,11 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@desk/db": "*",
-    "@desk/runtime": "*",
-    "@desk/scheduler": "*",
-    "@desk/shared": "*",
-    "@desk/storage": "*",
+    "@agent-desk/db": "*",
+    "@agent-desk/runtime": "*",
+    "@agent-desk/scheduler": "*",
+    "@agent-desk/shared": "*",
+    "@agent-desk/storage": "*",
     "croner": "^10.0.1"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { serializeWsEvent, type WsEvent } from "@desk/shared";
+import { serializeWsEvent, type WsEvent } from "@agent-desk/shared";
 
 interface WsLike {
   send(data: string): void;

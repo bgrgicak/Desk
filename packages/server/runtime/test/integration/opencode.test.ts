@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 

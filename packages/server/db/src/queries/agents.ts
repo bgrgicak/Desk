@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { AgentSchema, type Agent } from "@desk/shared";
+import { AgentSchema, type Agent } from "@agent-desk/shared";
 
 function rowToAgent(row: Record<string, unknown>): Agent {
   return AgentSchema.parse({

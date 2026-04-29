@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { type Pool } from "../../src/pool.js";
-import { generateId } from "@desk/shared";
+import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
 import * as users from "../../src/queries/users.js";

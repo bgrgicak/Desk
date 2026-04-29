@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { UnauthorizedError } from "@desk/shared";
+import { UnauthorizedError } from "@agent-desk/shared";
 
 let cachedToken: string | null = null;
 

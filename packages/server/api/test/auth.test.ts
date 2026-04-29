@@ -2,9 +2,9 @@ import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@desk/db";
-import { runMigrations, queries } from "@desk/db";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, queries } from "@agent-desk/db";
+import { generateId } from "@agent-desk/shared";
 import {
   issueSession,
   revokeSession,

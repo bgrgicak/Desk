@@ -13,10 +13,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { Pool } from "@desk/db";
-import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createRunManager } from "@desk/scheduler";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -108,7 +108,7 @@ afterAll(async () => {
   // Sandboxes are keyed per-workspace now (M3), not per-agent.
   try {
     const { default: Docker } = await import("dockerode");
-    const { dockerSocketPath } = await import("@desk/runtime");
+    const { dockerSocketPath } = await import("@agent-desk/runtime");
     const docker = new Docker({ socketPath: dockerSocketPath() });
     const all = await docker.listContainers({ all: true });
     for (const c of all) {

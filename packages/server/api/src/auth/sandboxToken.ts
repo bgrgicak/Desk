@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { UnauthorizedError, type Agent, type SandboxSession } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { UnauthorizedError, type Agent, type SandboxSession } from "@agent-desk/shared";
 
 /**
  * Sandbox session tokens authenticate requests from inside an OpenCode run

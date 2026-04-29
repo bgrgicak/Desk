@@ -1,12 +1,12 @@
 {
-  "name": "@desk/shared",
+  "name": "@agent-desk/shared",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "@desk/dev": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": { "@agent-desk/dev": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
   "scripts": {
     "build": "tsc",
