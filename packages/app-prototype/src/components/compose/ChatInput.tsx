@@ -1,35 +1,16 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
-import { createPortal } from 'react-dom'
 import {
-  CornerDownLeft, ChevronDown, FileText, Paperclip, X,
-  Zap, ImageIcon, Table, Globe, Target, ListTodo,
-  type LucideIcon,
+  CornerDownLeft, Paperclip, X,
 } from 'lucide-react'
 import { type GoalKey as SharedGoalKey } from '@desk/shared'
 import {
   ComposerPickers,
+  getGoalPlaceholder,
   type ComposerPickersHandle,
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
 
 type GoalKey = SharedGoalKey | null
-
-interface Goal {
-  key: GoalKey
-  label: string
-  Icon: LucideIcon | null
-  placeholder: string
-}
-
-const GOALS: Goal[] = [
-  { key: 'app',       label: 'New app',       Icon: Zap,           placeholder: 'Describe the app you want to build...' },
-  { key: 'document',  label: 'New doc',       Icon: FileText,      placeholder: 'What should the document cover?' },
-  { key: 'image',     label: 'New image',     Icon: ImageIcon,     placeholder: 'Describe the image you want to create...' },
-  { key: 'data',      label: 'New data',      Icon: Table,         placeholder: 'What data do you want to track or analyse?' },
-  { key: 'site',      label: 'New site',      Icon: Globe,         placeholder: 'Describe the site you want to build...' },
-  { key: 'task',      label: 'New task',      Icon: ListTodo,      placeholder: 'What needs to be done?' },
-  { key: null,        label: 'No goal',       Icon: Target,        placeholder: 'Ask anything, start a task, build something...' },
-]
 
 /**
  * Map a picker selection to the kind/title/executeAt fields the
@@ -130,19 +111,6 @@ interface ChatInputProps {
 
 const DRAFT_STORAGE_PREFIX = 'chatDraft:'
 
-// Calculate fixed position above a trigger button
-function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
-  const gap = 6
-  const left = Math.min(rect.left, window.innerWidth - width - 8)
-  return {
-    position: 'fixed',
-    bottom: window.innerHeight - rect.top + gap,
-    left: Math.max(8, left),
-    width,
-    zIndex: 9999,
-  }
-}
-
 export function ChatInput({
   onSend,
   disabled = false,
@@ -193,19 +161,11 @@ export function ChatInput({
     return () => { if (focusRef) focusRef.current = null }
   }, [focusRef])
 
-  const goalBtnRef = useRef<HTMLButtonElement>(null)
-  const goalDropRef = useRef<HTMLDivElement>(null)
-  const [goalRect, setGoalRect] = useState<DOMRect | null>(null)
-  const [goalOpen, setGoalOpen] = useState(false)
-
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
   const effectiveGoalKey: GoalKey = goalOverride ?? null
-  const effectiveGoal = GOALS.find(g => g.key === effectiveGoalKey) ?? null
-  // When the goal picker is hidden, always use the passed placeholder directly.
-  // Otherwise the goal inference would override it with "Ask anything, start a task…"
   const activePlaceholder = showGoalPicker
-    ? (effectiveGoal?.placeholder ?? placeholder)
+    ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
 
   // Auto-focus
@@ -268,21 +228,6 @@ export function ChatInput({
     el.style.height     = `${newH}px`
     el.style.overflowY  = newH >= maxH ? 'auto' : 'hidden'
   }, [value, compact])
-
-  // Close goal picker on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (
-        !goalBtnRef.current?.contains(target) &&
-        !goalDropRef.current?.contains(target)
-      ) {
-        setGoalOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
 
   // Detect @ mention while typing — drives the attach picker open via
   // the ComposerPickers imperative handle.
@@ -353,13 +298,11 @@ export function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') { setGoalOpen(false); setAtMentionStart(null); pickersRef.current?.closeAttach() }
+    if (e.key === 'Escape') { setAtMentionStart(null); pickersRef.current?.closeAttach() }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
   const canSubmit = (value.trim().length > 0 || attachedItems.length > 0 || extraUploads.length > 0) && !disabled
-  const pickerBtnClass = 'flex items-center gap-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors px-2 h-6 text-xs font-medium shrink-0'
-  const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
   return (
     <div className="w-full">
@@ -446,54 +389,6 @@ export function ChatInput({
       {/* Pickers row — below the input */}
       <div className={`flex items-center gap-1.5 ${compact ? 'mt-1.5' : 'mt-2'}`}>
 
-        {/* Goal picker — chat-only */}
-        {showGoalPicker && (
-          <>
-            <button
-              type="button"
-              ref={goalBtnRef}
-              onClick={() => {
-                const rect = goalBtnRef.current?.getBoundingClientRect() ?? null
-                setGoalRect(rect)
-                setGoalOpen(v => !v)
-              }}
-              className={`${pickerBtnClass} ${effectiveGoal && effectiveGoal.key !== null ? 'text-foreground' : ''}`}
-            >
-              {effectiveGoal && effectiveGoal.key !== null && effectiveGoal.Icon
-                ? <effectiveGoal.Icon className="h-3 w-3" />
-                : <Target className="h-3 w-3" />
-              }
-              {effectiveGoal && effectiveGoal.key !== null ? effectiveGoal.label : 'No goal'}
-              <ChevronDown className="h-3 w-3 opacity-60" />
-            </button>
-            {goalOpen && goalRect && createPortal(
-              <div ref={goalDropRef} style={getDropdownStyle(goalRect, 208)} className={dropdownClass}>
-                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your goal</p>
-                <div className="pb-1.5">
-                  {GOALS.map(goal => {
-                    const isSelected = goalOverride !== undefined && goal.key === goalOverride
-                    return (
-                      <button
-                        type="button"
-                        key={String(goal.key)}
-                        onClick={() => { setGoalOverride(goal.key); setGoalOpen(false) }}
-                        className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/30' : ''}`}
-                      >
-                        {goal.Icon
-                          ? <goal.Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          : <span className="h-3.5 w-3.5 shrink-0" />
-                        }
-                        <span className="flex-1">{goal.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>,
-              document.body
-            )}
-          </>
-        )}
-
         <ComposerPickers
           ref={pickersRef}
           workspaceId={_chatWorkspaceId}
@@ -506,6 +401,9 @@ export function ChatInput({
           uploadInProgress={uploadInProgress}
           hideAgentPicker={hideAgentPicker}
           directUpload={directUpload}
+          showGoalPicker={showGoalPicker}
+          goalKey={effectiveGoalKey}
+          onGoalChange={setGoalOverride}
         />
 
       </div>
