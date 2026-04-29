@@ -26,6 +26,32 @@ export async function unpin(
   );
 }
 
+export async function updatePinPath(
+  db: Queryable,
+  workspaceId: string,
+  oldPath: string,
+  newPath: string,
+): Promise<void> {
+  await db.query(
+    `UPDATE library_pins SET path = $3 WHERE workspace_id = $1 AND path = $2`,
+    [workspaceId, oldPath, newPath],
+  );
+}
+
+export async function updateFolderPinPaths(
+  db: Queryable,
+  workspaceId: string,
+  oldPrefix: string,
+  newPrefix: string,
+): Promise<void> {
+  await db.query(
+    `UPDATE library_pins
+     SET path = $3 || substring(path from length($2) + 1)
+     WHERE workspace_id = $1 AND path LIKE $2 || '/%'`,
+    [workspaceId, oldPrefix, newPrefix],
+  );
+}
+
 export async function listPinnedPaths(
   db: Queryable,
   workspaceId: string,
