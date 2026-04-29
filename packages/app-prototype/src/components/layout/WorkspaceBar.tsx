@@ -28,6 +28,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
@@ -128,6 +132,8 @@ export function WorkspaceBar({
     : ACCOUNT_PLACEHOLDER
 
   const { open: openGlobalPalette } = useGlobalPalette()
+
+  const [pendingDeleteWorkspaceId, setPendingDeleteWorkspaceId] = useState<string | null>(null)
 
   // Dark mode
   const [isDark, setIsDark] = useState(false)
@@ -261,7 +267,7 @@ export function WorkspaceBar({
                       Customize
                     </ContextMenuItem>
                     <ContextMenuItem
-                      onSelect={() => deleteWorkspace(ws.id)}
+                      onSelect={() => setPendingDeleteWorkspaceId(ws.id)}
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -474,6 +480,32 @@ export function WorkspaceBar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={pendingDeleteWorkspaceId !== null}
+        onOpenChange={open => { if (!open) setPendingDeleteWorkspaceId(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the workspace and all its content. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (pendingDeleteWorkspaceId) deleteWorkspace(pendingDeleteWorkspaceId)
+                setPendingDeleteWorkspaceId(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
