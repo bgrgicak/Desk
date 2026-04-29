@@ -18,7 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import { TaskSheet } from './TaskSheet'
+import { TaskSheet, type TaskCreateInput } from './TaskSheet'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 
@@ -33,7 +33,7 @@ interface TasksPageProps {
    * through to PATCH /chats/:id/messages/:id in App.tsx. Intra-column
    * reorders don't fire this hook — the server has no ordering field. */
   onTaskMove?: (task: Task, newStatus: Task['status']) => Promise<void> | void
-  onCreateTask?: (input: { name: string; description?: string; status: Task['status']; scheduledFor?: Date; scheduleRepeat?: boolean }) => Promise<void> | void
+  onCreateTask?: (input: TaskCreateInput) => Promise<void> | void
 }
 
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [

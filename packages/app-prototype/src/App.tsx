@@ -642,9 +642,6 @@ function AppInner() {
                   agentId: pickedAgentId,
                   title: input.name.length > 50 ? input.name.slice(0, 50) + '…' : input.name,
                 }).unwrap()
-                // Self-firing task message — server inserts one row with kind=task,
-                // schedules it via at-job if executeAt is set, fires immediately
-                // otherwise.
                 await postMessageMutation({
                   chatId: newChat.id,
                   content: input.description?.trim() ? `${input.name}\n\n${input.description}` : input.name,

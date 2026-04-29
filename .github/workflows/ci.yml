@@ -44,12 +44,10 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Install OS packages (at, cron, postgres client)
+      - name: Install OS packages (postgres client)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends at cron postgresql-client
-          sudo service atd start
-          sudo service cron start
+          sudo apt-get install -y --no-install-recommends postgresql-client
 
       - name: Stage DESK_HOME (avoid /opt/desk fallback)
         run: |

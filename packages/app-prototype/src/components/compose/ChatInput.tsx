@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import { createPortal } from 'react-dom'
 import {
   CornerDownLeft, ChevronDown, FileText, Paperclip, X,
-  Zap, ImageIcon, Table, Globe, Play, Target, ListTodo, CalendarClock,
+  Zap, ImageIcon, Table, Globe, Target, ListTodo,
   type LucideIcon,
 } from 'lucide-react'
 import { inferGoal as inferGoalShared, type GoalKey as SharedGoalKey } from '@desk/shared'
