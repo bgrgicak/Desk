@@ -164,7 +164,7 @@ describe("cron tasks", () => {
       [taskId, chatId, JSON.stringify({ type: "text", text: "every 30 min" }), cronExpr],
     );
 
-    const expectedNext = new Cron(cronExpr).next()!;
+    const expectedNext = new Cron(cronExpr).nextRun()!;
     await rm.tickScheduled();
     await new Promise((r) => setTimeout(r, 200));
 
