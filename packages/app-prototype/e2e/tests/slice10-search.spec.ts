@@ -1,5 +1,5 @@
 /**
- * Slice 10 — server-backed search in the chat palette.
+ * Slice 10 — server-backed search in the global palette (Cmd+K).
  */
 import { test, expect } from "../fixtures";
 
