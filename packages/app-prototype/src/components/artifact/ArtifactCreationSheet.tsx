@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import { X, FileText, Zap, ImageIcon, Table, Globe, File } from 'lucide-react'
+import { X, FileText, Zap, ImageIcon, Table, Globe } from 'lucide-react'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,8 +20,6 @@ export interface ArtifactCreateInput {
   agentId?: string
 }
 
-type CardType = ArtifactType | 'file'
-
 interface ArtifactCreationSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -32,12 +30,10 @@ interface ArtifactCreationSheetProps {
   /** Called when every field is empty — parent navigates to a fresh new
    * chat, optionally seeding the agent picked in the sheet. */
   onSkipToChat?: (agentId?: string) => Promise<void> | void
-  /** Called when the user selects the File card and submits a name. */
-  onCreateFile?: (name: string) => Promise<void>
 }
 
 interface FormState {
-  type?: CardType
+  type?: ArtifactType
   instructions: string
   name: string
 }
@@ -50,16 +46,15 @@ const DEFAULT_FORM: FormState = {
 
 // ── Type choice card config ────────────────────────────────────────────────────
 
-const TYPE_CONFIG: Record<CardType, { label: string; desc: string; icon: React.ElementType }> = {
-  document:    { label: 'Document',    desc: 'Reports, briefs, plans',      icon: FileText  },
+const TYPE_CONFIG: Record<ArtifactType, { label: string; desc: string; icon: React.ElementType }> = {
+  document:    { label: 'Document',    desc: 'Reports, briefs, plans',     icon: FileText  },
   app:         { label: 'App',         desc: 'Tools, dashboards, trackers', icon: Zap       },
-  image:       { label: 'Image',       desc: 'Logos, illustrations, art',   icon: ImageIcon },
-  spreadsheet: { label: 'Spreadsheet', desc: 'Tables, data, charts',        icon: Table     },
+  image:       { label: 'Image',       desc: 'Logos, illustrations, art',  icon: ImageIcon },
+  spreadsheet: { label: 'Spreadsheet', desc: 'Tables, data, charts',       icon: Table     },
   site:        { label: 'Site',        desc: 'Landings, pages, portfolios', icon: Globe     },
-  file:        { label: 'File',        desc: 'Any format, blank to start',  icon: File      },
 }
 
-const TYPE_ORDER: CardType[] = ['document', 'app', 'image', 'spreadsheet', 'site', 'file']
+const TYPE_ORDER: ArtifactType[] = ['document', 'app', 'image', 'spreadsheet', 'site']
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -69,7 +64,6 @@ export function ArtifactCreationSheet({
   workspaceId,
   onCreateArtifact,
   onSkipToChat,
-  onCreateFile,
 }: ArtifactCreationSheetProps) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
@@ -96,11 +90,9 @@ export function ArtifactCreationSheet({
     setForm(prev => ({ ...prev, [key]: value }))
   }
 
-  function toggleType(type: CardType) {
-    setForm(prev => ({ ...prev, type: prev.type === type ? undefined : type, name: '', instructions: '' }))
+  function toggleType(type: ArtifactType) {
+    setForm(prev => ({ ...prev, type: prev.type === type ? undefined : type }))
   }
-
-  const isFileMode = form.type === 'file'
 
   const isEmpty =
     !form.type &&
@@ -109,12 +101,8 @@ export function ArtifactCreationSheet({
     attachments.length === 0
 
   const buttonLabel = submitting
-    ? 'Creating…'
-    : isFileMode
-      ? 'Create'
-      : (isEmpty ? 'Skip to chat' : 'Create')
-
-  const submitDisabled = submitting || (isFileMode && !form.name.trim())
+    ? (isEmpty ? 'Opening…' : 'Creating…')
+    : (isEmpty ? 'Skip to chat' : 'Create')
 
   function removeAttachment(id: string) {
     setAttachments(prev => prev.filter(a => a.id !== id))
@@ -146,12 +134,7 @@ export function ArtifactCreationSheet({
   async function handlePrimary() {
     setSubmitting(true)
     try {
-      if (isFileMode) {
-        const name = form.name.trim()
-        if (!name) return
-        await onCreateFile?.(name)
-        onOpenChange(false)
-      } else if (isEmpty) {
+      if (isEmpty) {
         await onSkipToChat?.(agentId)
       } else {
         const refs: AttachmentRef[] = attachments.map(a => ({
@@ -160,7 +143,7 @@ export function ArtifactCreationSheet({
           kind: a.kind === 'folder' ? 'directory' : 'file',
         }))
         await onCreateArtifact({
-          type:         form.type as ArtifactType | undefined,
+          type:         form.type,
           instructions: form.instructions.trim(),
           name:         form.name.trim() || undefined,
           attachments:  refs.length ? refs : undefined,
@@ -215,8 +198,8 @@ export function ArtifactCreationSheet({
             })}
           </div>
 
-          {/* Instructions + pickers row — hidden in file mode */}
-          {!isFileMode && <div className="space-y-1.5">
+          {/* Instructions + pickers row */}
+          <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Instructions</label>
             <div className="rounded-lg border bg-background shadow-xs">
               {attachments.length > 0 && (
@@ -273,25 +256,17 @@ export function ArtifactCreationSheet({
                 onChange={handleFileInputChange}
               />
             </div>
-          </div>}
+          </div>
 
-          {/* Name */}
+          {/* Name (optional) */}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Name{' '}
-              {!isFileMode && <span className="font-normal text-muted-foreground/60">(optional)</span>}
-            </label>
+            <label className="text-xs font-medium text-muted-foreground">Name <span className="font-normal text-muted-foreground/60">(optional)</span></label>
             <Input
               data-testid="artifact-sheet-name"
-              placeholder={isFileMode ? 'e.g., Notes.md' : 'Generated automatically if blank'}
+              placeholder="Generated automatically if blank"
               value={form.name}
               onChange={e => set('name', e.target.value)}
-              autoFocus={isFileMode}
-              onKeyDown={isFileMode ? (e) => { if (e.key === 'Enter' && form.name.trim()) handlePrimary() } : undefined}
             />
-            {isFileMode && (
-              <p className="text-xs text-muted-foreground">Include the extension in the name.</p>
-            )}
           </div>
 
         </div>
@@ -301,7 +276,7 @@ export function ArtifactCreationSheet({
           <Button
             data-testid="artifact-sheet-submit"
             onClick={handlePrimary}
-            disabled={submitDisabled}
+            disabled={submitting}
           >
             {buttonLabel}
           </Button>
