@@ -4,6 +4,7 @@ export {
   renameWorkspaceDir,
   trashWorkspaceDir,
   chatAttachmentsDir,
+  messageAttachmentsDir,
   chatsDir,
   resolveDeskHome,
   resolveHostPath,
@@ -14,6 +15,7 @@ export {
 } from "./layout.js";
 export {
   uploadArtifact,
+  uploadMessageAttachment,
   readFile,
   downloadFile,
   statFile,

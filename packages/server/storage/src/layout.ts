@@ -104,6 +104,25 @@ export async function chatAttachmentsDir(
   return dir;
 }
 
+/**
+ * Returns the absolute path to a single message's attachments directory.
+ * Each user upload rides on a message and lands here keyed by the
+ * message id, so filename collisions across messages are impossible
+ * without the per-file rename dance. Creates the directory lazily.
+ */
+export async function messageAttachmentsDir(
+  home: string,
+  slug: string,
+  chatId: string,
+  messageId: string,
+): Promise<string> {
+  validateId(chatId, ID_PREFIXES.chat);
+  validateId(messageId, ID_PREFIXES.message);
+  const dir = path.join(workspaceRoot(home, slug), ".chats", chatId, "messages", messageId);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
 /** Returns the temp directory for in-progress uploads. */
 export function tmpDir(home: string): string {
   return path.join(home, "Desk", ".tmp");

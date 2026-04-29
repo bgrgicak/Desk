@@ -15,7 +15,7 @@ import {
   pinLibraryFileToChat,
   snapshotNote,
   trashChatDirectories,
-  uploadArtifact,
+  uploadMessageAttachment,
   workspaceRootPath,
   type FileRef,
   type NoteVersion,
@@ -114,7 +114,82 @@ const SendMessageSchema = z.object({
   executeAt: z.string().optional(),
   cron: z.string().optional(),
   goal: z.string().optional(),
+  /** Pre-allocated id, supplied by the multipart route so attachment
+   * paths can include the message id before the row is inserted. */
+  id: z.string().optional(),
 });
+
+/**
+ * Translates a multipart `POST /chats/{id}/messages` form into the JSON
+ * body shape `sendMessage` expects. Pre-allocates the message id so each
+ * uploaded file lands at a path that already includes the message id —
+ * no rename dance, no orphaning if the message-row insert succeeds.
+ *
+ * Form fields:
+ *   content           — message text (required, may be empty)
+ *   attachment        — file part(s); repeated for multi-attachment sends
+ *   attachments       — JSON array of AttachmentRef for refs without a
+ *                       file body (library mentions)
+ *   kind/title/executeAt/cron — optional, same semantics as the JSON path
+ */
+export async function buildSendMessageBodyFromForm(
+  storage: StorageContext,
+  chatId: string,
+  form: FormData,
+): Promise<unknown> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const messageId = generateId("message");
+  const content = typeof form.get("content") === "string" ? (form.get("content") as string) : "";
+
+  // Library-mention refs ride alongside file uploads — same array on the
+  // wire, distinguished only by whether a file part is present.
+  const refsRaw = form.get("attachments");
+  const refs: AttachmentRef[] = [];
+  if (typeof refsRaw === "string" && refsRaw !== "") {
+    const parsed = z.array(AttachmentRefSchema).safeParse(JSON.parse(refsRaw));
+    if (!parsed.success) {
+      throw new ValidationError(`Invalid 'attachments' JSON: ${parsed.error.message}`);
+    }
+    refs.push(...parsed.data);
+  }
+
+  const fileParts = form.getAll("attachment").filter((p): p is File => p instanceof Blob);
+  const uploaded: AttachmentRef[] = [];
+  for (const part of fileParts) {
+    const name = part.name || "upload";
+    const mime = part.type || "application/octet-stream";
+    const stream = Readable.from(Buffer.from(await part.arrayBuffer()));
+    const ref = await uploadMessageAttachment(storage, {
+      workspaceSlug: ws.path,
+      chatId,
+      messageId,
+      name,
+      mime,
+      stream,
+    });
+    uploaded.push({
+      path: ref.path,
+      name: ref.name,
+      mime: ref.mime,
+      size: ref.size,
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    id: messageId,
+    content,
+    attachments: [...refs, ...uploaded],
+  };
+  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
+    const v = form.get(k);
+    if (typeof v === "string" && v !== "") body[k] = v;
+  }
+  return body;
+}
 
 export async function sendMessage(
   pool: Pool,
@@ -142,7 +217,7 @@ export async function sendMessage(
   // value is a chat-shape concession — both ids point at the same row so
   // app.ts can schedule the message id without branching.
   if (kind !== "chat") {
-    const messageId = generateId("message");
+    const messageId = data.id ?? generateId("message");
     let executeAt = data.executeAt ?? null;
     if (data.cron && !executeAt) {
       const next = new Cron(data.cron).nextRun();
@@ -167,7 +242,7 @@ export async function sendMessage(
   }
 
   const userMessage = await queries.messages.insert(pool, {
-    id: generateId("message"),
+    id: data.id ?? generateId("message"),
     chatId,
     role: "user",
     content: data.goal
@@ -424,6 +499,7 @@ export async function listAttachments(
   const showHidden = opts?.showHidden ?? false;
   const out: ChatFileRef[] = [];
 
+  // Legacy path: pinned library refs and old direct uploads land here.
   const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
   const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
   for (const name of attNames) {
@@ -439,6 +515,32 @@ export async function listAttachments(
       createdAt: stat.birthtime.toISOString(),
       kind: "attachment",
     });
+  }
+
+  // Message-scoped uploads: `.chats/{id}/messages/{msgId}/{name}`. Each
+  // user message that carried files gets its own subdir. Flatten the
+  // tree into the same list so the Files panel shows uploads regardless
+  // of which path produced them.
+  const msgsDir = path.join(root, ".chats", chatId, "messages");
+  const msgIds = await fs.readdir(msgsDir).catch(() => [] as string[]);
+  for (const msgId of msgIds) {
+    if (msgId.startsWith(".")) continue;
+    const sub = path.join(msgsDir, msgId);
+    const fileNames = await fs.readdir(sub).catch(() => [] as string[]);
+    for (const name of fileNames) {
+      if (!showHidden && name.startsWith(".")) continue;
+      const abs = path.join(sub, name);
+      const stat = await fs.stat(abs).catch(() => null);
+      if (!stat || !stat.isFile()) continue;
+      out.push({
+        path: path.relative(root, abs).split(path.sep).join("/"),
+        name,
+        mime: "application/octet-stream",
+        size: stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        kind: "attachment",
+      });
+    }
   }
 
   if (opts?.includeNotes) {
@@ -531,29 +633,3 @@ export async function pinLibraryFile(
   return file;
 }
 
-export async function uploadAttachmentToChat(
-  storage: StorageContext,
-  chatId: string,
-  data: { name: string; mime: string; content: Buffer },
-  emit: (event: WsEvent) => void,
-): Promise<FileRef> {
-  const chat = await queries.chats.findById(storage.pool, chatId);
-  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
-  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
-  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
-
-  const stream = Readable.from(data.content);
-
-  const file = await uploadArtifact(storage, {
-    workspaceId: chat.workspaceId,
-    workspaceSlug: ws.path,
-    chatId,
-    name: data.name,
-    mime: data.mime,
-    stream,
-  });
-
-  emit({ type: "artifact.created", payload: file });
-
-  return file;
-}

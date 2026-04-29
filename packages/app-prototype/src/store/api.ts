@@ -376,6 +376,11 @@ export const api = createApi({
         chatId: string;
         content: string;
         attachments?: AttachmentRef[];
+        /** Files to upload with this message. Switches the request to
+         * multipart so the server writes them under
+         * `.chats/{chatId}/messages/{msgId}/` keyed by the new message
+         * id (no upload-then-attach two-step). */
+        files?: File[];
         kind?: "chat" | "task" | "ai_note";
         title?: string;
         executeAt?: string;
@@ -383,7 +388,22 @@ export const api = createApi({
         goal?: string;
       }
     >({
-      query: ({ chatId, content, attachments, kind, title, executeAt, cron, goal }) => {
+      query: ({ chatId, content, attachments, files, kind, title, executeAt, cron, goal }) => {
+        const url = `/chats/${chatId}/messages`;
+        if (files && files.length > 0) {
+          const fd = new FormData();
+          fd.append("content", content);
+          if (attachments && attachments.length > 0) {
+            fd.append("attachments", JSON.stringify(attachments));
+          }
+          for (const f of files) fd.append("attachment", f, f.name);
+          if (kind) fd.append("kind", kind);
+          if (title) fd.append("title", title);
+          if (executeAt) fd.append("executeAt", executeAt);
+          if (cron) fd.append("cron", cron);
+          if (goal) fd.append("goal", goal);
+          return { url, method: "POST", body: fd };
+        }
         const body: Record<string, unknown> = { content };
         if (attachments && attachments.length > 0) body.attachments = attachments;
         if (kind) body.kind = kind;
@@ -391,11 +411,7 @@ export const api = createApi({
         if (executeAt) body.executeAt = executeAt;
         if (cron) body.cron = cron;
         if (goal) body.goal = goal;
-        return {
-          url: `/chats/${chatId}/messages`,
-          method: "POST",
-          body,
-        };
+        return { url, method: "POST", body };
       },
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
@@ -580,23 +596,6 @@ export const api = createApi({
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
-    uploadChatArtifact: build.mutation<
-      ServerFile,
-      { chatId: string; file: File }
-    >({
-      query: ({ chatId, file }) => {
-        const fd = new FormData();
-        fd.append("file", file, file.name);
-        return {
-          url: `/chats/${chatId}/attachments`,
-          method: "POST",
-          body: fd,
-        };
-      },
-      invalidatesTags: (_r, _e, { chatId }) => [
-        { type: "ChatArtifact", id: `CHAT_${chatId}` },
-      ],
-    }),
     // Pins a workspace-library file to the chat by symlinking it into
     // `.chats/{chatId}/attachments/`. The library file is untouched.
     // Idempotent — pinning the same file twice is a no-op server-side.
@@ -677,7 +676,6 @@ export const {
   useCreateLibraryLinkMutation,
   useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
-  useUploadChatArtifactMutation,
   usePinChatLibraryRefMutation,
   useSearchQuery,
   useGetModelsQuery,

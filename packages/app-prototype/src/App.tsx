@@ -308,6 +308,7 @@ function AppInner() {
     agentId?: string,
     attachments?: AttachmentRef[],
     options?: { kind?: 'task'; title?: string; executeAt?: string; goal?: string },
+    files?: File[],
   ) => {
     if (!activeWorkspaceId) return
     // The workspace-agents query may not have resolved yet on first paint
@@ -344,6 +345,7 @@ function AppInner() {
         chatId: newChat.id,
         content: message,
         attachments: attachments && attachments.length > 0 ? attachments : undefined,
+        files: files && files.length > 0 ? files : undefined,
         kind: options?.kind,
         title: options?.title,
         executeAt: options?.executeAt,

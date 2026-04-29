@@ -48,7 +48,7 @@ test("library upload via 'Choose file' button uploads to the server", async ({
   ).toBeVisible({ timeout: 10_000 });
 });
 
-test("chat Files-tab upload stages the file and the next message attaches it", async ({
+test("chat Files-tab upload chips the file and the next message attaches it", async ({
   loggedInPage: page,
   serverUrl,
   token,
@@ -82,9 +82,9 @@ test("chat Files-tab upload stages the file and the next message attaches it", a
   await page.getByRole("button", { name: "Files", exact: true }).click();
 
   // Two FileDropZones mount on the Files tab — the outer ChatView
-  // wrapper and the inner FilesPanel. Either one is fine for this
-  // assertion: dropping/uploading anywhere on the chat must land in
-  // `.chats/{id}/attachments/`, never the workspace library.
+  // wrapper and the inner FilesPanel. Either one is fine: drops are
+  // held in browser memory until send, so neither one writes to disk
+  // up front.
   const inputs = page.locator('[data-testid="dropzone-file-input"]');
   await expect(inputs).toHaveCount(2);
   await inputs.last().setInputFiles({
@@ -93,44 +93,24 @@ test("chat Files-tab upload stages the file and the next message attaches it", a
     buffer: Buffer.from("hello from files-tab\n"),
   });
 
-  // Wait for the file to surface as a chip in the composer — both
-  // pendingUploads and stagedFiles render there, so this works regardless
-  // of which dropzone the input was attached to.
   await expect(
     page.getByRole("button", { name: "Remove files-tab-upload.md" }),
   ).toBeVisible();
 
-  // File must land in `.chats/{chatId}/attachments/` (chat-scoped, not
-  // the workspace library).
-  const expectedPath = `.chats/${chat.id}/attachments/files-tab-upload.md`;
+  // No spill into the workspace library before send (the file is
+  // in-memory; nothing has touched the disk yet).
+  const libBefore = (await (
+    await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+  ).json()) as { items: Array<{ name: string }> };
+  expect(libBefore.items.map((i) => i.name)).not.toContain("files-tab-upload.md");
 
-  const chatFilesRes = await fetch(
-    `${serverUrl}/chats/${chat.id}/attachments`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const chatFiles = (await chatFilesRes.json()) as Array<{
-    path: string;
-    name: string;
-    kind: "attachment" | "note";
-  }>;
-  expect(chatFiles.map((i) => i.path)).toContain(expectedPath);
-  expect(chatFiles.find((i) => i.path === expectedPath)?.kind).toBe(
-    "attachment",
-  );
-
-  // Critical regression guard: Files-tab uploads must NOT spill into the
-  // workspace library. (Prior behavior staged via /library; current
-  // contract is chat-scoped.)
-  const libRes = await fetch(
-    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const lib = (await libRes.json()) as { items: Array<{ name: string }> };
-  expect(lib.items.map((i) => i.name)).not.toContain("files-tab-upload.md");
-
-  // Send a message — the regression we're guarding against is "file
-  // uploaded but never attached, so the LLM never sees it". The POST body
-  // must carry attachments[] referencing the staged file's chat path.
+  // Send the message — the request must be multipart, with the file
+  // riding as a part. The server writes it under
+  // `.chats/{id}/messages/{msgId}/{name}` and stamps the AttachmentRef
+  // onto the user message.
   const messagePromise = page.waitForRequest(
     (req) =>
       req.method() === "POST" &&
@@ -142,28 +122,55 @@ test("chat Files-tab upload stages the file and the next message attaches it", a
     .fill("look at this");
   await page.keyboard.press("Enter");
   const sent = await messagePromise;
-  const body = JSON.parse(sent.postData() ?? "{}") as {
-    attachments?: Array<{ path: string; name: string }>;
-  };
-  expect(body.attachments?.map((a) => a.name)).toContain("files-tab-upload.md");
-  expect(body.attachments?.map((a) => a.path)).toContain(expectedPath);
+  expect((sent.headers()["content-type"] ?? "").toLowerCase()).toContain(
+    "multipart/form-data",
+  );
 
-  // The "In this chat" section keeps the file visible after send.
-  await expect(page.getByText("In this chat").first()).toBeVisible();
-  await expect(
-    page.getByText("files-tab-upload.md").first(),
-  ).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        const res = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const { items } = (await res.json()) as {
+          items: Array<{
+            role: string;
+            content: { type: string; text?: string };
+            attachments?: Array<{ path: string; name: string }>;
+          }>;
+        };
+        const m = items.find(
+          (x) =>
+            x.role === "user" &&
+            x.content.type === "text" &&
+            x.content.text === "look at this",
+        );
+        return (m?.attachments ?? []).map((a) => a.name);
+      },
+      { timeout: 10_000 },
+    )
+    .toContain("files-tab-upload.md");
+
+  // Still no spill into the workspace library after send.
+  const libAfter = (await (
+    await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+  ).json()) as { items: Array<{ name: string }> };
+  expect(libAfter.items.map((i) => i.name)).not.toContain("files-tab-upload.md");
 });
 
-test("uploads on the new-chat screen are rejected with a toast — never spill into the library", async ({
+test("uploads on the new-chat screen are held until send — never spill into the library", async ({
   loggedInPage: page,
   serverUrl,
   token,
 }) => {
   const workspaceId = await getFirstWorkspaceId(serverUrl, token);
 
-  // Snapshot the workspace library before — we'll assert nothing new
-  // sneaks in.
+  // Snapshot the workspace library — drops on the new-chat stub are
+  // held in browser memory and ride on the first /messages POST, so
+  // nothing new must sneak into the library before OR after send.
   const libBefore = (await (
     await fetch(
       `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
@@ -172,14 +179,9 @@ test("uploads on the new-chat screen are rejected with a toast — never spill i
   ).json()) as { items: Array<{ name: string }> };
   const namesBefore = new Set(libBefore.items.map((i) => i.name));
 
-  // Open a brand-new chat (no first message sent yet — there is no
-  // chat row, no `.chats/{id}/`, and no chat id to attach to).
   await page.getByRole("button", { name: /^New chat$/i }).first().click();
   await page.waitForLoadState("networkidle");
 
-  // Use the outer dropzone's hidden input. (Inner FilesPanel input is
-  // gated on hasRealChatId so it isn't usable here.) Picking a file via
-  // the outer input simulates a drop on the chat-pane drop zone.
   const outerInput = page.locator('[data-testid="dropzone-file-input"]').first();
   const guardFileName = `new-chat-no-spill-${Date.now()}.md`;
   await outerInput.setInputFiles({
@@ -188,26 +190,43 @@ test("uploads on the new-chat screen are rejected with a toast — never spill i
     buffer: Buffer.from("must not land in library\n"),
   });
 
-  // The user gets an explanatory toast — "Send your first message
-  // before adding files" — instead of a silent library upload.
+  // The chip appears (file is held in composer state), and there is
+  // NO upload-rejection toast — the new contract permits drops here.
+  await expect(
+    page.getByRole("button", { name: `Remove ${guardFileName}` }),
+  ).toBeVisible({ timeout: 5_000 });
   await expect(
     page.getByText(/send your first message before adding files/i),
-  ).toBeVisible({ timeout: 5_000 });
+  ).not.toBeVisible();
 
-  // Critical regression guard: nothing may have been written to the
-  // workspace library root (or anywhere in the library) as a side
-  // effect of the drop attempt.
-  const libAfter = (await (
+  // Library snapshot before send: nothing wrote to disk yet.
+  const libDuring = (await (
     await fetch(
       `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
   ).json()) as { items: Array<{ name: string }> };
-  const newNames = libAfter.items
+  const newNamesDuring = libDuring.items
     .map((i) => i.name)
     .filter((n) => !namesBefore.has(n));
-  expect(newNames).not.toContain(guardFileName);
-  expect(newNames).toEqual([]);
+  expect(newNamesDuring).not.toContain(guardFileName);
+
+  // Send the first message — file rides as multipart, lands under
+  // `.chats/{id}/messages/{msgId}/{name}`, never the workspace root.
+  await page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first()
+    .fill("first message");
+  await page.keyboard.press("Enter");
+
+  await expect.poll(async () => {
+    const res = await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const lib = (await res.json()) as { items: Array<{ name: string }> };
+    return lib.items.map((i) => i.name).filter((n) => !namesBefore.has(n));
+  }, { timeout: 5_000 }).not.toContain(guardFileName);
 });
 
 test("attach picker mentions a library file and the next message attaches it", async ({

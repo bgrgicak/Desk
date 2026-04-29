@@ -507,7 +507,10 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req);
+      const ct = (req.headers["content-type"] ?? "").toLowerCase();
+      const body = ct.startsWith("multipart/form-data")
+        ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
+        : await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
       // Self-firing kinds (task / ai_note): execute_at is computed at insert
@@ -569,25 +572,6 @@ export function createApp(opts: AppOptions): Server {
         includeNotes,
       });
       sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const form = await parseMultipart(req);
-      const part = form.get("file");
-      if (!(part instanceof Blob)) {
-        throw new ValidationError("Missing 'file' part in multipart body");
-      }
-      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
-      const mime = part.type || "application/octet-stream";
-      const content = Buffer.from(await part.arrayBuffer());
-      const result = await chatRoutes.uploadAttachmentToChat(
-        storage,
-        segments[1],
-        { name, mime, content },
-        emitEvent,
-      );
-      sendJson(res, 201, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {
