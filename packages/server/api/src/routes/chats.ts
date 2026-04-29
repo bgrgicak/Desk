@@ -15,7 +15,7 @@ import {
   pinLibraryFileToChat,
   snapshotNote,
   trashChatDirectories,
-  uploadMessageAttachment,
+  uploadArtifact,
   workspaceRootPath,
   type FileRef,
   type NoteVersion,
@@ -114,16 +114,13 @@ const SendMessageSchema = z.object({
   executeAt: z.string().optional(),
   cron: z.string().optional(),
   goal: z.string().optional(),
-  /** Pre-allocated id, supplied by the multipart route so attachment
-   * paths can include the message id before the row is inserted. */
-  id: z.string().optional(),
 });
 
 /**
  * Translates a multipart `POST /chats/{id}/messages` form into the JSON
- * body shape `sendMessage` expects. Pre-allocates the message id so each
- * uploaded file lands at a path that already includes the message id —
- * no rename dance, no orphaning if the message-row insert succeeds.
+ * body shape `sendMessage` expects. Files land under
+ * `.chats/{id}/attachments/` (the canonical chat-attachment home);
+ * `uploadArtifact` handles same-name collisions by appending `-N`.
  *
  * Form fields:
  *   content           — message text (required, may be empty)
@@ -142,7 +139,6 @@ export async function buildSendMessageBodyFromForm(
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
-  const messageId = generateId("message");
   const content = typeof form.get("content") === "string" ? (form.get("content") as string) : "";
 
   // Library-mention refs ride alongside file uploads — same array on the
@@ -163,10 +159,10 @@ export async function buildSendMessageBodyFromForm(
     const name = part.name || "upload";
     const mime = part.type || "application/octet-stream";
     const stream = Readable.from(Buffer.from(await part.arrayBuffer()));
-    const ref = await uploadMessageAttachment(storage, {
+    const ref = await uploadArtifact(storage, {
+      workspaceId: chat.workspaceId,
       workspaceSlug: ws.path,
       chatId,
-      messageId,
       name,
       mime,
       stream,
@@ -180,7 +176,6 @@ export async function buildSendMessageBodyFromForm(
   }
 
   const body: Record<string, unknown> = {
-    id: messageId,
     content,
     attachments: [...refs, ...uploaded],
   };
@@ -217,7 +212,7 @@ export async function sendMessage(
   // value is a chat-shape concession — both ids point at the same row so
   // app.ts can schedule the message id without branching.
   if (kind !== "chat") {
-    const messageId = data.id ?? generateId("message");
+    const messageId = generateId("message");
     let executeAt = data.executeAt ?? null;
     if (data.cron && !executeAt) {
       const next = new Cron(data.cron).nextRun();
@@ -242,7 +237,7 @@ export async function sendMessage(
   }
 
   const userMessage = await queries.messages.insert(pool, {
-    id: data.id ?? generateId("message"),
+    id: generateId("message"),
     chatId,
     role: "user",
     content: data.goal
@@ -499,7 +494,6 @@ export async function listAttachments(
   const showHidden = opts?.showHidden ?? false;
   const out: ChatFileRef[] = [];
 
-  // Legacy path: pinned library refs and old direct uploads land here.
   const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
   const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
   for (const name of attNames) {
@@ -515,32 +509,6 @@ export async function listAttachments(
       createdAt: stat.birthtime.toISOString(),
       kind: "attachment",
     });
-  }
-
-  // Message-scoped uploads: `.chats/{id}/messages/{msgId}/{name}`. Each
-  // user message that carried files gets its own subdir. Flatten the
-  // tree into the same list so the Files panel shows uploads regardless
-  // of which path produced them.
-  const msgsDir = path.join(root, ".chats", chatId, "messages");
-  const msgIds = await fs.readdir(msgsDir).catch(() => [] as string[]);
-  for (const msgId of msgIds) {
-    if (msgId.startsWith(".")) continue;
-    const sub = path.join(msgsDir, msgId);
-    const fileNames = await fs.readdir(sub).catch(() => [] as string[]);
-    for (const name of fileNames) {
-      if (!showHidden && name.startsWith(".")) continue;
-      const abs = path.join(sub, name);
-      const stat = await fs.stat(abs).catch(() => null);
-      if (!stat || !stat.isFile()) continue;
-      out.push({
-        path: path.relative(root, abs).split(path.sep).join("/"),
-        name,
-        mime: "application/octet-stream",
-        size: stat.size,
-        createdAt: stat.birthtime.toISOString(),
-        kind: "attachment",
-      });
-    }
   }
 
   if (opts?.includeNotes) {

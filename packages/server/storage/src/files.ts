@@ -12,7 +12,6 @@ import {
 } from "@desk/shared";
 import {
   chatAttachmentsDir,
-  messageAttachmentsDir,
   resolveHostPath,
   tmpDir,
   trashDir,
@@ -190,73 +189,6 @@ export async function uploadArtifact(
   return {
     path: relPath.split(path.sep).join("/"),
     name: path.basename(destPath),
-    mime: input.mime || guessMime(input.name),
-    size: stat.size,
-    createdAt: stat.birthtime.toISOString(),
-  };
-}
-
-/**
- * Writes a single user-attached file under
- * `.chats/{chatId}/messages/{messageId}/{name}`. The message id makes
- * the directory unique, so filenames are kept verbatim — no
- * `name-1.png` collision rename. Returns a FileRef describing the
- * workspace-relative path and stat metadata.
- */
-export async function uploadMessageAttachment(
-  ctx: StorageContext,
-  input: {
-    workspaceSlug: string;
-    chatId: string;
-    messageId: string;
-    name: string;
-    mime: string;
-    stream: Readable;
-  },
-): Promise<FileRef> {
-  rejectHiddenName(input.name);
-
-  const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
-  const destDir = await messageAttachmentsDir(
-    ctx.home,
-    input.workspaceSlug,
-    input.chatId,
-    input.messageId,
-  );
-  const destPath = path.join(destDir, input.name);
-
-  let size = 0;
-  const sizeEnforcer = new (await import("node:stream")).Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      size += chunk.length;
-      if (size > MAX_UPLOAD_BYTES) {
-        callback(new ValidationError(`File exceeds maximum size of ${MAX_UPLOAD_BYTES} bytes`));
-        return;
-      }
-      callback(null, chunk);
-    },
-  });
-
-  try {
-    await pipeline(input.stream, sizeEnforcer, createWriteStream(tmpPath));
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
-
-  try {
-    await fs.rename(tmpPath, destPath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
-
-  const stat = await fs.stat(destPath);
-  const relPath = path.relative(workspaceRootPath(ctx.home, input.workspaceSlug), destPath);
-
-  return {
-    path: relPath.split(path.sep).join("/"),
-    name: input.name,
     mime: input.mime || guessMime(input.name),
     size: stat.size,
     createdAt: stat.birthtime.toISOString(),

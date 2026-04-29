@@ -5,11 +5,10 @@
  *
  *   Drop → in-memory chip in the composer → on send the file rides as
  *   a multipart `attachment[]` part on `POST /chats/{id}/messages`.
- *   Server writes it under `.chats/{id}/messages/{msgId}/{name}` and
- *   the resulting message row carries it in `attachments[]`. There is
- *   no separate upload step, no `.chats/{id}/attachments/` write, and
- *   no chat-id requirement at drop time (drops on the new-chat screen
- *   work too).
+ *   Server writes it under `.chats/{id}/attachments/{name}` and the
+ *   resulting message row carries it in `attachments[]`. There is no
+ *   separate upload step, and no chat-id requirement at drop time
+ *   (drops on the new-chat screen work too).
  */
 import { test, expect } from "../fixtures";
 
@@ -145,7 +144,7 @@ test("chat: drop a screenshot → chip in composer → send rides on POST /messa
 
   // The server-side outcome is what we actually assert on: the message
   // row carries the attachment, and the file lives under
-  // `.chats/{id}/messages/{msgId}/{name}`.
+  // `.chats/{id}/attachments/{name}`.
   await expect
     .poll(
       async () => {
@@ -192,7 +191,7 @@ test("chat: drop a screenshot → chip in composer → send rides on POST /messa
   expect(userMsg).toBeDefined();
   const att = userMsg!.attachments!.find((a) => a.name === SCREENSHOT_NAME);
   expect(att).toBeDefined();
-  expect(att!.path).toBe(`.chats/${chat.id}/messages/${userMsg!.id}/${SCREENSHOT_NAME}`);
+  expect(att!.path).toBe(`.chats/${chat.id}/attachments/${SCREENSHOT_NAME}`);
 
   // Composer chip clears after send.
   await expect(
