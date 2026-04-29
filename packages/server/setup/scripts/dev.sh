@@ -38,6 +38,23 @@ full_clean() {
     "${REPO_ROOT}/package-lock.json"
 }
 
+# 0. Pin host Node to the major version in .nvmrc.
+#
+#    The host and the VM share /desk/node_modules over 9p. Native modules
+#    (better-sqlite3) carry a NODE_MODULE_VERSION compiled against
+#    whichever Node ran `npm install` — so a host on a different major
+#    than the VM produces an ABI mismatch the moment either side dlopens
+#    the binding. install.sh pins the VM via the same .nvmrc; this is
+#    the host counterpart. Hard fail rather than warn — a "wrong Node"
+#    dev session corrupts the shared tree for the next run.
+NVMRC_MAJOR="$(awk -F. 'NR==1{gsub(/^v/,"",$1); print $1}' "${REPO_ROOT}/.nvmrc" 2>/dev/null || true)"
+HOST_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+if [ -n "$NVMRC_MAJOR" ] && [ "$HOST_MAJOR" != "$NVMRC_MAJOR" ]; then
+  echo "ERROR: host Node is v${HOST_MAJOR:-?} but .nvmrc requires v${NVMRC_MAJOR}." >&2
+  echo "       Run \`nvm install ${NVMRC_MAJOR} && nvm use\` (or your equivalent) and retry." >&2
+  exit 1
+fi
+
 # 1. Ensure the dev VM is running. dev-override.sh just bails if it isn't,
 #    which is hostile on a clean clone — bring it up automatically.
 vm_status="$(limactl list --format '{{.Status}}' "$NAME" 2>/dev/null || true)"
@@ -61,9 +78,11 @@ fi
 #    Fix: after any install, verify the platform binding is present; if not,
 #    nuke ALL workspace node_modules AND package-lock.json and reinstall so npm
 #    re-resolves optional deps for the current platform from scratch.
+host_installed=0
 if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ]; then
   echo "==> Installing workspace dependencies"
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+  host_installed=1
 fi
 
 # Always verify rolldown binding (catches VM-provisioning corruption,
@@ -72,6 +91,35 @@ if ! rolldown_binding_ok; then
   echo "==> rolldown native binding missing for $(uname -s)/$(uname -m) — reinstalling…"
   full_clean
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+  host_installed=1
+fi
+
+# After any host npm install, refresh the VM-local node_modules shadow.
+# dev-provision.sh bind-mounts /home/desk/vm-node_modules over
+# /desk/node_modules so the VM is insulated from 9p churn — but that
+# means newly-installed deps on the host are invisible to the in-VM
+# server until we rsync them across. Reading the host tree requires
+# stopping the bind first (otherwise /desk/node_modules shows the
+# shadow). Skipped when no host install ran — rsync is fast on a
+# no-op but `systemctl stop` would briefly tear the server's
+# require() resolution out from under it.
+if [ "$host_installed" = "1" ]; then
+  echo "==> Re-syncing VM node_modules shadow"
+  # Stop the bind mount so /desk/node_modules shows the host (macOS/Linux)
+  # tree. rsync copies it verbatim to the VM-local shadow — including any
+  # macOS Mach-O native binaries that are invalid ELF on Linux.
+  # After remounting, rebuild better-sqlite3 from source inside the VM so
+  # the shadow always has a Linux ELF binary regardless of host platform.
+  "$VM_SH" exec "
+    sudo systemctl stop desk-node_modules.mount &&
+    sudo rsync -a --delete /desk/node_modules/ /home/desk/vm-node_modules/ &&
+    sudo chown -R desk:desk /home/desk/vm-node_modules &&
+    sudo systemctl start desk-node_modules.mount &&
+    echo '==> Rebuilding better-sqlite3 for Linux inside VM' &&
+    cd /desk && sudo npm rebuild --build-from-source better-sqlite3 &&
+    sudo chown -R desk:desk /home/desk/vm-node_modules/better-sqlite3/build &&
+    sudo systemctl restart desk-server || true
+  "
 fi
 
 # 3. Ensure DESK_SECRET_KEY is persisted on the host and injected into the VM.

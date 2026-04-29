@@ -18,12 +18,10 @@
     "@desk/shared": "*",
     "@desk/db": "*",
     "@desk/storage": "*",
-    "dockerode": "^4.0.0",
-    "pg": "^8.13.0"
+    "dockerode": "^4.0.0"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.0",
-    "@types/pg": "^8.11.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.1.0"

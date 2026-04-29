@@ -21,7 +21,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -30,21 +30,7 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_msg_model_attachments_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
@@ -52,19 +38,14 @@ let userToken: string;
 let chatId: string;
 let agentModel: string;
 let runManager: ReturnType<typeof createRunManager>;
+let dbPath: string;
 /** Captures the prompt + forwarded attachments seen by the fake driver on each fireMessage call. */
 const promptsSeen: { prompt: string; attachments?: string[] }[] = [];
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally { await admin.end(); }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-attach-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "attach-user";
@@ -93,7 +74,7 @@ beforeAll(async () => {
   agentModel = agentRows[0].model as string;
   chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, wsRows[0].id, agentRows[0].id, "Attach Chat"],
   );
 
@@ -111,13 +92,8 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally { await admin.end(); }
 });
 
 function request(method: string, urlPath: string, body?: unknown, bearer?: string | null): Promise<{ status: number; body: unknown }> {
@@ -150,8 +126,8 @@ async function login(): Promise<string> {
 async function fireTriggerFor(messageId: string): Promise<void> {
   const { rows } = await pool.query(
     `SELECT id FROM messages
-     WHERE chat_id = $1 AND role = 'system' AND content->>'type' = 'agent_turn'
-       AND content->>'userMessageId' = $2
+     WHERE chat_id = ? AND role = 'system' AND json_extract(content, '$.type') = 'agent_turn'
+       AND json_extract(content, '$.userMessageId') = ?
      ORDER BY created_at DESC LIMIT 1`,
     [chatId, messageId],
   );
@@ -378,7 +354,7 @@ describe("fireMessage stamps model on the assistant row", () => {
 
     const { rows } = await pool.query(
       `SELECT id, model FROM messages
-       WHERE chat_id = $1 AND role = 'agent' AND parent_id IS NOT NULL
+       WHERE chat_id = ? AND role = 'agent' AND parent_id IS NOT NULL
        ORDER BY created_at DESC LIMIT 1`,
       [chatId],
     );
@@ -395,7 +371,7 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
     const requestId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-       VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
       [requestId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
     const { childIds } = await runManager.fireMessage(requestId);
@@ -412,7 +388,7 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
     const reqId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-       VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
       [reqId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
     const { childIds } = await runManager.fireMessage(reqId);

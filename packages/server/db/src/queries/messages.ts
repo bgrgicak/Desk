@@ -1,25 +1,31 @@
-import pg from "pg";
+import { type Pool, transact } from "../pool.js";
 import { MessageSchema, type Message } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
+// SQLite stores JSON columns as TEXT; parse at the boundary. Postgres
+// JSONB used to do this for us automatically.
+function parseJson<T>(v: unknown): T | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return JSON.parse(v) as T;
+  return v as T;
+}
 
 function rowToMessage(row: Record<string, unknown>): Message {
   return MessageSchema.parse({
     id: row.id,
     chatId: row.chat_id,
     role: row.role,
-    content: row.content,
-    createdAt: (row.created_at as Date).toISOString(),
-    attachments: row.attachments ?? undefined,
+    content: parseJson(row.content),
+    createdAt: row.created_at as string,
+    attachments: parseJson(row.attachments),
     model: row.model ?? undefined,
-    executeAt: row.execute_at ? (row.execute_at as Date).toISOString() : undefined,
+    executeAt: row.execute_at ? row.execute_at as string : undefined,
     cron: row.cron ?? undefined,
     state: row.state ?? undefined,
     parentId: row.parent_id ?? undefined,
     agentId: row.agent_id ?? undefined,
-    startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
-    endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : undefined,
-    updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : undefined,
+    startedAt: row.started_at ? row.started_at as string : undefined,
+    endedAt: row.ended_at ? row.ended_at as string : undefined,
+    updatedAt: row.updated_at ? row.updated_at as string : undefined,
     kind: row.kind ?? "chat",
     title: row.title ?? null,
   });
@@ -31,34 +37,47 @@ export interface PaginatedMessages {
 }
 
 export async function listByChat(
-  db: Queryable,
+  db: Pool,
   chatId: string,
   opts?: { cursor?: string; limit?: number },
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
-  const params: unknown[] = [chatId, limit + 1];
-  let whereClause = "chat_id = $1";
+  // Cursor is `<createdAtISO>|<id>` so paging stays stable when multiple
+  // messages share a ms-precision timestamp — without the id tiebreaker,
+  // `created_at > cursor` would skip every message that landed in the
+  // same tick as the cursor row.
+  // SQL uses anonymous `?` placeholders bound by textual order. The
+  // params array is built to match: chatId, [cursorIso, cursorId,] limit.
+  const params: unknown[] = [chatId];
+  let whereClause = "chat_id = ?";
 
   if (opts?.cursor) {
-    whereClause += " AND created_at > $3";
-    params.push(new Date(opts.cursor));
+    const sep = opts.cursor.indexOf("|");
+    const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
+    whereClause += " AND (created_at, id) > (?, ?)";
+    params.push(cursorIso);
+    params.push(cursorId);
   }
+  params.push(limit + 1);
 
   const { rows } = await db.query(
-    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at LIMIT $2`,
+    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
     params,
   );
 
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit).map(rowToMessage);
-  return {
-    items,
-    nextCursor: hasMore ? items[items.length - 1].createdAt : undefined,
-  };
+  let nextCursor: string | undefined;
+  if (hasMore && items.length > 0) {
+    const last = items[items.length - 1];
+    nextCursor = `${last.createdAt}|${last.id}`;
+  }
+  return { items, nextCursor };
 }
 
 export async function insert(
-  db: Queryable,
+  db: Pool,
   data: {
     id: string;
     chatId: string;
@@ -80,7 +99,7 @@ export async function insert(
        id, chat_id, role, content,
        state, execute_at, cron, parent_id, agent_id,
        attachments, model, kind, title
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
      RETURNING *`,
     [
       data.id,
@@ -99,12 +118,15 @@ export async function insert(
     ],
   );
   // Touch the parent chat's updated_at
-  await db.query("UPDATE chats SET updated_at = now(), unread = true WHERE id = $1", [data.chatId]);
+  await db.query(
+    "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
+    [data.chatId],
+  );
   return rowToMessage(rows[0]);
 }
 
-export async function findById(db: Queryable, id: string): Promise<Message | null> {
-  const { rows } = await db.query("SELECT * FROM messages WHERE id = $1", [id]);
+export async function findById(db: Pool, id: string): Promise<Message | null> {
+  const { rows } = await db.query("SELECT * FROM messages WHERE id = ?", [id]);
   return rows.length ? rowToMessage(rows[0]) : null;
 }
 
@@ -115,11 +137,13 @@ export async function findById(db: Queryable, id: string): Promise<Message | nul
  * fire handler: concurrent attempts to fire the same message converge
  * on one execution.
  */
-export async function claimPending(db: Queryable, id: string): Promise<boolean> {
+export async function claimPending(db: Pool, id: string): Promise<boolean> {
   const { rowCount } = await db.query(
     `UPDATE messages
-     SET state = 'running', started_at = now(), updated_at = now()
-     WHERE id = $1 AND state = 'pending'`,
+     SET state = 'running',
+         started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND state = 'pending'`,
     [id],
   );
   return (rowCount ?? 0) > 0;
@@ -127,17 +151,21 @@ export async function claimPending(db: Queryable, id: string): Promise<boolean> 
 
 /**
  * Atomically starts a new task_run row as a child of the task message.
- * Locks the task FOR UPDATE, refuses if another task_run for the same task
- * is already pending or running (so concurrent fires of the same task
- * converge on one in-flight run), and inserts the new row directly in
- * `running` state with `started_at = now()`. Returns the run row, or null
- * if the task is missing / not a task / already firing.
+ * Refuses if another task_run for the same task is already pending or
+ * running (so concurrent fires of the same task converge on one in-flight
+ * run), and inserts the new row directly in `running` state with
+ * `started_at = strftime(... 'now')`. Returns the run row, or null if the task is
+ * missing / not a task / already firing.
  *
- * Pool-only: opens a dedicated client for the transaction. Don't pass a
- * PoolClient here — the lock has to be held end-to-end on one connection.
+ * Concurrency model: the body runs inside a synchronous `transact`
+ * (BEGIN IMMEDIATE). better-sqlite3's transaction wrapper + SQLite's
+ * file lock serialize the entire callback, so the existence check and
+ * the INSERT can't interleave with another fire on the same task. The
+ * loser of the race sees the winner's committed task_run via the
+ * in-flight check and returns null — no SQL-level row lock involved.
  */
 export async function startTaskRun(
-  pool: pg.Pool,
+  pool: Pool,
   args: {
     runId: string;
     taskId: string;
@@ -148,32 +176,24 @@ export async function startTaskRun(
     model?: string | null;
   },
 ): Promise<Message | null> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const lock = await client.query(
-      `SELECT id FROM messages WHERE id = $1 AND kind = 'task' FOR UPDATE`,
+  return transact(pool, (client): Message | null => {
+    const lock = client.querySync(
+      `SELECT id FROM messages WHERE id = ? AND kind = 'task'`,
       [args.taskId],
     );
-    if (lock.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-    const inFlight = await client.query(
+    if (lock.rowCount === 0) return null;
+    const inFlight = client.querySync(
       `SELECT 1 FROM messages
-       WHERE parent_id = $1 AND kind = 'task_run' AND state IN ('pending', 'running')
+       WHERE parent_id = ? AND kind = 'task_run' AND state IN ('pending', 'running')
        LIMIT 1`,
       [args.taskId],
     );
-    if ((inFlight.rowCount ?? 0) > 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-    const ins = await client.query(
+    if ((inFlight.rowCount ?? 0) > 0) return null;
+    const ins = client.querySync(
       `INSERT INTO messages (
          id, chat_id, role, content, parent_id, kind,
          state, started_at, agent_id, model
-       ) VALUES ($1, $2, $3, $4, $5, 'task_run', 'running', now(), $6, $7)
+       ) VALUES (?, ?, ?, ?, ?, 'task_run', 'running', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)
        RETURNING *`,
       [
         args.runId,
@@ -186,37 +206,34 @@ export async function startTaskRun(
       ],
     );
     // Mark the parent task as running so the kanban moves the card to Active.
-    await client.query(
-      `UPDATE messages SET state = 'running', updated_at = now()
-       WHERE id = $1 AND kind = 'task'`,
+    client.querySync(
+      `UPDATE messages SET state = 'running',
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND kind = 'task'`,
       [args.taskId],
     );
-    await client.query(
-      "UPDATE chats SET updated_at = now() WHERE id = $1",
+    client.querySync(
+      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
       [args.chatId],
     );
-    await client.query("COMMIT");
     return rowToMessage(ins.rows[0]);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**
  * Marks a running message as succeeded or failed.
  */
 export async function finalizeExecution(
-  db: Queryable,
+  db: Pool,
   id: string,
   terminalState: "succeeded" | "failed" | "cancelled",
 ): Promise<Message | null> {
   const { rows } = await db.query(
     `UPDATE messages
-     SET state = $1, ended_at = now(), updated_at = now()
-     WHERE id = $2
+     SET state = ?,
+         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?
      RETURNING *`,
     [terminalState, id],
   );
@@ -228,7 +245,7 @@ export async function finalizeExecution(
  * Returns the updated row, or null if not found.
  */
 export async function updateMessage(
-  db: Queryable,
+  db: Pool,
   id: string,
   patch: {
     content?: unknown;
@@ -238,32 +255,31 @@ export async function updateMessage(
     title?: string | null;
   },
 ): Promise<Message | null> {
-  const sets: string[] = ["updated_at = now()"];
+  const sets: string[] = ["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"];
   const params: unknown[] = [];
-  let idx = 1;
   if (patch.content !== undefined) {
-    sets.push(`content = $${idx++}`);
+    sets.push(`content = ?`);
     params.push(JSON.stringify(patch.content));
   }
   if (patch.state !== undefined) {
-    sets.push(`state = $${idx++}`);
+    sets.push(`state = ?`);
     params.push(patch.state);
   }
   if (patch.executeAt !== undefined) {
-    sets.push(`execute_at = $${idx++}`);
+    sets.push(`execute_at = ?`);
     params.push(patch.executeAt === null ? null : new Date(patch.executeAt));
   }
   if (patch.cron !== undefined) {
-    sets.push(`cron = $${idx++}`);
+    sets.push(`cron = ?`);
     params.push(patch.cron);
   }
   if (patch.title !== undefined) {
-    sets.push(`title = $${idx++}`);
+    sets.push(`title = ?`);
     params.push(patch.title);
   }
   params.push(id);
   const { rows } = await db.query(
-    `UPDATE messages SET ${sets.join(", ")} WHERE id = $${idx} RETURNING *`,
+    `UPDATE messages SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
     params,
   );
   return rows.length ? rowToMessage(rows[0]) : null;
@@ -298,24 +314,26 @@ export interface CrossChatListOptions {
  * key and break ties deterministically.
  */
 export async function listCrossChat(
-  db: Queryable,
+  db: Pool,
   opts: CrossChatListOptions,
 ): Promise<PaginatedMessages> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const conditions: string[] = ["w.user_id = $1"];
+  // SQL is built with anonymous `?` placeholders. Each branch pushes its
+  // params in textual order to match the order the placeholders appear
+  // in the assembled WHERE clause; the LIMIT param is appended last.
+  const conditions: string[] = ["w.user_id = ?"];
   const params: unknown[] = [opts.userId];
-  let idx = 2;
 
   if (opts.workspaceId) {
-    conditions.push(`c.workspace_id = $${idx++}`);
+    conditions.push(`c.workspace_id = ?`);
     params.push(opts.workspaceId);
   }
   if (opts.chatId) {
-    conditions.push(`m.chat_id = $${idx++}`);
+    conditions.push(`m.chat_id = ?`);
     params.push(opts.chatId);
   }
   if (opts.states && opts.states.length > 0) {
-    const placeholders = opts.states.map(() => `$${idx++}`).join(", ");
+    const placeholders = opts.states.map(() => `?`).join(", ");
     conditions.push(`m.state IN (${placeholders})`);
     params.push(...opts.states);
   }
@@ -325,28 +343,29 @@ export async function listCrossChat(
     conditions.push("(m.execute_at IS NULL AND m.cron IS NULL)");
   }
   if (opts.contentKinds && opts.contentKinds.length > 0) {
-    const placeholders = opts.contentKinds.map(() => `$${idx++}`).join(", ");
-    conditions.push(`(m.content->>'type') IN (${placeholders})`);
+    const placeholders = opts.contentKinds.map(() => `?`).join(", ");
+    conditions.push(`json_extract(m.content, '$.type') IN (${placeholders})`);
     params.push(...opts.contentKinds);
   }
   if (opts.kinds && opts.kinds.length > 0) {
-    const placeholders = opts.kinds.map(() => `$${idx++}`).join(", ");
+    const placeholders = opts.kinds.map(() => `?`).join(", ");
     conditions.push(`m.kind IN (${placeholders})`);
     params.push(...opts.kinds);
   }
   if (opts.parentId) {
-    conditions.push(`m.parent_id = $${idx++}`);
+    conditions.push(`m.parent_id = ?`);
     params.push(opts.parentId);
   }
   if (opts.since) {
-    conditions.push(`m.created_at > $${idx++}`);
+    conditions.push(`m.created_at > ?`);
     params.push(new Date(opts.since));
   }
   // `awaitingUser=true`: a message is "awaiting user" when it's the latest row
   // in a chat whose awaiting_user flag is set, authored by the agent in a
   // succeeded state. `false` returns the complement.
+  // SQLite stores BOOLEAN as INTEGER 0/1.
   const awaitingClause = `(
-    c.awaiting_user = true
+    c.awaiting_user = 1
     AND m.role = 'agent'
     AND m.state = 'succeeded'
     AND m.id = (
@@ -368,12 +387,11 @@ export async function listCrossChat(
     }
     const cursorIso = opts.cursor.slice(0, sep);
     const cursorId = opts.cursor.slice(sep + 1);
-    conditions.push(`(m.created_at, m.id) < ($${idx++}, $${idx++})`);
+    conditions.push(`(m.created_at, m.id) < (?, ?)`);
     params.push(new Date(cursorIso));
     params.push(cursorId);
   }
 
-  const limitIdx = idx;
   params.push(limit + 1);
 
   const sql = `
@@ -383,7 +401,7 @@ export async function listCrossChat(
     JOIN workspaces w ON w.id = c.workspace_id
     WHERE ${conditions.join(" AND ")}
     ORDER BY m.created_at DESC, m.id DESC
-    LIMIT $${limitIdx}
+    LIMIT ?
   `;
 
   const { rows } = await db.query(sql, params);

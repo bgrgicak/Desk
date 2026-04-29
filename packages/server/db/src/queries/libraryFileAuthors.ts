@@ -1,6 +1,6 @@
-import pg from "pg";
+import { type Pool } from "../pool.js";
 
-type Queryable = pg.Pool | pg.PoolClient;
+type Queryable = Pool;
 
 /**
  * Upserts authorship for a batch of paths in one round-trip. `agent_id`
@@ -8,6 +8,10 @@ type Queryable = pg.Pool | pg.PoolClient;
  * `creator_agent_id` is set only on the first insert and preserved on
  * conflict, so it remains a stable record of the original author even
  * after subsequent edits.
+ *
+ * SQLite has no array type, so we expand to N rows in a single
+ * multi-VALUES insert. better-sqlite3 imposes a SQLITE_MAX_VARIABLE_NUMBER
+ * cap (default 32766) — well above any realistic single-run scan size.
  */
 export async function upsertAuthors(
   db: Queryable,
@@ -16,12 +20,17 @@ export async function upsertAuthors(
   paths: string[],
 ): Promise<void> {
   if (paths.length === 0) return;
+  const values = paths.map(() => "(?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))").join(",\n            ");
+  const params: unknown[] = [];
+  for (const path of paths) {
+    params.push(workspaceId, path, agentId, agentId);
+  }
   await db.query(
     `INSERT INTO library_file_authors (workspace_id, path, agent_id, creator_agent_id, updated_at)
-     SELECT $1, unnest($2::text[]), $3, $3, now()
+     VALUES ${values}
      ON CONFLICT (workspace_id, path)
-     DO UPDATE SET agent_id = EXCLUDED.agent_id, updated_at = EXCLUDED.updated_at`,
-    [workspaceId, paths, agentId],
+     DO UPDATE SET agent_id = excluded.agent_id, updated_at = excluded.updated_at`,
+    params,
   );
 }
 
@@ -42,7 +51,7 @@ export async function listByWorkspace(
   const { rows } = await db.query(
     `SELECT path, agent_id, creator_agent_id
        FROM library_file_authors
-      WHERE workspace_id = $1`,
+      WHERE workspace_id = ?`,
     [workspaceId],
   );
   const result = new Map<string, LibraryFileAuthors>();

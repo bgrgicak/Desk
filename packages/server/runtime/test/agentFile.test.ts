@@ -8,7 +8,7 @@ describe("renderAgentFile", () => {
       agentName: "Jarvis",
       model: "anthropic/claude-sonnet-4-5",
       instructions: "Help me with code reviews.",
-      userName: "Bero",
+      userName: "Desk",
     });
 
     // Frontmatter
@@ -18,7 +18,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("mode: primary");
 
     // Identity framing
-    expect(result).toContain("You are Jarvis, a coworker of Bero.");
+    expect(result).toContain("You are Jarvis, a coworker of Desk.");
 
     // Workspace-as-home framing
     expect(result).toContain("~/ is your workspace");
@@ -58,11 +58,11 @@ describe("renderAgentFile", () => {
       agentName: "Helper",
       model: "anthropic/claude-sonnet-4-5",
       instructions: "",
-      userName: "Bero",
+      userName: "Desk",
       userTimezone: "America/Los_Angeles",
     });
 
-    expect(result).toContain("America/Los_Angeles (Bero's app client)");
+    expect(result).toContain("America/Los_Angeles (Desk's app client)");
     expect(result).toContain("## Scheduling — act first, ask never");
   });
 
@@ -72,7 +72,7 @@ describe("renderAgentFile", () => {
       agentName: "Helper",
       model: "anthropic/claude-sonnet-4-5",
       instructions: "",
-      userName: "Bero",
+      userName: "Desk",
     });
 
     expect(result).toContain("not reported — assume UTC");

@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { NotFoundError, ValidationError } from "@desk/shared";
 import { queries } from "@desk/db";
 import { validateLibrarySubpath } from "@desk/storage";
@@ -18,7 +18,7 @@ const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
  * (list endpoints) or an error (mutating endpoints).
  */
 export async function resolveWorkspaceId(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   query: URLSearchParams,
 ): Promise<string | null> {
@@ -40,7 +40,7 @@ export async function resolveWorkspaceId(
  * response makes no sense.
  */
 export async function requireWorkspaceId(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   query: URLSearchParams,
 ): Promise<string> {
@@ -84,7 +84,7 @@ const CHAT_NOTE_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/notes\/([^/]+\.md)$/;
 
 export async function requireReadablePathInWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   relPath: string,
   workspaceId: string,

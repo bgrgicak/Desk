@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool } from "../pool.js";
 import {
   ChatSchema,
   ValidationError,
@@ -8,8 +8,6 @@ import {
   type MessageKind,
 } from "@desk/shared";
 
-type Queryable = pg.Pool | pg.PoolClient;
-
 function rowToChat(row: Record<string, unknown>): Chat {
   return ChatSchema.parse({
     id: row.id,
@@ -17,9 +15,10 @@ function rowToChat(row: Record<string, unknown>): Chat {
     agentId: row.agent_id,
     title: row.title,
     goal: row.goal ?? undefined,
-    updatedAt: (row.updated_at as Date).toISOString(),
-    awaitingUser: row.awaiting_user,
-    unread: row.unread,
+    updatedAt: row.updated_at as string,
+    // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
+    awaitingUser: !!row.awaiting_user,
+    unread: !!row.unread,
   });
 }
 
@@ -44,17 +43,17 @@ export interface ChatWithLastMessage extends Chat {
 }
 
 export async function listWithLatestMessage(
-  db: Queryable,
+  db: Pool,
   workspaceId: string,
 ): Promise<ChatWithLastMessage[]> {
   const { rows } = await db.query(
     `SELECT c.*,
             (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
-            (SELECT m.content->>'text' FROM messages m
+            (SELECT json_extract(m.content, '$.text') FROM messages m
                WHERE m.chat_id = c.id
                  AND m.role = 'user'
                  AND m.kind IN ('chat', 'task')
-                 AND m.content->>'type' = 'text'
+                 AND json_extract(m.content, '$.type') = 'text'
                ORDER BY m.created_at DESC LIMIT 1) AS last_user_text,
             COALESCE(
               (SELECT m.kind FROM messages m
@@ -63,7 +62,7 @@ export async function listWithLatestMessage(
               'chat'
             ) AS kind
      FROM chats c
-     WHERE c.workspace_id = $1
+     WHERE c.workspace_id = ?
      ORDER BY c.updated_at DESC`,
     [workspaceId],
   );
@@ -78,20 +77,20 @@ export async function listWithLatestMessage(
   });
 }
 
-export async function findById(db: Queryable, id: string): Promise<Chat | null> {
-  const { rows } = await db.query("SELECT * FROM chats WHERE id = $1", [id]);
+export async function findById(db: Pool, id: string): Promise<Chat | null> {
+  const { rows } = await db.query("SELECT * FROM chats WHERE id = ?", [id]);
   return rows.length ? rowToChat(rows[0]) : null;
 }
 
 export async function insert(
-  db: Queryable,
+  db: Pool,
   data: { id: string; workspaceId: string; agentId: string; title?: string; goal?: string },
 ): Promise<Chat> {
   // Ensure the chat's agent is enabled in the workspace. This is the M3
   // invariant — chats can only use agents the user has explicitly added to
   // the workspace (or the workspace default).
   const { rows: checkRows } = await db.query(
-    "SELECT 1 FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+    "SELECT 1 FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
     [data.workspaceId, data.agentId],
   );
   if (checkRows.length === 0) {
@@ -102,7 +101,7 @@ export async function insert(
 
   const { rows } = await db.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES (?, ?, ?, ?, ?)
      RETURNING *`,
     [data.id, data.workspaceId, data.agentId, data.title ?? "", data.goal ?? null],
   );
@@ -110,7 +109,7 @@ export async function insert(
 }
 
 export async function updateMeta(
-  db: Queryable,
+  db: Pool,
   id: string,
   data: { title?: string; goal?: string; agentId?: string },
 ): Promise<Chat | null> {
@@ -119,13 +118,13 @@ export async function updateMeta(
     // be enabled in the chat's workspace. Look up the workspace via the
     // chat row so callers don't have to pass it.
     const { rows: chatRows } = await db.query(
-      "SELECT workspace_id FROM chats WHERE id = $1",
+      "SELECT workspace_id FROM chats WHERE id = ?",
       [id],
     );
     if (chatRows.length === 0) return null;
     const workspaceId = chatRows[0].workspace_id as string;
     const { rows: enabledRows } = await db.query(
-      "SELECT 1 FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+      "SELECT 1 FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
       [workspaceId, data.agentId],
     );
     if (enabledRows.length === 0) {
@@ -137,46 +136,46 @@ export async function updateMeta(
 
   const sets: string[] = [];
   const params: unknown[] = [];
-  let idx = 1;
 
   if (data.title !== undefined) {
-    sets.push(`title = $${idx++}`);
+    sets.push(`title = ?`);
     params.push(data.title);
   }
   if (data.goal !== undefined) {
-    sets.push(`goal = $${idx++}`);
+    sets.push(`goal = ?`);
     params.push(data.goal);
   }
   if (data.agentId !== undefined) {
-    sets.push(`agent_id = $${idx++}`);
+    sets.push(`agent_id = ?`);
     params.push(data.agentId);
   }
 
-  sets.push(`updated_at = now()`);
+  sets.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`);
 
   params.push(id);
   const { rows } = await db.query(
-    `UPDATE chats SET ${sets.join(", ")} WHERE id = $${idx} RETURNING *`,
+    `UPDATE chats SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
     params,
   );
   return rows.length ? rowToChat(rows[0]) : null;
 }
 
-export async function markRead(db: Queryable, id: string): Promise<boolean> {
+export async function markRead(db: Pool, id: string): Promise<boolean> {
+  // SQLite stores BOOLEAN as INTEGER 0/1.
   const { rowCount } = await db.query(
-    "UPDATE chats SET unread = false WHERE id = $1",
+    "UPDATE chats SET unread = 0 WHERE id = ?",
     [id],
   );
   return (rowCount ?? 0) > 0;
 }
 
 export async function setAwaitingUser(
-  db: Queryable,
+  db: Pool,
   id: string,
   awaiting: boolean,
 ): Promise<boolean> {
   const { rowCount } = await db.query(
-    "UPDATE chats SET awaiting_user = $1, updated_at = now() WHERE id = $2",
+    "UPDATE chats SET awaiting_user = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
     [awaiting, id],
   );
   return (rowCount ?? 0) > 0;

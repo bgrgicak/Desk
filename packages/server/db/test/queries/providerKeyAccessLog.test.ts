@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { type Pool } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as providerKeyAccessLog from "../../src/queries/providerKeyAccessLog.js";
@@ -10,7 +10,7 @@ import * as users from "../../src/queries/users.js";
 import { resetSecretKeyCache } from "../../src/encryption.js";
 import { hashPassword } from "../../src/passwords.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let keyDir: string;
 let prevEnv: string | undefined;
 
@@ -106,7 +106,7 @@ describe("providerKeyAccessLog queries", () => {
   it("rows are deleted when user is deleted (ON DELETE CASCADE)", async () => {
     const userId = await makeUser("pkal-user7");
     await providerKeyAccessLog.logKeyAccess(pool, userId, "write", ["ANTHROPIC_API_KEY"], "user_update");
-    await pool.query("DELETE FROM users WHERE id = $1", [userId]);
+    await pool.query("DELETE FROM users WHERE id = ?", [userId]);
     const log = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
     expect(log).toHaveLength(0);
   });

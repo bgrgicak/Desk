@@ -13,7 +13,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createApp } from "../src/app.js";
@@ -21,50 +21,16 @@ import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@desk/scheduler";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_routes_cov_${workerId}`;
-
-function baseUrl(): string {
-  return process.env.DESK_TEST_DATABASE_URL
-    ?? process.env.DATABASE_URL
-    ?? "postgresql://desk:desk@127.0.0.1:55432/desk";
-}
-
-function adminConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = "/postgres";
-  return url.toString();
-}
-
-function testConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConnectionString() });
-
-  try {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
-  } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
 
   await runMigrations(pool);
 
@@ -103,17 +69,7 @@ afterAll(async () => {
 
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
-
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
 function request(
@@ -493,7 +449,7 @@ describe("Routes coverage (real Postgres)", () => {
     const userId = uRows[0].id;
     const tmpWsId = "ws_tmp_delete_test";
     await pool.query(
-      `INSERT INTO workspaces (id, user_id, name, path) VALUES ($1, $2, $3, $4)`,
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
       [tmpWsId, userId, "ToDelete", `todelete-${tmpWsId.slice(-6)}`],
     );
 
@@ -507,7 +463,7 @@ describe("Routes coverage (real Postgres)", () => {
     expect(getRes.status).toBe(404);
 
     // DB row no longer exists (implementation uses hard DELETE)
-    const { rows } = await pool.query("SELECT * FROM workspaces WHERE id = $1", [tmpWsId]);
+    const { rows } = await pool.query("SELECT * FROM workspaces WHERE id = ?", [tmpWsId]);
     expect(rows.length).toBe(0);
   });
 

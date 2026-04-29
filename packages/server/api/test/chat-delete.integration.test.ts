@@ -15,7 +15,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, queries, hashPassword } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -24,32 +24,11 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_chat_delete_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 let alpha: SeededUser;
 let beta: SeededUser;
 
@@ -188,7 +167,7 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     model: "anthropic/claude-sonnet-4-5",
   });
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
     [workspaceId, agentId],
   );
 
@@ -251,20 +230,9 @@ async function createChatWithPayload(
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-delete-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-delete-"));
@@ -299,18 +267,8 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 describe("DELETE /chats/:id", () => {
@@ -333,12 +291,12 @@ describe("DELETE /chats/:id", () => {
     expect(msgs.status).toBe(404);
 
     const { rows: chatRows } = await pool.query(
-      "SELECT id FROM chats WHERE id = $1",
+      "SELECT id FROM chats WHERE id = ?",
       [chatId],
     );
     expect(chatRows).toHaveLength(0);
     const { rows: msgRows } = await pool.query(
-      "SELECT id FROM messages WHERE chat_id = $1",
+      "SELECT id FROM messages WHERE chat_id = ?",
       [chatId],
     );
     expect(msgRows).toHaveLength(0);
@@ -408,7 +366,7 @@ describe("DELETE /chats/:id", () => {
       icon: "",
     });
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
       [wsId, alpha.agentId],
     );
 
@@ -430,9 +388,9 @@ describe("DELETE /chats/:id", () => {
     const del = await request("DELETE", `/workspaces/${wsId}`, alpha.token);
     expect(del.status).toBe(200);
 
-    const { rows: chatRows } = await pool.query("SELECT id FROM chats WHERE id = $1", [chatId]);
+    const { rows: chatRows } = await pool.query("SELECT id FROM chats WHERE id = ?", [chatId]);
     expect(chatRows).toHaveLength(0);
-    const { rows: msgRows } = await pool.query("SELECT id FROM messages WHERE id = $1", [messageId]);
+    const { rows: msgRows } = await pool.query("SELECT id FROM messages WHERE id = ?", [messageId]);
     expect(msgRows).toHaveLength(0);
   });
 });

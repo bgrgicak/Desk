@@ -29,18 +29,18 @@ async function insertArtifactMessage(
   const content = { type: "artifactRef", path: filePath, name: path.basename(filePath), ...extra };
   await ctx.pool.query(
     `INSERT INTO messages (id, chat_id, role, content)
-     VALUES ($1, $2, 'agent', $3)`,
+     VALUES (?, ?, 'agent', ?)`,
     [id, ctx.chatId, JSON.stringify(content)],
   );
   return id;
 }
 
 async function readContent(messageId: string): Promise<Record<string, unknown>> {
-  const { rows } = await ctx.pool.query(
-    "SELECT content FROM messages WHERE id = $1",
+  const { rows } = await ctx.pool.query<{ content: string }>(
+    "SELECT content FROM messages WHERE id = ?",
     [messageId],
   );
-  return rows[0].content;
+  return JSON.parse(rows[0].content) as Record<string, unknown>;
 }
 
 describe("reconcileArtifactRefs", () => {

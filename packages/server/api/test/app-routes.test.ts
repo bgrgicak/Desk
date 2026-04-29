@@ -4,7 +4,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, queries } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -13,31 +13,10 @@ import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_app_routes_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let home: string;
 let userId: string;
+let dbPath: string;
 
 function getServerPort(server: http.Server): number {
   return (server.address() as net.AddressInfo).port;
@@ -101,20 +80,9 @@ function request(
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-routes-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-routes-"));
@@ -139,18 +107,8 @@ afterAll(async () => {
   for (const s of servers) s.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 describe("app route dispatch", () => {
@@ -170,7 +128,7 @@ describe("app route dispatch", () => {
   it("DELETE /me returns 200 with ok message", async () => {
     // Re-seed the user — DELETE /me wipes it, and other tests in this
     // file expect the row to exist when they issue a session against it.
-    await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    await pool.query(`DELETE FROM users WHERE id = ?`, [userId]);
     await queries.users.insert(pool, {
       id: userId,
       username: "delete-me-test",
@@ -198,7 +156,7 @@ describe("app route dispatch", () => {
     // Re-seed in case a prior test deleted the user.
     await pool.query(
       `INSERT INTO users (id, username, password_hash, email)
-            VALUES ($1, $2, $3, $4)
+            VALUES (?, ?, ?, ?)
        ON CONFLICT (id) DO NOTHING`,
       [userId, "unknown-route-test", "$2b$10$placeholder", "unknown@example.com"],
     );

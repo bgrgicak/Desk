@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Pool } from "@desk/db";
 import { runMigrations, queries } from "@desk/db";
 import { generateId } from "@desk/shared";
 import {
@@ -9,46 +12,15 @@ import {
   clearSessions,
 } from "../src/auth/sessions.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_auth_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let userId: string;
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  // Per-test-file SQLite file so workers don't collide.
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-auth-"));
+  dbPath = path.join(tmpDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   // verifySession requires the row's user_id FK to resolve.
@@ -67,16 +39,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await pool?.end();
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
 describe("session store", () => {
@@ -107,11 +70,12 @@ describe("session store", () => {
   it("verifySession returns null for tokens older than 7 days", async () => {
     const token = await issueSession(pool, userId);
     // Backdate the row past the 7-day TTL. Faking JS timers would not
-    // affect the row's issued_at (set by Postgres now()), so we shift the
-    // row directly — the TTL check still uses the row's wall-clock value.
+    // affect the row's issued_at (set by SQLite's strftime('now')), so we
+    // shift the row directly — the TTL check still uses the row's
+    // wall-clock value.
     await pool.query(
       `UPDATE auth_sessions
-          SET issued_at = now() - interval '7 days' - interval '1 second'`,
+          SET issued_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days', '-1 second')`,
     );
     expect(await verifySession(pool, token)).toBeNull();
   });
@@ -120,7 +84,7 @@ describe("session store", () => {
     const token = await issueSession(pool, userId);
     await pool.query(
       `UPDATE auth_sessions
-          SET issued_at = now() - interval '7 days' + interval '5 seconds'`,
+          SET issued_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days', '+5 seconds')`,
     );
     expect(await verifySession(pool, token)).toBe(userId);
   });
@@ -133,12 +97,13 @@ describe("session store", () => {
     // the pool and opening a new one against the same database is the
     // closest in-process proxy for a process restart; verifySession must
     // still resolve the token.
+    //
+    // EXCLUSIVE locking_mode means we close before re-opening — concurrent
+    // pools against the same file collide on the lock. That matches the
+    // production constraint anyway (the API is the only DB opener).
     const token = await issueSession(pool, userId);
-    const fresh = new pg.Pool({ connectionString: testConn() });
-    try {
-      expect(await verifySession(fresh, token)).toBe(userId);
-    } finally {
-      await fresh.end();
-    }
+    await pool.end();
+    pool = new Pool({ path: dbPath });
+    expect(await verifySession(pool, token)).toBe(userId);
   });
 });

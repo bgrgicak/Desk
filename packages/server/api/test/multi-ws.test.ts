@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -17,47 +17,16 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_multi_ws_test_${workerId}`;
-
-function baseUrl(): string {
-  return process.env.DESK_TEST_DATABASE_URL
-    ?? process.env.DATABASE_URL
-    ?? "postgresql://desk:desk@127.0.0.1:55432/desk";
-}
-
-function adminConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = "/postgres";
-  return url.toString();
-}
-
-function testConnectionString(): string {
-  const url = new URL(baseUrl());
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConnectionString() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-multi-ws-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
 
   await runMigrations(pool);
   process.env.DESK_SEED_USERNAME = "testuser";
@@ -90,17 +59,7 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
-
-  const admin = new pg.Pool({ connectionString: adminConnectionString() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
 function request(

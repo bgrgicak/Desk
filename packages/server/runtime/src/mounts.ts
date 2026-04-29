@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, notesDir, tmpDir, workspaceRootPath } from "@desk/storage";
+import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@desk/storage";
 
 /**
  * Mount model (workspace-as-home):
@@ -17,8 +16,6 @@ import { chatAttachmentsDir, notesDir, tmpDir, workspaceRootPath } from "@desk/s
  * `projectMounts` is still called per run to:
  *   - resolve the current chat's attachments path inside the container so
  *     the agent knows where to look,
- *   - record a manifest on disk (operator debugging: "which run saw which
- *     chat"),
  *   - track active runs for a lightweight teardown counter.
  */
 
@@ -36,13 +33,10 @@ export interface MountSet {
 }
 
 /**
- * Records the current-run → current-chat mapping, ensures the workspace
- * root exists (so the bind-mount has something to show), and writes a
- * manifest for debugging. Returns the MountSet the driver can pass to
- * OpenCode via the system prompt / chat context.
- *
- * The manifest lives in `~/Desk/.tmp/manifests/`, outside the workspace,
- * so it isn't visible to the agent and doesn't pollute the user's library.
+ * Records the current-run → current-chat mapping and ensures the workspace
+ * root exists (so the bind-mount has something to show). Returns the
+ * MountSet the driver can pass to OpenCode via the system prompt / chat
+ * context.
  */
 export async function projectMounts(
   handle: SandboxHandle,
@@ -66,22 +60,6 @@ export async function projectMounts(
     // path in opencode.ts; matching it on disk keeps the two consistent.
     await fs.mkdir(notesDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
-
-  const manifest = {
-    runId: opts.runId,
-    chatId: opts.chatId ?? null,
-    host: mountSet,
-    inSandbox: {
-      home: SANDBOX_HOME,
-      attachments: mountSet.attachmentsInSandbox ?? null,
-    },
-  };
-  const manifestRoot = path.join(tmpDir(opts.home), "manifests");
-  await fs.mkdir(manifestRoot, { recursive: true });
-  await fs.writeFile(
-    path.join(manifestRoot, `manifest-${opts.runId}.json`),
-    JSON.stringify(manifest, null, 2),
-  );
 
   if (!activeMounts.has(handle.workspaceId)) {
     activeMounts.set(handle.workspaceId, new Map());

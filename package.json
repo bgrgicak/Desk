@@ -6,6 +6,7 @@
     "packages/app-prototype"
   ],
   "scripts": {
+    "preinstall": "node -e \"const want='22';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
     "vm:up": "packages/server/setup/scripts/vm.sh up",
     "vm:halt": "packages/server/setup/scripts/vm.sh halt",
     "vm:destroy": "packages/server/setup/scripts/vm.sh destroy",
@@ -34,5 +35,8 @@
   },
   "devDependencies": {
     "nx": "22.6.5"
+  },
+  "engines": {
+    "node": "^22.0.0"
   }
 }

@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 
 const TOKEN_PREFIX = "ses_";
@@ -11,7 +11,7 @@ function hashToken(token: string): string {
 }
 
 export async function issueSession(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
 ): Promise<string> {
   const raw = crypto.randomBytes(TOKEN_BYTES).toString("hex");
@@ -24,14 +24,14 @@ export async function issueSession(
 }
 
 export async function revokeSession(
-  pool: pg.Pool,
+  pool: Pool,
   token: string,
 ): Promise<boolean> {
   return queries.authSessions.deleteByTokenHash(pool, hashToken(token));
 }
 
 export async function verifySession(
-  pool: pg.Pool,
+  pool: Pool,
   token: string,
 ): Promise<string | null> {
   return queries.authSessions.verify(pool, hashToken(token), SESSION_TTL_MS);
@@ -42,11 +42,11 @@ export async function verifySession(
  * unbounded. Lazy-deletion in verifySession() handles the hot path; this
  * keeps the cold tail tidy.
  */
-export async function pruneExpiredSessions(pool: pg.Pool): Promise<number> {
+export async function pruneExpiredSessions(pool: Pool): Promise<number> {
   return queries.authSessions.deleteExpired(pool, SESSION_TTL_MS);
 }
 
 /** Clears all sessions. For testing. */
-export async function clearSessions(pool: pg.Pool): Promise<void> {
+export async function clearSessions(pool: Pool): Promise<void> {
   await queries.authSessions.deleteAll(pool);
 }

@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -46,27 +46,27 @@ export interface MessageLifecycleOps {
  * that need to build a filesystem path from a bare chatId. Throws if the
  * chat is missing.
  */
-async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<string> {
+async function workspaceSlugForChat(pool: Pool, chatId: string): Promise<string> {
   const { rows } = await pool.query<{ path: string }>(
-    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
+    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = ?`,
     [chatId],
   );
   if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
   return rows[0].path;
 }
 
-export async function listChats(pool: pg.Pool, workspaceId: string) {
+export async function listChats(pool: Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
 }
 
-export async function getChat(pool: pg.Pool, id: string) {
+export async function getChat(pool: Pool, id: string) {
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
 
 export async function createChat(
-  pool: pg.Pool,
+  pool: Pool,
   data: { workspaceId: string; agentId: string; title: string; goal?: string },
 ) {
   return queries.chats.insert(pool, {
@@ -76,7 +76,7 @@ export async function createChat(
 }
 
 export async function patchChat(
-  pool: pg.Pool,
+  pool: Pool,
   id: string,
   data: { title?: string; goal?: string; agentId?: string },
 ) {
@@ -86,7 +86,7 @@ export async function patchChat(
 }
 
 export async function listMessages(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   opts?: { cursor?: string },
 ) {
@@ -117,8 +117,78 @@ const SendMessageSchema = z.object({
   goal: z.string().optional(),
 });
 
+/**
+ * Translates a multipart `POST /chats/{id}/messages` form into the JSON
+ * body shape `sendMessage` expects. Files land under
+ * `.chats/{id}/attachments/` (the canonical chat-attachment home);
+ * `uploadArtifact` handles same-name collisions by appending `-N`.
+ *
+ * Form fields:
+ *   content           — message text (required, may be empty)
+ *   attachment        — file part(s); repeated for multi-attachment sends
+ *   attachments       — JSON array of AttachmentRef for refs without a
+ *                       file body (library mentions)
+ *   kind/title/executeAt/cron — optional, same semantics as the JSON path
+ */
+export async function buildSendMessageBodyFromForm(
+  storage: StorageContext,
+  chatId: string,
+  form: FormData,
+): Promise<unknown> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const content = typeof form.get("content") === "string" ? (form.get("content") as string) : "";
+
+  // Library-mention refs ride alongside file uploads — same array on the
+  // wire, distinguished only by whether a file part is present.
+  const refsRaw = form.get("attachments");
+  const refs: AttachmentRef[] = [];
+  if (typeof refsRaw === "string" && refsRaw !== "") {
+    const parsed = z.array(AttachmentRefSchema).safeParse(JSON.parse(refsRaw));
+    if (!parsed.success) {
+      throw new ValidationError(`Invalid 'attachments' JSON: ${parsed.error.message}`);
+    }
+    refs.push(...parsed.data);
+  }
+
+  const fileParts = form.getAll("attachment").filter((p): p is File => p instanceof Blob);
+  const uploaded: AttachmentRef[] = [];
+  for (const part of fileParts) {
+    const name = part.name || "upload";
+    const mime = part.type || "application/octet-stream";
+    const stream = Readable.from(Buffer.from(await part.arrayBuffer()));
+    const ref = await uploadArtifact(storage, {
+      workspaceId: chat.workspaceId,
+      workspaceSlug: ws.path,
+      chatId,
+      name,
+      mime,
+      stream,
+    });
+    uploaded.push({
+      path: ref.path,
+      name: ref.name,
+      mime: ref.mime,
+      size: ref.size,
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    content,
+    attachments: [...refs, ...uploaded],
+  };
+  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
+    const v = form.get(k);
+    if (typeof v === "string" && v !== "") body[k] = v;
+  }
+  return body;
+}
+
 export async function sendMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
@@ -204,7 +274,7 @@ export async function sendMessage(
  * note and take the plain DB update path.
  */
 export async function patchMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
@@ -290,7 +360,7 @@ export async function patchMessage(
  * is already running: returns the current row without firing twice.
  */
 export async function runMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   messageId: string,
   ops: MessageLifecycleOps,
@@ -338,7 +408,7 @@ export async function getNoteHistory(
  * returns 404.
  */
 export async function deleteMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
@@ -350,7 +420,7 @@ export async function deleteMessage(
 
   const slug = await workspaceSlugForChat(pool, chatId);
 
-  await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+  await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
 
   // Move log file to trash if present.
   const logPath = path.join(
@@ -477,7 +547,7 @@ export async function listAttachments(
  * caller can broadcast the event correctly.
  */
 export async function deleteChat(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   emit: (event: WsEvent) => void,
@@ -488,7 +558,7 @@ export async function deleteChat(
   const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
-  await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+  await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
 
   if (ws) {
     await trashChatDirectories(storage.home, ws.path, chatId).catch(() => {
@@ -563,33 +633,6 @@ export async function saveAttachmentToLibrary(
     type: "library.changed",
     payload: { workspaceId: chat.workspaceId, path: file.path, op: "added" },
   });
-
-  return file;
-}
-
-export async function uploadAttachmentToChat(
-  storage: StorageContext,
-  chatId: string,
-  data: { name: string; mime: string; content: Buffer },
-  emit: (event: WsEvent) => void,
-): Promise<FileRef> {
-  const chat = await queries.chats.findById(storage.pool, chatId);
-  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
-  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
-  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
-
-  const stream = Readable.from(data.content);
-
-  const file = await uploadArtifact(storage, {
-    workspaceId: chat.workspaceId,
-    workspaceSlug: ws.path,
-    chatId,
-    name: data.name,
-    mime: data.mime,
-    stream,
-  });
-
-  emit({ type: "artifact.created", payload: file });
 
   return file;
 }

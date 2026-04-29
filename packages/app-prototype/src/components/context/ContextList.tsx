@@ -271,9 +271,12 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
           subpath: subpath || undefined,
         }).unwrap()
       } catch (err) {
-        toast.error(`Upload failed: ${relativePath}`, {
-          description: err instanceof Error ? err.message : undefined,
-        })
+        // RTK Query rejects with `{ status, data }` from fetchBaseQuery —
+        // not an Error — so reach into `data` for the server's message.
+        const data = (err as { data?: { message?: string } } | undefined)?.data
+        const status = (err as { status?: number | string } | undefined)?.status
+        const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+        toast.error(`Upload failed: ${relativePath}`, { description })
       }
     }
     // A single toast for the batch — one-per-file is noisy on folder drops.
@@ -382,9 +385,10 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
       setLinkUrl('')
       setLinkName('')
     } catch (err) {
-      toast.error(`Failed to add link`, {
-        description: err instanceof Error ? err.message : undefined,
-      })
+      const data = (err as { data?: { message?: string } } | undefined)?.data
+      const status = (err as { status?: number | string } | undefined)?.status
+      const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+      toast.error(`Failed to add link`, { description })
     }
   }
 
@@ -401,9 +405,10 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
       }).unwrap()
       toast.success(`Created ${name}`)
     } catch (err) {
-      toast.error(`Failed to create file`, {
-        description: err instanceof Error ? err.message : undefined,
-      })
+      const data = (err as { data?: { message?: string } } | undefined)?.data
+      const status = (err as { status?: number | string } | undefined)?.status
+      const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+      toast.error(`Failed to create file`, { description })
     }
     setCreateFileDialogOpen(false)
     setNewFileName('')

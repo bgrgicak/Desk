@@ -16,23 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: desk
-          POSTGRES_PASSWORD: desk
-          POSTGRES_DB: desk
-        ports:
-          - 55432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-
     env:
-      DATABASE_URL: postgresql://desk:desk@127.0.0.1:55432/desk
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       DESK_DEV: "1"
 
@@ -44,16 +28,16 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Install OS packages (postgres client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client
-
       - name: Stage DESK_HOME (avoid /opt/desk fallback)
+        # The DB is a SQLite file under DESK_HOME; tests that share state
+        # across pools route to a per-process temp file derived from the
+        # connection string they pass, so DESK_DB_PATH only needs to be
+        # set for tests that explicitly read it.
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
           echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -70,9 +54,6 @@ jobs:
         # `desk` service user; CI doesn't have one, so adapt to whoever
         # the runner is.
         run: docker build --build-arg AGENT_UID=$(id -u) -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
-
-      - name: Enable pg_trgm extension on admin DB
-        run: PGPASSWORD=desk psql -h 127.0.0.1 -p 55432 -U desk -d desk -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 
       - name: Run unit + integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling

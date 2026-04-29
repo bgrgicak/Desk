@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import pg from "pg";
 import { Cron } from "croner";
+import { type Pool } from "@desk/db";
 import {
   generateId,
   AgentEventSchema,
@@ -11,7 +11,7 @@ import {
   type WsEvent,
 } from "@desk/shared";
 import { queries } from "@desk/db";
-import { resolveDeskHome, workspaceRootPath } from "@desk/storage";
+import { resolveDeskHome } from "@desk/storage";
 import {
   createOrReuse,
   execRun as runtimeExecRun,
@@ -22,7 +22,7 @@ import {
 } from "@desk/runtime";
 
 export interface RunManagerOptions {
-  pool: pg.Pool;
+  pool: Pool;
   emit?: (event: WsEvent) => void;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
@@ -184,40 +184,6 @@ export function createRunManager(opts: RunManagerOptions) {
     return c?.type === "ai_note_request" ? "note" : "text";
   }
 
-  /**
-   * Walks the workspace root for files whose mtime is at or after `since`.
-   * Returns workspace-relative paths (forward slashes). Skips dotfiles so
-   * agent infrastructure (.chats/, .opencode/, etc.) is excluded — matching
-   * the same rule as listLibrary.
-   */
-  async function touchedLibraryPaths(workspaceRoot: string, since: Date): Promise<string[]> {
-    const sinceMs = since.getTime();
-    const result: string[] = [];
-    const stack = [workspaceRoot];
-    while (stack.length > 0) {
-      const dir = stack.pop()!;
-      let entries: fs.Dirent[];
-      try {
-        entries = await fsp.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (entry.name.startsWith(".")) continue;
-        const abs = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          stack.push(abs);
-        } else if (entry.isFile()) {
-          const stat = await fsp.stat(abs).catch(() => null);
-          if (stat && stat.mtimeMs >= sinceMs) {
-            result.push(path.relative(workspaceRoot, abs).split(path.sep).join("/"));
-          }
-        }
-      }
-    }
-    return result;
-  }
-
   function buildOutputContent(
     kind: "note" | "text",
     entries: AgentLogEntry[],
@@ -305,7 +271,7 @@ export function createRunManager(opts: RunManagerOptions) {
        FROM chats c
        JOIN workspaces w ON w.id = c.workspace_id
        LEFT JOIN users u ON u.id = w.user_id
-       WHERE c.id = $1`,
+       WHERE c.id = ?`,
       [msg.chatId],
     );
     const ctxRow = ctxRows[0];
@@ -355,7 +321,6 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
       };
 
-      const runStart = new Date();
       let result: { exitCode: number };
       if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
@@ -399,13 +364,6 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       await afterTaskRun(msg, terminal);
 
-      // Best-effort: record which files this agent touched so the library UI
-      // can show real agent names on artifact cards.
-      const wsRoot = workspaceRootPath(resolveDeskHome(), workspaceSlug);
-      touchedLibraryPaths(wsRoot, runStart).then((touched) =>
-        queries.libraryFileAuthors.upsertAuthors(pool, workspaceId, agentId, touched),
-      ).catch(() => { /* best-effort */ });
-
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);
       if (content) {
@@ -415,15 +373,17 @@ export function createRunManager(opts: RunManagerOptions) {
           const { snapshotNote } = await import("@desk/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
-             WHERE chat_id = $1 AND content->>'type' = 'note'
+             WHERE chat_id = ? AND json_extract(content, '$.type') = 'note'
              ORDER BY created_at DESC LIMIT 1`,
             [msg.chatId],
           );
           if (prev.rows[0]) {
-            const prevRow = prev.rows[0] as { id: string; content: { body?: string } };
-            if (typeof prevRow.content.body === "string") {
+            // SQLite returns JSON columns as TEXT; parse before reading.
+            const prevRow = prev.rows[0] as { id: string; content: string };
+            const parsed = JSON.parse(prevRow.content) as { body?: string };
+            if (typeof parsed.body === "string") {
               const home = resolveDeskHome();
-              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, prevRow.content.body).catch(() => { /* best-effort */ });
+              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }
@@ -501,9 +461,9 @@ export function createRunManager(opts: RunManagerOptions) {
       `SELECT id FROM messages
        WHERE state = 'pending'
          AND execute_at IS NOT NULL
-         AND execute_at <= now()
+         AND execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        ORDER BY execute_at
-       LIMIT $1`,
+       LIMIT ?`,
       [available],
     );
     await Promise.all(
@@ -528,7 +488,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
-    await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+    await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
   /** Schedules an ai_note refresh for the chat, deleting any prior ai_note rows first. */
@@ -548,7 +508,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function cancelAiNoteForChat(chatId: string): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = $1 AND kind = 'ai_note'`,
+      `DELETE FROM messages WHERE chat_id = ? AND kind = 'ai_note'`,
       [chatId],
     );
   }

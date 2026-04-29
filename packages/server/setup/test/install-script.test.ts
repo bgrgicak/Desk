@@ -35,6 +35,25 @@ describe("install.sh static checks", () => {
   it("sets DESK_RUN_BIN in the env file so at/cron jobs can find desk-run", () => {
     expect(script).toContain("DESK_RUN_BIN=");
   });
+
+  it("creates `desk` at UID 2000 as the systemd service user", () => {
+    // The service always runs as `desk`; anyone debugging the running
+    // process should see a predictable name regardless of how the VM
+    // was provisioned.
+    expect(script).toMatch(/useradd[^\n]*--uid 2000[^\n]*desk\b/);
+    expect(script).toMatch(/^User=desk$/m);
+  });
+
+  it("pre-creates desk-owned subdirs under /home/desk/Desk", () => {
+    // Mount root ownership is host-driven and can't be chown'd from
+    // inside the VM (chown EINVAL on virtiofs/9p). Pre-creating each
+    // top-level subdir as desk:desk gives the service write access
+    // without requiring write on the mount root itself.
+    for (const sub of [".database", ".tmp", ".trash", "workspaces", "backups"]) {
+      expect(script).toContain(sub);
+    }
+    expect(script).toMatch(/chown desk:desk/);
+  });
 });
 
 describe("dev-override.conf static checks", () => {

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type pg from "pg";
+import { type Pool } from "@desk/db";
 import { resolveHostPath, workspaceRootPath } from "./layout.js";
 
 /**
@@ -17,22 +17,36 @@ import { resolveHostPath, workspaceRootPath } from "./layout.js";
  * on-disk root.
  */
 export async function reconcileArtifactRefs(
-  pool: pg.Pool,
+  pool: Pool,
   home: string,
 ): Promise<{ checked: number; repaired: number; missing: number }> {
   const stats = { checked: 0, repaired: 0, missing: 0 };
 
-  const { rows } = await pool.query<{
+  const { rows: rawRows } = await pool.query<{
     id: string;
     workspace_path: string;
-    content: { type: "artifactRef"; path?: string; name?: string; mime?: string; missing?: boolean };
+    content: string;
   }>(
     `SELECT m.id, w.path AS workspace_path, m.content
      FROM messages m
      JOIN chats c ON c.id = m.chat_id
      JOIN workspaces w ON w.id = c.workspace_id
-     WHERE m.content->>'type' = 'artifactRef'`,
+     WHERE json_extract(m.content, '$.type') = 'artifactRef'`,
   );
+
+  // SQLite stores JSON columns as TEXT; parse here so the rest of the
+  // reconcile logic can treat content as a structured object.
+  const rows = rawRows.map((r) => ({
+    id: r.id,
+    workspace_path: r.workspace_path,
+    content: JSON.parse(r.content) as {
+      type: "artifactRef";
+      path?: string;
+      name?: string;
+      mime?: string;
+      missing?: boolean;
+    },
+  }));
 
   for (const row of rows) {
     stats.checked++;
@@ -60,7 +74,7 @@ export async function reconcileArtifactRefs(
         const cleared = { ...row.content };
         delete cleared.missing;
         await pool.query(
-          `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+          `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
           [JSON.stringify(cleared), row.id],
         );
       }
@@ -73,7 +87,7 @@ export async function reconcileArtifactRefs(
       const updated = { ...row.content, path: rel };
       delete updated.missing;
       await pool.query(
-        `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+        `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
         [JSON.stringify(updated), row.id],
       );
       stats.repaired++;
@@ -87,13 +101,13 @@ export async function reconcileArtifactRefs(
 }
 
 async function markMissing(
-  pool: pg.Pool,
+  pool: Pool,
   messageId: string,
   content: Record<string, unknown>,
 ): Promise<void> {
   const next = { ...content, missing: true };
   await pool.query(
-    `UPDATE messages SET content = $1, updated_at = now() WHERE id = $2`,
+    `UPDATE messages SET content = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
     [JSON.stringify(next), messageId],
   );
 }

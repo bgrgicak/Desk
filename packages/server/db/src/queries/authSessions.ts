@@ -1,14 +1,12 @@
-import pg from "pg";
-
-type Queryable = pg.Pool | pg.PoolClient;
+import { type Pool } from "../pool.js";
 
 export async function insert(
-  db: Queryable,
+  db: Pool,
   data: { tokenHash: string; userId: string },
 ): Promise<void> {
   await db.query(
     `INSERT INTO auth_sessions (token_hash, user_id)
-     VALUES ($1, $2)`,
+     VALUES (?, ?)`,
     [data.tokenHash, data.userId],
   );
 }
@@ -19,47 +17,50 @@ export async function insert(
  * compromised token can't be reused even if the cleanup job is paused.
  */
 export async function verify(
-  db: Queryable,
+  db: Pool,
   tokenHash: string,
   ttlMs: number,
 ): Promise<string | null> {
   const { rows } = await db.query(
-    `SELECT user_id, issued_at FROM auth_sessions WHERE token_hash = $1`,
+    `SELECT user_id, issued_at FROM auth_sessions WHERE token_hash = ?`,
     [tokenHash],
   );
   if (rows.length === 0) return null;
-  const issuedAt = (rows[0].issued_at as Date).getTime();
+  const issuedAt = new Date(rows[0].issued_at as string).getTime();
   if (Date.now() - issuedAt > ttlMs) {
-    await db.query(`DELETE FROM auth_sessions WHERE token_hash = $1`, [tokenHash]);
+    await db.query(`DELETE FROM auth_sessions WHERE token_hash = ?`, [tokenHash]);
     return null;
   }
   return rows[0].user_id as string;
 }
 
 export async function deleteByTokenHash(
-  db: Queryable,
+  db: Pool,
   tokenHash: string,
 ): Promise<boolean> {
   const result = await db.query(
-    `DELETE FROM auth_sessions WHERE token_hash = $1`,
+    `DELETE FROM auth_sessions WHERE token_hash = ?`,
     [tokenHash],
   );
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function deleteAll(db: Queryable): Promise<void> {
+export async function deleteAll(db: Pool): Promise<void> {
   await db.query(`DELETE FROM auth_sessions`);
 }
 
 /** Bulk-delete rows older than the TTL. Cheap to run at boot. */
 export async function deleteExpired(
-  db: Queryable,
+  db: Pool,
   ttlMs: number,
 ): Promise<number> {
+  // SQLite has no INTERVAL type — express the TTL as a strftime offset.
+  // Negative number → subtract from `now`, gives us the "issued before"
+  // cutoff in the same ISO 8601 format the column uses.
+  const cutoff = new Date(Date.now() - ttlMs).toISOString();
   const result = await db.query(
-    `DELETE FROM auth_sessions
-      WHERE issued_at < now() - ($1::bigint || ' milliseconds')::interval`,
-    [ttlMs],
+    `DELETE FROM auth_sessions WHERE issued_at < ?`,
+    [cutoff],
   );
   return result.rowCount ?? 0;
 }

@@ -2,14 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { type Pool } from "../src/pool.js";
 import { PROVIDER_KEY_VARS } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "./helpers/db.js";
 import { seedIfEmpty, seedProviderKeysFromEnv } from "../src/seed.js";
 import * as userSettings from "../src/queries/userSettings.js";
 import { resetSecretKeyCache } from "../src/encryption.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let keyDir: string;
 let savedProviderKeys: Record<string, string | undefined>;
 
@@ -69,13 +69,13 @@ describe("seedIfEmpty", () => {
   it("is idempotent — calling again does not duplicate rows", async () => {
     await seedIfEmpty(pool);
 
-    const { rows: users } = await pool.query("SELECT count(*)::int AS c FROM users");
+    const { rows: users } = await pool.query("SELECT count(*) AS c FROM users");
     expect(users[0].c).toBe(1);
 
-    const { rows: agents } = await pool.query("SELECT count(*)::int AS c FROM agents");
+    const { rows: agents } = await pool.query("SELECT count(*) AS c FROM agents");
     expect(agents[0].c).toBe(1);
 
-    const { rows: workspaces } = await pool.query("SELECT count(*)::int AS c FROM workspaces");
+    const { rows: workspaces } = await pool.query("SELECT count(*) AS c FROM workspaces");
     expect(workspaces[0].c).toBe(1);
   });
 });

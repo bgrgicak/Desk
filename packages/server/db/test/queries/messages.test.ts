@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
+import { type Pool } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
@@ -8,7 +8,7 @@ import * as workspaces from "../../src/queries/workspaces.js";
 import * as chats from "../../src/queries/chats.js";
 import * as messages from "../../src/queries/messages.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let chatId: string;
 
 beforeAll(async () => {
@@ -21,7 +21,7 @@ beforeAll(async () => {
   await workspaces.insert(pool, { id: wsId, userId, name: "MsgWS", path: `msgws-${wsId.slice(-6)}` });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+     VALUES (?, ?) ON CONFLICT DO NOTHING`,
     [wsId, agentId],
   );
   chatId = generateId("chat");
@@ -71,7 +71,7 @@ describe("messages queries", () => {
     const { rows } = await messages.listByChat(pool, chatId);
     expect(rows).toBeUndefined(); // it returns { items, nextCursor }
 
-    await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+    await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
     const result = await messages.listByChat(pool, chatId);
     expect(result.items).toHaveLength(0);
   });

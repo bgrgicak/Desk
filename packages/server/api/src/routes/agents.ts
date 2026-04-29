@@ -1,13 +1,13 @@
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError } from "@desk/shared";
 
-export async function listAgents(pool: pg.Pool, userId: string) {
+export async function listAgents(pool: Pool, userId: string) {
   return queries.agents.listByUser(pool, userId);
 }
 
 export async function createAgent(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   data: { name: string; instructions?: string; model?: string },
 ) {
@@ -18,14 +18,14 @@ export async function createAgent(
   });
 }
 
-export async function getAgent(pool: pg.Pool, id: string) {
+export async function getAgent(pool: Pool, id: string) {
   const agent = await queries.agents.findById(pool, id);
   if (!agent) throw new NotFoundError(`Agent not found: ${id}`);
   return agent;
 }
 
 export async function patchAgent(
-  pool: pg.Pool,
+  pool: Pool,
   id: string,
   data: { name?: string; instructions?: string; model?: string },
 ) {
@@ -44,7 +44,7 @@ export async function patchAgent(
  * Refuses to delete the user's last agent — every user must retain at least
  * one so compose + existing chats remain usable.
  */
-export async function deleteAgent(pool: pg.Pool, userId: string, id: string) {
+export async function deleteAgent(pool: Pool, userId: string, id: string) {
   const owned = await queries.agents.listByUser(pool, userId);
   if (owned.length <= 1) {
     throw new ValidationError(

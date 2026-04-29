@@ -126,7 +126,7 @@ export async function createOrReuse(
     await fs.mkdir(entry.sourcePath, { recursive: true });
   }
 
-  const container = await docker.createContainer({
+  const createSpec = {
     name: containerName,
     Image: "desk/sandbox:v1",
     Env: providerKeyEnv(providerKeys),
@@ -143,7 +143,24 @@ export async function createOrReuse(
       Tmpfs: { "/tmp": "" },
       Binds: expectedBinds,
     },
-  });
+  };
+  let container;
+  try {
+    container = await docker.createContainer(createSpec);
+  } catch (err) {
+    // Race: two startSandbox() calls for the same workspace can both pass
+    // the inspect() check (404 → not found) and both try to create. The
+    // loser sees a 409 Conflict. The winner has already produced a usable
+    // container with matching binds (we'd have reused it above otherwise),
+    // so reuse it instead of failing the fire.
+    if ((err as { statusCode?: number }).statusCode === 409) {
+      const winner = docker.getContainer(containerName);
+      const winnerInfo = await winner.inspect();
+      if (!winnerInfo.State.Running) await winner.start();
+      return { containerId: winnerInfo.Id, workspaceId };
+    }
+    throw err;
+  }
   await container.start();
   const info = await container.inspect();
   return { containerId: info.Id, workspaceId };

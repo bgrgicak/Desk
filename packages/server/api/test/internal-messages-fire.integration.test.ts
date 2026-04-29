@@ -13,7 +13,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { Pool } from "@desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
 import { createRunManager } from "@desk/scheduler";
@@ -22,37 +22,18 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_internal_msg_fire_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
 let chatId: string;
 let runManager: ReturnType<typeof createRunManager>;
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally { await admin.end(); }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "msgfire-user";
@@ -79,7 +60,7 @@ beforeAll(async () => {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, wsRows[0].id, agentRows[0].id, "Fire Chat"],
   );
 
@@ -94,13 +75,8 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally { await admin.end(); }
 });
 
 function postJson(pathStr: string, body: unknown, bearer: string | null): Promise<{ status: number; body: unknown }> {
@@ -129,7 +105,7 @@ async function insertPendingMessage(content: unknown): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-     VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+     VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
     [id, chatId, JSON.stringify(content)],
   );
   return id;
@@ -235,8 +211,8 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     const mid = await insertPendingMessage({ type: "text", text: "succeeded→todo" });
     await pool.query(
       `UPDATE messages SET state = 'succeeded', execute_at = NULL,
-                           started_at = now(), ended_at = now()
-       WHERE id = $1`,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
       [mid],
     );
     const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
@@ -253,8 +229,8 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     const mid = await insertPendingMessage({ type: "text", text: "failed→todo" });
     await pool.query(
       `UPDATE messages SET state = 'failed', execute_at = NULL,
-                           started_at = now(), ended_at = now()
-       WHERE id = $1`,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
       [mid],
     );
     const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
@@ -269,7 +245,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
 
   it("PATCH state:pending on a running row is rejected", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "running guard" });
-    await pool.query(`UPDATE messages SET state = 'running' WHERE id = $1`, [mid]);
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = ?`, [mid]);
     const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
     expect(res.status).toBe(400);
   });
@@ -317,9 +293,9 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     const mid = await insertPendingMessage({ type: "text", text: "rerun me" });
     await pool.query(
       `UPDATE messages SET state = 'succeeded', execute_at = NULL,
-                           started_at = now() - interval '1 hour',
-                           ended_at = now() - interval '1 hour'
-       WHERE id = $1`,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'),
+                           ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour')
+       WHERE id = ?`,
       [mid],
     );
     const before = await queries.messages.findById(pool, mid);
@@ -340,7 +316,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
 
   it("POST /run on a running row is a no-op (returns the row unchanged)", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "already running" });
-    await pool.query(`UPDATE messages SET state = 'running' WHERE id = $1`, [mid]);
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = ?`, [mid]);
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
     const row = await queries.messages.findById(pool, mid);
@@ -471,19 +447,24 @@ describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
     );
     expect(sent.status).toBe(201);
 
-    const { rows } = await pool.query(
-      `SELECT id, role, content FROM messages WHERE chat_id = $1`,
+    const { rows: rawRows } = await pool.query(
+      `SELECT id, role, content FROM messages WHERE chat_id = ?`,
       [chatId],
     );
+    // SQLite stores JSON as TEXT; parse at the test boundary.
+    const rows = rawRows.map((r) => ({
+      ...r,
+      content: JSON.parse(r.content as string) as { type?: string; text?: string; userMessageId?: string },
+    }));
 
-    const textRows = rows.filter((r: { content: { type?: string; text?: string } }) =>
+    const textRows = rows.filter((r) =>
       r.content?.type === "text" && r.content?.text === uniqueText,
     );
     expect(textRows.length).toBe(1);
     expect(textRows[0].role).toBe("user");
 
-    const triggerRows = rows.filter((r: { content: { type?: string } }) => r.content?.type === "agent_turn");
-    const ourTrigger = triggerRows.find((r: { content: { userMessageId?: string } }) =>
+    const triggerRows = rows.filter((r) => r.content?.type === "agent_turn");
+    const ourTrigger = triggerRows.find((r) =>
       r.content.userMessageId === textRows[0].id,
     );
     expect(ourTrigger).toBeDefined();

@@ -31,7 +31,6 @@ import {
   usePatchChatMutation,
   usePinChatLibraryRefMutation,
   usePostChatMessageMutation,
-  useUploadChatArtifactMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import { NEW_CHAT_ID } from '@/router/nav'
@@ -78,6 +77,7 @@ interface ChatViewProps {
     agentId?: string,
     attachments?: AttachmentRef[],
     options?: SendOptions,
+    files?: File[],
   ) => void
   /** When set and the id matches a rendered message, scroll that row
    * into view instead of the default scroll-to-bottom. Drives the
@@ -446,12 +446,8 @@ function FilesPanel({
   const filteredChatFiles = chatFiles.filter(f =>
     !search.trim() || f.name.toLowerCase().includes(search.toLowerCase())
   )
-  const dropDisabled = !hasRealChatId || uploading
-  const overlayLabel = !hasRealChatId
-    ? 'Send a message first to enable uploads'
-    : uploading
-      ? 'Uploading…'
-      : 'Drop to add to chat'
+  const dropDisabled = uploading
+  const overlayLabel = uploading ? 'Uploading…' : 'Drop to add to chat'
 
   return (
     <FileDropZone
@@ -645,21 +641,17 @@ export function ChatView({
   )
 
   // Upload ownership lives at ChatView so the entire chat screen (not
-  // just the small input strip) can be a drop target. Both the outer
-  // (chat-pane) and inner (Files-panel) dropzones land files in the
-  // chat's `.chats/{id}/attachments/` — never the workspace library —
-  // so a drag-and-drop into the chat view never silently spills into
-  // the user's global library.
-  const [uploadChatArtifact, chatUploadState] = useUploadChatArtifactMutation()
-  const isUploading = chatUploadState.isLoading
+  // just the small input strip) can be a drop target. Drops are held in
+  // browser memory until the user sends — the file rides on the next
+  // outgoing message as a multipart part, so there is no upload-then-
+  // attach two-step and no chat-id requirement. New-chat drops work the
+  // same way; the file goes out with the first message.
   const hasRealChatId = !isNewChat
-  const [pendingUploads, setPendingUploads] = useState<UploadedFile[]>([])
-  // Sidebar Files-tab staging tray. Adds (upload or pick-from-library)
-  // queue here; on send these merge into the message's `attachments[]`
-  // and the tray is cleared. Removing only unstages — the underlying
-  // file stays on disk in the library.
-  // Seeded from `initialStagedItems` so the "Use in chat" affordance from
-  // a library item lands the file in the tray on the new-chat mount.
+  const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; file: File }>>([])
+  // Library-mention tray. Refs only (no File body) — these point at
+  // workspace-library files the agent should read in place. Seeded from
+  // `initialStagedItems` so the "Use in chat" affordance from a library
+  // item lands the file in the tray on the new-chat mount.
   const [stagedFiles, setStagedFiles] = useState<UploadedFile[]>(() =>
     (initialStagedItems ?? []).map(item => ({
       id: item.id,
@@ -670,74 +662,24 @@ export function ChatView({
   )
 
   const handleUpload = useCallback(async (entries: UploadEntry[]) => {
-    if (!hasRealChatId) {
-      toast.error('Send your first message before adding files')
-      return
-    }
-    for (const { file } of entries) {
-      try {
-        const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
-        setPendingUploads(prev => [
-          ...prev,
-          {
-            id: `upload-${serverFile.path ?? Date.now()}`,
-            name: serverFile.name ?? file.name,
-            path: serverFile.path,
-            mime: serverFile.mime,
-            size: serverFile.size,
-          },
-        ])
-        toast.success(`Uploaded ${file.name}`)
-      } catch (err) {
-        toast.error(`Upload failed: ${file.name}`, {
-          description: err instanceof Error ? err.message : undefined,
-        })
-      }
-    }
-  }, [hasRealChatId, chat.id, uploadChatArtifact])
+    setPendingFiles(prev => [
+      ...prev,
+      ...entries.map(({ file }, i) => ({
+        id: `pending-${Date.now()}-${i}-${file.name}`,
+        file,
+      })),
+    ])
+  }, [])
 
-  const removePendingUpload = (id: string) =>
-    setPendingUploads(prev => prev.filter(u => u.id !== id))
+  const removePendingFile = useCallback((id: string) => {
+    setPendingFiles(prev => prev.filter(p => p.id !== id))
+  }, [])
 
-  // Sidebar tray: uploads land in `.chats/{chatId}/attachments/` so the
-  // file is scoped to this chat (vs. the workspace library, where every
-  // chat sees it). The returned ServerFile is pushed onto the staging
-  // tray so it auto-attaches to the next send. Disabled until the chat
-  // has a real id — the new-chat stub has no `.chats/{id}/` directory
-  // to write into yet.
-  const handleSidebarUpload = useCallback(async (entries: UploadEntry[]) => {
-    if (!hasRealChatId) {
-      toast.error('Send your first message before adding files')
-      return
-    }
-    for (const { file } of entries) {
-      try {
-        const serverFile = await uploadChatArtifact({ chatId: chat.id, file }).unwrap()
-        // Key staging-tray rows by the workspace-relative path so an
-        // identical re-upload (rare) collapses cleanly and picker-add
-        // dedup uses the same key.
-        setStagedFiles(prev =>
-          prev.some(s => s.id === serverFile.path)
-            ? prev
-            : [
-                ...prev,
-                {
-                  id: serverFile.path,
-                  name: serverFile.name ?? file.name,
-                  path: serverFile.path,
-                  mime: serverFile.mime,
-                  size: serverFile.size,
-                },
-              ],
-        )
-        toast.success(`Uploaded ${file.name}`)
-      } catch (err) {
-        toast.error(`Upload failed: ${file.name}`, {
-          description: err instanceof Error ? err.message : undefined,
-        })
-      }
-    }
-  }, [hasRealChatId, chat.id, uploadChatArtifact])
+  // Sidebar Files-tab dropzone funnels into the same in-memory holding —
+  // the distinction between "chat-pane drop" and "Files-tab drop" only
+  // existed because the old code had two separate trays. Both now mean
+  // "attach to the next outgoing message".
+  const handleSidebarUpload = handleUpload
 
   const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
 
@@ -839,14 +781,7 @@ export function ChatView({
           library — chat drops are always chat-scoped. */}
       <FileDropZone
         onFiles={handleUpload}
-        disabled={isUploading}
-        overlayLabel={
-          isUploading
-            ? 'Uploading…'
-            : hasRealChatId
-              ? 'Drop to attach to chat'
-              : 'Send a message first to enable uploads'
-        }
+        overlayLabel={hasRealChatId ? 'Drop to attach to chat' : 'Drop to attach to your first message'}
         className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden"
       >
         {({ openPicker }) => (
@@ -936,8 +871,11 @@ export function ChatView({
                 <ChatInput
                   focusRef={focusInputRef}
                   onSend={(msg, uploads, options) => {
-                    // De-dupe uploads by path so a file staged AND attached
-                    // inline doesn't appear twice in `attachments`.
+                    // `uploads` carries library-mention refs (path set) plus
+                    // pending-file chips (path undefined — the actual File
+                    // object lives in `pendingFiles` state below). De-dupe
+                    // refs by path so a file staged AND @-mentioned doesn't
+                    // appear twice on the wire.
                     const seen = new Set<string>()
                     const attachments: AttachmentRef[] = uploads
                       .filter(u => typeof u.path === 'string')
@@ -953,7 +891,8 @@ export function ChatView({
                         mime: u.mime,
                         size: u.size,
                       }))
-                    setPendingUploads([])
+                    const files = pendingFiles.map(p => p.file)
+                    setPendingFiles([])
                     setStagedFiles([])
                     if (isNewChat) {
                       onFirstMessage?.(
@@ -961,12 +900,14 @@ export function ChatView({
                         newChatAgentId ?? undefined,
                         attachments.length > 0 ? attachments : undefined,
                         options,
+                        files.length > 0 ? files : undefined,
                       )
                     } else {
                       postMessageMutation({
                         chatId: chat.id,
                         content: msg,
                         attachments: attachments.length > 0 ? attachments : undefined,
+                        files: files.length > 0 ? files : undefined,
                         kind: options?.kind,
                         title: options?.title,
                         executeAt: options?.executeAt,
@@ -974,9 +915,10 @@ export function ChatView({
                       })
                         .unwrap()
                         .catch(err => {
-                          toast.error('Failed to send message', {
-                            description: err instanceof Error ? err.message : undefined,
-                          })
+                          const data = (err as { data?: { message?: string } } | undefined)?.data
+                          const status = (err as { status?: number | string } | undefined)?.status
+                          const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+                          toast.error('Failed to send message', { description })
                         })
                     }
                     setPrefillText(undefined)
@@ -991,12 +933,20 @@ export function ChatView({
                   onAgentChange={handleAgentChange}
                   draftKey={`chat:${chat.id}`}
                   onOpenUploadPicker={openPicker}
-                  extraUploads={[...pendingUploads, ...stagedFiles]}
+                  extraUploads={[
+                    ...pendingFiles.map(p => ({
+                      id: p.id,
+                      name: p.file.name,
+                      mime: p.file.type,
+                      size: p.file.size,
+                    })),
+                    ...stagedFiles,
+                  ]}
                   onRemoveExtraUpload={(id) => {
-                    removePendingUpload(id)
+                    removePendingFile(id)
                     removeStaged(id)
                   }}
-                  uploadInProgress={isUploading}
+                  uploadInProgress={false}
                 />
               </div>
             </div>
@@ -1061,7 +1011,7 @@ export function ChatView({
                 chatFiles={chatAttachmentFiles}
                 libraryItems={libraryItems}
                 hasRealChatId={hasRealChatId}
-                uploading={chatUploadState.isLoading}
+                uploading={false}
                 onUpload={handleSidebarUpload}
                 onAddFromLibrary={addStagedFromLibrary}
                 onFileClick={(file) =>

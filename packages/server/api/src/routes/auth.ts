@@ -1,10 +1,10 @@
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { UnauthorizedError } from "@desk/shared";
 import { issueSession, revokeSession } from "../auth/sessions.js";
 
 export async function handleLogin(
-  pool: pg.Pool,
+  pool: Pool,
   body: { username: string; password: string },
 ): Promise<{ token: string }> {
   const user = await queries.users.login(pool, body.username, body.password);
@@ -15,7 +15,7 @@ export async function handleLogin(
 }
 
 export async function handleLogout(
-  pool: pg.Pool,
+  pool: Pool,
   authHeader: string | undefined,
 ): Promise<{ ok: boolean }> {
   if (authHeader?.startsWith("Bearer ")) {

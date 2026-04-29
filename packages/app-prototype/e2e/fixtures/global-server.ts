@@ -15,7 +15,6 @@ import * as path from "node:path";
 import * as net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dropTestDatabase } from "./db";
 import { startDeskServer, type DiskServer } from "./server";
 
 const HANDLE_FILE = path.join(os.tmpdir(), "desk-app-e2e-handle.json");
@@ -23,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..", "..");
 
 interface StoredHandle {
-  server: { pid: number; url: string; dbName: string; home: string };
+  server: { pid: number; url: string; dbPath: string; home: string };
   vite: { pid: number; url: string };
 }
 
@@ -146,7 +145,7 @@ export async function globalSetup(): Promise<void> {
     server: {
       pid: server.pid,
       url: server.url,
-      dbName: server.dbName,
+      dbPath: server.dbPath,
       home: server.home,
     },
     vite: { pid: viteProc.pid ?? -1, url: viteUrl },
@@ -187,8 +186,11 @@ export async function globalTeardown(): Promise<void> {
       /* already dead */
     }
   }
-  if (handle.server.dbName)
-    await dropTestDatabase(handle.server.dbName).catch(() => undefined);
+  if (handle.server.dbPath) {
+    await fs
+      .rm(path.dirname(handle.server.dbPath), { recursive: true, force: true })
+      .catch(() => undefined);
+  }
   if (handle.server.home)
     await fs
       .rm(handle.server.home, { recursive: true, force: true })

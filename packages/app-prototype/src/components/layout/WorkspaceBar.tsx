@@ -237,6 +237,7 @@ export function WorkspaceBar({
                   <ContextMenuTrigger asChild>
                     <button
                       onClick={() => onSelectWorkspace(ws.id)}
+                      data-testid={`workspace-tab-${ws.id}`}
                       className={`relative flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors cursor-pointer select-none ${
                         isActive
                           ? 'bg-background/60 text-foreground'

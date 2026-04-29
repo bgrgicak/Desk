@@ -1,10 +1,13 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import pg from "pg";
+import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { type Pool } from "@desk/db";
 import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
+import { requireInternal } from "./auth/internal.js";
 import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {
@@ -36,7 +39,7 @@ import {
 type RunManager = ReturnType<typeof createRunManager>;
 
 export interface AppOptions {
-  pool: pg.Pool;
+  pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
   /** The userId to broadcast events to (v1: single user). */
@@ -62,6 +65,17 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
   const raw = await readRawBody(req);
   if (raw.length === 0) return {};
   return JSON.parse(raw.toString());
+}
+
+/**
+ * Default destination for `/internal/backup`. Lands next to the live DB
+ * inside `~/Desk/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of `~/Desk`. Uses
+ * UTC date so multi-region rsync targets don't fight over filenames.
+ */
+function defaultBackupPath(deskHome: string): string {
+  const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -248,6 +262,28 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(HEALTH_MESSAGE);
+      return;
+    }
+
+    // Online backup. The pool opens its DB with locking_mode=EXCLUSIVE,
+    // which blocks other connections (including a host-side
+    // `sqlite3 .backup` CLI) from opening the file. `VACUUM INTO` runs
+    // on the existing connection, produces a checkpointed snapshot,
+    // and works while the server is up — exactly what BACKUP.md needs.
+    //
+    // Path defaults to ${DESK_HOME}/Desk/backups/desk-<ISO date>.sqlite3
+    // (alongside the live DB, on the host mount). Request body may
+    // override with `{ "path": "..." }`; the path must not already
+    // exist (VACUUM INTO refuses to overwrite).
+    if (path === "/internal/backup" && method === "POST") {
+      requireInternal(req);
+      const body = await parseBody(req) as { path?: string };
+      const targetPath = body.path ?? defaultBackupPath(storage.home);
+      const targetDir = pathDirname(targetPath);
+      await fsMkdir(targetDir, { recursive: true });
+      pool.exec(`VACUUM INTO '${targetPath.replace(/'/g, "''")}'`);
+      const stat = await fsStat(targetPath);
+      sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
       return;
     }
 
@@ -492,7 +528,10 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req);
+      const ct = (req.headers["content-type"] ?? "").toLowerCase();
+      const body = ct.startsWith("multipart/form-data")
+        ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
+        : await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
       // Self-firing kinds (task / ai_note): execute_at is computed at insert
@@ -554,25 +593,6 @@ export function createApp(opts: AppOptions): Server {
         includeNotes,
       });
       sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const form = await parseMultipart(req);
-      const part = form.get("file");
-      if (!(part instanceof Blob)) {
-        throw new ValidationError("Missing 'file' part in multipart body");
-      }
-      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
-      const mime = part.type || "application/octet-stream";
-      const content = Buffer.from(await part.arrayBuffer());
-      const result = await chatRoutes.uploadAttachmentToChat(
-        storage,
-        segments[1],
-        { name, mime, content },
-        emitEvent,
-      );
-      sendJson(res, 201, result);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {

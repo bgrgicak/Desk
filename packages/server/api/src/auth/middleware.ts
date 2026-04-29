@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool } from "@desk/db";
 import { queries } from "@desk/db";
 import { UnauthorizedError } from "@desk/shared";
 import { verifySession } from "./sessions.js";
@@ -12,7 +12,7 @@ import { verifySession } from "./sessions.js";
 const TIMEZONE_RE = /^[A-Za-z][A-Za-z0-9/_+-]{0,63}$/;
 
 export async function recordClientTimezone(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   headerValue: string | string[] | undefined,
 ): Promise<void> {
@@ -46,7 +46,7 @@ const SANDBOX_PREFIX = "/sandbox/";
  * Returns userId on success, throws UnauthorizedError on failure.
  */
 export async function requireAuth(
-  pool: pg.Pool,
+  pool: Pool,
   url: string,
   authHeader: string | undefined,
 ): Promise<string> {

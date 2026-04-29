@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import pg from "pg";
+import { type Pool } from "../../src/pool.js";
 import { generateId, NotFoundError, ValidationError } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
@@ -7,7 +7,7 @@ import * as users from "../../src/queries/users.js";
 import * as workspaces from "../../src/queries/workspaces.js";
 import * as workspaceAgents from "../../src/queries/workspaceAgents.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let userId: string;
 let workspaceId: string;
 let agent1: string;
@@ -35,7 +35,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("DELETE FROM workspace_agents WHERE workspace_id = $1", [workspaceId]);
+  await pool.query("DELETE FROM workspace_agents WHERE workspace_id = ?", [workspaceId]);
 });
 
 describe("workspace_agents queries", () => {
@@ -76,9 +76,9 @@ describe("workspace_agents queries", () => {
     await workspaces.insert(pool, { id: wsThrow, userId, name: "Throw", path: `throw-${wsThrow.slice(-6)}` });
     await workspaceAgents.addToWorkspace(pool, wsThrow, agent1);
 
-    await pool.query("DELETE FROM workspaces WHERE id = $1", [wsThrow]);
+    await pool.query("DELETE FROM workspaces WHERE id = ?", [wsThrow]);
     const { rows } = await pool.query(
-      "SELECT 1 FROM workspace_agents WHERE workspace_id = $1",
+      "SELECT 1 FROM workspace_agents WHERE workspace_id = ?",
       [wsThrow],
     );
     expect(rows).toHaveLength(0);

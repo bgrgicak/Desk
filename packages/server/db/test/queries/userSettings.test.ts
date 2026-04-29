@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
+import { type Pool } from "../../src/pool.js";
 import { generateId } from "@desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as userSettings from "../../src/queries/userSettings.js";
@@ -10,7 +10,7 @@ import * as users from "../../src/queries/users.js";
 import { resetSecretKeyCache } from "../../src/encryption.js";
 import { hashPassword } from "../../src/passwords.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let keyDir: string;
 let prevEnv: string | undefined;
 
@@ -59,7 +59,7 @@ describe("user_settings queries", () => {
     await userSettings.setProviderKeys(pool, id, keys);
 
     const { rows } = await pool.query(
-      "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = $1",
+      "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = ?",
       [id],
     );
     expect(rows.length).toBe(1);
@@ -110,9 +110,9 @@ describe("user_settings queries", () => {
   it("cascades on user delete", async () => {
     const id = await makeUser("cascade-user");
     await userSettings.setProviderKeys(pool, id, { ANTHROPIC_API_KEY: "x" });
-    await pool.query("DELETE FROM users WHERE id = $1", [id]);
+    await pool.query("DELETE FROM users WHERE id = ?", [id]);
     const { rows } = await pool.query(
-      "SELECT 1 FROM user_settings WHERE user_id = $1",
+      "SELECT 1 FROM user_settings WHERE user_id = ?",
       [id],
     );
     expect(rows.length).toBe(0);
