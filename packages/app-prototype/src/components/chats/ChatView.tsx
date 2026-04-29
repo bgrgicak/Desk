@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
-  ChevronDown, Link2, StickyNote, Paperclip, Plus, X,
+  ChevronDown, Link2, StickyNote, Paperclip, X,
   PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -281,7 +281,7 @@ function ArtifactsPanel({
                     title="Add to message"
                     className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
                   >
-                    <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                    <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -343,7 +343,7 @@ function ArtifactsPanel({
                     title="Add to message"
                     className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
                   >
-                    <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                    <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
