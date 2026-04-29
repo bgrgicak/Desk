@@ -182,6 +182,11 @@ export async function move(
 ): Promise<{ kind: "file" | "folder"; path: string }> {
   const slug = await resolveSlug(ctx, workspaceId);
   const result = await moveLibraryEntry(ctx, slug, from, to);
+  if (result.kind === "file") {
+    await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, from, to);
+  } else {
+    await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, from, to);
+  }
   emit({
     type: "library.changed",
     payload: { workspaceId, path: to, op: "moved" },
