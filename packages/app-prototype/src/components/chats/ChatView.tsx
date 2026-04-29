@@ -82,6 +82,7 @@ function eventsHasUserText(log: AgentLogEntry[]): boolean {
 }
 
 function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
+  if (m.kind === 'task_run' && !developerMode) return false
   if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
   if (developerMode) return true
   if (TOOL_CONTENT_TYPES.has(m.content.type)) return false

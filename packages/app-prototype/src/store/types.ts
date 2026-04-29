@@ -129,8 +129,8 @@ export interface ServerMessage {
   endedAt?: string;
   updatedAt?: string;
   /** Discriminates the message's surface — `chat` (default), `task`,
-   * or `ai_note`. The Tasks page filters on `task`. */
-  kind?: "chat" | "task" | "ai_note";
+   * `task_run` (execution record child of a task), or `ai_note`. */
+  kind?: "chat" | "task" | "task_run" | "ai_note";
   /** Display name for tasks; null/missing for ordinary chat messages. */
   title?: string | null;
 }
