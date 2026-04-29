@@ -61,13 +61,16 @@ export async function execRun(
 
   // Tell the agent which chat it's in. The per-chat workbench path is
   // encoded in the system prompt as a template; here we anchor it and
-  // name the attachments/ + notes/ subdirs so the agent reads real
-  // paths instead of guessing.
+  // name the subdirs so the agent reads real paths instead of guessing.
+  // Files attached to *this* turn are also delivered via --file flags;
+  // the messages/ directory is the persistent home for earlier turns'
+  // attachments.
   const workbenchHint = opts.chatId
     ? [
         `Current chat workbench: ~/.chats/${opts.chatId}/`,
-        `Chat attachments: ~/.chats/${opts.chatId}/attachments/`,
-        `Chat notes:       ~/.chats/${opts.chatId}/notes/`,
+        `Message attachments:    ~/.chats/${opts.chatId}/messages/{messageId}/`,
+        `Library pins:           ~/.chats/${opts.chatId}/attachments/`,
+        `Chat notes:             ~/.chats/${opts.chatId}/notes/`,
       ].join("\n")
     : null;
   const chatContext = [workbenchHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
