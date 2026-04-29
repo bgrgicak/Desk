@@ -17,7 +17,7 @@ export function ArtifactCard({ artifact, onClick, index = 0, update }: ArtifactC
     <AppCard onClick={onClick} index={index}>
       <ArtifactThumbnail artifact={artifact} />
       <div className="p-4 pt-3">
-        <h3 className="text-sm font-medium text-foreground line-clamp-1 mb-2 group-hover:text-foreground/90">
+        <h3 className="text-sm font-medium text-foreground truncate mb-2 group-hover:text-foreground/90">
           {artifact.name}
         </h3>
         <div className="flex items-center gap-1.5">
