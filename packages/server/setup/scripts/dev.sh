@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the full dev stack on the host:
-#   - desk-server in tsx-watch mode on http://127.0.0.1:8080/
-#   - app-prototype Vite dev server on http://127.0.0.1:5173/
+#   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-8080}/
+#   - app-prototype Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
 #
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
 # process-group trap below.
@@ -87,6 +87,9 @@ SERVER_PID=$!
 ) &
 VITE_PID=$!
 
+SERVER_PORT="${PORT:-8080}"
+APP_PORT="${DESK_APP_PORT:-5173}"
+
 cleanup() {
   if kill -0 "$VITE_PID" 2>/dev/null; then
     kill -TERM -- "-$VITE_PID" 2>/dev/null || kill -TERM "$VITE_PID" 2>/dev/null || true
@@ -98,14 +101,14 @@ cleanup() {
   kill -KILL -- "-$VITE_PID" 2>/dev/null || true
   kill -KILL -- "-$SERVER_PID" 2>/dev/null || true
   # Belt-and-braces: anything left on our ports.
-  for port in 5173 8080; do
+  for port in "$APP_PORT" "$SERVER_PORT"; do
     lsof -ti ":${port}" 2>/dev/null | xargs kill -9 2>/dev/null || true
   done
 }
 trap cleanup EXIT INT TERM
 
-echo "==> desk-server starting (pid $SERVER_PID) on http://127.0.0.1:8080/"
-echo "==> Vite dev server starting (pid $VITE_PID) on http://127.0.0.1:5173/"
+echo "==> desk-server starting (pid $SERVER_PID) on http://127.0.0.1:${SERVER_PORT}/"
+echo "==> Vite dev server starting (pid $VITE_PID) on http://127.0.0.1:${APP_PORT}/"
 echo "==> Ctrl+C stops both."
 
 # Wait for either child to exit, then trigger cleanup.

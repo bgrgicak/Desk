@@ -19,7 +19,6 @@ import {
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
-import { HEALTH_MESSAGE } from "./health-message.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -258,10 +257,10 @@ export function createApp(opts: AppOptions): Server {
     const { segments, userId, query } = params;
     const path = params.path;
 
-    // Health check — used by install.sh + VM e2e tests to confirm the server is up.
+    // Health check — confirms the server is up.
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end(HEALTH_MESSAGE);
+      res.end("hello world");
       return;
     }
 
