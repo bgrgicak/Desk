@@ -1,6 +1,7 @@
 import type { ChatMessage as ChatMessageType } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { Bot } from 'lucide-react'
+import { MarkdownContent } from '@/components/MarkdownContent'
 
 interface ChatMessageProps {
   message: ChatMessageType
@@ -40,10 +41,7 @@ export function ChatMessage({ message, agentModel = 'Claude Sonnet 4', isFirstIn
           )}
         </div>
       )}
-      {/* Plain text — no bubble */}
-      <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-        {message.content}
-      </p>
+      <MarkdownContent text={message.content} />
     </div>
   )
 }
