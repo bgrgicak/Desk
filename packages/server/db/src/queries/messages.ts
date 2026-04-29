@@ -272,6 +272,34 @@ export async function updateMessage(
   return rows.length ? rowToMessage(rows[0]) : null;
 }
 
+/**
+ * Returns the most recent agent_id per artifact path for a given workspace.
+ * Uses JSONB lateral unnesting to find messages that contain artifactRef
+ * content items, then picks the latest agent per path.
+ */
+export async function findArtifactAuthorsByWorkspace(
+  db: Queryable,
+  workspaceId: string,
+): Promise<Map<string, string>> {
+  const { rows } = await db.query(
+    `SELECT DISTINCT ON (m.content->>'path')
+       m.content->>'path' AS path,
+       m.agent_id
+     FROM messages m
+     JOIN chats c ON c.id = m.chat_id
+     WHERE c.workspace_id = $1
+       AND m.content->>'type' = 'artifactRef'
+       AND m.agent_id IS NOT NULL
+     ORDER BY m.content->>'path', m.created_at DESC`,
+    [workspaceId],
+  );
+  const result = new Map<string, string>();
+  for (const row of rows) {
+    if (row.path && row.agent_id) result.set(row.path as string, row.agent_id as string);
+  }
+  return result;
+}
+
 /** Lists pending scheduled messages across all chats (for boot reconcile). */
 export async function listPendingScheduled(db: Queryable): Promise<Message[]> {
   const { rows } = await db.query(

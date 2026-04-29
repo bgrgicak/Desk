@@ -378,7 +378,7 @@ function AppInner() {
   const libraryItems: ContextItem[] = activeWorkspaceId
     ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId))
     : []
-  const artifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
+  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f, serverAgents ?? []))
 
   useEffect(() => {
     if (!libraryResp?.items) return
