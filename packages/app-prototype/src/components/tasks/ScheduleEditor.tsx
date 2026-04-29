@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { buildCron, parseCron, type Unit, type ScheduleParams } from './schedule-utils'
+import { buildCron, parseCron, describeCron, type Unit, type ScheduleParams } from './schedule-utils'
 
 type Mode = 'once' | 'recurring'
 
@@ -233,7 +233,7 @@ export function ScheduleEditor({
 
           {/* Live summary */}
           <p className="text-[11px] text-muted-foreground italic">
-            {summarise(p)}
+            {describeCron(buildCron(p))}
           </p>
         </div>
       )}
@@ -254,34 +254,4 @@ export function ScheduleEditor({
       </div>
     </div>
   )
-}
-
-function summarise(p: ScheduleParams): string {
-  const time = formatTime(p.hour, p.minute)
-  const n = p.n
-  switch (p.unit) {
-    case 'minutes': return n === 1 ? 'Every minute' : `Every ${n} minutes`
-    case 'hours':   return n === 1 ? 'Every hour'   : `Every ${n} hours`
-    case 'days':    return n === 1 ? `Every day at ${time}` : `Every ${n} days at ${time}`
-    case 'weeks': {
-      const days = p.weekdays.slice().sort((a, b) => a - b)
-        .map(d => ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d])
-        .join(', ')
-      return `Every ${days} at ${time}`
-    }
-    case 'months':
-      return `Monthly on the ${ordinal(p.day)} at ${time}`
-  }
-}
-
-function formatTime(hour: number, minute: number): string {
-  const suffix = hour < 12 ? 'AM' : 'PM'
-  const h = hour % 12 || 12
-  return minute === 0 ? `${h} ${suffix}` : `${h}:${pad2(minute)} ${suffix}`
-}
-
-function ordinal(n: number): string {
-  const s = ['th','st','nd','rd']
-  const v = n % 100
-  return n + (s[(v - 20) % 10] ?? s[v] ?? s[0]!)
 }

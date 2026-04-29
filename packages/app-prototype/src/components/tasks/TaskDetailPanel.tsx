@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import {
   X,
   AlertCircle,
@@ -14,6 +15,7 @@ import {
   Pause,
   Play,
   Trash2,
+  ExternalLink,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -44,6 +46,7 @@ import {
 } from '@/components/ui/command'
 import type { Task, TaskOccurrence, ChatMessage as ChatMessageType } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
+import { buildPath } from '@/router/nav'
 import {
   useGetAgentsQuery,
   usePatchMessageMutation,
@@ -57,6 +60,7 @@ import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { StatusBadge, PriorityIcon, PRIORITY_LABELS } from './task-badges'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
+import { describeCron } from './schedule-utils'
 
 type PanelTab = 'details' | 'chat'
 
@@ -84,16 +88,19 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
   }
 }
 
-function ChatInPanel({ chatId, agentName }: { chatId: string; agentName?: string }) {
+function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
+  const { wsId } = useParams<{ wsId: string }>()
   const { data } = useGetChatMessagesQuery({ chatId })
   const [postMessage] = usePostChatMessageMutation()
   const [isSending, setIsSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Filter out the task message itself and system/tool messages; map to the
-  // ChatMessage shape used by the ChatMessage component.
+  const chatUrl = wsId ? buildPath(wsId, 'desk', { chat: chatId, message: messageId ?? null }) : null
+
+  // Show user and agent text messages. Exclude task_run (execution record
+  // that duplicates the task definition) to match the full chat view.
   const messages: ChatMessageType[] = (data?.items ?? [])
-    .filter(m => m.kind !== 'task' && (m.role === 'user' || m.role === 'agent'))
+    .filter(m => m.kind !== 'task_run' && (m.role === 'user' || m.role === 'agent'))
     .map(m => ({
       id: m.id,
       role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
@@ -124,8 +131,25 @@ function ChatInPanel({ chatId, agentName }: { chatId: string; agentName?: string
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
+      {chatUrl && (
+        <div className="px-3 pt-2 pb-1 shrink-0 flex justify-end border-b">
+          <Link
+            to={chatUrl}
+            className="inline-flex items-center gap-1.5 h-7 px-2 rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="open-in-chat"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open in chat
+          </Link>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="space-y-6 p-4">
+          {messages.length === 0 && !isSending && (
+            <p className="text-xs text-muted-foreground text-center pt-4" data-testid="task-chat-empty">
+              No messages yet. Ask a question or request changes.
+            </p>
+          )}
           {messages.map((msg, i) => (
             <ChatMessage
               key={msg.id}
@@ -142,7 +166,7 @@ function ChatInPanel({ chatId, agentName }: { chatId: string; agentName?: string
           onSend={(msg) => void handleSend(msg)}
           placeholder="Ask a question or request changes…"
           compact={true}
-          showGoalPicker={true}
+          showGoalPicker={false}
           draftKey={`task-chat:${chatId}`}
         />
       </div>
@@ -261,7 +285,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
   // What the Schedule row shows when not editing.
   const scheduleLabel = task.schedule
-    ? task.schedule
+    ? describeCron(task.schedule)
     : task.scheduledFor
       ? `${task.scheduledFor.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${task.scheduledFor.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
       : 'Not scheduled'
@@ -350,7 +374,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
       {/* Chat tab */}
       {activeTab === 'chat' && (
         task.chatId
-          ? <ChatInPanel chatId={task.chatId} agentName={task.agentName} />
+          ? <ChatInPanel chatId={task.chatId} agentName={task.agentName} messageId={task.messageId} />
           : <div className="flex-1 flex items-center justify-center p-4">
               <p className="text-xs text-muted-foreground text-center">No chat linked to this task yet.</p>
             </div>

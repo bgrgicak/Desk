@@ -63,6 +63,39 @@ export function parseCron(cron: string): ScheduleParams | null {
   return base(1, 'weeks', weekdays, 1, hour, minute)
 }
 
+export function describeCron(cron: string): string {
+  const p = parseCron(cron)
+  if (!p) return cron
+  const time = formatTime(p.hour, p.minute)
+  const n = p.n
+  switch (p.unit) {
+    case 'minutes': return n === 1 ? 'Every minute' : `Every ${n} minutes`
+    case 'hours':   return n === 1 ? 'Every hour'   : `Every ${n} hours`
+    case 'days':    return n === 1 ? `Every day at ${time}` : `Every ${n} days at ${time}`
+    case 'weeks': {
+      const days = p.weekdays.slice().sort((a, b) => a - b)
+        .map(d => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d])
+        .join(', ')
+      return `Every ${days} at ${time}`
+    }
+    case 'months': return `Monthly on the ${ordinal(p.day)} at ${time}`
+  }
+}
+
+function formatTime(hour: number, minute: number): string {
+  const suffix = hour < 12 ? 'AM' : 'PM'
+  const h = hour % 12 || 12
+  return minute === 0 ? `${h} ${suffix}` : `${h}:${pad2(minute)} ${suffix}`
+}
+
+function ordinal(n: number): string {
+  const s = ['th', 'st', 'nd', 'rd']
+  const v = n % 100
+  return n + (s[(v - 20) % 10] ?? s[v] ?? s[0]!)
+}
+
+function pad2(n: number): string { return n.toString().padStart(2, '0') }
+
 function base(n: number, unit: Unit, weekdays: number[], day: number, hour: number, minute: number): ScheduleParams {
   return { n, unit, weekdays, day, hour, minute }
 }
