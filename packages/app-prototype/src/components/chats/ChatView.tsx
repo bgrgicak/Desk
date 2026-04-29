@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Link2, StickyNote, Paperclip, Plus, X,
-  PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
+  PanelRight, PanelRightClose, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -109,6 +113,7 @@ interface ChatViewProps {
   showNewBadge?: boolean
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
+  onDeleteArtifact?: (artifact: Artifact) => void
   /**
    * Fires for the "new chat" case on first message. Optional second
    * arg is the agent id picked in the bottom toggle before sending —
@@ -163,6 +168,7 @@ function ArtifactsPanel({
   onPrefillInput,
   savedArtifactIds = new Set(),
   onSaveArtifact,
+  onDeleteArtifact,
 }: {
   chatId: string
   artifacts: Artifact[]
@@ -180,10 +186,12 @@ function ArtifactsPanel({
   onPrefillInput?: (text: string) => void
   savedArtifactIds?: Set<string>
   onSaveArtifact?: (artifactId: string) => void
+  onDeleteArtifact?: (artifact: Artifact) => void
 }) {
   const filterKey = chatId && chatId !== NEW_CHAT_ID ? `desk.chat.${chatId}.artifactFilter` : null
   const [filter, setFilter] = usePersistedState<ArtifactFilter>(filterKey, 'all')
   const [search, setSearch] = useState('')
+  const [deletingArtifact, setDeletingArtifact] = useState<Artifact | null>(null)
 
   const filtered = artifacts.filter(a => {
     if (filter !== 'all' && a.type !== filter) return false
@@ -277,7 +285,6 @@ function ArtifactsPanel({
         ) : filtered.length === 0 ? null : (
           filtered.map(artifact => {
             const Icon = getArtifactIcon(artifact.type)
-            const isSaved = savedArtifactIds.has(artifact.id)
             return (
               <div
                 key={artifact.id}
@@ -288,45 +295,74 @@ function ArtifactsPanel({
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
                   <Icon className="h-4 w-4 text-muted-foreground/70" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 relative overflow-hidden">
                   <p className="text-sm font-medium truncate">{artifact.name}</p>
                   <p className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type]} · {getRelativeTime(artifact.updatedAt)}</p>
+                  <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      onClick={e => e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                    <DropdownMenuItem onClick={() => onArtifactClick?.(artifact)}>
-                      <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                      Open
-                    </DropdownMenuItem>
-                    {isSaved ? (
-                      <DropdownMenuItem disabled>
-                        <Check className="h-3.5 w-3.5 mr-2" />
-                        Saved to Desk
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
+                    title="Add to message"
+                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        onClick={e => e.stopPropagation()}
+                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                      <DropdownMenuItem onClick={() => onArtifactClick?.(artifact)}>
+                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                        Open
                       </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onClick={() => {
-                        onSaveArtifact?.(artifact.id)
-                        toast.success(`"${artifact.name}" saved to your Desk`)
-                      }}>
-                        <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
-                        Save to Desk
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setDeletingArtifact(artifact)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-2" />
+                        Delete
                       </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
             )
           })
         )}
       </div>
+
+      <AlertDialog
+        open={deletingArtifact !== null}
+        onOpenChange={open => { if (!open) setDeletingArtifact(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{deletingArtifact?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This artifact will be permanently removed from your Desk. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deletingArtifact) onDeleteArtifact?.(deletingArtifact)
+                setDeletingArtifact(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -550,6 +586,7 @@ export function ChatView({
   showNewBadge = false,
   savedArtifactIds = new Set(),
   onSaveArtifact,
+  onDeleteArtifact,
   onFirstMessage,
   highlightMessageId,
   onAttachmentClick,
@@ -1082,6 +1119,7 @@ export function ChatView({
                 onPrefillInput={(text) => setPrefillText(text)}
                 savedArtifactIds={savedArtifactIds}
                 onSaveArtifact={onSaveArtifact}
+                onDeleteArtifact={onDeleteArtifact}
               />
             )}
             {rightTab === 'files' && (
