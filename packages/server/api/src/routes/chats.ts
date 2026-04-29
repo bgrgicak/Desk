@@ -144,7 +144,7 @@ export async function sendMessage(
     let executeAt = data.executeAt ?? null;
     if (data.cron && !executeAt) {
       const next = new Cron(data.cron).nextRun();
-      if (!next) return sendError(res, 400, `cron expression "${data.cron}" has no future occurrences`);
+      if (!next) throw new ValidationError(`cron expression "${data.cron}" has no future occurrences`);
       executeAt = next.toISOString();
     }
     const message = await queries.messages.insert(pool, {
