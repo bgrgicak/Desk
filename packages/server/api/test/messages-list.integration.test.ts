@@ -160,6 +160,10 @@ async function insertMessage(
     title?: string | null;
   },
 ): Promise<string> {
+  // SQLite stores created_at at millisecond precision, and the awaitingUser
+  // query (and any "latest in chat" logic) tiebreaks ties on random nanoid id.
+  // Sleep 2 ms so successive seed inserts always land in distinct ms buckets.
+  await new Promise((r) => setTimeout(r, 2));
   const id = generateId("message");
   await queries.messages.insert(pool, {
     id,
