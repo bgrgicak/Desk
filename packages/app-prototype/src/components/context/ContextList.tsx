@@ -733,6 +733,7 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                     className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors group cursor-pointer ${
                       isSelected ? 'bg-primary/5 border border-primary/10' : 'hover:bg-muted/50 border border-transparent'
                     }`}
+                    onClick={() => onItemClick(item)}
                   >
                     <Checkbox
                       checked={isSelected}
@@ -742,7 +743,6 @@ export function ContextList({ items, onItemClick, onCompose }: ContextListProps)
                     />
                     <div
                       className="flex items-center gap-3 flex-1 min-w-0"
-                      onClick={() => onItemClick(item)}
                     >
                       <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
