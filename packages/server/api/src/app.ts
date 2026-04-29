@@ -5,7 +5,6 @@ import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
 import type { StorageContext } from "@desk/storage";
 import type { createRunManager } from "@desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
-import { requireInternal } from "./auth/internal.js";
 import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {
@@ -252,16 +251,6 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Internal routes — loopback + shared-secret auth (not the user session).
-    if (path === "/internal/messages/fire" && method === "POST") {
-      requireInternal(req);
-      const body = await parseBody(req) as { messageId?: string };
-      if (!body.messageId) throw new ValidationError("Missing messageId");
-      const result = await runManager.fireMessage(body.messageId);
-      sendJson(res, 200, { ok: true, ...result });
-      return;
-    }
-
     // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
     // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
     // and we use the agent's userId to gate the chat ownership check.
@@ -283,13 +272,7 @@ export function createApp(opts: AppOptions): Server {
       const sendBody = { kind: "task", ...body };
       delete (sendBody as { chatId?: string }).chatId;
 
-      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent);
-      if (userMessage.kind && userMessage.kind !== "chat" && (userMessage.executeAt || userMessage.cron)) {
-        runManager.scheduleMessage(triggerId).catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error(`scheduleMessage for ${triggerId} failed:`, err);
-        });
-      }
+      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, userMessage);
       return;
     }
@@ -495,7 +478,6 @@ export function createApp(opts: AppOptions): Server {
         pool,
         storage,
         segments[1],
-        runManager.adapter,
         emitEvent,
       );
       sendJson(res, 200, result);
@@ -513,21 +495,9 @@ export function createApp(opts: AppOptions): Server {
       const body = await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Self-firing kinds (task / ai_note): the agent only acts when the
-      // row carries a schedule. A schedule installs the at/cron entry; a
-      // manual task (no executeAt, no cron) is just inserted and sits in
-      // the user-chosen column until the user moves it. Agents must not
-      // change the column-state of a task the user added by hand.
+      // Self-firing kinds (task / ai_note): execute_at is computed at insert
+      // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
       if (userMessage.kind && userMessage.kind !== "chat") {
-        if (userMessage.executeAt || userMessage.cron) {
-          runManager.scheduleMessage(triggerId).catch((err) => {
-            // eslint-disable-next-line no-console
-            console.error(`scheduleMessage for ${triggerId} failed:`, err);
-          });
-        }
-        // No fire-now branch: unscheduled tasks stay where the user
-        // placed them; the agent is silent until the user schedules it
-        // or runs it explicitly.
         sendJson(res, 201, userMessage);
         return;
       }
@@ -564,7 +534,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3], runManager.adapter);
+      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3]);
       sendJson(res, 200, { ok: true });
       return;
     }

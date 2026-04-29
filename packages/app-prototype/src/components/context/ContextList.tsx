@@ -587,6 +587,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
+                    data-testid="library-type-filter"
                     className="flex items-center gap-1.5 h-8 rounded-md border px-2.5 text-xs font-medium hover:bg-accent/30 transition-colors"
                   >
                     <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />

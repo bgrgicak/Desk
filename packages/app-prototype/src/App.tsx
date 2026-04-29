@@ -662,10 +662,7 @@ function AppInner() {
                   agentId: pickedAgentId,
                   title: input.name.length > 50 ? input.name.slice(0, 50) + '…' : input.name,
                 }).unwrap()
-                // Self-firing task message — server inserts one row with kind=task,
-                // schedules it via at-job if executeAt is set, fires immediately
-                // otherwise.
-                await postMessageMutation({
+                const newMessage = await postMessageMutation({
                   chatId: newChat.id,
                   content: input.description?.trim() ? `${input.name}\n\n${input.description}` : input.name,
                   kind: 'task',
@@ -675,6 +672,9 @@ function AppInner() {
                     : undefined,
                   cron: input.cron,
                 }).unwrap()
+                if (input.status === 'active') {
+                  await runMessageMutation({ chatId: newMessage.chatId, messageId: newMessage.id }).unwrap()
+                }
               } catch (err) {
                 toast.error('Failed to create task', {
                   description: err instanceof Error ? err.message : undefined,

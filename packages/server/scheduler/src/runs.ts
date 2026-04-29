@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import pg from "pg";
+import { Cron } from "croner";
 import {
   generateId,
   AgentEventSchema,
@@ -19,18 +20,14 @@ import {
   type LogEvent,
   type AgentFileInput,
 } from "@desk/runtime";
-import { createAdapter, type ScheduleAdapter } from "./scheduleAdapter.js";
 
 export interface RunManagerOptions {
   pool: pg.Pool;
-  adapter?: ScheduleAdapter;
   emit?: (event: WsEvent) => void;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
-   * by fireMessage with the message id (as the "runId" arg, for log
-   * correlation), the resolved agent, the derived prompt, and a log
-   * sink. Return the exit code; the scheduler handles state transitions
-   * and child-message insertion.
+   * by fireMessage with the run id. Return the exit code; the scheduler
+   * handles state transitions and child-message insertion.
    */
   execRunFn?: (
     messageId: string,
@@ -41,29 +38,17 @@ export interface RunManagerOptions {
   ) => Promise<{ exitCode: number }>;
 }
 
-/**
- * Builds the shell command at/cron runs to fire a scheduled message.
- * The token is read fresh from disk at fire time via $(cat ...) so
- * rotations don't invalidate scheduled entries (reconcile regenerates).
- */
-export function buildMessageFireCmd(messageId: string): string {
-  const tokenPath = process.env.DESK_INTERNAL_TOKEN_PATH ?? "/etc/desk-server/internal-token";
-  const port = process.env.DESK_API_PORT ?? process.env.PORT ?? "8080";
-  const url = `http://127.0.0.1:${port}/internal/messages/fire`;
-  const body = JSON.stringify({ messageId }).replace(/"/g, '\\"');
-  return (
-    `sh -c 'T=$(cat ${tokenPath}) && ` +
-    `curl -sf -X POST ` +
-    `-H "Authorization: Bearer $T" ` +
-    `-H "Content-Type: application/json" ` +
-    `-d "${body}" ` +
-    `${url}'`
-  );
+function computeNextRun(cronExpr: string): string {
+  const next = new Cron(cronExpr).nextRun();
+  if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
+  return next.toISOString();
 }
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
-  const adapter = opts.adapter ?? createAdapter();
+
+  let inFlight = 0;
+  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "3", 10);
 
   async function getDefaultAgentId(): Promise<string> {
     const agents = await queries.agents.list(pool);
@@ -76,12 +61,6 @@ export function createRunManager(opts: RunManagerOptions) {
       "SELECT id FROM workspaces ORDER BY created_at LIMIT 1",
     );
     return rows[0]?.id as string;
-  }
-
-  async function resolveUserIdForWorkspace(workspaceId: string): Promise<string | null> {
-    if (!workspaceId) return null;
-    const ws = await queries.workspaces.findById(pool, workspaceId);
-    return ws?.userId ?? null;
   }
 
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
@@ -296,6 +275,9 @@ export function createRunManager(opts: RunManagerOptions) {
       if (!run) return { fired: false, childIds: [] };
       runId = run.id;
       emit({ type: "message.appended", payload: run });
+      // Emit parent task update so the kanban moves the card to Active.
+      const updatedTask = await queries.messages.findById(pool, messageId);
+      if (updatedTask) emit({ type: "message.updated", payload: updatedTask });
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -309,24 +291,30 @@ export function createRunManager(opts: RunManagerOptions) {
     const { prompt, attachments } = await derivePromptInputs(msg);
     const outputKind = outputContentTypeFor(msg);
 
-    // Resolve the workspace slug and agent id in one JOIN'd round-trip.
-    // The slug threads through the sandbox driver (mount plan, agent file,
-    // chat attachments) and the per-chat log directory; extra findById
-    // calls add latency that makes fire-and-forget callers racy.
+    // Single JOIN resolves workspace slug, agent, user, and timezone in one round-trip.
     const { rows: ctxRows } = await pool.query<{
       workspace_id: string;
       workspace_path: string;
-      agent_id: string;
+      agent_id: string | null;
+      user_id: string | null;
+      username: string | null;
+      timezone: string | null;
     }>(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id
-       FROM chats c JOIN workspaces w ON w.id = c.workspace_id
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
+              u.id AS user_id, u.username, u.timezone
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+       LEFT JOIN users u ON u.id = w.user_id
        WHERE c.id = $1`,
       [msg.chatId],
     );
     const ctxRow = ctxRows[0];
-    const workspaceIdPre = ctxRow?.workspace_id ?? (await firstWorkspaceId());
+    const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
     const workspaceSlug = ctxRow?.workspace_path ?? "desk";
-    const chatAgentIdPre = ctxRow?.agent_id;
+    const chatAgentId = ctxRow?.agent_id ?? null;
+    const userId = ctxRow?.user_id ?? null;
+    const userName = ctxRow?.username ?? "User";
+    const userTimezone = ctxRow?.timezone ?? undefined;
 
     const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${runId}.log`);
@@ -348,12 +336,7 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
-      const agentId = msg.agentId ?? chatAgentIdPre ?? (await getDefaultAgentId());
-      const workspaceId = workspaceIdPre;
-      const userId = await resolveUserIdForWorkspace(workspaceId);
-      const userRow = userId ? await queries.users.findById(pool, userId) : null;
-      const userName = userRow?.username ?? "User";
-      const userTimezone = userRow?.timezone;
+      const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId
         ? await queries.userSettings.getProviderKeys(pool, userId)
         : {};
@@ -404,9 +387,6 @@ export function createRunManager(opts: RunManagerOptions) {
       }
 
       // Wait for pending writes to flush before reading the file back.
-      // Each onLog call now splits multi-line payloads into multiple
-      // writes, so relying on end()'s synchronous return lets readLogEntries
-      // race ahead and see only the first flushed line.
       await new Promise<void>((resolve) => {
         logStream.once("finish", resolve);
         logStream.end();
@@ -417,7 +397,7 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await finalizeTaskDefinitionIfOneShot(msg, terminal);
+      await afterTaskRun(msg, terminal);
 
       // Best-effort: record which files this agent touched so the library UI
       // can show real agent names on artifact cards.
@@ -479,64 +459,82 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await finalizeTaskDefinitionIfOneShot(msg, "failed");
+      await afterTaskRun(msg, "failed");
       return { fired: true, childIds: [] };
     }
   }
 
   /**
-   * One-shot task (executeAt set, no cron): once its single run terminates,
-   * the task definition itself transitions to mirror the run's outcome and
-   * clears executeAt — moving it out of the "scheduled" column on the
-   * Tasks page. Cron tasks always stay scheduled (their schedule is the
-   * point); chat / ai_note kinds don't go through this path.
+   * After a task run completes: cron tasks advance execute_at to the next
+   * occurrence and stay pending; one-shot tasks transition to the terminal
+   * state and clear execute_at.
    */
-  async function finalizeTaskDefinitionIfOneShot(
+  async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
   ): Promise<void> {
     if (task.kind !== "task") return;
-    if (task.cron) return;
-    await queries.messages.updateMessage(pool, task.id, {
+    if (task.cron) {
+      const nextRun = computeNextRun(task.cron);
+      const updated = await queries.messages.updateMessage(pool, task.id, { state: "pending", executeAt: nextRun });
+      if (updated) emit({ type: "message.updated", payload: updated });
+      return;
+    }
+    // User-created unscheduled tasks: the user owns their status. Leave
+    // the parent at 'running' so the card stays in the Active column.
+    if (task.role === "user" && !task.executeAt) return;
+    const updated = await queries.messages.updateMessage(pool, task.id, {
       state: terminal,
       executeAt: null,
     });
-    const updated = await queries.messages.findById(pool, task.id);
     if (updated) emit({ type: "message.updated", payload: updated });
   }
 
   /**
-   * Cancels a pending scheduled message: removes any at/cron entry it
-   * owns via scheduler_ref and deletes the row. No-op if already gone.
+   * Polls for due pending messages and fires them up to MAX_CONCURRENT at a time.
+   * Awaits all fires so callers (and tests) get a consistent DB state on return.
    */
+  async function tickScheduled(): Promise<void> {
+    const available = MAX_CONCURRENT - inFlight;
+    if (available <= 0) return;
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE state = 'pending'
+         AND execute_at IS NOT NULL
+         AND execute_at <= now()
+       ORDER BY execute_at
+       LIMIT $1`,
+      [available],
+    );
+    await Promise.all(
+      rows.map((row) => {
+        inFlight++;
+        return fireMessage(row.id)
+          .catch((err: unknown) => {
+            console.error(`fireMessage ${row.id} failed:`, err);
+          })
+          .finally(() => {
+            inFlight--;
+          });
+      }),
+    );
+  }
+
+  function startPolling(intervalMs: number): NodeJS.Timeout {
+    const timer = setInterval(() => { void tickScheduled(); }, intervalMs);
+    timer.unref();
+    return timer;
+  }
+
+  /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return;
-    const ref = msg.schedulerRef;
-    if (ref) {
-      try {
-        if (ref.kind === "at") await adapter.removeAt(ref.id);
-        else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-      } catch {
-        // Best-effort.
-      }
-    }
     await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
   }
 
-  /**
-   * Schedules a new ai-note refresh for the chat: a pending system
-   * ai_note_request message with an at-job that curls
-   * /internal/messages/fire 30 minutes from now. Cancels any prior
-   * pending ai_note_request first so there's only ever one outstanding.
-   */
+  /** Schedules an ai_note refresh for the chat, deleting any prior ai_note rows first. */
   async function scheduleAiNote(chatId: string): Promise<void> {
     await cancelAiNoteForChat(chatId);
-
     const messageId = generateId("message");
-    const atTime = `now + 30 minutes`;
-    const atJobId = await adapter.scheduleAt(buildMessageFireCmd(messageId), atTime);
-
     await queries.messages.insert(pool, {
       id: messageId,
       chatId,
@@ -545,27 +543,14 @@ export function createRunManager(opts: RunManagerOptions) {
       state: "pending",
       kind: "ai_note",
       executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      schedulerRef: { kind: "at", id: atJobId },
     });
   }
 
   async function cancelAiNoteForChat(chatId: string): Promise<void> {
-    const { rows } = await pool.query(
-      `SELECT id, scheduler_ref FROM messages
-       WHERE chat_id = $1
-         AND state = 'pending'
-         AND content->>'type' = 'ai_note_request'`,
+    await pool.query(
+      `DELETE FROM messages WHERE chat_id = $1 AND kind = 'ai_note'`,
       [chatId],
     );
-    for (const row of rows) {
-      const ref = row.scheduler_ref as { kind: string; id: string } | null;
-      if (ref?.kind === "at") {
-        try { await adapter.removeAt(ref.id); } catch { /* ok */ }
-      } else if (ref?.kind === "cron") {
-        try { await adapter.removeCron(ref.id); } catch { /* ok */ }
-      }
-      await pool.query("DELETE FROM messages WHERE id = $1", [row.id]);
-    }
   }
 
   async function cancelAiNote(chatId: string): Promise<void> {
@@ -580,208 +565,77 @@ export function createRunManager(opts: RunManagerOptions) {
     if (msg) emit({ type: "message.updated", payload: msg });
   }
 
-  /**
-   * Pauses a pending scheduled message: removes its at/cron entry from the
-   * OS scheduler, clears scheduler_ref, and transitions state to 'paused'.
-   * The message row is kept so the schedule's metadata (executeAt / cron)
-   * can be restored by resumeMessage. No-op if the message isn't currently
-   * pending or is missing.
-   */
+  /** Pauses a pending scheduled message: transitions state to 'paused'. */
   async function pauseMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
     if (msg.state !== "pending") return msg;
-    const ref = msg.schedulerRef;
-    if (ref) {
-      try {
-        if (ref.kind === "at") await adapter.removeAt(ref.id);
-        else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-      } catch {
-        // Best-effort: the OS-level entry may already be gone.
-      }
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, {
-      state: "paused",
-      schedulerRef: null,
-    });
+    const updated = await queries.messages.updateMessage(pool, messageId, { state: "paused" });
     if (updated) emit({ type: "message.updated", payload: updated });
     return updated;
   }
 
   /**
-   * Resumes a non-running message back to 'pending': re-installs the
-   * at/cron entry using the message's stored executeAt/cron, writes the
-   * new scheduler_ref back, and transitions state to 'pending'. For an
-   * overdue at-message, the new at-job uses `now` so it fires
-   * immediately on resume. If neither executeAt nor cron is set the row
-   * just flips to pending with no scheduler entry — that's the kanban
-   * "Complete → Todo" path, where executeAt was already cleared by the
-   * patch handler before we get here. Source state can be paused,
-   * cancelled, succeeded, or failed (the kanban Complete column maps to
-   * any of those); we no-op only if it's already running or pending.
+   * Resumes a non-running message back to 'pending'. For cron tasks without
+   * an execute_at, computes the next run time. Source state can be paused,
+   * cancelled, succeeded, or failed; no-op only if already running or pending.
    */
   async function resumeMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
     if (msg.state === "running" || msg.state === "pending") return msg;
-    // A stale ref can be present on a cancelled row in theory (cancel
-    // clears it, but a future code path might not). Remove it before
-    // reinstalling so we never leak two at-jobs for one message.
-    const existing = msg.schedulerRef;
-    if (existing) {
-      try {
-        if (existing.kind === "at") await adapter.removeAt(existing.id);
-        else if (existing.kind === "cron") await adapter.removeCron(existing.id);
-      } catch {
-        // Best-effort.
-      }
+    const patch: Parameters<typeof queries.messages.updateMessage>[2] = { state: "pending" };
+    if (msg.cron && !msg.executeAt) {
+      patch.executeAt = computeNextRun(msg.cron);
     }
-    const cmd = buildMessageFireCmd(messageId);
-    let newRef: { kind: "at" | "cron"; id: string } | null = null;
-    if (msg.cron) {
-      // One cron job per message — use the message id as the stable job id
-      // so re-pauses/re-resumes don't leak stray crontab lines.
-      const jobId = messageId;
-      await adapter.installCron(jobId, msg.cron, cmd);
-      newRef = { kind: "cron", id: jobId };
-    } else if (msg.executeAt) {
-      const whenMs = new Date(msg.executeAt).getTime();
-      const atTime = whenMs > Date.now()
-        ? new Date(whenMs).toISOString()
-        : "now";
-      const atJobId = await adapter.scheduleAt(cmd, atTime);
-      newRef = { kind: "at", id: atJobId };
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, {
-      state: "pending",
-      schedulerRef: newRef,
-    });
+    const updated = await queries.messages.updateMessage(pool, messageId, patch);
     if (updated) emit({ type: "message.updated", payload: updated });
     return updated;
   }
 
   /**
-   * Installs the at/cron entry for a freshly inserted self-firing message
-   * (kind='task' / 'ai_note' with executeAt or cron set). Stamps
-   * scheduler_ref on the row. Idempotent: if a ref already exists, it's
-   * removed first so callers can retry. Used by the POST /chats/:id/messages
-   * handler when the inserted row already carries its schedule.
-   */
-  async function scheduleMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (!msg.executeAt && !msg.cron) return msg;
-    const existing = msg.schedulerRef;
-    if (existing) {
-      try {
-        if (existing.kind === "at") await adapter.removeAt(existing.id);
-        else if (existing.kind === "cron") await adapter.removeCron(existing.id);
-      } catch {
-        // Best-effort.
-      }
-    }
-    const cmd = buildMessageFireCmd(messageId);
-    let ref: { kind: "at" | "cron"; id: string } | null = null;
-    if (msg.cron) {
-      await adapter.installCron(messageId, msg.cron, cmd);
-      ref = { kind: "cron", id: messageId };
-    } else if (msg.executeAt) {
-      const whenMs = new Date(msg.executeAt).getTime();
-      const atTime = whenMs > Date.now()
-        ? new Date(whenMs).toISOString()
-        : "now";
-      const atJobId = await adapter.scheduleAt(cmd, atTime);
-      ref = { kind: "at", id: atJobId };
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, {
-      state: "pending",
-      schedulerRef: ref ?? undefined,
-    });
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Reconciles the OS-level at/cron entry with the row's current state +
-   * schedule. Called after a PATCH that mutates executeAt/cron without
-   * crossing a state boundary (e.g. kanban "Scheduled → Todo" clears
-   * executeAt but leaves state='pending'). Always removes the existing
-   * scheduler_ref entry; re-installs only if state='pending' and a
-   * schedule remains. No-op for terminal rows.
+   * Reconciles the execute_at/cron after a PATCH that mutates schedule without
+   * crossing a state boundary. For cron tasks, recomputes the next run time.
    */
   async function rescheduleMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
-    const existing = msg.schedulerRef;
-    if (existing) {
-      try {
-        if (existing.kind === "at") await adapter.removeAt(existing.id);
-        else if (existing.kind === "cron") await adapter.removeCron(existing.id);
-      } catch {
-        // Best-effort.
-      }
+    if (msg.state !== "pending") return msg;
+    if (msg.cron) {
+      const nextRun = computeNextRun(msg.cron);
+      const updated = await queries.messages.updateMessage(pool, messageId, { executeAt: nextRun });
+      if (updated) emit({ type: "message.updated", payload: updated });
+      return updated;
     }
-    let newRef: { kind: "at" | "cron"; id: string } | null = null;
-    if (msg.state === "pending") {
-      const cmd = buildMessageFireCmd(messageId);
-      if (msg.cron) {
-        await adapter.installCron(messageId, msg.cron, cmd);
-        newRef = { kind: "cron", id: messageId };
-      } else if (msg.executeAt) {
-        const whenMs = new Date(msg.executeAt).getTime();
-        const atTime = whenMs > Date.now()
-          ? new Date(whenMs).toISOString()
-          : "now";
-        const atJobId = await adapter.scheduleAt(cmd, atTime);
-        newRef = { kind: "at", id: atJobId };
-      }
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, {
-      schedulerRef: newRef,
-    });
+    const updated = await queries.messages.findById(pool, messageId);
     if (updated) emit({ type: "message.updated", payload: updated });
     return updated;
   }
 
   /**
-   * Cancels a pending scheduled message without deleting it: removes the
-   * at/cron entry, clears scheduler_ref, and transitions state to
-   * 'cancelled'. Used by the PATCH path so the row stays visible in the
-   * chat timeline. For already-running messages this is a no-op at the
-   * scheduler level but still flips the DB row.
+   * Cancels a pending scheduled message without deleting it: transitions state
+   * to 'cancelled' so the row stays visible in the chat timeline.
    */
   async function cancelScheduledMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
-    const ref = msg.schedulerRef;
-    if (ref) {
-      try {
-        if (ref.kind === "at") await adapter.removeAt(ref.id);
-        else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-      } catch {
-        // Best-effort.
-      }
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, {
-      state: "cancelled",
-      schedulerRef: null,
-    });
+    const updated = await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
     if (updated) emit({ type: "message.updated", payload: updated });
     return updated;
   }
 
   return {
     fireMessage,
+    tickScheduled,
+    startPolling,
     cancelMessage,
     cancelRun,
     pauseMessage,
     resumeMessage,
-    scheduleMessage,
     rescheduleMessage,
     cancelScheduledMessage,
     scheduleAiNote,
     cancelAiNote,
     cancelAiNoteForChat,
-    adapter,
   };
 }

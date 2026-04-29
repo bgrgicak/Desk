@@ -151,5 +151,6 @@ test("scheduled-but-never-fired task hides the 'Last run' row", async ({
 
   await expect(loggedInPage.getByText("Next run")).toBeVisible();
   await expect(loggedInPage.getByText(/^Last run$/)).toHaveCount(0);
+  await loggedInPage.getByRole("button", { name: /^History$/ }).click();
   await expect(loggedInPage.getByTestId("task-history-empty")).toBeVisible();
 });

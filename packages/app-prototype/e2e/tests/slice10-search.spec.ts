@@ -36,11 +36,11 @@ test("search palette returns server results", async ({
 
   await loggedInPage.reload();
 
-  // Open the chat-search button in the sidebar (title="Search chats").
-  await loggedInPage.getByRole("button", { name: /^Search chats$/i }).click();
+  // Open the global search / Ask AI palette.
+  await loggedInPage.getByRole("button", { name: /Search.*Ask AI/i }).click();
 
   // Type enough to trigger the server query.
-  await loggedInPage.getByPlaceholder(/Search chats and artifacts/).fill("searchableMoose");
+  await loggedInPage.getByPlaceholder(/Ask a question or search/).fill("searchableMoose");
 
   await expect(
     loggedInPage.getByText("ZZZ searchableMoose chat").first(),

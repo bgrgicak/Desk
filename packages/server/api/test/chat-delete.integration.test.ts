@@ -1,7 +1,7 @@
 /**
  * Integration tests for `DELETE /chats/:id` (feature-gap-matrix.md §4.2.4).
  *
- * Real Postgres, real filesystem, real scheduler adapter — follows the harness
+ * Real Postgres, real filesystem — follows the harness
  * used by workspace-scoped-listing.integration.test.ts and multi-ws.test.ts.
  * Seeds one user with two chats (plus a second tenant) and exercises the
  * delete route end-to-end: DB rows vanish, on-disk directories land in
@@ -18,7 +18,7 @@ import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, queries, hashPassword } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { generateId } from "@desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -50,7 +50,6 @@ let pool: pg.Pool;
 let server: http.Server;
 let port: number;
 let home: string;
-let adapter: ReturnType<typeof createMemoryAdapter>;
 let alpha: SeededUser;
 let beta: SeededUser;
 
@@ -206,7 +205,6 @@ async function createChatWithPayload(
   chatId: string;
   userMessageId: string;
   scheduledMessageId: string;
-  atJobId: string;
   attachmentRel: string;
 }> {
   const chatId = generateId("chat");
@@ -227,12 +225,8 @@ async function createChatWithPayload(
     content: { type: "text", text: "hello" },
   });
 
-  // Insert a pending scheduled message with a real at-job in the scheduler
-  // adapter. Deleting the chat must cancel the at-job via the adapter.
-  const atJobId = await adapter.scheduleAt(
-    `echo fire ${chatId}`,
-    "now + 1 hour",
-  );
+  // Insert a pending scheduled message. Deleting the chat cascades messages,
+  // so the poll loop will never pick this up after deletion.
   const scheduledMessageId = generateId("message");
   await queries.messages.insert(pool, {
     id: scheduledMessageId,
@@ -241,7 +235,6 @@ async function createChatWithPayload(
     content: { type: "text", text: "scheduled" },
     state: "pending",
     executeAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    schedulerRef: { kind: "at", id: atJobId },
   });
 
   // Seed an on-disk attachment + a log, both under the chat's hidden tree.
@@ -254,7 +247,7 @@ async function createChatWithPayload(
   await fs.writeFile(path.join(logsDir, `${scheduledMessageId}.log`), "stdout\tready\n");
 
   const attachmentRel = `.chats/${chatId}/attachments/hello.txt`;
-  return { chatId, userMessageId, scheduledMessageId, atJobId, attachmentRel };
+  return { chatId, userMessageId, scheduledMessageId, attachmentRel };
 }
 
 beforeAll(async () => {
@@ -278,10 +271,8 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  adapter = createMemoryAdapter();
   const runManager = createRunManager({
     pool,
-    adapter,
     execRunFn: async () => ({ exitCode: 0 }),
   });
 
@@ -323,14 +314,11 @@ afterAll(async () => {
 });
 
 describe("DELETE /chats/:id", () => {
-  it("deletes the chat, cascades messages, trashes on-disk dirs, and cancels scheduler refs", async () => {
-    const { chatId, scheduledMessageId, atJobId } = await createChatWithPayload(
+  it("deletes the chat, cascades messages, and trashes on-disk dirs", async () => {
+    const { chatId, scheduledMessageId } = await createChatWithPayload(
       alpha,
       "happy-path chat",
     );
-
-    // Sanity: adapter knows about the at-job and the chat + messages exist.
-    expect((await adapter.listAt()).some((j) => j.id === atJobId)).toBe(true);
 
     const ws = await openWs(alpha.token);
 
@@ -355,12 +343,8 @@ describe("DELETE /chats/:id", () => {
     );
     expect(msgRows).toHaveLength(0);
 
-    // Scheduler at-job cancelled.
-    expect((await adapter.listAt()).some((j) => j.id === atJobId)).toBe(false);
-
-    // The scheduled message row is gone (FK cascade), which on its own
-    // proves the cancel path ran — a leaked at-job would still be in the
-    // adapter list above.
+    // Scheduled message row is gone (FK cascade) — the poll loop will never
+    // pick it up again since the row no longer exists.
     const row = await queries.messages.findById(pool, scheduledMessageId);
     expect(row).toBeNull();
 
@@ -391,7 +375,6 @@ describe("DELETE /chats/:id", () => {
 
   it("cross-tenant: 404 when user X deletes user Y's chat; Y's chat untouched", async () => {
     const { chatId: betaChatId } = await createChatWithPayload(beta, "beta's chat");
-
     const res = await request("DELETE", `/chats/${betaChatId}`, alpha.token);
     expect(res.status).toBe(404);
 

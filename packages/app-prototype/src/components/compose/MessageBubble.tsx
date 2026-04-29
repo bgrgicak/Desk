@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import { MarkdownContent } from '@/components/MarkdownContent'
@@ -32,6 +32,9 @@ export function MessageBubble({
   const hasAttachments = !!message.attachments && message.attachments.length > 0
 
   if (isUser) {
+    if (message.kind === 'task_run' && message.content.type === 'text') {
+      return <TaskRunChip prompt={message.content.text} />
+    }
     return (
       <div className="flex flex-col items-end gap-1.5">
         {hasAttachments && (
@@ -148,6 +151,15 @@ function AttachmentCard({
     >
       {inner}
     </button>
+  )
+}
+
+function TaskRunChip({ prompt }: { prompt: string }) {
+  const preview = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt
+  return (
+    <CollapsibleChip icon={<ListTodo className="h-3 w-3" />} label={`task run: ${preview}`}>
+      <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">{prompt}</pre>
+    </CollapsibleChip>
   )
 }
 

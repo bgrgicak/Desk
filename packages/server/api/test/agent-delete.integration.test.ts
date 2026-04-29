@@ -14,7 +14,7 @@ import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, queries, hashPassword } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { generateId } from "@desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -132,7 +132,6 @@ beforeAll(async () => {
 
   const runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async () => ({ exitCode: 0 }),
   });
 

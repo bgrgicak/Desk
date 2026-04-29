@@ -1,48 +1,45 @@
-# Scheduling and the stuck-run sweep
+# Scheduling
 
-A pending scheduled message (`messages.state = 'pending'`) relies on the
-Unix `at`/`crontab` daemon to curl `POST /internal/messages/fire` at its
-`execute_at`. Several things can silently drop that fire:
+Scheduled messages use an in-process DB polling loop instead of OS `at`/`crontab`.
 
-- VM/server was down at the trigger time (`at` does not retroactively
-  run missed jobs).
-- Daemon lost the queue file (VM rebuilt, spool wiped).
-- Server was restarting when the curl arrived — `curl -sf` fails and
-  the at-job is consumed regardless.
+## How it works
 
-In all of these, the message sits in `pending` with a past `execute_at`.
-The UI labels it "Overdue since …" client-side in
-`packages/app-prototype/src/store/selectors/runs.ts`; there is no
-persisted `overdue` status.
+A `setInterval` loop in `packages/server/api/src/main.ts` calls `runManager.tickScheduled()` every 60 seconds (configurable). Each tick queries:
 
-## Repair
+```sql
+SELECT id FROM messages
+WHERE state = 'pending'
+  AND execute_at IS NOT NULL
+  AND execute_at <= now()
+ORDER BY execute_at
+LIMIT $max_concurrent
+```
 
-`packages/server/scheduler/src/reconcile.ts` exposes:
+Matched messages are fired concurrently via `fireMessage()`. The DB is the single source of truth — no OS entries, no reconciliation needed.
 
-- `sweepStaleRuns(pool, adapter)` — for each pending message, reinstall
-  missing at/cron entries and reschedule overdue at-jobs as `"now"` so
-  the daemon fires them on its next tick. Idempotent.
-- `reconcile(pool, adapter)` — `sweepStaleRuns` plus a boot-only
-  garbage-collect of orphan at/cron entries no pending message
-  references.
+## Configuration
 
-`fireMessage` is idempotent via `claimPending`, so a racing fire from a
-stale entry that happens to still be queued is harmless.
+| Env var | Default | Description |
+|---|---|---|
+| `DESK_SCHEDULER_POLL_INTERVAL_MS` | `60000` | How often the poll loop runs (ms) |
+| `DESK_SCHEDULER_MAX_CONCURRENT` | `3` | Max simultaneous fires per tick |
 
-## When it runs
+## Cron tasks
 
-- Boot: `packages/server/api/src/main.ts` calls `reconcile()` before the
-  HTTP server starts listening.
-- Periodic: `main.ts` installs a `setInterval` calling `sweepStaleRuns()`
-  every 5 minutes. Override with `DESK_SCHEDULER_SWEEP_INTERVAL_MS`
-  (milliseconds). In-process on purpose — matches the existing
-  `retentionTimer`, no HTTP hop, no orphan crontab lines.
+When a task has a `cron` expression, `execute_at` is computed at insert time using `croner`. After each run, `afterTaskRun()` calls `croner` again to advance `execute_at` to the next occurrence. The task stays in `pending` indefinitely.
 
-## Not handled
+One-shot tasks (no `cron`) transition to their terminal state (`succeeded`/`failed`) after their single run, and `execute_at` is cleared.
 
-- **Cron catch-up.** A `cron` schedule that missed N ticks resumes at
-  the next tick; missed occurrences are not backfilled. Matches the
-  Unix cron daemon itself.
-- **Creation with a past `execute_at`.** The adapter still hands it to
-  `at`, which may reject or silently drop. The first sweep picks it up
-  within the sweep interval.
+## Overdue tasks
+
+Tasks with a past `execute_at` fire naturally on the next tick — no special handling needed. The UI labels them "Overdue since …" client-side in `packages/app-prototype/src/store/selectors/runs.ts`.
+
+## Pause / Resume / Cancel
+
+- **Pause**: sets `state = 'paused'`. The poll query skips non-`pending` rows, so the task won't fire until resumed.
+- **Resume**: sets `state = 'pending'`. For cron tasks with no `execute_at`, the next occurrence is computed and set.
+- **Cancel**: sets `state = 'cancelled'`. The row is kept for history; the poll query never picks it up.
+
+## ai_note scheduling
+
+`scheduleAiNote(chatId)` deletes all existing `ai_note` rows for the chat (including completed ones) and inserts a new `pending` row with `execute_at = now() + 30 minutes`. This refreshes the context note for the chat.

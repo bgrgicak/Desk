@@ -324,7 +324,7 @@ export function WorkspaceBar({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                data-testid="account-avatar"
+                {...(me ? { 'data-testid': 'account-avatar' } : {})}
                 className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5"
               >
                 {account.initials}

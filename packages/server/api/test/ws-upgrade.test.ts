@@ -8,7 +8,7 @@ import * as crypto from "node:crypto";
 import pg from "pg";
 import { runMigrations, queries } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { generateId } from "@desk/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
@@ -46,7 +46,6 @@ function appOpts(): AppOptions {
     storage: { pool, home },
     runManager: createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
       execRunFn: async () => ({ exitCode: 0 }),
     }),
     broadcastUserId: userId,

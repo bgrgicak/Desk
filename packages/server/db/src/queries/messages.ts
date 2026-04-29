@@ -17,7 +17,6 @@ function rowToMessage(row: Record<string, unknown>): Message {
     state: row.state ?? undefined,
     parentId: row.parent_id ?? undefined,
     agentId: row.agent_id ?? undefined,
-    schedulerRef: row.scheduler_ref ?? undefined,
     startedAt: row.started_at ? (row.started_at as Date).toISOString() : undefined,
     endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : undefined,
     updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : undefined,
@@ -70,7 +69,6 @@ export async function insert(
     cron?: string | null;
     parentId?: string | null;
     agentId?: string | null;
-    schedulerRef?: unknown;
     attachments?: unknown;
     model?: string | null;
     kind?: string | null;
@@ -80,9 +78,9 @@ export async function insert(
   const { rows } = await db.query(
     `INSERT INTO messages (
        id, chat_id, role, content,
-       state, execute_at, cron, parent_id, agent_id, scheduler_ref,
+       state, execute_at, cron, parent_id, agent_id,
        attachments, model, kind, title
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING *`,
     [
       data.id,
@@ -94,7 +92,6 @@ export async function insert(
       data.cron ?? null,
       data.parentId ?? null,
       data.agentId ?? null,
-      data.schedulerRef ? JSON.stringify(data.schedulerRef) : null,
       data.attachments ? JSON.stringify(data.attachments) : null,
       data.model ?? null,
       data.kind ?? "chat",
@@ -188,6 +185,12 @@ export async function startTaskRun(
         args.model ?? null,
       ],
     );
+    // Mark the parent task as running so the kanban moves the card to Active.
+    await client.query(
+      `UPDATE messages SET state = 'running', updated_at = now()
+       WHERE id = $1 AND kind = 'task'`,
+      [args.taskId],
+    );
     await client.query(
       "UPDATE chats SET updated_at = now() WHERE id = $1",
       [args.chatId],
@@ -222,7 +225,6 @@ export async function finalizeExecution(
 
 /**
  * PATCH-style content/state update. Any field left undefined is preserved.
- * `schedulerRef: null` clears the column; an object value is stored as JSON.
  * Returns the updated row, or null if not found.
  */
 export async function updateMessage(
@@ -233,7 +235,6 @@ export async function updateMessage(
     state?: string;
     executeAt?: string | null;
     cron?: string | null;
-    schedulerRef?: unknown | null;
     title?: string | null;
   },
 ): Promise<Message | null> {
@@ -256,10 +257,6 @@ export async function updateMessage(
     sets.push(`cron = $${idx++}`);
     params.push(patch.cron);
   }
-  if (patch.schedulerRef !== undefined) {
-    sets.push(`scheduler_ref = $${idx++}`);
-    params.push(patch.schedulerRef === null ? null : JSON.stringify(patch.schedulerRef));
-  }
   if (patch.title !== undefined) {
     sets.push(`title = $${idx++}`);
     params.push(patch.title);
@@ -270,16 +267,6 @@ export async function updateMessage(
     params,
   );
   return rows.length ? rowToMessage(rows[0]) : null;
-}
-
-/** Lists pending scheduled messages across all chats (for boot reconcile). */
-export async function listPendingScheduled(db: Queryable): Promise<Message[]> {
-  const { rows } = await db.query(
-    `SELECT * FROM messages
-     WHERE state = 'pending' AND (execute_at IS NOT NULL OR cron IS NOT NULL)
-     ORDER BY execute_at NULLS LAST`,
-  );
-  return rows.map(rowToMessage);
 }
 
 export interface CrossChatListOptions {

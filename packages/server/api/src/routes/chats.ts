@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
+import { Cron } from "croner";
 import { queries } from "@desk/db";
 import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@desk/shared";
 import { z } from "zod";
@@ -22,11 +23,6 @@ import {
   type StorageContext,
 } from "@desk/storage";
 
-interface SchedulerCancelAdapter {
-  removeAt: (id: string) => Promise<void>;
-  removeCron: (id: string) => Promise<void>;
-}
-
 /**
  * Subset of the run manager the patch-message route needs to drive
  * scheduler-aware state transitions (pause / resume / cancel-in-place).
@@ -37,59 +33,12 @@ export interface MessageLifecycleOps {
   pauseMessage(messageId: string): Promise<Message | null>;
   resumeMessage(messageId: string): Promise<Message | null>;
   cancelScheduledMessage(messageId: string): Promise<Message | null>;
-  /** Sync the OS-level at/cron entry with the row's current
-   * executeAt/cron/state. Removes the existing entry, then re-installs
-   * iff state='pending' and a schedule remains. Used after PATCHes that
-   * change schedule fields without crossing a state boundary, so
-   * `executeAt: null` actually cancels the at-job. */
+  /** Re-compute execute_at after a PATCH that changes schedule fields
+   * without crossing a state boundary. For cron tasks this means calling
+   * croner to get the next occurrence. */
   rescheduleMessage(messageId: string): Promise<Message | null>;
-  /** Claims the row and runs the agent in-process. Used by the run-now
-   * route so the kanban "drag to Active" can fire a task on demand. */
+  /** Claims the row and runs the agent in-process. */
   fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }>;
-  adapter: SchedulerCancelAdapter | null;
-}
-
-/**
- * Cancels the at/cron entry a single message owned via `schedulerRef`.
- * Best-effort: a stale ref (already fired, already removed) is swallowed
- * so deletion isn't blocked on infra drift. Shared by per-message delete
- * and by the per-chat cascade.
- */
-async function cancelSchedulerRef(
-  msg: Message,
-  adapter: SchedulerCancelAdapter | null,
-): Promise<void> {
-  const ref = msg.schedulerRef;
-  if (!ref || !adapter) return;
-  try {
-    if (ref.kind === "at") await adapter.removeAt(ref.id);
-    else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-  } catch {
-    // Stale refs are OK.
-  }
-}
-
-async function cancelSchedulerRefsForChat(
-  pool: pg.Pool,
-  chatId: string,
-  adapter: SchedulerCancelAdapter | null,
-): Promise<void> {
-  if (!adapter) return;
-  const { rows } = await pool.query(
-    `SELECT id, scheduler_ref FROM messages
-     WHERE chat_id = $1 AND scheduler_ref IS NOT NULL`,
-    [chatId],
-  );
-  for (const row of rows) {
-    const ref = row.scheduler_ref as { kind?: string; id?: string } | null;
-    if (!ref || !ref.id) continue;
-    try {
-      if (ref.kind === "at") await adapter.removeAt(ref.id);
-      else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-    } catch {
-      // Stale refs are OK.
-    }
-  }
 }
 
 /**
@@ -173,6 +122,7 @@ export async function sendMessage(
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
+  opts?: { role?: "user" | "agent" | "system" },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -194,19 +144,22 @@ export async function sendMessage(
   // app.ts can schedule the message id without branching.
   if (kind !== "chat") {
     const messageId = generateId("message");
+    let executeAt = data.executeAt ?? null;
+    if (data.cron && !executeAt) {
+      const next = new Cron(data.cron).nextRun();
+      if (!next) throw new ValidationError(`cron expression "${data.cron}" has no future occurrences`);
+      executeAt = next.toISOString();
+    }
     const message = await queries.messages.insert(pool, {
       id: messageId,
       chatId,
-      role: "user",
+      role: opts?.role ?? "user",
       content: { type: "text", text: data.content },
       attachments,
       kind,
       title: data.title ?? null,
-      // Self-firing kinds always land as `pending` so claimPending in the
-      // fire handler can transition them. Schedule presence governs whether
-      // app.ts schedules an at/cron entry or fires immediately.
       state: "pending",
-      executeAt: data.executeAt ?? null,
+      executeAt,
       cron: data.cron ?? null,
       agentId: chat.agentId,
     });
@@ -246,10 +199,9 @@ export async function sendMessage(
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
- * State transitions delegate to the run manager so the OS-level at/cron
- * entry is actually removed or re-installed; content-only patches (e.g.
- * user editing a note body) snapshot the prior note and take the plain
- * DB update path.
+ * State transitions delegate to the run manager (pause/resume/cancel);
+ * content-only patches (e.g. user editing a note body) snapshot the prior
+ * note and take the plain DB update path.
  */
 export async function patchMessage(
   pool: pg.Pool,
@@ -274,12 +226,12 @@ export async function patchMessage(
   // board sends the column's target state on every drop without inspecting
   // the row's current state.
   const stateTransition = data.state !== undefined && data.state !== current.state;
-  // The only forbidden destination is from 'running' — that's claimed
-  // atomically by fireMessage and a manual flip would race with the
-  // executor. Every other transition (terminal → pending for a re-run,
-  // paused → cancelled, …) is fair game; the lifecycle ops reconcile
-  // OS-level at/cron entries.
-  if (stateTransition && current.state === "running") {
+  // For non-task messages the running state is claimed atomically by
+  // fireMessage — a manual flip would race with the executor. Task messages
+  // (kind='task') are different: the executor claims the task_run child, so
+  // the parent's running state is only a kanban-position signal and can be
+  // patched freely.
+  if (stateTransition && current.state === "running" && current.kind !== "task") {
     throw new ValidationError(
       `cannot patch state of a running message; cancel or wait for it to finish`,
     );
@@ -302,11 +254,8 @@ export async function patchMessage(
     }
   }
 
-  // Lifecycle transitions route through the scheduler so OS-level at/cron
-  // entries are added/removed in sync with the DB state. We apply non-state
-  // fields (content, executeAt, cron) first so the lifecycle op observes
-  // the new schedule when it re-installs at/cron — e.g. `pending + executeAt:null`
-  // resumes the row but rescheduleMessage's at-job install correctly no-ops.
+  // Apply non-state fields first so the lifecycle op observes the new
+  // schedule when it runs (e.g. resumeMessage sees the updated execute_at).
   if (stateTransition && lifecycleOps) {
     const preTransition = { ...data };
     delete preTransition.state;
@@ -321,9 +270,8 @@ export async function patchMessage(
     return updated;
   }
 
-  // Non-transition path. Apply DB update, then if executeAt or cron changed,
-  // sync the OS-level at/cron entry. Without this, clearing executeAt would
-  // leave a stale at-job that fires on a now-orphaned schedule.
+  // Non-transition path: apply the DB update, then if the schedule changed,
+  // let rescheduleMessage recompute execute_at from the new cron expression.
   const updated = await queries.messages.updateMessage(pool, messageId, data);
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
   if (lifecycleOps && (data.executeAt !== undefined || data.cron !== undefined)) {
@@ -336,11 +284,10 @@ export async function patchMessage(
 
 /**
  * Runs a task message on demand. Used by the kanban "drag to Active"
- * gesture: forces the row back to `pending`, drops any pending OS-level
- * at/cron entry, then dispatches the agent. Re-fires terminal rows
- * (succeeded/failed/cancelled) too — the column drop is the user's
- * "do it again, now" intent. Idempotent if the row is already running:
- * returns the current row without firing twice.
+ * gesture: forces the row back to `pending` then dispatches the agent.
+ * Re-fires terminal rows (succeeded/failed/cancelled) too — the column
+ * drop is the user's "do it again, now" intent. Idempotent if the row
+ * is already running: returns the current row without firing twice.
  */
 export async function runMessage(
   pool: pg.Pool,
@@ -355,14 +302,8 @@ export async function runMessage(
   }
   if (current.state === "running") return current;
 
-  // Drop any scheduled at/cron entry so a manual run doesn't race a
-  // queued one. We keep executeAt/cron on the row as metadata; if the
-  // task succeeds, statusFor maps it to the Complete column anyway.
-  await cancelSchedulerRef(current, ops.adapter);
-  const reset = await queries.messages.updateMessage(pool, messageId, {
-    state: "pending",
-    schedulerRef: null,
-  });
+  // Reset to pending so fireMessage can claim it.
+  const reset = await queries.messages.updateMessage(pool, messageId, { state: "pending" });
   if (!reset) throw new NotFoundError(`Message not found: ${messageId}`);
   emit({ type: "message.updated", payload: reset });
 
@@ -393,24 +334,20 @@ export async function getNoteHistory(
 }
 
 /**
- * Deletes a message. Cancels any at/cron scheduler entry this message
- * owned via scheduler_ref. Idempotent — deleting an already-gone
- * message returns 404; deleting with no scheduler_ref just removes
- * the row.
+ * Deletes a message. Idempotent — deleting an already-gone message
+ * returns 404.
  */
 export async function deleteMessage(
   pool: pg.Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  adapter: SchedulerCancelAdapter | null,
 ): Promise<void> {
   const msg = await queries.messages.findById(pool, messageId);
   if (!msg || msg.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
 
-  await cancelSchedulerRef(msg, adapter);
   const slug = await workspaceSlugForChat(pool, chatId);
 
   await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
@@ -543,13 +480,11 @@ export async function deleteChat(
   pool: pg.Pool,
   storage: StorageContext,
   chatId: string,
-  adapter: SchedulerCancelAdapter | null,
   emit: (event: WsEvent) => void,
 ): Promise<{ ok: true }> {
   const chat = await queries.chats.findById(pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
-  await cancelSchedulerRefsForChat(pool, chatId, adapter);
   const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.

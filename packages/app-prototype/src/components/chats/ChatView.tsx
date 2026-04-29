@@ -20,15 +20,13 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { MessageBubble } from '@/components/compose/MessageBubble'
+import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
-import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 import {
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
-  useGetChatMessagesQuery,
   useGetLibraryQuery,
   usePatchChatMutation,
   usePinChatLibraryRefMutation,
@@ -39,59 +37,13 @@ import { toContextItem } from '@/store/selectors/library'
 import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
-import type { AgentLogEntry, AttachmentRef, MessageContent, ServerFile, ServerMessage } from '@/store/types'
+import type { AttachmentRef, ServerFile } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useClickOrDoubleClick } from '@/hooks/use-click-or-double-click'
 import { usePrefs } from '@/hooks/use-prefs'
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-// Content types that don't render as bubbles. `agent_turn` and
-// `ai_note_request` are scheduling slots (drive the typing indicator);
-// `note` surfaces in the Artifacts panel as "Chat notes".
-const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
-  'agent_turn',
-  'ai_note_request',
-  'note',
-])
-
-// Tool-related surfaces hidden when developer mode is off.
-const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
-  'toolCall',
-  'toolResult',
-])
-
-/** True if an events log carries any text the user would want to read in
- *  non-dev mode — `text` events and unparsed-stdout fallbacks (used by
- *  drivers that don't emit JSON events). Mirrors the chunking rules in
- *  MessageBubble's EventsView so the visibility decision matches what the
- *  bubble would actually render. */
-function eventsHasUserText(log: AgentLogEntry[]): boolean {
-  let sawEvent = false
-  for (const entry of log) {
-    if (entry.kind === 'event') {
-      sawEvent = true
-      if (entry.event.type === 'text') {
-        const t = entry.event.part?.text
-        if (typeof t === 'string' && t.trim().length > 0) return true
-      }
-    } else if (entry.kind === 'unparsed' && !sawEvent) {
-      if (entry.line.trim().length > 0) return true
-    }
-  }
-  return false
-}
-
-function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
-  if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
-  if (developerMode) return true
-  if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
-  if (m.content.type === 'events') return eventsHasUserText(m.content.log)
-  return true
-}
 
 const STARTER_CHIPS = [
   'Draft a project brief',
@@ -647,8 +599,6 @@ export function ChatView({
   onAttachmentClick,
   initialStagedItems,
 }: ChatViewProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const focusInputRef = useRef<(() => void) | null>(null)
   const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
   const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
@@ -657,12 +607,6 @@ export function ChatView({
 
   const isNewChat = chat.id === NEW_CHAT_ID
 
-  // Fetch persisted messages for this chat from the server. Skipped for
-  // the "new chat" placeholder (not yet created).
-  const { data: serverMsgs, isLoading: messagesLoading } = useGetChatMessagesQuery(
-    { chatId: chat.id },
-    { skip: isNewChat },
-  )
   const [postMessageMutation, postMessageState] = usePostChatMessageMutation()
   const [patchChatMutation] = usePatchChatMutation()
 
@@ -867,52 +811,7 @@ export function ChatView({
   const chatNotes = useMemo(() => chatFiles.filter(f => f.kind === 'note'), [chatFiles])
   const chatAttachmentFiles = useMemo(() => chatFiles.filter(f => f.kind !== 'note'), [chatFiles])
 
-  // Filter server messages to what the bubble stream renders. Scheduling
-  // triggers (agent_turn / ai_note_request) drive the typing indicator via
-  // `hasPendingTrigger` below, not bubbles. Notes surface in the Artifacts
-  // panel as "Chat notes", not as conversation turns. When developer mode
-  // is off, tool-call surfaces are also hidden (see `isMessageVisible`).
   const { developerMode } = usePrefs()
-  const messages: ServerMessage[] = useMemo(
-    () => (serverMsgs?.items ?? []).filter(m => isMessageVisible(m, developerMode)),
-    [serverMsgs, developerMode],
-  )
-
-  const lastInitialAssistantId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'agent') return messages[i].id
-    }
-    return null
-  }, [messages])
-
-  // Agent is considered "typing" while the agent_turn trigger for this
-  // chat is pending or running, or while the user's POST is in flight.
-  // ai_note_request triggers (scheduled ~30 min out) are excluded — those
-  // aren't responses to the user's last message.
-  const hasPendingTrigger = (serverMsgs?.items ?? []).some(
-    m =>
-      m.content.type === 'agent_turn' &&
-      (m.state === 'pending' || m.state === 'running'),
-  )
-  const isTyping = hasPendingTrigger || postMessageState.isLoading
-
-  useEffect(() => {
-    // Highlight target wins over scroll-to-bottom — only when it
-    // matches a rendered message. System messages (agent_turn /
-    // ai_note_request) are filtered out of `messages`, so opening a
-    // chat via a run that's never fired falls through to normal
-    // scroll-to-bottom behaviour.
-    if (highlightMessageId) {
-      const el = messageRefs.current.get(highlightMessageId)
-      if (el) {
-        el.scrollIntoView({ block: 'center' })
-        return
-      }
-    }
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages, isTyping, highlightMessageId])
 
   // Focus the composer when a chat is opened. Defers past the
   // scroll-to-bottom and message-load layout shifts that follow
@@ -984,146 +883,125 @@ export function ChatView({
           }
         />
 
-        {/* Messages */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
-
-            {/* Empty state — shown before any message is sent.
-                Suppressed during the initial messages fetch so a slow load
-                doesn't briefly look like an empty chat. */}
-            {messages.length === 0 && !messagesLoading && (
-              <div className="flex flex-col items-center justify-center py-24 text-center">
-                <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
-                <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
-                <p className="text-sm text-muted-foreground max-w-sm">
-                  Describe what you need and I'll build it for you. A document, an app, a design — just ask.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  {STARTER_CHIPS.map((chip) => (
-                    <button
-                      key={chip}
-                      onClick={() => {
-                        if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
-                        else void postMessageMutation({ chatId: chat.id, content: chip })
-                      }}
-                      className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
-                    >
-                      {chip}
-                    </button>
-                  ))}
-                </div>
+        {/* Messages + Input via shared ChatThread */}
+        <ChatThread
+          chatId={chat.id}
+          skipQuery={isNewChat}
+          fallbackModel={fallbackModel}
+          developerMode={developerMode}
+          isSending={postMessageState.isLoading}
+          highlightMessageId={highlightMessageId}
+          innerClassName="max-w-2xl mx-auto px-6 py-8 space-y-6"
+          onAttachmentClick={onAttachmentClick}
+          showNewBadge={showNewBadge}
+          emptySlot={
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
+              <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
+              <p className="text-sm text-muted-foreground max-w-sm">
+                Describe what you need and I'll build it for you. A document, an app, a design — just ask.
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {STARTER_CHIPS.map((chip) => (
+                  <button
+                    key={chip}
+                    onClick={() => {
+                      if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
+                      else void postMessageMutation({ chatId: chat.id, content: chip })
+                    }}
+                    className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+                  >
+                    {chip}
+                  </button>
+                ))}
               </div>
-            )}
-
-            {messages.map((msg, i) => (
-              <div
-                key={msg.id}
-                data-message-id={msg.id}
-                ref={(el) => {
-                  if (el) messageRefs.current.set(msg.id, el)
-                  else messageRefs.current.delete(msg.id)
-                }}
-              >
-                <MessageBubble
-                  message={msg}
-                  fallbackModel={fallbackModel}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                  isNew={showNewBadge && msg.id === lastInitialAssistantId}
-                  onAttachmentClick={onAttachmentClick}
-                  developerMode={developerMode}
+            </div>
+          }
+          lastAssistantSlot={artifacts.length > 0 ? () => (
+            <div className="mt-4 flex flex-col gap-2">
+              {artifacts.map(artifact => (
+                <ArtifactInlineCard
+                  key={artifact.id}
+                  artifact={artifact}
+                  isSaved={savedArtifactIds.has(artifact.id)}
+                  onOpen={() => onArtifactClick?.(artifact)}
+                  onSave={() => onSaveArtifact?.(artifact.id)}
                 />
-                {/* Inline artifact cards after the last initial assistant message */}
-                {artifacts.length > 0 && msg.id === lastInitialAssistantId && (
-                  <div className="mt-4 flex flex-col gap-2">
-                    {artifacts.map(artifact => (
-                      <ArtifactInlineCard
-                        key={artifact.id}
-                        artifact={artifact}
-                        isSaved={savedArtifactIds.has(artifact.id)}
-                        onOpen={() => onArtifactClick?.(artifact)}
-                        onSave={() => onSaveArtifact?.(artifact.id)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-            <StatusIndicator text={null} isTyping={isTyping} />
-          </div>
-        </div>
-
-        {/* Input */}
-        <div className="border-t shrink-0">
-          <div className="max-w-2xl mx-auto px-6 py-4">
-            <ChatInput
-              focusRef={focusInputRef}
-              onSend={(msg, uploads, options) => {
-                // `uploads` already includes both pendingUploads (chat-input
-                // strip) and stagedFiles (sidebar tray) — both flow through
-                // ChatInput.extraUploads below. De-dupe by path so a file
-                // staged AND attached inline doesn't appear twice.
-                const seen = new Set<string>()
-                const attachments: AttachmentRef[] = uploads
-                  .filter(u => typeof u.path === 'string')
-                  .filter(u => {
-                    if (seen.has(u.path!)) return false
-                    seen.add(u.path!)
-                    return true
-                  })
-                  .map(u => ({
-                    path: u.path!,
-                    name: u.name,
-                    kind: u.kind,
-                    mime: u.mime,
-                    size: u.size,
-                  }))
-                setPendingUploads([])
-                setStagedFiles([])
-                if (isNewChat) {
-                  onFirstMessage?.(
-                    msg,
-                    newChatAgentId ?? undefined,
-                    attachments.length > 0 ? attachments : undefined,
-                    options,
-                  )
-                } else {
-                  postMessageMutation({
-                    chatId: chat.id,
-                    content: msg,
-                    attachments: attachments.length > 0 ? attachments : undefined,
-                    kind: options?.kind,
-                    title: options?.title,
-                    executeAt: options?.executeAt,
-                    goal: options?.goal,
-                  })
-                    .unwrap()
-                    .catch(err => {
-                      toast.error('Failed to send message', {
-                        description: err instanceof Error ? err.message : undefined,
+              ))}
+            </div>
+          ) : undefined}
+          footerSlot={
+            <div className="border-t shrink-0">
+              <div className="max-w-2xl mx-auto px-6 py-4">
+                <ChatInput
+                  focusRef={focusInputRef}
+                  onSend={(msg, uploads, options) => {
+                    // De-dupe uploads by path so a file staged AND attached
+                    // inline doesn't appear twice in `attachments`.
+                    const seen = new Set<string>()
+                    const attachments: AttachmentRef[] = uploads
+                      .filter(u => typeof u.path === 'string')
+                      .filter(u => {
+                        if (seen.has(u.path!)) return false
+                        seen.add(u.path!)
+                        return true
                       })
-                    })
-                }
-                setPrefillText(undefined)
-              }}
-              placeholder={messages.length === 0 ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
-              compact={true}
-              showGoalPicker={true}
-              prefillValue={prefillText}
-              chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
-              chatWorkspaceId={chat.workspaceId}
-              chatId={chat.id}
-              onAgentChange={handleAgentChange}
-              draftKey={`chat:${chat.id}`}
-              onOpenUploadPicker={openPicker}
-              extraUploads={[...pendingUploads, ...stagedFiles]}
-              onRemoveExtraUpload={(id) => {
-                removePendingUpload(id)
-                removeStaged(id)
-              }}
-              uploadInProgress={isUploading}
-            />
-          </div>
-        </div>
+                      .map(u => ({
+                        path: u.path!,
+                        name: u.name,
+                        kind: u.kind,
+                        mime: u.mime,
+                        size: u.size,
+                      }))
+                    setPendingUploads([])
+                    setStagedFiles([])
+                    if (isNewChat) {
+                      onFirstMessage?.(
+                        msg,
+                        newChatAgentId ?? undefined,
+                        attachments.length > 0 ? attachments : undefined,
+                        options,
+                      )
+                    } else {
+                      postMessageMutation({
+                        chatId: chat.id,
+                        content: msg,
+                        attachments: attachments.length > 0 ? attachments : undefined,
+                        kind: options?.kind,
+                        title: options?.title,
+                        executeAt: options?.executeAt,
+                        goal: options?.goal,
+                      })
+                        .unwrap()
+                        .catch(err => {
+                          toast.error('Failed to send message', {
+                            description: err instanceof Error ? err.message : undefined,
+                          })
+                        })
+                    }
+                    setPrefillText(undefined)
+                  }}
+                  placeholder={isNewChat ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
+                  compact={true}
+                  showGoalPicker={true}
+                  prefillValue={prefillText}
+                  chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
+                  chatWorkspaceId={chat.workspaceId}
+                  chatId={chat.id}
+                  onAgentChange={handleAgentChange}
+                  draftKey={`chat:${chat.id}`}
+                  onOpenUploadPicker={openPicker}
+                  extraUploads={[...pendingUploads, ...stagedFiles]}
+                  onRemoveExtraUpload={(id) => {
+                    removePendingUpload(id)
+                    removeStaged(id)
+                  }}
+                  uploadInProgress={isUploading}
+                />
+              </div>
+            </div>
+          }
+        />
       </div>
         )}
       </FileDropZone>

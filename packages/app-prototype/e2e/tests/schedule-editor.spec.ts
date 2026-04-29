@@ -46,22 +46,21 @@ async function readMessage(
   return body.items.find((m) => m.id === messageId);
 }
 
-async function openTaskDetail(page: import("@playwright/test").Page, seeded: Seeded) {
+async function openScheduleEditor(page: import("@playwright/test").Page, seeded: Seeded) {
   await page.reload();
   await page.getByRole("button", { name: /^Tasks$/ }).first().click();
   await page.getByTestId(`task-row-${seeded.messageId}`).click();
   await expect(page.getByTestId("task-status-trigger")).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("task-schedule-trigger").click();
+  await expect(page.getByTestId("schedule-editor")).toBeVisible();
+  await page.getByTestId("schedule-mode-recurring").click();
 }
 
 test("schedule editor sets a daily cron", async ({ loggedInPage, serverUrl, token }) => {
   const seeded = await seedTask(serverUrl, token, "Schedule editor cron");
-  await openTaskDetail(loggedInPage, seeded);
+  await openScheduleEditor(loggedInPage, seeded);
 
-  await loggedInPage.getByTestId("task-schedule-trigger").click();
-  await expect(loggedInPage.getByTestId("schedule-editor")).toBeVisible();
-
-  await loggedInPage.getByTestId("schedule-mode-recurring").click();
-  // Default cadence is `daily`; just set the time to 09:00 and save.
+  // Default unit is 'days'; set the time to 09:00 and save.
   await loggedInPage.getByTestId("schedule-recur-time").fill("09:00");
   await loggedInPage.getByTestId("schedule-save").click();
 
@@ -70,19 +69,78 @@ test("schedule editor sets a daily cron", async ({ loggedInPage, serverUrl, toke
     { timeout: 5_000 },
   ).toBe("0 9 * * *");
 
-  // The one-shot executeAt should be cleared when switching to cron.
+  // With DB-poll scheduling, setting a cron expression also advances executeAt
+  // to the next occurrence so the poll loop knows when to fire.
   const msg = await readMessage(serverUrl, token, seeded.chatId, seeded.messageId);
-  expect(msg?.executeAt ?? null).toBeNull();
+  expect(msg?.executeAt).toBeDefined();
+});
+
+test("schedule editor sets a weekly cron on Wednesday", async ({ loggedInPage, serverUrl, token }) => {
+  const seeded = await seedTask(serverUrl, token, "Schedule editor weekly");
+  await openScheduleEditor(loggedInPage, seeded);
+
+  await loggedInPage.getByTestId("schedule-unit").selectOption("weeks");
+  // Add Wednesday first, then deselect Monday — the guard prevents removing
+  // the last selected weekday, so Wednesday must be selected before Monday is removed.
+  await loggedInPage.getByTestId("schedule-weekday-3").click();
+  await loggedInPage.getByTestId("schedule-weekday-1").click();
+  await loggedInPage.getByTestId("schedule-recur-time").fill("10:00");
+  await loggedInPage.getByTestId("schedule-save").click();
+
+  await expect.poll(
+    async () => (await readMessage(serverUrl, token, seeded.chatId, seeded.messageId))?.cron,
+    { timeout: 5_000 },
+  ).toBe("0 10 * * 3");
+});
+
+test("schedule editor sets a monthly cron on the 15th", async ({ loggedInPage, serverUrl, token }) => {
+  const seeded = await seedTask(serverUrl, token, "Schedule editor monthly");
+  await openScheduleEditor(loggedInPage, seeded);
+
+  await loggedInPage.getByTestId("schedule-unit").selectOption("months");
+  await loggedInPage.getByTestId("schedule-month-day").fill("15");
+  await loggedInPage.getByTestId("schedule-recur-time").fill("08:00");
+  await loggedInPage.getByTestId("schedule-save").click();
+
+  await expect.poll(
+    async () => (await readMessage(serverUrl, token, seeded.chatId, seeded.messageId))?.cron,
+    { timeout: 5_000 },
+  ).toBe("0 8 15 * *");
+});
+
+test("schedule editor sets an every-N-hours cron", async ({ loggedInPage, serverUrl, token }) => {
+  const seeded = await seedTask(serverUrl, token, "Schedule editor hours");
+  await openScheduleEditor(loggedInPage, seeded);
+
+  await loggedInPage.getByTestId("schedule-unit").selectOption("hours");
+  await loggedInPage.getByTestId("schedule-n").fill("6");
+  await loggedInPage.getByTestId("schedule-save").click();
+
+  await expect.poll(
+    async () => (await readMessage(serverUrl, token, seeded.chatId, seeded.messageId))?.cron,
+    { timeout: 5_000 },
+  ).toBe("0 */6 * * *");
+});
+
+test("schedule editor sets an every-N-minutes cron", async ({ loggedInPage, serverUrl, token }) => {
+  const seeded = await seedTask(serverUrl, token, "Schedule editor minutes");
+  await openScheduleEditor(loggedInPage, seeded);
+
+  await loggedInPage.getByTestId("schedule-unit").selectOption("minutes");
+  await loggedInPage.getByTestId("schedule-n").fill("15");
+  await loggedInPage.getByTestId("schedule-save").click();
+
+  await expect.poll(
+    async () => (await readMessage(serverUrl, token, seeded.chatId, seeded.messageId))?.cron,
+    { timeout: 5_000 },
+  ).toBe("*/15 * * * *");
 });
 
 test("schedule editor sets a one-shot executeAt", async ({ loggedInPage, serverUrl, token }) => {
   const seeded = await seedTask(serverUrl, token, "Schedule editor once");
-  await openTaskDetail(loggedInPage, seeded);
+  await openScheduleEditor(loggedInPage, seeded);
 
-  await loggedInPage.getByTestId("task-schedule-trigger").click();
-  await expect(loggedInPage.getByTestId("schedule-editor")).toBeVisible();
-
-  // Default mode is `once`; write a known date+time and save.
+  await loggedInPage.getByTestId("schedule-mode-once").click();
   await loggedInPage.getByTestId("schedule-once-date").fill("2099-12-31");
   await loggedInPage.getByTestId("schedule-once-time").fill("14:30");
   await loggedInPage.getByTestId("schedule-save").click();
@@ -95,9 +153,7 @@ test("schedule editor sets a one-shot executeAt", async ({ loggedInPage, serverU
 
 test("schedule editor clears the schedule", async ({ loggedInPage, serverUrl, token }) => {
   const seeded = await seedTask(serverUrl, token, "Schedule editor clear");
-  await openTaskDetail(loggedInPage, seeded);
-
-  await loggedInPage.getByTestId("task-schedule-trigger").click();
+  await openScheduleEditor(loggedInPage, seeded);
   await loggedInPage.getByTestId("schedule-clear").click();
 
   await expect.poll(
@@ -107,4 +163,18 @@ test("schedule editor clears the schedule", async ({ loggedInPage, serverUrl, to
 
   const msg = await readMessage(serverUrl, token, seeded.chatId, seeded.messageId);
   expect(msg?.cron ?? null).toBeNull();
+});
+
+test("schedule label shows human-readable text", async ({ loggedInPage, serverUrl, token }) => {
+  const seeded = await seedTask(serverUrl, token, "Schedule label readable");
+  await openScheduleEditor(loggedInPage, seeded);
+
+  // Set to every Monday at 9am
+  await loggedInPage.getByTestId("schedule-unit").selectOption("weeks");
+  await loggedInPage.getByTestId("schedule-recur-time").fill("09:00");
+  await loggedInPage.getByTestId("schedule-save").click();
+
+  // The schedule trigger label should show readable text, not a cron string
+  await expect(loggedInPage.getByTestId("task-schedule-trigger")).not.toContainText("* * *");
+  await expect(loggedInPage.getByTestId("task-schedule-trigger")).toContainText("Mo");
 });

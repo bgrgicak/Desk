@@ -20,6 +20,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Calendar as CalendarPicker } from '@/components/ui/calendar'
 import type { Task } from '@/data/ui-types'
 import { StatusBadge } from './task-badges'
+import { buildCron, type Unit, type ScheduleParams } from './schedule-utils'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -42,43 +43,34 @@ interface TaskSheetProps {
 
 type FormStatus   = Task['status']
 type ScheduleMode = 'once' | 'recurring'
-type Cadence      = 'daily' | 'weekdays' | 'weekly' | 'custom'
+
+const UNITS: { value: Unit; singular: string; plural: string }[] = [
+  { value: 'minutes', singular: 'minute', plural: 'minutes' },
+  { value: 'hours',   singular: 'hour',   plural: 'hours'   },
+  { value: 'days',    singular: 'day',    plural: 'days'    },
+  { value: 'weeks',   singular: 'week',   plural: 'weeks'   },
+  { value: 'months',  singular: 'month',  plural: 'months'  },
+]
+
+const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+const DEFAULT_SCHEDULE: ScheduleParams = {
+  n: 1, unit: 'days', weekdays: [1], day: 1, hour: 9, minute: 0,
+}
 
 interface FormState {
   name:            string
   description:     string
   status:          FormStatus
   scheduleMode:    ScheduleMode
-  // once
   onceDate:        string   // YYYY-MM-DD
   onceTime:        string   // HH:MM
-  // recurring
-  cadence:         Cadence
-  weekday:         number
-  recurHour:       number
-  recurMinute:     number
-  customCron:      string
+  schedule:        ScheduleParams
   beginDate:       string   // YYYY-MM-DD
   endDate:         string   // YYYY-MM-DD
 }
 
-const CADENCE_LABELS: Record<Cadence, string> = {
-  daily:    'Every day',
-  weekdays: 'Weekdays (Mon–Fri)',
-  weekly:   'Weekly',
-  custom:   'Custom cron',
-}
-
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
 function pad2(n: number) { return n.toString().padStart(2, '0') }
-
-function buildCron(cadence: Cadence, minute: number, hour: number, weekday: number, custom: string): string {
-  if (cadence === 'custom') return custom.trim()
-  if (cadence === 'daily')    return `${minute} ${hour} * * *`
-  if (cadence === 'weekdays') return `${minute} ${hour} * * 1-5`
-  return `${minute} ${hour} * * ${weekday}`
-}
 
 function defaultOnceDate(): string {
   const d = new Date()
@@ -98,11 +90,7 @@ const DEFAULT_FORM: FormState = {
   scheduleMode: 'once',
   onceDate:     defaultOnceDate(),
   onceTime:     defaultOnceTime(),
-  cadence:      'daily',
-  weekday:      1,
-  recurHour:    9,
-  recurMinute:  0,
-  customCron:   '',
+  schedule:     DEFAULT_SCHEDULE,
   beginDate:    defaultOnceDate(),
   endDate:      '',
 }
@@ -185,7 +173,21 @@ export function TaskSheet({ open, onOpenChange, onCreateTask, defaultStatus }: T
     setForm(prev => ({ ...prev, [key]: value }))
   }
 
-  const recurTime = `${pad2(form.recurHour)}:${pad2(form.recurMinute)}`
+  function patchSchedule(delta: Partial<ScheduleParams>) {
+    setForm(prev => {
+      const next = { ...prev.schedule, ...delta }
+      if (delta.unit === 'weeks' && next.weekdays.length === 0) next.weekdays = [1]
+      return { ...prev, schedule: next }
+    })
+  }
+
+  function toggleWeekday(i: number) {
+    setForm(prev => {
+      const has  = prev.schedule.weekdays.includes(i)
+      const days = has ? prev.schedule.weekdays.filter(d => d !== i) : [...prev.schedule.weekdays, i]
+      return { ...prev, schedule: { ...prev.schedule, weekdays: days.length === 0 ? [i] : days } }
+    })
+  }
 
   function parseDateStr(s: string): Date | undefined {
     if (!s) return undefined
@@ -205,15 +207,15 @@ export function TaskSheet({ open, onOpenChange, onCreateTask, defaultStatus }: T
           const [hh, mm]   = form.onceTime.split(':').map(Number)
           scheduledFor = new Date(y, (mo ?? 1) - 1, d ?? 1, hh ?? 0, mm ?? 0, 0, 0)
         } else {
-          cron = buildCron(form.cadence, form.recurMinute, form.recurHour, form.weekday, form.customCron) || undefined
+          cron = buildCron(form.schedule) || undefined
           scheduledFor = parseDateStr(form.beginDate)
         }
       }
 
       await onCreateTask({
-        name:           form.name.trim() || 'Untitled task',
-        description:    form.description.trim() || undefined,
-        status:         form.status,
+        name:            form.name.trim() || 'Untitled task',
+        description:     form.description.trim() || undefined,
+        status:          form.status,
         scheduledFor,
         scheduleEndDate: form.status === 'scheduled' && form.scheduleMode === 'recurring'
           ? parseDateStr(form.endDate)
@@ -225,6 +227,10 @@ export function TaskSheet({ open, onOpenChange, onCreateTask, defaultStatus }: T
       setSubmitting(false)
     }
   }
+
+  const s = form.schedule
+  const timeValue = `${pad2(s.hour)}:${pad2(s.minute)}`
+  const needsTime = s.unit === 'days' || s.unit === 'weeks' || s.unit === 'months'
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -289,9 +295,9 @@ export function TaskSheet({ open, onOpenChange, onCreateTask, defaultStatus }: T
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-48">
-                {(['todo', 'active', 'complete', 'scheduled'] as FormStatus[]).map(s => (
-                  <DropdownMenuItem key={s} onSelect={() => set('status', s)} className="gap-2">
-                    <StatusBadge status={s} />
+                {(['todo', 'active', 'complete', 'scheduled'] as FormStatus[]).map(st => (
+                  <DropdownMenuItem key={st} onSelect={() => set('status', st)} className="gap-2">
+                    <StatusBadge status={st} />
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -348,107 +354,92 @@ export function TaskSheet({ open, onOpenChange, onCreateTask, defaultStatus }: T
                       </PopoverContent>
                     </Popover>
                   </div>
-                  <TimeField
-                    label="Time"
-                    value={form.onceTime}
-                    onChange={v => set('onceTime', v)}
-                  />
+                  <TimeField label="Time" value={form.onceTime} onChange={v => set('onceTime', v)} />
                 </div>
               )}
 
-              {/* ── Recurring ── */}
+              {/* ── Recurring — sentence builder ── */}
               {form.scheduleMode === 'recurring' && (
                 <div className="space-y-3">
 
-                  {/* Cadence */}
+                  {/* Every [N] [unit] */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">Cadence</label>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm shadow-xs hover:bg-accent/30 transition-colors"
-                        >
-                          <span>{CADENCE_LABELS[form.cadence]}</span>
-                          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-[220px]">
-                        {(Object.keys(CADENCE_LABELS) as Cadence[]).map(c => (
-                          <DropdownMenuItem key={c} onSelect={() => set('cadence', c)}>
-                            {CADENCE_LABELS[c]}
-                          </DropdownMenuItem>
+                    <label className="text-xs font-medium text-muted-foreground">Repeat</label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground shrink-0">Every</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={s.unit === 'minutes' ? 59 : s.unit === 'hours' ? 23 : 99}
+                        value={s.n}
+                        onChange={e => patchSchedule({ n: Math.max(1, Number(e.target.value)) })}
+                        className="w-16 text-center"
+                      />
+                      <select
+                        value={s.unit}
+                        onChange={e => patchSchedule({ unit: e.target.value as Unit })}
+                        className="flex-1 h-9 rounded-md border border-input bg-background px-2 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        {UNITS.map(u => (
+                          <option key={u.value} value={u.value}>
+                            {s.n === 1 ? u.singular : u.plural}
+                          </option>
                         ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                      </select>
+                    </div>
                   </div>
 
-                  {/* Detail + time row */}
-                  {form.cadence === 'weekly' && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground">Day</label>
-                        <div className="flex gap-1">
-                          {WEEKDAYS.map((label, i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              onClick={() => set('weekday', i)}
-                              className={`flex-1 h-9 rounded-md border text-xs transition-colors ${
-                                form.weekday === i
-                                  ? 'bg-foreground text-background border-foreground'
-                                  : 'bg-background text-foreground hover:bg-muted'
-                              }`}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
+                  {/* Day-of-week chips */}
+                  {s.unit === 'weeks' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">On</label>
+                      <div className="flex gap-1">
+                        {WEEKDAY_LABELS.map((label, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => toggleWeekday(i)}
+                            className={`flex-1 h-9 rounded-md border text-xs font-medium transition-colors ${
+                              s.weekdays.includes(i)
+                                ? 'bg-foreground text-background border-foreground'
+                                : 'bg-background text-foreground hover:bg-muted'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </div>
-                      <TimeField
-                        label="Time"
-                        value={recurTime}
-                        onChange={v => {
-                          const [hh, mm] = v.split(':').map(Number)
-                          setForm(p => ({ ...p, recurHour: hh ?? 0, recurMinute: mm ?? 0 }))
-                        }}
-                      />
-                    </div>
-                  )}
-                  {(form.cadence === 'daily' || form.cadence === 'weekdays') && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <TimeField
-                        label="Time"
-                        value={recurTime}
-                        onChange={v => {
-                          const [hh, mm] = v.split(':').map(Number)
-                          setForm(p => ({ ...p, recurHour: hh ?? 0, recurMinute: mm ?? 0 }))
-                        }}
-                      />
-                      <div />
                     </div>
                   )}
 
-                  {/* Custom cron — 2-column grid, cron in col 1, col 2 empty */}
-                  {form.cadence === 'custom' && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground">Cron expression</label>
-                        <Input
-                          placeholder="0 9 * * 1"
-                          value={form.customCron}
-                          onChange={e => set('customCron', e.target.value)}
-                        />
-                        <p className="text-[11px] text-muted-foreground">
-                          Format: <code>min hour day month weekday</code>
-                        </p>
-                      </div>
-                      <div />
+                  {/* Day of month */}
+                  {s.unit === 'months' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">On day</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={28}
+                        value={s.day}
+                        onChange={e => patchSchedule({ day: Math.min(28, Math.max(1, Number(e.target.value))) })}
+                        className="w-24"
+                      />
                     </div>
+                  )}
+
+                  {/* Time */}
+                  {needsTime && (
+                    <TimeField
+                      label="At"
+                      value={timeValue}
+                      onChange={v => {
+                        const [hh, mm] = v.split(':').map(Number)
+                        patchSchedule({ hour: hh ?? 0, minute: mm ?? 0 })
+                      }}
+                    />
                   )}
 
                   {/* Begin on + End on */}
-                  {/* TODO(backend): endDate is optional — server should treat null/missing as "no end" */}
                   <div className="flex gap-3">
                     <DateField
                       label="Begin on"

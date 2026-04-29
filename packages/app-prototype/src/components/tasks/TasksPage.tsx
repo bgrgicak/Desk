@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import { TaskSheet } from './TaskSheet'
+import { TaskSheet, type TaskCreateInput } from './TaskSheet'
 import type { Task } from '@/data/ui-types'
 
 interface TasksPageProps {
@@ -14,7 +14,7 @@ interface TasksPageProps {
    * through to PATCH /chats/:id/messages/:id in App.tsx. Intra-column
    * reorders don't fire this hook — the server has no ordering field. */
   onTaskMove?: (task: Task, newStatus: Task['status']) => Promise<void> | void
-  onCreateTask?: (input: { name: string; description?: string; status: Task['status']; scheduledFor?: Date; scheduleRepeat?: boolean }) => Promise<void> | void
+  onCreateTask?: (input: TaskCreateInput) => Promise<void> | void
 }
 
 export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {

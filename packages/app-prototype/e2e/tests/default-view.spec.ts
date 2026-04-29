@@ -8,8 +8,8 @@
  *      was on a moment ago.
  *
  * The pref previously offered a "chats" value that didn't map to any
- * route — `loadPrefs` now sanitises it back to "desk", which is also
- * covered here.
+ * route — `loadPrefs` now sanitises it back to the default
+ * (PREFS_DEFAULTS.defaultView), which is also covered here.
  */
 import { test, expect } from "../fixtures";
 
@@ -108,19 +108,20 @@ test("workspace tab click jumps to the default view", async ({
   );
 });
 
-test("stale 'chats' value is sanitised back to 'desk'", async ({
+test("stale 'chats' value is sanitised back to the default view", async ({
   loggedInPage,
   serverUrl,
   token,
 }) => {
   const wsId = await getWorkspaceId(serverUrl, token);
 
-  // 'chats' was a valid pref value in an earlier release. The shape
-  // has since narrowed to RouteView (desk|tasks|context); loadPrefs
-  // must not propagate the stale value into the URL.
+  // 'chats' was a valid pref value in an earlier release. The shape has
+  // since narrowed to RouteView (pinned|desk|tasks|context); loadPrefs
+  // must not propagate the stale value into the URL — it falls back to
+  // PREFS_DEFAULTS.defaultView (currently 'tasks').
   await setDefaultViewPref(loggedInPage, serverUrl, token, "chats");
   await loggedInPage.goto("/");
-  await expect(loggedInPage).toHaveURL(new RegExp(`/w/${wsId}/desk($|\\?)`), {
+  await expect(loggedInPage).toHaveURL(new RegExp(`/w/${wsId}/tasks($|\\?)`), {
     timeout: 10_000,
   });
 });

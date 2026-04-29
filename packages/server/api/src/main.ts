@@ -17,7 +17,7 @@ import {
   resolveDeskHome,
 } from "@desk/storage";
 import { queries } from "@desk/db";
-import { createRunManager, createAdapter, reconcile, sweepStaleRuns } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { auditSandboxMounts } from "@desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
@@ -105,43 +105,18 @@ async function main(): Promise<void> {
   const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
   const broadcastUserId: string | undefined = rows[0]?.id;
 
-  const adapter = createAdapter();
-
-  // Repair drift between pending messages and the at/cron daemons:
-  // reinstall missing entries, fire overdue at-jobs immediately, and
-  // garbage-collect orphan scheduler entries. Without this, a lost or
-  // missed at-job leaves the message stuck in `pending` with a past
-  // execute_at, which the UI renders as "Overdue since …".
-  try {
-    await reconcile(pool, adapter);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("scheduler reconcile failed:", err);
-  }
-
-  // Periodic sweep for runs that go stale while the server is up — e.g.
-  // an at-job the daemon silently dropped, or a message whose executeAt
-  // has passed without a fire. sweepStaleRuns is the same repair logic
-  // reconcile runs at boot, minus the orphan GC (which is boot-only).
-  const SWEEP_INTERVAL_MS = parseInt(
-    process.env.DESK_SCHEDULER_SWEEP_INTERVAL_MS ?? "300000",
-    10,
-  );
-  const sweepTimer = setInterval(() => {
-    void sweepStaleRuns(pool, adapter).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.error("scheduler sweep failed:", err);
-    });
-  }, SWEEP_INTERVAL_MS);
-  sweepTimer.unref();
-
   const runManager = createRunManager({
     pool,
-    adapter,
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
   });
+
+  const POLL_INTERVAL_MS = parseInt(
+    process.env.DESK_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
+    10,
+  );
+  const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
 
   const server = createApp({
     pool,
@@ -160,6 +135,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);
+    clearInterval(pollTimer);
+    clearInterval(retentionTimer);
     clearConnections();
     server.close();
     await pool.end();

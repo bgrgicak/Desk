@@ -12,7 +12,7 @@ import * as crypto from "node:crypto";
 import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -68,10 +68,8 @@ beforeAll(async () => {
   await ensureLayout(home);
 
   const storage = { pool, home };
-  const adapter = createMemoryAdapter();
   const runManager = createRunManager({
     pool,
-    adapter,
     execRunFn: async (_runId, _agentId, _prompt, onLog) => {
       onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "ok" });
       return { exitCode: 0 };

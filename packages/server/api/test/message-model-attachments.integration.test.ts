@@ -24,12 +24,11 @@ import * as path from "node:path";
 import pg from "pg";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@desk/scheduler";
 import { generateId } from "@desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { resetInternalTokenCache } from "../src/auth/internal.js";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
 const testDbName = `desk_msg_model_attachments_${workerId}`;
@@ -50,9 +49,9 @@ let server: http.Server;
 let port: number;
 let home: string;
 let userToken: string;
-let internalToken: string;
 let chatId: string;
 let agentModel: string;
+let runManager: ReturnType<typeof createRunManager>;
 /** Captures the prompt + forwarded attachments seen by the fake driver on each fireMessage call. */
 const promptsSeen: { prompt: string; attachments?: string[] }[] = [];
 
@@ -77,15 +76,8 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  const tokenPath = path.join(home, "internal-token");
-  internalToken = "internaltoken123456789012345678901";
-  await fs.writeFile(tokenPath, internalToken, { mode: 0o600 });
-  process.env.DESK_INTERNAL_TOKEN_PATH = tokenPath;
-  resetInternalTokenCache();
-
-  const runManager = createRunManager({
+  runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async (runId, _a, prompt, onLog, runOpts) => {
       promptsSeen.push({ prompt, attachments: runOpts?.attachments });
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed the attached file." });
@@ -119,8 +111,6 @@ afterAll(async () => {
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
-  resetInternalTokenCache();
-  delete process.env.DESK_INTERNAL_TOKEN_PATH;
   delete process.env.DESK_HOME;
 
   const admin = new pg.Pool({ connectionString: adminConn() });
@@ -158,7 +148,6 @@ async function login(): Promise<string> {
 }
 
 async function fireTriggerFor(messageId: string): Promise<void> {
-  // Walk the chat to find the newest agent_turn trigger for this user message.
   const { rows } = await pool.query(
     `SELECT id FROM messages
      WHERE chat_id = $1 AND role = 'system' AND content->>'type' = 'agent_turn'
@@ -168,8 +157,7 @@ async function fireTriggerFor(messageId: string): Promise<void> {
   );
   const triggerId = rows[0]?.id as string;
   expect(triggerId).toBeDefined();
-  const res = await request("POST", "/internal/messages/fire", { messageId: triggerId }, internalToken);
-  expect(res.status).toBe(200);
+  await runManager.fireMessage(triggerId);
 }
 
 describe("POST /chats/{id}/messages with attachments", () => {
@@ -410,9 +398,7 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
        VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
       [requestId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
-    const fire = await request("POST", "/internal/messages/fire", { messageId: requestId }, internalToken);
-    expect(fire.status).toBe(200);
-    const { childIds } = fire.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
     const notePath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
@@ -429,8 +415,7 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
        VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
       [reqId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
-    const fire = await request("POST", "/internal/messages/fire", { messageId: reqId }, internalToken);
-    const { childIds } = fire.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(reqId);
     const noteId = childIds[0];
 
     const patched = await request(

@@ -6,7 +6,6 @@ import pg from "pg";
 import { runMigrations, seedIfEmpty, queries } from "@desk/db";
 import { generateId, type WsEvent } from "@desk/shared";
 import { createRunManager } from "../src/runs.js";
-import { createMemoryAdapter } from "../src/scheduleAdapter.js";
 import type { LogEvent } from "@desk/runtime";
 
 const workerId = process.env.VITEST_WORKER_ID ?? "0";
@@ -106,14 +105,15 @@ async function insertPendingMessage(content: unknown): Promise<string> {
   return id;
 }
 
-async function insertTask(opts: { content: unknown; cron?: string; executeAt?: string }): Promise<string> {
+async function insertTask(opts: { content: unknown; cron?: string; executeAt?: string; role?: string }): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state, kind, cron, execute_at)
-     VALUES ($1, $2, 'user', $3, 'pending', 'task', $4, $5)`,
+     VALUES ($1, $2, $3, $4, 'pending', 'task', $5, $6)`,
     [
       id,
       chatId,
+      opts.role ?? "user",
       JSON.stringify(opts.content),
       opts.cron ?? null,
       opts.executeAt ? new Date(opts.executeAt) : null,
@@ -155,8 +155,7 @@ describe("fireMessage", () => {
 
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      emit: (evt) => events.push(evt),
+emit: (evt) => events.push(evt),
       execRunFn: fakeExec,
     });
 
@@ -191,8 +190,7 @@ describe("fireMessage", () => {
   it("ai_note_request content produces a note-content child", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async (messageId, _a, _p, onLog) => {
+execRunFn: async (messageId, _a, _p, onLog) => {
         onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "Note about the vacation chat." });
         return { exitCode: 0 };
       },
@@ -210,8 +208,7 @@ describe("fireMessage", () => {
   it("is idempotent — second fire on same message is a no-op", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async () => ({ exitCode: 0 }),
+execRunFn: async () => ({ exitCode: 0 }),
     });
 
     const messageId = await insertPendingMessage({ type: "text", text: "idempotent" });
@@ -226,8 +223,7 @@ describe("fireMessage", () => {
   it("unknown messageId: fired=false, no side effects", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async () => ({ exitCode: 0 }),
+execRunFn: async () => ({ exitCode: 0 }),
     });
     const result = await mgr.fireMessage("msg_does_not_exist");
     expect(result.fired).toBe(false);
@@ -236,8 +232,7 @@ describe("fireMessage", () => {
   it("exec failure: message transitions to failed", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async () => ({ exitCode: 1 }),
+execRunFn: async () => ({ exitCode: 1 }),
     });
 
     const messageId = await insertPendingMessage({ type: "text", text: "will fail" });
@@ -250,8 +245,7 @@ describe("fireMessage", () => {
     let capturedPrompt = "";
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async (_id, _agentId, prompt, onLog) => {
+execRunFn: async (_id, _agentId, prompt, onLog) => {
         capturedPrompt = prompt;
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
         return { exitCode: 0 };
@@ -277,8 +271,7 @@ describe("fireMessage on kind='task'", () => {
     const events: WsEvent[] = [];
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      emit: (evt) => events.push(evt),
+emit: (evt) => events.push(evt),
       execRunFn: async (_id, _agentId, _prompt, onLog) => {
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
         return { exitCode: 0 };
@@ -295,8 +288,8 @@ describe("fireMessage on kind='task'", () => {
     const b = await mgr.fireMessage(taskId);
     expect(b.fired).toBe(true);
 
-    // Parent task is untouched: still pending, no started_at — the schedule
-    // is the source of truth, runs hold per-fire state.
+    // After both runs complete, parent task is back to pending with no
+    // started_at — runs hold per-fire state, parent tracks schedule status.
     const parent = await queries.messages.findById(pool, taskId);
     expect(parent?.state).toBe("pending");
     expect(parent?.startedAt).toBeUndefined();
@@ -321,8 +314,7 @@ describe("fireMessage on kind='task'", () => {
   it("one-shot task transitions parent to terminal and clears executeAt", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+execRunFn: async (_id, _agentId, _prompt, onLog) => {
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
         return { exitCode: 0 };
       },
@@ -347,8 +339,7 @@ describe("fireMessage on kind='task'", () => {
   it("task run failure marks the run failed and the one-shot parent failed", async () => {
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async () => ({ exitCode: 1 }),
+execRunFn: async () => ({ exitCode: 1 }),
     });
 
     const taskId = await insertTask({
@@ -364,6 +355,90 @@ describe("fireMessage on kind='task'", () => {
     expect(runs[0].state).toBe("failed");
   });
 
+  it("parent task state is running while task_run is in-flight and stays running after (user controls status)", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "start" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "active check" },
+    });
+
+    const fire = mgr.fireMessage(taskId);
+    await runStarted;
+
+    // While the run is in-flight the parent task must be 'running'.
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+
+    allowFinish();
+    await fire;
+
+    // After the run completes the parent stays 'running' — the user placed
+    // it in Active and owns its status from here.
+    const afterRun = await queries.messages.findById(pool, taskId);
+    expect(afterRun?.state).toBe("running");
+  });
+
+  it("user-created unscheduled task: parent stays running after run (user owns status)", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "user todo" },
+      // no executeAt, no cron — plain user-created task
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("running");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("agent-created unscheduled task: parent state transitions to terminal after run", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "agent todo" },
+      role: "agent",
+      // no executeAt, no cron
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("succeeded");
+    expect(parent?.executeAt).toBeUndefined();
+  });
+
   it("declines to start a second concurrent run for the same task", async () => {
     // Block the first fire inside execRunFn so its run is still "running"
     // when the second fire arrives. The second should see the in-flight
@@ -372,8 +447,7 @@ describe("fireMessage on kind='task'", () => {
     const blocked = new Promise<void>((r) => { release = r; });
     const mgr = createRunManager({
       pool,
-      adapter: createMemoryAdapter(),
-      execRunFn: async (_id, _a, _p, onLog) => {
+execRunFn: async (_id, _a, _p, onLog) => {
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "" });
         await blocked;
         return { exitCode: 0 };
@@ -410,11 +484,9 @@ describe("scheduleAiNote", () => {
     );
   }
 
-  it("creates a pending ai_note_request message with an at scheduler_ref", async () => {
-    const adapter = createMemoryAdapter();
+  it("creates a pending ai_note_request message with a future execute_at", async () => {
     const mgr = createRunManager({
       pool,
-      adapter,
       execRunFn: async () => ({ exitCode: 0 }),
     });
     await clearNotes();
@@ -422,19 +494,17 @@ describe("scheduleAiNote", () => {
     await mgr.scheduleAiNote(chatId);
 
     const { rows } = await pool.query(
-      `SELECT id, state, scheduler_ref FROM messages
+      `SELECT id, state, execute_at FROM messages
        WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
       [chatId],
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].state).toBe("pending");
-    expect(rows[0].scheduler_ref).toMatchObject({ kind: "at" });
-    expect((await adapter.listAt()).length).toBeGreaterThanOrEqual(1);
+    expect(new Date(rows[0].execute_at as Date).getTime()).toBeGreaterThan(Date.now());
   });
 
   it("cancels the previous ai_note_request before scheduling a new one", async () => {
-    const adapter = createMemoryAdapter();
-    const mgr = createRunManager({ pool, adapter, execRunFn: async () => ({ exitCode: 0 }) });
+    const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
     await clearNotes();
 
     await mgr.scheduleAiNote(chatId);
@@ -454,22 +524,18 @@ describe("scheduleAiNote", () => {
 });
 
 describe("cancelMessage", () => {
-  it("removes the row and cancels the at ref", async () => {
-    const adapter = createMemoryAdapter();
-    const mgr = createRunManager({ pool, adapter, execRunFn: async () => ({ exitCode: 0 }) });
+  it("removes the row", async () => {
+    const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
     await mgr.scheduleAiNote(chatId);
 
     const { rows } = await pool.query(
-      `SELECT id, scheduler_ref FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = $1 AND content->>'type' = 'ai_note_request'`,
       [chatId],
     );
     const messageId = rows[0].id as string;
-    const beforeCount = (await adapter.listAt()).length;
 
     await mgr.cancelMessage(messageId);
 
     expect(await queries.messages.findById(pool, messageId)).toBeNull();
-    const afterCount = (await adapter.listAt()).length;
-    expect(afterCount).toBeLessThan(beforeCount);
   });
 });

@@ -12,7 +12,6 @@ import * as crypto from "node:crypto";
 import pg from "pg";
 import { runMigrations, seedIfEmpty } from "@desk/db";
 import { ensureLayout, materializeNote } from "@desk/storage";
-import { createMemoryAdapter } from "@desk/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -77,10 +76,8 @@ beforeAll(async () => {
   process.env.DESK_HOME = home;
 
   const storage = { pool, home };
-  const adapter = createMemoryAdapter();
   const runManager = createRunManager({
     pool,
-    adapter,
     execRunFn: async (_runId, _agentId, _prompt, onLog) => {
       await onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "fake response" });
       return { exitCode: 0 };
@@ -1080,12 +1077,10 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic 
     await ensureLayout(realHome);
 
     const storage = { pool: realPool, home: realHome };
-    const adapter = createMemoryAdapter();
 
     // Use real Anthropic API but bypass Docker sandbox
     const runManager = createRunManager({
       pool: realPool,
-      adapter,
       execRunFn: async (_runId, _agentId, prompt, onLog, execOpts) => {
         // Call real Anthropic API, using agent instructions as the Anthropic system param
         const apiKey = process.env.ANTHROPIC_API_KEY!;
