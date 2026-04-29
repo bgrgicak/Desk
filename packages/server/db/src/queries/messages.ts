@@ -185,6 +185,12 @@ export async function startTaskRun(
         args.model ?? null,
       ],
     );
+    // Mark the parent task as running so the kanban moves the card to Active.
+    await client.query(
+      `UPDATE messages SET state = 'running', updated_at = now()
+       WHERE id = $1 AND kind = 'task'`,
+      [args.taskId],
+    );
     await client.query(
       "UPDATE chats SET updated_at = now() WHERE id = $1",
       [args.chatId],

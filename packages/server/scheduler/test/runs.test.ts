@@ -288,8 +288,8 @@ emit: (evt) => events.push(evt),
     const b = await mgr.fireMessage(taskId);
     expect(b.fired).toBe(true);
 
-    // Parent task is untouched: still pending, no started_at — the schedule
-    // is the source of truth, runs hold per-fire state.
+    // After both runs complete, parent task is back to pending with no
+    // started_at — runs hold per-fire state, parent tracks schedule status.
     const parent = await queries.messages.findById(pool, taskId);
     expect(parent?.state).toBe("pending");
     expect(parent?.startedAt).toBeUndefined();
@@ -355,7 +355,45 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("failed");
   });
 
-  it("user-created unscheduled task: parent state stays pending after run (user controls status)", async () => {
+  it("parent task state is running while task_run is in-flight and stays running after (user controls status)", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "start" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "active check" },
+    });
+
+    const fire = mgr.fireMessage(taskId);
+    await runStarted;
+
+    // While the run is in-flight the parent task must be 'running'.
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+
+    allowFinish();
+    await fire;
+
+    // After the run completes the parent stays 'running' — the user placed
+    // it in Active and owns its status from here.
+    const afterRun = await queries.messages.findById(pool, taskId);
+    expect(afterRun?.state).toBe("running");
+  });
+
+  it("user-created unscheduled task: parent stays running after run (user owns status)", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -372,7 +410,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("pending");
+    expect(parent?.state).toBe("running");
 
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);

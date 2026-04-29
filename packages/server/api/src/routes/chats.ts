@@ -225,11 +225,12 @@ export async function patchMessage(
   // board sends the column's target state on every drop without inspecting
   // the row's current state.
   const stateTransition = data.state !== undefined && data.state !== current.state;
-  // The only forbidden destination is from 'running' — that's claimed
-  // atomically by fireMessage and a manual flip would race with the
-  // executor. Every other transition (terminal → pending for a re-run,
-  // paused → cancelled, …) is fair game.
-  if (stateTransition && current.state === "running") {
+  // For non-task messages the running state is claimed atomically by
+  // fireMessage — a manual flip would race with the executor. Task messages
+  // (kind='task') are different: the executor claims the task_run child, so
+  // the parent's running state is only a kanban-position signal and can be
+  // patched freely.
+  if (stateTransition && current.state === "running" && current.kind !== "task") {
     throw new ValidationError(
       `cannot patch state of a running message; cancel or wait for it to finish`,
     );

@@ -275,6 +275,9 @@ export function createRunManager(opts: RunManagerOptions) {
       if (!run) return { fired: false, childIds: [] };
       runId = run.id;
       emit({ type: "message.appended", payload: run });
+      // Emit parent task update so the kanban moves the card to Active.
+      const updatedTask = await queries.messages.findById(pool, messageId);
+      if (updatedTask) emit({ type: "message.updated", payload: updatedTask });
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -473,13 +476,12 @@ export function createRunManager(opts: RunManagerOptions) {
     if (task.kind !== "task") return;
     if (task.cron) {
       const nextRun = computeNextRun(task.cron);
-      const updated = await queries.messages.updateMessage(pool, task.id, { executeAt: nextRun });
+      const updated = await queries.messages.updateMessage(pool, task.id, { state: "pending", executeAt: nextRun });
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    // User-created unscheduled tasks: only the user should change status.
-    // Server/agent-created tasks (role !== 'user') and user-scheduled one-shots
-    // (executeAt set at fire time) may be auto-transitioned by the server.
+    // User-created unscheduled tasks: the user owns their status. Leave
+    // the parent at 'running' so the card stays in the Active column.
     if (task.role === "user" && !task.executeAt) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
       state: terminal,
