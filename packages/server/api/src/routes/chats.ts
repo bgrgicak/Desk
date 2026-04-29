@@ -113,6 +113,7 @@ const SendMessageSchema = z.object({
   title: z.string().optional(),
   executeAt: z.string().optional(),
   cron: z.string().optional(),
+  goal: z.string().optional(),
 });
 
 export async function sendMessage(
@@ -168,7 +169,9 @@ export async function sendMessage(
     id: generateId("message"),
     chatId,
     role: "user",
-    content: { type: "text", text: data.content },
+    content: data.goal
+      ? { type: "text", text: data.content, goal: data.goal }
+      : { type: "text", text: data.content },
     attachments,
   });
 

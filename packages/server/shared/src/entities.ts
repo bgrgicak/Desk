@@ -62,6 +62,8 @@ export type Chat = z.infer<typeof ChatSchema>;
 export const MessageContentTextSchema = z.object({
   type: z.literal("text"),
   text: z.string(),
+  /** Optional goal the user selected in the chat composer for this message. */
+  goal: z.string().optional(),
 });
 
 export const MessageContentToolCallSchema = z.object({

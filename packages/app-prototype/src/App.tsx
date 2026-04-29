@@ -307,7 +307,7 @@ function AppInner() {
     message: string,
     agentId?: string,
     attachments?: AttachmentRef[],
-    options?: { kind?: 'task'; title?: string; executeAt?: string },
+    options?: { kind?: 'task'; title?: string; executeAt?: string; goal?: string },
   ) => {
     if (!activeWorkspaceId) return
     // The workspace-agents query may not have resolved yet on first paint
@@ -347,6 +347,7 @@ function AppInner() {
         kind: options?.kind,
         title: options?.title,
         executeAt: options?.executeAt,
+        goal: options?.goal,
       }).unwrap()
       // Best-effort pin: failure leaves the file usable as a message
       // attachment, just absent from the right-sidebar "In this chat" list.
@@ -377,7 +378,7 @@ function AppInner() {
   const libraryItems: ContextItem[] = activeWorkspaceId
     ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId))
     : []
-  const artifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
+  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f, serverAgents ?? []))
 
   useEffect(() => {
     if (!libraryResp?.items) return

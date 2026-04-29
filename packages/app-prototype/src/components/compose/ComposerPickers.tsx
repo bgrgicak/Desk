@@ -2,7 +2,10 @@ import { Fragment, useCallback, useEffect, useImperativeHandle, useRef, useState
 import { createPortal } from 'react-dom'
 import {
   Bot, ChevronDown, Folder, Paperclip, Search,
+  Zap, FileText, ImageIcon, Table, Globe, ListTodo, Target,
+  type LucideIcon,
 } from 'lucide-react'
+import type { GoalKey } from '@desk/shared'
 import type { ContextItem } from '@/data/ui-types'
 import {
   useGetAgentsQuery,
@@ -12,6 +15,27 @@ import {
 import { toContextItem, toFolderList } from '@/store/selectors/library'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { ITEM_ICON, type ComposerAttachment } from './composer-pickers-utils'
+
+interface Goal {
+  key: GoalKey | null
+  label: string
+  Icon: LucideIcon | null
+  placeholder: string
+}
+
+const GOALS: Goal[] = [
+  { key: 'app',       label: 'New app',       Icon: Zap,           placeholder: 'Describe the app you want to build...' },
+  { key: 'document',  label: 'New doc',       Icon: FileText,      placeholder: 'What should the document cover?' },
+  { key: 'image',     label: 'New image',     Icon: ImageIcon,     placeholder: 'Describe the image you want to create...' },
+  { key: 'data',      label: 'New data',      Icon: Table,         placeholder: 'What data do you want to track or analyse?' },
+  { key: 'site',      label: 'New site',      Icon: Globe,         placeholder: 'Describe the site you want to build...' },
+  { key: 'task',      label: 'New task',      Icon: ListTodo,      placeholder: 'What needs to be done?' },
+  { key: null,        label: 'No goal',       Icon: Target,        placeholder: 'Ask anything, start a task, build something...' },
+]
+
+export function getGoalPlaceholder(key: GoalKey | null): string | null {
+  return GOALS.find(g => g.key === key)?.placeholder ?? null
+}
 
 export interface ComposerPickersHandle {
   /** Open the attach dropdown and seed its search box. Used by ChatInput's @ mention path. */
@@ -45,6 +69,9 @@ interface ComposerPickersProps {
   /** Skip the library dropdown and open a native file picker on click.
    * Used when the surface has no library to pick from. */
   directUpload?: boolean
+  goalKey?: GoalKey | null
+  onGoalChange?: (key: GoalKey | null) => void
+  showGoalPicker?: boolean
 }
 
 function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
@@ -60,7 +87,7 @@ function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
 }
 
 const pickerBtnClass =
-  'flex items-center gap-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors px-2 h-6 text-xs font-medium shrink-0'
+  'flex items-center gap-1 rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors px-2 h-6 text-xs font-medium shrink-0'
 const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
 export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickersProps>(function ComposerPickers(
@@ -77,6 +104,9 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
     portalContainer,
     hideAgentPicker = false,
     directUpload = false,
+    goalKey = null,
+    onGoalChange,
+    showGoalPicker = false,
   },
   ref,
 ) {
@@ -118,13 +148,17 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
 
   const attachBtnRef = useRef<HTMLButtonElement>(null)
   const agentBtnRef = useRef<HTMLButtonElement>(null)
+  const goalBtnRef = useRef<HTMLButtonElement>(null)
   const attachDropRef = useRef<HTMLDivElement>(null)
   const agentDropRef = useRef<HTMLDivElement>(null)
+  const goalDropRef = useRef<HTMLDivElement>(null)
 
   const [attachRect, setAttachRect] = useState<DOMRect | null>(null)
   const [agentRect, setAgentRect] = useState<DOMRect | null>(null)
+  const [goalRect, setGoalRect] = useState<DOMRect | null>(null)
   const [attachOpen, setAttachOpen] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  const [goalOpen, setGoalOpen] = useState(false)
   const [attachSearch, setAttachSearch] = useState('')
   const [agentSearch, setAgentSearch] = useState('')
   // Visual highlight on the keyboard-nav cursor only after the user
@@ -163,6 +197,12 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         !agentDropRef.current?.contains(target)
       ) {
         setAgentOpen(false)
+      }
+      if (
+        !goalBtnRef.current?.contains(target) &&
+        !goalDropRef.current?.contains(target)
+      ) {
+        setGoalOpen(false)
       }
     }
     document.addEventListener('mousedown', handler)
@@ -232,6 +272,56 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         />
       )}
 
+      {/* Goal picker */}
+      {showGoalPicker && (() => {
+        const effectiveGoal = GOALS.find(g => g.key === goalKey) ?? GOALS.find(g => g.key === null)!
+        return (
+          <>
+            <button
+              type="button"
+              ref={goalBtnRef}
+              onClick={() => {
+                const rect = goalBtnRef.current?.getBoundingClientRect() ?? null
+                setGoalRect(rect)
+                setGoalOpen(v => !v)
+                setAttachOpen(false)
+                setAgentOpen(false)
+              }}
+              className={`${pickerBtnClass} ${goalKey !== null ? 'text-foreground' : ''}`}
+            >
+              {goalKey !== null && effectiveGoal.Icon
+                ? <effectiveGoal.Icon className="h-3 w-3" />
+                : <Target className="h-3 w-3" />
+              }
+              {effectiveGoal.label}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {goalOpen && goalRect && createPortal(
+              <div ref={goalDropRef} style={getDropdownStyle(goalRect, 208)} className={dropdownClass}>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your goal</p>
+                <div className="pb-1.5">
+                  {GOALS.map(goal => (
+                    <button
+                      type="button"
+                      key={String(goal.key)}
+                      onClick={() => { onGoalChange?.(goal.key); setGoalOpen(false) }}
+                      className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${goalKey === goal.key ? 'bg-muted/30' : ''}`}
+                    >
+                      {goal.Icon
+                        ? <goal.Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        : <span className="h-3.5 w-3.5 shrink-0" />
+                      }
+                      <span className="flex-1">{goal.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>,
+              portalTarget ?? document.body,
+            )}
+          </>
+        )
+      })()}
+
       {/* Agent picker — hidden on surfaces with a fixed global model. */}
       {!hideAgentPicker && (
         <>
@@ -249,7 +339,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
       >
         <Bot className="h-3 w-3" />
         {activeAgent?.name ?? 'Agent'}
-        <ChevronDown className="h-3 w-3 opacity-60" />
+        <ChevronDown className="h-3 w-3" />
       </button>
       {agentOpen && agentRect && createPortal(
         <div ref={agentDropRef} data-composer-dropdown="" style={getDropdownStyle(agentRect, 256)} className={dropdownClass}>
@@ -308,7 +398,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
       >
         <Paperclip className="h-3 w-3" />
         {directUpload ? 'Attach file' : 'Add files'}
-        {!directUpload && <ChevronDown className="h-3 w-3 opacity-60" />}
+        {!directUpload && <ChevronDown className="h-3 w-3" />}
       </button>
       {!directUpload && attachOpen && attachRect && createPortal(
         <div ref={attachDropRef} data-composer-dropdown="" style={getDropdownStyle(attachRect, 288)} className={dropdownClass}>

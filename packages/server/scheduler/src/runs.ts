@@ -11,7 +11,7 @@ import {
   type WsEvent,
 } from "@desk/shared";
 import { queries } from "@desk/db";
-import { resolveDeskHome } from "@desk/storage";
+import { resolveDeskHome, workspaceRootPath } from "@desk/storage";
 import {
   createOrReuse,
   execRun as runtimeExecRun,
@@ -168,11 +168,12 @@ export function createRunManager(opts: RunManagerOptions) {
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
+      const inner = userMsg?.content as { type?: string; text?: string; goal?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: text, attachments };
+      const prompt = inner?.goal ? `Goal: ${inner.goal}\n\n${text}` : text;
+      return { prompt, attachments };
     }
     return { prompt: JSON.stringify(msg.content) };
   }
@@ -181,6 +182,40 @@ export function createRunManager(opts: RunManagerOptions) {
     if (msg.kind === "ai_note") return "note";
     const c = msg.content as { type?: string };
     return c?.type === "ai_note_request" ? "note" : "text";
+  }
+
+  /**
+   * Walks the workspace root for files whose mtime is at or after `since`.
+   * Returns workspace-relative paths (forward slashes). Skips dotfiles so
+   * agent infrastructure (.chats/, .opencode/, etc.) is excluded — matching
+   * the same rule as listLibrary.
+   */
+  async function touchedLibraryPaths(workspaceRoot: string, since: Date): Promise<string[]> {
+    const sinceMs = since.getTime();
+    const result: string[] = [];
+    const stack = [workspaceRoot];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".")) continue;
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(abs);
+        } else if (entry.isFile()) {
+          const stat = await fsp.stat(abs).catch(() => null);
+          if (stat && stat.mtimeMs >= sinceMs) {
+            result.push(path.relative(workspaceRoot, abs).split(path.sep).join("/"));
+          }
+        }
+      }
+    }
+    return result;
   }
 
   function buildOutputContent(
@@ -317,6 +352,7 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
       };
 
+      const runStart = new Date();
       let result: { exitCode: number };
       if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
@@ -359,6 +395,13 @@ export function createRunManager(opts: RunManagerOptions) {
         payload: (await queries.messages.findById(pool, runId))!,
       });
       await afterTaskRun(msg, terminal);
+
+      // Best-effort: record which files this agent touched so the library UI
+      // can show real agent names on artifact cards.
+      const wsRoot = workspaceRootPath(resolveDeskHome(), workspaceSlug);
+      touchedLibraryPaths(wsRoot, runStart).then((touched) =>
+        queries.libraryFileAuthors.upsertAuthors(pool, workspaceId, agentId, touched),
+      ).catch(() => { /* best-effort */ });
 
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);

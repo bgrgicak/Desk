@@ -153,6 +153,8 @@ export interface ServerFile {
    * filename as the primary label.
    */
   label?: string;
+  /** ID of the agent that last created or edited this file, if known. */
+  agentId?: string;
 }
 
 /**

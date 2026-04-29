@@ -38,7 +38,7 @@ export function TaskCard({
       dragAttributes={attributes}
       dragListeners={listeners}
     >
-      <div className="p-4 space-y-2">
+      <div className="p-4 space-y-2" data-testid={`task-row-${task.id}`}>
         <p className="text-sm font-medium text-foreground truncate">{task.name}</p>
         {task.description && (
           <p className="text-xs text-muted-foreground line-clamp-1">{task.description}</p>
