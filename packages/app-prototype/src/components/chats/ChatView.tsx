@@ -405,7 +405,7 @@ function ArtifactsPanel({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              variant="destructive"
               onClick={() => {
                 if (deletingArtifact) onDeleteArtifact?.(deletingArtifact)
                 if (deletingNote) onDeleteChatNote?.(deletingNote)
