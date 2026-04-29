@@ -9,3 +9,4 @@ export * as userSettings from "./userSettings.js";
 export * as workspaceAgents from "./workspaceAgents.js";
 export * as providerKeyAccessLog from "./providerKeyAccessLog.js";
 export * as libraryFileAuthors from "./libraryFileAuthors.js";
+export * as libraryPins from "./libraryPins.js";

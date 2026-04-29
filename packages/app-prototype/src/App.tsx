@@ -12,9 +12,9 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
-import { ArtifactDetail } from '@/components/artifact/ArtifactDetail'
 import { DeskGrid } from '@/components/desk/DeskGrid'
 import { ContextList } from '@/components/context/ContextList'
+import { PinnedView } from '@/components/library/PinnedView'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
@@ -33,9 +33,12 @@ import {
   useCreateChatMutation,
   useDeleteChatMutation,
   usePinChatLibraryRefMutation,
+  useSaveChatAttachmentToLibraryMutation,
   usePostChatMessageMutation,
   usePatchMessageMutation,
   useRunMessageMutation,
+  usePinLibraryItemMutation,
+  useUnpinLibraryItemMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
@@ -127,7 +130,7 @@ function AppInner() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
 
-  const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'desk'
+  const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
   const activeWorkspaceId = wsId
   const { defaultView } = usePrefs()
   const selectedChatId = searchParams.get('chat')
@@ -136,7 +139,6 @@ function AppInner() {
   const selectedMessageId = searchParams.get('message')
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
-  const artifactBackLabel = useAppSelector(s => s.ui.artifactBackLabel)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
   const readUpdateIdList = useAppSelector(s => s.ui.readUpdateIds)
   const readChatIdList = useAppSelector(s => s.ui.readChatIds)
@@ -183,6 +185,7 @@ function AppInner() {
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
+  const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
   const { data: tasksResp } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, kind: ['task'] },
@@ -191,6 +194,8 @@ function AppInner() {
   const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, serverAgents ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
+  const [pinLibraryItem] = usePinLibraryItemMutation()
+  const [unpinLibraryItem] = useUnpinLibraryItemMutation()
 
   // Agentation widget (Option+A)
   useEffect(() => {
@@ -268,9 +273,25 @@ function AppInner() {
     goTo({ artifact: artifact.id })
   }, [dispatch, goTo])
 
-  const handleSaveArtifact = useCallback((artifactId: string) => {
-    dispatch(markArtifactSaved(artifactId))
-  }, [dispatch])
+  // Promotes a chat-scoped attachment to the primary workspace library.
+  // The `artifactId` is the artifact's workspace-relative path; for chat
+  // attachments it has the shape `.chats/{chatId}/attachments/{name}`.
+  // For files already in the library this is a no-op — they're already there.
+  const handleSaveArtifact = useCallback(async (artifactId: string) => {
+    const match = artifactId.match(/^\.chats\/([^/]+)\/attachments\/(.+)$/)
+    if (!match) {
+      // Already in primary library — just mark UI state.
+      dispatch(markArtifactSaved(artifactId))
+      return
+    }
+    const [, chatId, name] = match
+    try {
+      await saveChatAttachmentToLibraryMutation({ chatId, name }).unwrap()
+      dispatch(markArtifactSaved(artifactId))
+    } catch (err) {
+      toast.error('Failed to save to Library', { description: extractApiError(err) })
+    }
+  }, [dispatch, saveChatAttachmentToLibraryMutation])
 
   // Library items the user picked via "Use in chat" — seeded into the
   // new-chat input tray so they ride the first message as attachments,
@@ -366,6 +387,28 @@ function AppInner() {
     if (selectedChatId === chatId) goTo({ chat: null })
   }, [deleteChatMutation, selectedChatId, goTo])
 
+  const handleCreateArtifact = useCallback(async (input: Parameters<typeof buildArtifactPrompt>[0]) => {
+    if (!activeWorkspaceId) return
+    const pickedAgentId = input.agentId ?? workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
+    if (!pickedAgentId) {
+      toast.error('No agent enabled in this workspace', { description: 'Open Settings → Agents to enable one.' })
+      return
+    }
+    try {
+      const raw = input.name?.trim() || input.instructions || 'New artifact'
+      const title = raw.length > 50 ? raw.slice(0, 50) + '…' : raw
+      const newChat = await createChatMutation({ workspaceId: activeWorkspaceId, agentId: pickedAgentId, title }).unwrap()
+      await postMessageMutation({
+        chatId: newChat.id,
+        content: buildArtifactPrompt(input),
+        attachments: input.attachments?.length ? input.attachments : undefined,
+      }).unwrap()
+      goTo({ chat: newChat.id })
+    } catch (err) {
+      toast.error('Failed to create artifact', { description: err instanceof Error ? err.message : undefined })
+    }
+  }, [activeWorkspaceId, workspaceServerAgents, serverAgents, createChatMutation, postMessageMutation, goTo])
+
   // Inbox badge count = server-reported awaiting-user messages.
   // Don't filter by workspace — the inbox is global.
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
@@ -376,16 +419,19 @@ function AppInner() {
     { skip: !activeWorkspaceId },
   )
   const libraryItems: ContextItem[] = activeWorkspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId))
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, serverAgents ?? []))
     : []
+  const pinnedItems = libraryItems.filter(i => i.pinned)
   const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f, serverAgents ?? []))
 
+  // Files already in `/library` are by definition in the user's library —
+  // mark them as saved so any inline "Save to Library" affordance is
+  // correctly disabled. Newly-promoted chat attachments are marked by the
+  // mutation handler in `handleSaveArtifact`.
   useEffect(() => {
     if (!libraryResp?.items) return
     for (const f of libraryResp.items) dispatch(markArtifactSaved(f.path))
   }, [libraryResp, dispatch])
-
-  const deskUnreadCount = artifactUpdates.filter(u => !readUpdateIds.has(u.id)).length
 
   const handleDismissUpdate = useCallback((id: string) => {
     dispatch(markUpdateRead(id))
@@ -401,25 +447,26 @@ function AppInner() {
     .filter(Boolean) as Artifact[]
   const chatShowNewBadge = !!(selectedChat?.unread && readChatIds.has(selectedChat.id))
 
-  const selectedArtifact = selectedArtifactPath
-    ? artifacts.find(a => a.id === selectedArtifactPath) ?? null
-    : null
-  const libraryItem = selectedContextPath
-    ? libraryItems.find(c => c.id === selectedContextPath) ?? null
+  // Both `?artifact=<path>` and `?item=<path>` route to the same unified
+  // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
+  // the Desk → Library consolidation removes it.
+  const effectiveItemPath = selectedContextPath ?? selectedArtifactPath
+  const libraryItem = effectiveItemPath
+    ? libraryItems.find(c => c.id === effectiveItemPath) ?? null
     : null
   // Fallback path: chat attachments live under `.chats/{id}/attachments/`
   // and don't appear in the default library listing. Fetch their metadata
   // by path so we can render the same ContextDetail view for them.
   const needsMetaFallback =
-    !!selectedContextPath && !libraryItem && !!activeWorkspaceId
+    !!effectiveItemPath && !libraryItem && !!activeWorkspaceId
   const { data: fallbackFile } = useGetLibraryFileQuery(
-    { workspaceId: activeWorkspaceId ?? '', path: selectedContextPath ?? '' },
+    { workspaceId: activeWorkspaceId ?? '', path: effectiveItemPath ?? '' },
     { skip: !needsMetaFallback },
   )
   const selectedContextItem: ContextItem | null =
     libraryItem ??
     (needsMetaFallback && fallbackFile && activeWorkspaceId
-      ? toContextItem(fallbackFile, activeWorkspaceId)
+      ? toContextItem(fallbackFile, activeWorkspaceId, serverAgents ?? [])
       : null)
 
 
@@ -457,9 +504,8 @@ function AppInner() {
         onChatClick={handleSidebarChatClick}
         onDeleteChat={handleDeleteChat}
         unreadCount={unreadCount}
-        deskUnreadCount={deskUnreadCount}
         readChatIds={readChatIds}
-        isDetailOpen={!!(selectedArtifact || selectedContextItem)}
+        isDetailOpen={!!selectedContextItem}
         onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
@@ -468,39 +514,34 @@ function AppInner() {
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
         onChatWithAgent={handleChatWithAgent}
+        pinnedItems={pinnedItems}
+        selectedItemId={effectiveItemPath}
+        onPinnedItemClick={(item) => goTo({ view: 'context', item: item.id })}
+        onUnpinItem={(item) => {
+          if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
+        }}
       >
-        {selectedArtifact && (() => {
-          const selectedArtifactUpdate = artifactUpdates.find(u => u.artifactId === selectedArtifact.id) ?? null
-          return (
-            <ArtifactDetail
-              key={selectedArtifact.id}
-              artifact={selectedArtifact}
-              onBack={() => { goTo({ artifact: null }); dispatch(setArtifactBackLabel(null)) }}
-              backLabel={artifactBackLabel ?? undefined}
-              update={selectedArtifactUpdate}
-              isUpdateRead={selectedArtifactUpdate ? readUpdateIds.has(selectedArtifactUpdate.id) : true}
-              onDismissUpdate={handleDismissUpdate}
-              transitionFrom={artifactTransitionSource ?? undefined}
-              isSaved={savedArtifactIds.has(selectedArtifact.id)}
-              onSave={() => handleSaveArtifact(selectedArtifact.id)}
-            />
-          )
-        })()}
-
-        {!selectedArtifact && selectedContextItem && (
+        {selectedContextItem && (
           <ContextDetail
             key={selectedContextItem.id}
             item={selectedContextItem}
-            onBack={() => goTo({ item: null })}
-            onCompose={(items) => { goTo({ item: null }); handleComposeWithContext(items) }}
+            onBack={() => {
+              // Clear whichever param routed us here.
+              goTo({ item: null, artifact: null })
+              dispatch(setArtifactBackLabel(null))
+            }}
+            onCompose={(items) => {
+              goTo({ item: null, artifact: null })
+              handleComposeWithContext(items)
+            }}
             onArtifactClick={(artifact) => {
-              goTo({ view: 'desk', artifact: artifact.id })
+              goTo({ item: artifact.id })
             }}
             onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
           />
         )}
 
-        {!selectedArtifact && !selectedContextItem && activeChat && (
+        {!selectedContextItem && activeChat && (
           <ChatView
             key={activeChat.id}
             chat={activeChat}
@@ -521,40 +562,15 @@ function AppInner() {
           />
         )}
 
-        {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'desk' && (
+        {!selectedContextItem && !activeChat && activeView === 'pinned' && (
+          <Navigate to={buildPath(activeWorkspaceId, 'context')} replace />
+        )}
+        {!selectedContextItem && !activeChat && activeView === 'desk' && (
           <DeskGrid
             artifacts={artifacts.filter(a => savedArtifactIds.has(a.id))}
             workspaceId={activeWorkspaceId || undefined}
             onArtifactClick={(artifact) => goTo({ artifact: artifact.id })}
-            onCreateArtifact={async (input) => {
-              if (!activeWorkspaceId) return
-              const pickedAgentId = input.agentId ?? workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
-              if (!pickedAgentId) {
-                toast.error('No agent enabled in this workspace', {
-                  description: 'Open Settings → Agents to enable one.',
-                })
-                return
-              }
-              try {
-                const raw = input.name?.trim() || input.instructions || 'New artifact'
-                const title = raw.length > 50 ? raw.slice(0, 50) + '…' : raw
-                const newChat = await createChatMutation({
-                  workspaceId: activeWorkspaceId,
-                  agentId: pickedAgentId,
-                  title,
-                }).unwrap()
-                await postMessageMutation({
-                  chatId: newChat.id,
-                  content: buildArtifactPrompt(input),
-                  attachments: input.attachments?.length ? input.attachments : undefined,
-                }).unwrap()
-                goTo({ chat: newChat.id })
-              } catch (err) {
-                toast.error('Failed to create artifact', {
-                  description: err instanceof Error ? err.message : undefined,
-                })
-              }
-            }}
+            onCreateArtifact={handleCreateArtifact}
             onSkipToChat={(agentId) => {
               if (agentId) dispatch(setPendingNewChatAgentId(agentId))
               goTo({ chat: NEW_CHAT_ID })
@@ -564,7 +580,7 @@ function AppInner() {
             onDismissUpdate={handleDismissUpdate}
           />
         )}
-        {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'tasks' && (
+        {!selectedContextItem && !activeChat && activeView === 'tasks' && (
           <TasksPage
             tasks={tasks}
             onTaskMove={async (task, newStatus) => {
@@ -664,11 +680,22 @@ function AppInner() {
             }}
           />
         )}
-        {!selectedArtifact && !selectedContextItem && !activeChat && activeView === 'context' && (
+        {!selectedContextItem && !activeChat && activeView === 'context' && (
           <ContextList
             items={libraryItems}
             onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
+            onPinItem={(item) => {
+              if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
+            }}
+            onUnpinItem={(item) => {
+              if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
+            }}
+            onCreateArtifact={handleCreateArtifact}
+            onSkipToChat={async (agentId) => {
+              if (agentId) dispatch(setPendingNewChatAgentId(agentId))
+              enterCompose()
+            }}
           />
         )}
       </AppShell>

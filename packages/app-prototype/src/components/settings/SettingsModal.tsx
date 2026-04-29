@@ -1145,11 +1145,9 @@ function ConnectionDetail({
 
 // ── Preferences ──────────────────────────────────────────────────────────────
 
-// Mirrors `RouteView` from `@/router/nav`. The pref offered 'chats' for a
-// while, but there is no Chats route — chats are URL params layered onto
-// any top-level view — so picking it had no effect. `loadPrefs` migrates
-// stored 'chats' values to 'desk' on load.
-type DefaultView = 'desk' | 'tasks' | 'context'
+// Mirrors `RouteView` from `@/router/nav`. 'desk' is kept as a valid stored
+// value during the deprecation window; `loadPrefs` normalises it to 'pinned'.
+type DefaultView = 'pinned' | 'desk' | 'tasks' | 'context'
 
 export interface PrefsShape {
   autoSave: boolean
@@ -1160,7 +1158,7 @@ export interface PrefsShape {
 
 const PREFS_DEFAULTS: PrefsShape = {
   autoSave: true,
-  defaultView: 'desk',
+  defaultView: 'tasks',
   showBadges: true,
   developerMode: false,
 }
@@ -1169,7 +1167,7 @@ function prefsKey(userId: string): string {
   return `desk.prefs.${userId}`
 }
 
-const VALID_VIEWS: readonly DefaultView[] = ['desk', 'tasks', 'context']
+const VALID_VIEWS: readonly DefaultView[] = ['pinned', 'desk', 'tasks', 'context']
 
 export function loadPrefs(userId: string | undefined): PrefsShape {
   if (!userId) return PREFS_DEFAULTS
@@ -1178,6 +1176,8 @@ export function loadPrefs(userId: string | undefined): PrefsShape {
     if (!raw) return PREFS_DEFAULTS
     const parsed = JSON.parse(raw) as Partial<PrefsShape>
     const merged = { ...PREFS_DEFAULTS, ...parsed }
+    // Migrate stored 'desk' → 'pinned' (Desk was renamed to Pinned).
+    if ((merged.defaultView as string) === 'desk') merged.defaultView = 'pinned'
     if (!VALID_VIEWS.includes(merged.defaultView)) {
       merged.defaultView = PREFS_DEFAULTS.defaultView
     }
@@ -1227,7 +1227,6 @@ function PreferencesSection() {
   }
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
-    { value: 'desk',    label: 'Desk'    },
     { value: 'tasks',   label: 'Tasks'   },
     { value: 'context', label: 'Library' },
   ]
