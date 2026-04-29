@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
-  ChevronDown, Link2, StickyNote, Paperclip, X,
+  ChevronDown, Link2, StickyNote, Paperclip, Plus, X,
   PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
