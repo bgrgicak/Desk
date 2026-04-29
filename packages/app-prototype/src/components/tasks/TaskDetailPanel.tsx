@@ -56,6 +56,7 @@ import {
 } from '@/store/api'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
+import type { ServerMessage } from '@/store/types'
 import { StatusBadge, PriorityIcon, PRIORITY_LABELS } from './task-badges'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
@@ -88,6 +89,11 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
   }
 }
 
+// Task-panel chat shows only follow-up conversation messages, not the task
+// definition row itself. This filter is stable (module-level) so useMemo
+// inside ChatThread does not recompute on every render.
+const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task'
+
 function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
   const { wsId } = useParams<{ wsId: string }>()
   const { data: agents } = useGetAgentsQuery()
@@ -116,6 +122,7 @@ function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentNa
       fallbackModel={fallbackModel}
       developerMode={developerMode}
       isSending={isSending}
+      filterMessage={hidePanelTaskRows}
       headerSlot={chatUrl && (
         <div className="px-3 pt-2 pb-1 shrink-0 flex justify-end border-b">
           <Link

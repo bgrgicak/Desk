@@ -101,7 +101,7 @@ test("chat tab displays messages that exist in the task's chat", async ({
   await openTaskChatTab(loggedInPage, seeded);
 
   await expect(
-    loggedInPage.getByText("Slice24 existing message content"),
+    loggedInPage.getByText("Slice24 existing message content").first(),
   ).toBeVisible({ timeout: 8_000 });
 });
 
@@ -119,6 +119,6 @@ test("message typed in the chat tab appears in the message list after submit", a
   await textarea.press("Enter");
 
   await expect(
-    loggedInPage.getByText("Slice24 typed message"),
+    loggedInPage.getByText("Slice24 typed message").first(),
   ).toBeVisible({ timeout: 8_000 });
 });

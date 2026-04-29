@@ -66,6 +66,11 @@ export interface ChatThreadProps {
   /** Called after the last assistant message (e.g. inline artifact cards). */
   lastAssistantSlot?: (messageId: string) => ReactNode
   showNewBadge?: boolean
+  /** Optional additional filter applied after the default visibility check.
+   *  Return false to hide a message from this thread instance.
+   *  Should be a stable reference (module-level constant or memoized) to avoid
+   *  unnecessary message-list recomputations. */
+  filterMessage?: (m: ServerMessage) => boolean
 }
 
 export function ChatThread({
@@ -82,6 +87,7 @@ export function ChatThread({
   onAttachmentClick,
   lastAssistantSlot,
   showNewBadge = false,
+  filterMessage,
 }: ChatThreadProps) {
   const { data, isLoading } = useGetChatMessagesQuery({ chatId }, { skip: skipQuery })
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -95,9 +101,12 @@ export function ChatThread({
   const isTyping = hasPendingTrigger || isSending
 
   const messages: ServerMessage[] = useMemo(
-    () => allItems.filter(m => isMessageVisible(m, developerMode)),
+    () => {
+      const visible = allItems.filter(m => isMessageVisible(m, developerMode))
+      return filterMessage ? visible.filter(filterMessage) : visible
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, developerMode],
+    [data, developerMode, filterMessage],
   )
 
   const lastAssistantId = useMemo(() => {
