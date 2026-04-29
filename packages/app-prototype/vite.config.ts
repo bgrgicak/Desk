@@ -35,6 +35,12 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // Resolve workspace deps (@desk/shared, @desk/db) via the `@desk/dev`
+    // export condition so Vite pulls TS source from each package's src/
+    // directly. Without this it walks the default `import` condition
+    // (e.g. @desk/shared/dist/index.js), which only exists after a
+    // separate `tsc` build of the package — and silently goes stale.
+    conditions: ['@desk/dev'],
   },
   // Bind explicitly to 127.0.0.1 (default `host: false` resolves
   // `localhost` and on stock GH runners that lands on ::1 only — the e2e
