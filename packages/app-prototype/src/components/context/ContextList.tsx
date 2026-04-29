@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload,
-  ClipboardPaste,
   PenLine,
+  FilePlus,
   FolderOpen,
   Folder as FolderIcon,
   FolderPlus,
@@ -16,6 +16,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Sparkles,
   Shapes,
   FileText,
   StickyNote,
@@ -54,6 +55,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
@@ -355,8 +357,9 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
 
-  // Create blank file (called from ArtifactCreationSheet's File card)
-
+  // Create blank file dialog
+  const [createFileDialogOpen, setCreateFileDialogOpen] = useState(false)
+  const [newFileName, setNewFileName] = useState('')
 
   // Paste link dialog — name is optional; falls back to the URL hostname.
   const [pasteLinkDialogOpen, setPasteLinkDialogOpen] = useState(false)
@@ -385,33 +388,25 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
     }
   }
 
-  const handleCreateFile = async (name: string) => {
-    if (!activeWorkspaceId) return
+  const handleCreateFile = async () => {
+    const name = newFileName.trim()
+    if (!name || !activeWorkspaceId) return
     const subpath = subpathFromFolderId(currentFolderId)
     const blob = new File([''], name, { type: 'application/octet-stream' })
     try {
-      const serverFile = await uploadLibraryFile({
+      await uploadLibraryFile({
         workspaceId: activeWorkspaceId,
         file: blob,
         subpath: subpath || undefined,
       }).unwrap()
       toast.success(`Created ${name}`)
-      onItemClick({
-        id: serverFile.path,
-        type: 'file',
-        name: serverFile.name ?? name,
-        content: '',
-        folderId: currentFolderId,
-        addedAt: new Date(serverFile.createdAt),
-        usedBy: [],
-        uploadedBy: 'user',
-        relatedArtifactIds: [],
-      })
     } catch (err) {
       toast.error(`Failed to create file`, {
         description: err instanceof Error ? err.message : undefined,
       })
     }
+    setCreateFileDialogOpen(false)
+    setNewFileName('')
   }
 
   // Folders come from the server's recursive library listing; the
@@ -626,11 +621,6 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             />
           </div>
 
-          {/* New folder */}
-          <Button variant="outline" size="icon" className="h-8 w-8" title="New folder" onClick={() => setFolderDialogOpen(true)}>
-            <FolderPlus className="h-4 w-4" />
-          </Button>
-
           {/* View toggle */}
           <div className="flex items-center rounded-lg border p-0.5">
             <button onClick={() => setViewMode('list')} className={`rounded-md p-1.5 transition-colors ${viewMode === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
@@ -648,26 +638,29 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             </Button>
           )}
 
-          {/* Upload icon button */}
+          {/* Add dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8" title="Upload" data-testid="library-add-button">
-                <Upload className="h-4 w-4" />
+              <Button size="sm" variant="default" className="gap-1.5 text-xs" data-testid="library-add-button">
+                Add
+                <ChevronDown className="h-3 w-3 ml-0.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+              {onCreateArtifact && (
+                <>
+                  <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)} data-testid="library-create-ai-artifact"><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)} data-testid="library-create-folder"><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {/* Create button — opens artifact creation sheet */}
-          {onCreateArtifact && (
-            <Button size="sm" variant="default" className="text-xs" onClick={() => setCreateSheetOpen(true)}>
-              Create
-            </Button>
-          )}
         </div>}
       />
 
@@ -695,12 +688,22 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" className="gap-1.5">
                     Add
+                    <ChevronDown className="h-3 w-3 ml-0.5" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Choose file</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Choose folder</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+                <DropdownMenuContent align="center" className="w-44">
+                  {onCreateArtifact && (
+                    <>
+                      <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)}><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)}><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -993,9 +996,18 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
       </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
-        <ContextMenuItem onSelect={openPicker}><Upload className="h-4 w-4 mr-2" />Choose file</ContextMenuItem>
-        <ContextMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Choose folder</ContextMenuItem>
-        <ContextMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><ClipboardPaste className="h-4 w-4 mr-2" />Paste link</ContextMenuItem>
+        {onCreateArtifact && (
+          <>
+            <ContextMenuItem onSelect={() => setCreateSheetOpen(true)}><Sparkles className="h-4 w-4 mr-2" />AI artifact</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />New file</ContextMenuItem>
+        <ContextMenuItem onSelect={() => setFolderDialogOpen(true)}><FolderPlus className="h-4 w-4 mr-2" />New folder</ContextMenuItem>
+        <ContextMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><Link2 className="h-4 w-4 mr-2" />New link</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={openPicker}><Upload className="h-4 w-4 mr-2" />Upload file</ContextMenuItem>
+        <ContextMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Upload folder</ContextMenuItem>
       </ContextMenuContent>
       </ContextMenu>
 
@@ -1031,6 +1043,52 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
               onClick={handleCreateFolder}
             >
               Create folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create blank file dialog */}
+      <Dialog
+        open={createFileDialogOpen}
+        onOpenChange={(open) => {
+          setCreateFileDialogOpen(open)
+          if (!open) setNewFileName('')
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create file</DialogTitle>
+            <DialogDescription>
+              {currentFolder
+                ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
+                : 'Create a new blank file. Include the extension in the name.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm font-medium text-foreground">File name</label>
+            <Input
+              placeholder="e.g., notes.md"
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!newFileName.trim()}
+              onClick={handleCreateFile}
+            >
+              Create file
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1216,7 +1274,6 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 setCreateSheetOpen(false)
                 await onSkipToChat?.(agentId)
               }}
-              onCreateFile={handleCreateFile}
             />
           )}
         </div>
