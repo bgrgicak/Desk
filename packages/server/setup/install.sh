@@ -100,9 +100,17 @@ usermod -aG docker desk
 #   /home/desk/Desk/.trash/     desk-owned, soft-deleted workspaces
 #   /home/desk/Desk/workspaces/ desk-owned, parent of per-workspace dirs
 #   /home/desk/Desk/backups/    desk-owned, /internal/backup destination
+#
+# Recursive chown: any of these dirs may already contain sub-trees from a
+# previous host-side run (e.g. an older topology where the API server ran
+# on the host as the host user). Files created that way come back into
+# the VM owned by the host UID and the in-VM `desk` user can't write to
+# them — uploads then fail with EACCES on rename into the workspace dir.
+# Reclaiming ownership on every provision keeps the tree writable by
+# desk-server regardless of who created the files.
 for sub in .database .tmp .trash workspaces backups; do
   mkdir -p "/home/desk/Desk/$sub"
-  chown desk:desk "/home/desk/Desk/$sub"
+  chown -R desk:desk "/home/desk/Desk/$sub"
 done
 
 # ---------- 7. Build & install the server ----------
@@ -117,6 +125,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 log "Installing workspace dependencies at $REPO_ROOT"
 cd "$REPO_ROOT"
 npm ci --no-audit --no-fund
+
+# Force rebuild of native addons against the VM's Node ABI. `npm ci` may
+# accept a prebuilt binary that prebuild-install downloaded for a
+# different Node major (or, when /desk is a 9p mount of the host's tree,
+# inherit a binding compiled by a different host Node), then `cp -a` later
+# stages that wrong-ABI binding into /opt/desk-server and desk-server
+# crashloops with NODE_MODULE_VERSION mismatches. Building from source
+# inside the VM guarantees the binding matches the Node we ship with.
+log "Rebuilding native addons from source against VM Node $(node --version)"
+npm rebuild --build-from-source better-sqlite3
 
 log "Building server workspace packages"
 # The VM only runs the server. The host-side `app` prototype is built by

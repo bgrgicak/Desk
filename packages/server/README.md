@@ -48,8 +48,10 @@ npx playwright install chromium  # only if you'll run Playwright on the host
    is preserved). Adds `desk` to the `docker` group. Builds the
    `desk/sandbox:v1` image. Installs Playwright Chromium inside the VM.
 
-Guest port `8080` is forwarded to a host port derived from `DESK_INSTANCE`
-(default `dev` → usually `3013`). See [setup/scripts/vm.sh](setup/scripts/vm.sh).
+Guest port `8080` is forwarded to host port `3000` by default. Setting
+`DESK_INSTANCE=<name>` derives a deterministic port in 3000–3099 via
+CRC32 so secondary instances (e.g. test VMs) don't collide. See
+[setup/scripts/vm.sh](setup/scripts/vm.sh).
 
 ## Day-to-day commands
 
@@ -125,7 +127,7 @@ covers every route in
 
 1. Set the collection variables:
    - `baseUrl` = `http://127.0.0.1:14173` (demo setup above) or the VM's
-     forwarded port (e.g. `http://127.0.0.1:3013`).
+     forwarded port (e.g. `http://127.0.0.1:3000`).
    - `username` / `password` = whatever you seeded.
 2. Run **POST /auth/login** first — the test script stores `token` and subsequent
    requests pick it up automatically via collection-level Bearer auth.

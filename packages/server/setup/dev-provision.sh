@@ -79,17 +79,26 @@ if [ -d "$REPO_NM" ]; then
   sudo systemctl enable desk-node_modules.mount >/dev/null
   sudo systemctl start desk-node_modules.mount
 
-  # Bounce desk-server so it picks up the shadowed tree.
-  sudo systemctl restart desk-server || true
+  # Bounce desk-server so it picks up the shadowed tree. `reset-failed`
+  # first because install.sh may have left the unit rate-limited
+  # ("Start request repeated too quickly") if the initial start hit a
+  # transient error; without the reset, restart silently no-ops and the
+  # service stays failed even after we've fixed the underlying problem.
+  sudo systemctl reset-failed desk-server || true
+  sudo systemctl restart desk-server
 fi
 
 log "Building @desk/sandbox-cli"
 cd "$REPO_ROOT/packages/server/sandbox-cli"
 npm run build --silent
 
-log "Building all workspace packages (nx)"
+log "Building server workspace packages (nx, excluding host-built app)"
+# `app` is built by Vite on the host when the dev server starts; building
+# it here just couples the VM provision to the prototype's typecheck
+# health. Mirror install.sh's --exclude=app and let real failures surface
+# instead of swallowing them with `|| true`.
 cd "$REPO_ROOT"
-npm run build --silent || true
+npx nx run-many -t build --exclude=app
 
 log "Building desk/sandbox:v1 image (AGENT_UID=2000 to match the VM desk user)"
 cd "$REPO_ROOT/packages/server"
