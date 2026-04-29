@@ -189,11 +189,12 @@ export function createRunManager(opts: RunManagerOptions) {
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
+      const inner = userMsg?.content as { type?: string; text?: string; goal?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: text, attachments };
+      const prompt = inner?.goal ? `Goal: ${inner.goal}\n\n${text}` : text;
+      return { prompt, attachments };
     }
     return { prompt: JSON.stringify(msg.content) };
   }

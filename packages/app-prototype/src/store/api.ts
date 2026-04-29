@@ -380,15 +380,17 @@ export const api = createApi({
         title?: string;
         executeAt?: string;
         cron?: string;
+        goal?: string;
       }
     >({
-      query: ({ chatId, content, attachments, kind, title, executeAt, cron }) => {
+      query: ({ chatId, content, attachments, kind, title, executeAt, cron, goal }) => {
         const body: Record<string, unknown> = { content };
         if (attachments && attachments.length > 0) body.attachments = attachments;
         if (kind) body.kind = kind;
         if (title) body.title = title;
         if (executeAt) body.executeAt = executeAt;
         if (cron) body.cron = cron;
+        if (goal) body.goal = goal;
         return {
           url: `/chats/${chatId}/messages`,
           method: "POST",

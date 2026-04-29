@@ -2,10 +2,10 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import { createPortal } from 'react-dom'
 import {
   CornerDownLeft, ChevronDown, FileText, Paperclip, X,
-  Zap, ImageIcon, Table, Globe, Play, Target, ListTodo, CalendarClock,
+  Zap, ImageIcon, Table, Globe, Target, ListTodo,
   type LucideIcon,
 } from 'lucide-react'
-import { inferGoal as inferGoalShared, type GoalKey as SharedGoalKey } from '@desk/shared'
+import { type GoalKey as SharedGoalKey } from '@desk/shared'
 import {
   ComposerPickers,
   type ComposerPickersHandle,
@@ -52,16 +52,6 @@ function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined
   }
 }
 
-function inferGoal(text: string): GoalKey {
-  const matched = inferGoalShared(text)
-  if (matched) return matched
-  // Compose-only fallback: if the user has typed a meaningful chunk of
-  // text but nothing matched, lean toward "document" so the composer
-  // shows a useful placeholder. The chat list keeps null in this case
-  // to avoid tagging every conversation as a doc.
-  if (text.toLowerCase().trim().length > 10) return 'document'
-  return null
-}
 
 export interface UploadedFile {
   id: string
@@ -87,6 +77,8 @@ export interface SendOptions {
   kind?: 'task'
   title?: string
   executeAt?: string
+  /** Goal the user explicitly selected in the chat composer. */
+  goal?: GoalKey
 }
 
 interface ChatInputProps {
@@ -208,8 +200,7 @@ export function ChatInput({
 
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
-  const suggestedGoal = inferGoal(value)
-  const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : suggestedGoal
+  const effectiveGoalKey: GoalKey = goalOverride ?? null
   const effectiveGoal = GOALS.find(g => g.key === effectiveGoalKey) ?? null
   // When the goal picker is hidden, always use the passed placeholder directly.
   // Otherwise the goal inference would override it with "Ask anything, start a task…"
@@ -351,7 +342,10 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    const options = optionsForGoal(effectiveGoalKey, trimmed)
+    const taskOptions = optionsForGoal(effectiveGoalKey, trimmed)
+    const options: SendOptions | undefined = effectiveGoalKey !== null
+      ? { ...taskOptions, goal: effectiveGoalKey }
+      : taskOptions
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
@@ -477,8 +471,7 @@ export function ChatInput({
                 <p className="px-3 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Your goal</p>
                 <div className="pb-1.5">
                   {GOALS.map(goal => {
-                    const isSuggested = goal.key === suggestedGoal && suggestedGoal !== null
-                    const isSelected = goalOverride !== undefined ? goal.key === goalOverride : goal.key === suggestedGoal
+                    const isSelected = goalOverride !== undefined && goal.key === goalOverride
                     return (
                       <button
                         type="button"
@@ -491,7 +484,6 @@ export function ChatInput({
                           : <span className="h-3.5 w-3.5 shrink-0" />
                         }
                         <span className="flex-1">{goal.label}</span>
-                        {isSuggested && <span className="text-[10px] text-muted-foreground/70 shrink-0">Suggested</span>}
                       </button>
                     )
                   })}

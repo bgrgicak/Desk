@@ -1002,6 +1002,7 @@ export function ChatView({
                     kind: options?.kind,
                     title: options?.title,
                     executeAt: options?.executeAt,
+                    goal: options?.goal,
                   })
                     .unwrap()
                     .catch(err => {
