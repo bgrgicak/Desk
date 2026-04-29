@@ -35,7 +35,7 @@ export async function list(
   const slug = await resolveSlug(ctx, workspaceId);
   const [result, authors] = await Promise.all([
     listLibrary(ctx, slug, opts),
-    queries.messages.findArtifactAuthorsByWorkspace(ctx.pool, workspaceId),
+    queries.libraryFileAuthors.listByWorkspace(ctx.pool, workspaceId),
   ]);
   for (const item of result.items) {
     const agentId = authors.get(item.path);
