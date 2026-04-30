@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useSelector } from 'react-redux'
 import {
   Link2,
   Download,
@@ -55,6 +56,8 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePrefs } from '@/hooks/use-prefs'
 import { usePersistedState } from '@/hooks/use-persisted-state'
+import type { RootState } from '@/store/store'
+import { selectFileChangeCounter } from '@/store/slices/derivedSlice'
 
 const AUTO_SAVE_DEBOUNCE_MS = 1_000
 const SAVED_BADGE_TTL_MS = 2_000
@@ -85,6 +88,11 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const [panelCollapsed, setPanelCollapsed] = usePersistedState<boolean>('desk.context.sidebarCollapsed', false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
+  // Bumped by the WS middleware whenever `library.changed` fires for this path.
+  // Adding it as a dep to the fetch effect causes an automatic re-fetch when an
+  // agent writes new content to the file currently on screen.
+  const fileChangeCounter = useSelector((s: RootState) => selectFileChangeCounter(s, item.id))
+
   // File content fetched on demand for preview. Text files (notes, uri-list
   // links, csv/json/code, …) arrive as `previewText`; binary previews (images,
   // PDFs, video, audio) arrive as an object URL we can hand to <img>/<iframe>/
@@ -99,22 +107,44 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
   const kind = fileKindForItem(item)
 
+  // Refs that mirror the latest editorValue / previewText so the async fetch
+  // callback can read current values without stale closures, and without
+  // adding them as effect deps (which would re-run the fetch on every keystroke).
+  const editorValueRef = useRef<string | null>(null)
+  const previewTextRef = useRef<string | null>(null)
+  // Tracks the previous item.id so the fetch effect can distinguish a file
+  // switch (full reset required) from a background content refresh (preserve
+  // local editor edits).
+  const prevItemIdRef = useRef<string>(item.id)
+
   useEffect(() => {
-    setPreviewText(null)
-    setPreviewBlobUrl(null)
-    setPreviewError(null)
-    setMediaLoadFailed(false)
-    setEditorValue(null)
-    editorInitFor.current = null
+    const isItemChange = prevItemIdRef.current !== item.id
+    prevItemIdRef.current = item.id
+
+    if (isItemChange) {
+      // Switching to a different file: full reset including the editor.
+      setPreviewText(null)
+      setPreviewBlobUrl(null)
+      setPreviewError(null)
+      setMediaLoadFailed(false)
+      setEditorValue(null)
+      editorInitFor.current = null
+    }
+
     if (!activeWorkspaceId) return
     if (!canPreview(item)) return
     let cancelled = false
     let createdUrl: string | null = null
+    // Snapshot editor/preview state at fetch-start so the async .then()
+    // can safely compare without a stale closure.
+    const editorAtStart = editorValueRef.current
+    const previewAtStart = previewTextRef.current
     void fetchLibraryContent({ workspaceId: activeWorkspaceId, path: item.id })
       .then(async (blob) => {
         if (cancelled) return
         const effectiveKind = fileKindFrom(item.name, blob.type || item.mimeType)
         if (effectiveKind === 'docx') {
+          if (!isItemChange) return // don't re-render docx on background refresh
           // Convert docx → HTML in-browser via mammoth, then hand the
           // rendered HTML to the iframe as a blob URL. Lazy-imported so
           // users who never open a .docx don't pay the bundle cost.
@@ -128,7 +158,17 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           setPreviewBlobUrl(createdUrl)
         } else if (effectiveKind === 'text' || item.type === 'link' || item.type === 'note') {
           const text = await blob.text()
-          if (!cancelled) setPreviewText(text)
+          if (cancelled) return
+          setPreviewText(text)
+          // On initial load (item switch): always populate the editor.
+          // On background refresh: only update the editor when the user has
+          // no unsaved local changes — this preserves in-progress edits while
+          // still reflecting the server's latest content. CodeMirror's internal
+          // diffing keeps the cursor position stable across external updates.
+          if (isItemChange || editorAtStart === previewAtStart) {
+            setEditorValue(text)
+            editorInitFor.current = item.id
+          }
         } else {
           createdUrl = URL.createObjectURL(blob)
           setPreviewBlobUrl(createdUrl)
@@ -136,13 +176,19 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
       })
       .catch((err) => {
         if (cancelled) return
-        setPreviewError(err instanceof Error ? err.message : 'Preview failed')
+        // Only surface errors to the user on initial load; silently swallow
+        // background refresh errors so the last known content stays visible.
+        if (isItemChange) setPreviewError(err instanceof Error ? err.message : 'Preview failed')
       })
     return () => {
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [activeWorkspaceId, item.id, item.type, item.mimeType, item.name])
+  // fileChangeCounter is intentionally included so a WS library.changed event
+  // for this path triggers a re-fetch. The editorValue/previewText reads use
+  // refs (editorAtStart / previewAtStart) so they don't need to be in deps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspaceId, item.id, item.type, item.mimeType, item.name, fileChangeCounter])
 
   const handleDownload = async () => {
     if (!activeWorkspaceId) return
@@ -182,12 +228,11 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   // server-known content for this item) the Save button enables.
   const [editorValue, setEditorValue] = useState<string | null>(null)
   const editorInitFor = useRef<string | null>(null)
-  useEffect(() => {
-    if (previewText == null) return
-    if (editorInitFor.current === item.id) return
-    setEditorValue(previewText)
-    editorInitFor.current = item.id
-  }, [previewText, item.id])
+
+  // Keep refs in sync with state so async fetch callbacks can read current
+  // values without creating stale closures.
+  useEffect(() => { editorValueRef.current = editorValue }, [editorValue])
+  useEffect(() => { previewTextRef.current = previewText }, [previewText])
 
   const isTextEditable =
     (kind === 'text' && item.type === 'file') || item.type === 'note'
