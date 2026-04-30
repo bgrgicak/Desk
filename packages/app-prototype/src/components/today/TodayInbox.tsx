@@ -19,7 +19,7 @@ import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useServerChat } from '@/hooks/use-server-chat'
 import { cn } from '@/lib/utils'
-import type { TodayItem, TodayBand, Chat, ChatMessage } from '@/data/ui-types'
+import type { TodayItem, TodayBand, Chat } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 
 // ── Workspace name lookup ─────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ function TodayItemDetail({
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Seed the conversation with the item's context as the first AI message
-  const seedMessage: ChatMessage | undefined = item.context ? {
+  const seedMessage = item.context ? {
     id: `${item.id}-ctx`,
     role: 'assistant',
     content: item.context,

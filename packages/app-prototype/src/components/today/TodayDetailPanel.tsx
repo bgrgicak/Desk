@@ -17,7 +17,6 @@ import { InboxUICard } from './InboxUICard'
 import {
   getArtifactIcon,
   type Artifact,
-  type ChatMessage,
   type InboxItem,
   type Run,
 } from '@/data/ui-types'
@@ -53,7 +52,7 @@ export function TodayDetailPanel({
 
   // Seed the conversation with the item's context as the first assistant message
   // so users see what the agent said before they reply.
-  const seedMessage: ChatMessage = {
+  const seedMessage = {
     id: `${item.id}-ctx`,
     role: 'assistant',
     content: item.message,
