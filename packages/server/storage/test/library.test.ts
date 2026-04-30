@@ -2,14 +2,18 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { uploadArtifact, validateLibrarySubpath } from "../src/files.js";
+import {
+  pinLibraryFileToChat,
+  uploadArtifact,
+  validateLibrarySubpath,
+} from "../src/files.js";
 import {
   listLibrary,
   createLibraryFolder,
   moveLibraryEntry,
   deleteLibraryEntry,
 } from "../src/library.js";
-import { workspaceRootPath, trashDir } from "../src/layout.js";
+import { chatAttachmentsDir, workspaceRootPath, trashDir } from "../src/layout.js";
 import {
   setupTestStorage,
   teardownTestStorage,
@@ -303,6 +307,114 @@ describe("moveLibraryEntry", () => {
     await expect(
       moveLibraryEntry(ctx, ctx.workspaceSlug, "SrcA", "DstA"),
     ).rejects.toThrow();
+  });
+
+  it("re-points chat attachment symlinks when a library file is renamed", async () => {
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "linked-original.txt",
+      mime: "text/plain",
+      stream: makeStream("payload"),
+      subpath: "Symlinks/File",
+    });
+    await pinLibraryFileToChat(
+      ctx,
+      ctx.workspaceSlug,
+      ctx.chatId,
+      "Symlinks/File/linked-original.txt",
+    );
+
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "linked-original.txt");
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+
+    expect(await fs.readlink(linkPath)).toBe(
+      path.join(root, "Symlinks/File/linked-original.txt"),
+    );
+
+    await moveLibraryEntry(
+      ctx,
+      ctx.workspaceSlug,
+      "Symlinks/File/linked-original.txt",
+      "Symlinks/File/linked-renamed.txt",
+    );
+
+    expect(await fs.readlink(linkPath)).toBe(
+      path.join(root, "Symlinks/File/linked-renamed.txt"),
+    );
+    // Symlink still resolves — listAttachments would surface this row.
+    const stat = await fs.stat(linkPath);
+    expect(stat.isFile()).toBe(true);
+  });
+
+  it("re-points chat attachment symlinks under a renamed folder", async () => {
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "deep-pinned.txt",
+      mime: "text/plain",
+      stream: makeStream("hello"),
+      subpath: "SymlinkDir/Inner",
+    });
+    await pinLibraryFileToChat(
+      ctx,
+      ctx.workspaceSlug,
+      ctx.chatId,
+      "SymlinkDir/Inner/deep-pinned.txt",
+    );
+
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "deep-pinned.txt");
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+
+    await moveLibraryEntry(ctx, ctx.workspaceSlug, "SymlinkDir", "RenamedDir");
+
+    expect(await fs.readlink(linkPath)).toBe(
+      path.join(root, "RenamedDir/Inner/deep-pinned.txt"),
+    );
+    const stat = await fs.stat(linkPath);
+    expect(stat.isFile()).toBe(true);
+  });
+
+  it("leaves unrelated chat attachment symlinks untouched", async () => {
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "renamed.txt",
+      mime: "text/plain",
+      stream: makeStream("a"),
+      subpath: "SymOther/Renamed",
+    });
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "untouched.txt",
+      mime: "text/plain",
+      stream: makeStream("b"),
+      subpath: "SymOther/Stable",
+    });
+    await pinLibraryFileToChat(
+      ctx,
+      ctx.workspaceSlug,
+      ctx.chatId,
+      "SymOther/Stable/untouched.txt",
+    );
+
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "untouched.txt");
+    const before = await fs.readlink(linkPath);
+
+    await moveLibraryEntry(
+      ctx,
+      ctx.workspaceSlug,
+      "SymOther/Renamed/renamed.txt",
+      "SymOther/Renamed/different.txt",
+    );
+
+    expect(await fs.readlink(linkPath)).toBe(before);
+    expect(before).toBe(path.join(root, "SymOther/Stable/untouched.txt"));
   });
 });
 

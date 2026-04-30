@@ -68,7 +68,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import type { ContextItem, Folder } from '@/data/ui-types'
+import type { ContextItem } from '@/data/ui-types'
 import {
   getRelativeTime,
   getFolderById,
@@ -202,7 +202,14 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
    */
   type DeleteTarget = { path: string; name: string; kind: 'item' | 'folder' }
   const [deleteTargets, setDeleteTargets] = useState<DeleteTarget[] | null>(null)
-  const [renameTarget, setRenameTarget] = useState<Folder | null>(null)
+  /**
+   * Rename target — folders carry their parent path so the move can re-anchor
+   * inside the same parent. Files compute their parent from the path itself.
+   */
+  type RenameTarget =
+    | { kind: 'folder'; id: string; name: string; parentId: string | null }
+    | { kind: 'file'; id: string; name: string }
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [moveTargets, setMoveTargets] = useState<
     Array<{ path: string; name: string; kind: 'item' | 'folder' }> | null
@@ -304,14 +311,20 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
     setNewFolderName('')
   }
 
-  const handleRenameFolder = async () => {
+  const handleRename = async () => {
     if (!renameTarget || !activeWorkspaceId) return
     const name = renameValue.trim()
     if (!name || name === renameTarget.name) {
       setRenameTarget(null)
       return
     }
-    const parentPath = renameTarget.parentId ?? ''
+    let parentPath: string
+    if (renameTarget.kind === 'folder') {
+      parentPath = renameTarget.parentId ?? ''
+    } else {
+      const slash = renameTarget.id.lastIndexOf('/')
+      parentPath = slash >= 0 ? renameTarget.id.slice(0, slash) : ''
+    }
     const to = parentPath ? `${parentPath}/${name}` : name
     try {
       await moveLibraryEntry({
@@ -823,7 +836,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                             <MessageSquarePlus className="h-4 w-4 mr-2" />
                             Use in chat
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => { setRenameTarget(folder); setRenameValue(folder.name) }}>
+                          <DropdownMenuItem onClick={() => { setRenameTarget({ kind: 'folder', id: folder.id, name: folder.name, parentId: folder.parentId }); setRenameValue(folder.name) }}>
                             <PenLine className="h-4 w-4 mr-2" />
                             Rename
                           </DropdownMenuItem>
@@ -859,6 +872,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                   onClick={() => onItemClick(item)}
                   onUseInChat={() => onCompose([item])}
                   onDownload={() => handleDownload(item)}
+                  onRename={() => { setRenameTarget({ kind: 'file', id: item.id, name: item.name }); setRenameValue(item.name) }}
                   onMove={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
                   onDelete={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
                   isPinned={item.pinned}
@@ -919,7 +933,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                         <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
                           <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => { setRenameTarget(folder); setRenameValue(folder.name) }}>
+                        <DropdownMenuItem onClick={() => { setRenameTarget({ kind: 'folder', id: folder.id, name: folder.name, parentId: folder.parentId }); setRenameValue(folder.name) }}>
                           <PenLine className="h-4 w-4 mr-2" />Rename
                         </DropdownMenuItem>
                         <DropdownMenuItem
@@ -960,6 +974,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 onClick={() => onItemClick(item)}
                 onUseInChat={() => onCompose([item])}
                 onDownload={() => handleDownload(item)}
+                onRename={() => { setRenameTarget({ kind: 'file', id: item.id, name: item.name }); setRenameValue(item.name) }}
                 onMove={() => setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])}
                 onDelete={() => setDeleteTargets([{ path: item.id, name: item.name, kind: 'item' }])}
                 isPinned={item.pinned}
@@ -1192,24 +1207,32 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
         </DialogContent>
       </Dialog>
 
-      {/* Rename folder dialog */}
+      {/* Rename dialog (file or folder) */}
       <Dialog
         open={renameTarget !== null}
         onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Rename folder</DialogTitle>
-            <DialogDescription>Give the folder a new name.</DialogDescription>
+            <DialogTitle>
+              {renameTarget?.kind === 'file' ? 'Rename file' : 'Rename folder'}
+            </DialogTitle>
+            <DialogDescription>
+              {renameTarget?.kind === 'file'
+                ? 'Give the file a new name. Include the extension.'
+                : 'Give the folder a new name.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">Folder name</label>
+            <label className="text-sm font-medium text-foreground">
+              {renameTarget?.kind === 'file' ? 'File name' : 'Folder name'}
+            </label>
             <Input
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               autoFocus
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleRenameFolder()
+                if (e.key === 'Enter') handleRename()
               }}
             />
           </div>
@@ -1217,7 +1240,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
             <Button
               disabled={!renameValue.trim() || renameValue.trim() === renameTarget?.name}
-              onClick={handleRenameFolder}
+              onClick={handleRename}
             >
               Rename
             </Button>
