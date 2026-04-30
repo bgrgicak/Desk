@@ -45,6 +45,7 @@ export function useServerChat(
   storageKey: string,
   title: string,
   staticAttachments?: AttachmentRef[],
+  seedMessage?: ChatMessage,
 ): UseServerChatReturn {
   const [chatId, setChatIdState] = useState<string | null>(() =>
     workspaceId && storageKey ? localStorage.getItem(storageKey) : null,
@@ -71,9 +72,12 @@ export function useServerChat(
   )
 
   const rawMessages = messagesData?.items ?? []
-  const messages: ChatMessage[] = rawMessages
+  const serverMessages: ChatMessage[] = rawMessages
     .map(serverMessageToChatMessage)
     .filter((m): m is ChatMessage => m !== null)
+  const messages: ChatMessage[] = seedMessage
+    ? [seedMessage, ...serverMessages]
+    : serverMessages
 
   const isTyping = rawMessages.some(
     m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),

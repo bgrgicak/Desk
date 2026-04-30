@@ -17,6 +17,7 @@ import { InboxUICard } from './InboxUICard'
 import {
   getArtifactIcon,
   type Artifact,
+  type ChatMessage,
   type InboxItem,
   type Run,
 } from '@/data/ui-types'
@@ -50,23 +51,22 @@ export function TodayDetailPanel({
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputFocusRef = useRef<(() => void) | null>(null)
 
+  // Seed the conversation with the item's context as the first assistant message
+  // so users see what the agent said before they reply.
+  const seedMessage: ChatMessage = {
+    id: `${item.id}-ctx`,
+    role: 'assistant',
+    content: item.message,
+    timestamp: item.timestamp,
+  }
   const serverChat = useServerChat(
     workspaceId,
     workspaceId ? `desk.todaychat.${workspaceId}.${item.id}` : '',
     item.agentName,
+    undefined,
+    seedMessage,
   )
-
-  // Seed the conversation with the item's context as the first assistant message
-  // so users see what the agent said before they reply.
-  const seedMessage = {
-    id: `${item.id}-ctx`,
-    role: 'assistant' as const,
-    content: item.message,
-    timestamp: item.timestamp,
-  }
-  const messages = workspaceId
-    ? [seedMessage, ...serverChat.messages]
-    : [seedMessage]
+  const messages = serverChat.messages
   const isTyping = workspaceId ? serverChat.isTyping : false
   const sendMessage = workspaceId ? serverChat.sendMessage : async () => {}
 
