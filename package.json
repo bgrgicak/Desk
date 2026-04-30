@@ -13,9 +13,11 @@
     "build": "nx run-many -t build",
     "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
     "typecheck": "nx run-many -t typecheck",
+    "pretest": "npm rebuild better-sqlite3 --silent",
     "test": "vitest run --passWithNoTests",
     "test:host": "vitest run --passWithNoTests",
-    "test:e2e": "npm -w app run test:e2e"
+    "test:e2e": "npm -w app run test:e2e",
+    "prepare": "cp scripts/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
   },
   "devDependencies": {
     "nx": "22.6.5"

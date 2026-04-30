@@ -42,6 +42,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build sandbox-cli (prereq for sandbox image)
         run: npm run build --workspace=@agent-desk/sandbox-cli
 
