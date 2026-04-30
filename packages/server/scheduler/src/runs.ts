@@ -543,7 +543,7 @@ export function createRunManager(opts: RunManagerOptions) {
   async function resumeMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
-    if (msg.state === "running" || msg.state === "pending") return msg;
+    if (msg.state === "pending") return msg;
     const patch: Parameters<typeof queries.messages.updateMessage>[2] = { state: "pending" };
     if (msg.cron && !msg.executeAt) {
       patch.executeAt = computeNextRun(msg.cron);
