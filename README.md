@@ -1,6 +1,30 @@
 # Desk
 
-Monorepo for the API server, the React app prototype, and the host CLI.
+AI should work for everyone — not just developers who know how to run servers, write config files, or debug why a context window ran out.
+
+Desk is a personal AI platform built around three convictions:
+
+**Your data belongs to you.** Conversations, files, and the context agents build over time live on your machine, in your home directory, under your control. No vendor lock-in, no data siloed in someone else's cloud.
+
+**No single provider should hold you hostage.** Desk is designed to run across any AI provider. When one is down, over-priced, or simply not the best fit anymore, you switch — your workflows, history, and agents stay exactly where they were.
+
+**You shouldn't need to be an AI enthusiast to get a great experience.** Context windows, token limits, agent orchestration, prompt engineering — these are implementation details, not things anyone should have to think about. Desk handles the complexity so you can focus on what you're actually trying to do.
+
+## What we're building
+
+Desk is a place where you define goals and let AI help you reach them — not a chat interface you interact with manually, and not another app builder that requires you to wire things together yourself.
+
+You describe what you want: a workflow that processes your emails each morning, a research assistant that knows your projects, a recurring task that keeps something in sync. Desk turns that into something that runs, remembers context, and gets better over time — without you writing a line of configuration.
+
+The long-term vision is an agentic operating system: a personal environment where AI agents work alongside you, with your data, using tools you've authorized, toward goals you've set. Think less "AI assistant you talk to" and more "intelligent layer on top of your digital life."
+
+## How it's different
+
+Desk is not a Claude or ChatGPT wrapper. It's not a productivity tool with an AI button. It's not a no-code app builder.
+
+Those tools serve different needs. What's missing is something that meets people where they are — gives them the power of AI without demanding technical fluency — while giving them ownership and resilience that cloud-only products can't offer.
+
+---
 
 - **`packages/server/`** — API, DB, storage, tools, runtime, scheduler, sandbox CLI, setup scripts.
 - **`packages/app-prototype/`** — React/Vite UI (proxies `/api/*` to the server).
