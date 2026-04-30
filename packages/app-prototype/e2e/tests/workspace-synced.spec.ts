@@ -30,7 +30,7 @@ async function uploadText(
     Buffer.from(
       `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="file"; filename="${name}"\r\n` +
-        `Content-Type: text/plain\r\n\r\n`,
+        `Content-Type: application/json\r\n\r\n`,
     ),
     Buffer.from(body, "utf8"),
     Buffer.from(`\r\n--${boundary}--\r\n`),
@@ -116,7 +116,7 @@ test("open library file auto-refreshes after workspace.synced when agent writes 
   ).json()) as Agent[];
   expect(agents.length).toBeGreaterThan(0);
 
-  const filename = `ws-synced-${Date.now()}.txt`;
+  const filename = `ws-synced-${Date.now()}.json`;
   const initial = "initial content before agent run\n";
   const agentWrote = `agent wrote this at ${Date.now()}\n`;
 

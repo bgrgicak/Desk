@@ -66,7 +66,42 @@ export interface SandboxDriver {
 }
 
 export function createDriver(): SandboxDriver {
+  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
+    return createFakeDriver();
+  }
   return createRealDriver();
+}
+
+function createFakeDriver(): SandboxDriver {
+  const cancelled = new Set<string>();
+
+  return {
+    async execRun(_workspaceId, opts) {
+      const { runId, onLog } = opts;
+
+      const lines = [
+        "Starting fake sandbox run...",
+        `Processing prompt: ${opts.prompt.slice(0, 50)}...`,
+        "Fake response generated.",
+        "Run complete.",
+      ];
+
+      let seq = 0;
+      for (const line of lines) {
+        if (cancelled.has(runId)) {
+          return { exitCode: 130 };
+        }
+        await onLog({ runId, seq: seq++, kind: "stdout", payload: line });
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      return { exitCode: 0 };
+    },
+
+    async cancelRun(runId) {
+      cancelled.add(runId);
+    },
+  };
 }
 
 /**

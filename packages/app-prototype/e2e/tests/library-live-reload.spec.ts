@@ -22,7 +22,7 @@ async function uploadText(
     Buffer.from(
       `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="file"; filename="${name}"\r\n` +
-        `Content-Type: text/plain\r\n\r\n`,
+        `Content-Type: application/json\r\n\r\n`,
     ),
     Buffer.from(body, "utf8"),
     Buffer.from(`\r\n--${boundary}--\r\n`),
@@ -93,7 +93,7 @@ test("file preview updates automatically when content is changed via the API", a
   ).json()) as Array<{ id: string }>;
   const workspaceId = ws[0].id;
 
-  const filename = `live-reload-${Date.now()}.txt`;
+  const filename = `live-reload-${Date.now()}.json`;
   const initial = "initial content\n";
   const updated = `updated by agent at ${Date.now()}\n`;
 
@@ -132,7 +132,7 @@ test("unsaved local edits are preserved when the server updates the file", async
   ).json()) as Array<{ id: string }>;
   const workspaceId = ws[0].id;
 
-  const filename = `live-reload-dirty-${Date.now()}.txt`;
+  const filename = `live-reload-dirty-${Date.now()}.json`;
   const initial = "base content\n";
   const agentUpdate = `server update at ${Date.now()}\n`;
 

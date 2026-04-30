@@ -95,6 +95,9 @@ export async function startDeskServer(
     DESK_SECRET_KEY_PATH: path.join(home, "secret.key"),
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
+    // Use the fake sandbox driver so task runs complete instantly without
+    // needing Docker or API keys.
+    DESK_SANDBOX_DRIVER: "fake",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
     DESK_SCHEDULER_POLL_INTERVAL_MS: "2000",
   };
