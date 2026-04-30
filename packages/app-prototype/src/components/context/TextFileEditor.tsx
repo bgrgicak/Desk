@@ -7,6 +7,7 @@ import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
+import { isMarkdownFile } from '@/data/file-kind'
 
 function extFor(name: string): string {
   const i = name.lastIndexOf('.')
@@ -18,7 +19,7 @@ function languageFor(name: string, mimeType?: string | null): Extension | null {
   const ext = extFor(name)
   const mime = (mimeType ?? '').toLowerCase()
 
-  if (ext === 'md' || ext === 'markdown' || ext === 'mdx' || mime === 'text/markdown') {
+  if (isMarkdownFile(name, mimeType)) {
     return markdown()
   }
   if (ext === 'ts' || ext === 'tsx') return javascript({ jsx: true, typescript: true })
@@ -39,12 +40,6 @@ interface TextFileEditorProps {
   readOnly?: boolean
 }
 
-/**
- * Editable CodeMirror view for library text files. Syntax highlighting is
- * language-aware for a curated set of extensions (markdown, JS/TS, Python,
- * JSON, YAML, HTML, CSS); everything else (csv, txt, log, shell, sql, …)
- * falls back to plain text with monospace + line wrapping.
- */
 export function TextFileEditor({
   value,
   onChange,
@@ -66,9 +61,9 @@ export function TextFileEditor({
       extensions={extensions}
       readOnly={readOnly}
       basicSetup={{
-        lineNumbers: true,
-        highlightActiveLine: true,
-        foldGutter: true,
+        lineNumbers: false,
+        highlightActiveLine: false,
+        foldGutter: false,
         autocompletion: false,
         highlightSelectionMatches: false,
       }}

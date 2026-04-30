@@ -230,6 +230,122 @@ function decodeWsTextFrames(chunks: Buffer[]): string[] {
   return results;
 }
 
+async function putContent(
+  token: string,
+  workspaceId: string,
+  filePath: string,
+  content: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: string; etag: string | null }> {
+  return new Promise((resolve, reject) => {
+    const body = Buffer.from(content);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "text/plain",
+      "Content-Length": String(body.length),
+      ...extraHeaders,
+    };
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: `/library/content?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(filePath)}`,
+        method: "PUT",
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString(),
+            etag: res.headers["etag"] ?? null,
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function getContentWithEtag(
+  token: string,
+  workspaceId: string,
+  filePath: string,
+): Promise<{ body: string; etag: string | null }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: `/library/content?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(filePath)}`,
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          resolve({
+            body: Buffer.concat(chunks).toString(),
+            etag: res.headers["etag"] ?? null,
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+describe("library ETag conflict detection", () => {
+  it("GET /library/content returns an ETag header", async () => {
+    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "testpass" });
+    const token = (loginRes.body as { token: string }).token;
+    const workspacesRes = await request("GET", "/workspaces", token);
+    const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
+
+    const filePath = await uploadFile(token, workspaceId, `etag-get-${Date.now()}.txt`, "content");
+    const { etag } = await getContentWithEtag(token, workspaceId, filePath);
+
+    expect(etag).toBeTruthy();
+  });
+
+  it("PUT with matching If-Match succeeds", async () => {
+    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "testpass" });
+    const token = (loginRes.body as { token: string }).token;
+    const workspacesRes = await request("GET", "/workspaces", token);
+    const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
+
+    const filePath = await uploadFile(token, workspaceId, `etag-match-${Date.now()}.txt`, "original");
+    const { etag } = await getContentWithEtag(token, workspaceId, filePath);
+
+    const res = await putContent(token, workspaceId, filePath, "updated", { "If-Match": etag! });
+    expect(res.status).toBe(200);
+  });
+
+  it("PUT with stale If-Match returns 409 and the current server content", async () => {
+    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "testpass" });
+    const token = (loginRes.body as { token: string }).token;
+    const workspacesRes = await request("GET", "/workspaces", token);
+    const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
+
+    const filePath = await uploadFile(token, workspaceId, `etag-conflict-${Date.now()}.txt`, "server version");
+
+    const staleEtag = '"0"';
+    const res = await putContent(token, workspaceId, filePath, "my edits", { "If-Match": staleEtag });
+
+    expect(res.status).toBe(409);
+    const body = JSON.parse(res.body) as { conflict: boolean; content: string; etag: string };
+    expect(body.conflict).toBe(true);
+    expect(body.content).toBe("server version");
+    expect(body.etag).toBeTruthy();
+  });
+});
+
 describe("library WebSocket events", () => {
   it("PUT /library/content emits library.changed with op=updated and the file path", async () => {
     const loginRes = await request("POST", "/auth/login", undefined, {

@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useMockChat } from '@/hooks/use-mock-chat'
+import { useServerChat } from '@/hooks/use-server-chat'
 import { InboxUICard } from './InboxUICard'
 import {
   getArtifactIcon,
@@ -32,6 +32,8 @@ interface TodayDetailPanelProps {
   artifact?: Artifact | null
   /** Optional run associated with this item (looked up by parent). */
   run?: Run | null
+  /** When provided, backs the chat with a real server chat for this item. */
+  workspaceId?: string
 }
 
 export function TodayDetailPanel({
@@ -43,21 +45,30 @@ export function TodayDetailPanel({
   onFocusConsumed,
   artifact = null,
   run = null,
+  workspaceId,
 }: TodayDetailPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputFocusRef = useRef<(() => void) | null>(null)
 
-  const initialMessages = [{
+  const serverChat = useServerChat(
+    workspaceId,
+    workspaceId ? `desk.todaychat.${workspaceId}.${item.id}` : '',
+    item.agentName,
+  )
+
+  // Seed the conversation with the item's context as the first assistant message
+  // so users see what the agent said before they reply.
+  const seedMessage = {
     id: `${item.id}-ctx`,
     role: 'assistant' as const,
     content: item.message,
     timestamp: item.timestamp,
-  }]
-
-  const { messages, isTyping, sendMessage } = useMockChat({
-    initialMessages,
-    mode: 'conversation',
-  })
+  }
+  const messages = workspaceId
+    ? [seedMessage, ...serverChat.messages]
+    : [seedMessage]
+  const isTyping = workspaceId ? serverChat.isTyping : false
+  const sendMessage = workspaceId ? serverChat.sendMessage : async () => {}
 
   const hasUserReplied = messages.some(m => m.role === 'user')
 

@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { queries } from "@agent-desk/db";
-import { NotFoundError, type WsEvent } from "@agent-desk/shared";
+import { ConflictError, NotFoundError, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -95,6 +95,10 @@ export async function get(
 /**
  * Overwrites an existing library file with new content. Fails if the file
  * doesn't exist — callers wanting to create should POST to /library instead.
+ *
+ * When `ifMatch` is provided it is compared against the file's current mtime
+ * (in milliseconds). A mismatch throws ConflictError so the caller can respond
+ * with 409 and the current file content for client-side merge.
  */
 export async function saveContent(
   ctx: StorageContext,
@@ -102,8 +106,15 @@ export async function saveContent(
   relPath: string,
   stream: Readable,
   emit: (event: WsEvent) => void,
+  ifMatch?: string,
 ): Promise<FileRef> {
   const slug = await resolveSlug(ctx, workspaceId);
+  if (ifMatch !== undefined) {
+    const current = await statFile(ctx, slug, relPath);
+    if (current.updatedAtMs !== ifMatch) {
+      throw new ConflictError(`File modified since ${ifMatch}`);
+    }
+  }
   const file = await overwriteFile(ctx, slug, relPath, stream);
   emit({
     type: "library.changed",

@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
-import { useMockChat } from '@/hooks/use-mock-chat'
+import { useLibraryItemChat } from '@/hooks/use-library-item-chat'
+import { useServerChat } from '@/hooks/use-server-chat'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate, ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
@@ -19,6 +20,8 @@ interface ConversationPanelProps {
   collapsed?: boolean
   artifact?: Artifact
   item?: ContextItem
+  /** When provided the panel uses a real server-backed chat for the item. */
+  workspaceId?: string
   update?: ArtifactUpdate | null
   isUpdateRead?: boolean
   onDismissUpdate?: (id: string) => void
@@ -32,6 +35,7 @@ export function ConversationPanel({
   collapsed = false,
   artifact,
   item,
+  workspaceId,
   update,
   transitionFrom,
 }: ConversationPanelProps) {
@@ -50,10 +54,20 @@ export function ConversationPanel({
     timestamp: update.timestamp,
   } : null
 
-  const { messages, isTyping, sendMessage } = useMockChat({
-    initialMessages,
-    mode: 'conversation',
-  })
+  const libChat = useLibraryItemChat(
+    workspaceId && item ? workspaceId : undefined,
+    item?.id ?? '',
+  )
+  const artChat = useServerChat(
+    workspaceId && artifact && !item ? workspaceId : undefined,
+    workspaceId && artifact ? `desk.artchat.${workspaceId}.${artifact.id}` : '',
+    artifact?.name ?? '',
+  )
+  const chat = workspaceId && item ? libChat : workspaceId && artifact ? artChat : null
+  const messages = chat?.messages ?? initialMessages
+  const isTyping = chat?.isTyping ?? false
+  const sendMessage = chat?.sendMessage ?? (async () => {})
+  const displayAgentModel = chat?.agentModel ?? agentModel
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -112,14 +126,14 @@ export function ConversationPanel({
                 <ChatMessage
                   key={msg.id}
                   message={msg}
-                  agentModel={agentModel}
+                  agentModel={displayAgentModel}
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
                 />
               ))}
               {updateMsg && (
                 <ChatMessage
                   message={updateMsg}
-                  agentModel={agentModel}
+                  agentModel={displayAgentModel}
                   isFirstInGroup={true}
                   isNew={true}
                 />

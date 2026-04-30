@@ -28,15 +28,14 @@ export async function downloadLibraryFile(opts: {
 }
 
 /**
- * Fetches a library file's content for in-app preview. The blob carries
- * the server-sent MIME type so callers can branch on it. Callers that
- * render via `<img>`/`<iframe>` should pass the blob to `URL.createObjectURL`
- * and revoke on unmount; callers rendering text should use `blob.text()`.
+ * Fetches a library file's content for in-app preview. Returns the blob and
+ * the ETag from the response (mtime in ms, unquoted) so callers can detect
+ * conflicts on subsequent saves.
  */
 export async function fetchLibraryContent(opts: {
   workspaceId: string;
   path: string;
-}): Promise<Blob> {
+}): Promise<{ blob: Blob; etag: string | null }> {
   const params = new URLSearchParams({
     workspaceId: opts.workspaceId,
     path: opts.path,
@@ -48,19 +47,27 @@ export async function fetchLibraryContent(opts: {
   if (!res.ok) {
     throw new Error(`Preview failed (${res.status})`);
   }
-  return res.blob();
+  const raw = res.headers.get("etag");
+  const etag = raw ? raw.replace(/^"|"$/g, "") : null;
+  return { blob: await res.blob(), etag };
 }
 
+export type SaveResult =
+  | { conflict: false; etag: string | null }
+  | { conflict: true; content: string; etag: string };
+
 /**
- * Overwrites an existing library file's contents. Fails if the path doesn't
- * already exist on the server — use the upload mutation for new files.
+ * Overwrites an existing library file's contents. When `etag` is provided it
+ * is sent as `If-Match`; a mismatch returns `{ conflict: true, content, etag }`
+ * with the server's current content so the caller can show a merge view.
  */
 export async function saveLibraryContent(opts: {
   workspaceId: string;
   path: string;
   body: string | Blob;
   contentType?: string;
-}): Promise<void> {
+  etag?: string | null;
+}): Promise<SaveResult> {
   const params = new URLSearchParams({
     workspaceId: opts.workspaceId,
     path: opts.path,
@@ -70,13 +77,21 @@ export async function saveLibraryContent(opts: {
     "Content-Type": opts.contentType ?? "application/octet-stream",
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (opts.etag) headers["If-Match"] = `"${opts.etag}"`;
   const res = await fetch(`/api/library/content?${params.toString()}`, {
     method: "PUT",
     headers,
     body: opts.body,
   });
+  if (res.status === 409) {
+    const body = await res.json() as { conflict: boolean; content: string; etag: string };
+    return { conflict: true, content: body.content, etag: body.etag };
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(detail ? `Save failed (${res.status}): ${detail}` : `Save failed (${res.status})`);
   }
+  const raw = res.headers.get("etag");
+  const etag = raw ? raw.replace(/^"|"$/g, "") : null;
+  return { conflict: false, etag };
 }

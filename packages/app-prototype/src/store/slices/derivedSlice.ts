@@ -35,11 +35,18 @@ export interface DerivedState {
    * agent writes new data. Keyed by library path.
    */
   fileChangeCounters: Record<string, number>
+  /**
+   * Bumped on `workspace.synced` events (emitted after every agent run).
+   * `ContextDetail` includes this in its fetch effect deps so the open file
+   * re-fetches automatically when an agent run completes. Keyed by workspaceId.
+   */
+  workspaceChangeCounters: Record<string, number>
 }
 
 const initialState: DerivedState = {
   artifactUpdates: [],
   fileChangeCounters: {},
+  workspaceChangeCounters: {},
 }
 
 const slice = createSlice({
@@ -59,10 +66,15 @@ const slice = createSlice({
       const path = action.payload
       state.fileChangeCounters[path] = (state.fileChangeCounters[path] ?? 0) + 1
     },
+    /** Called by wsMiddleware on `workspace.synced`. */
+    bumpWorkspaceChangeCounter(state, action: PayloadAction<string>) {
+      const wsId = action.payload
+      state.workspaceChangeCounters[wsId] = (state.workspaceChangeCounters[wsId] ?? 0) + 1
+    },
   },
 })
 
-export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter } = slice.actions
+export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter } = slice.actions
 export default slice.reducer
 
 // ── Selectors ────────────────────────────────────────────────────────────────
@@ -72,6 +84,9 @@ export const selectArtifactUpdates = (s: RootState): ArtifactUpdate[] =>
 
 export const selectFileChangeCounter = (s: RootState, path: string): number =>
   s.derived.fileChangeCounters[path] ?? 0
+
+export const selectWorkspaceChangeCounter = (s: RootState, wsId: string): number =>
+  s.derived.workspaceChangeCounters[wsId] ?? 0
 
 /**
  * Folders view of the library.

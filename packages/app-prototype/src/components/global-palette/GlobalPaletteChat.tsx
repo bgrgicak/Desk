@@ -70,7 +70,7 @@ export function GlobalPaletteChat() {
               key={m.id}
               message={toServerMessage(m)}
               isFirstInGroup={i === 0 || visibleMessages[i - 1].role !== m.role}
-              fallbackModel="Desk AI"
+              agentName="Desk AI"
               developerMode={false}
             />
           ))}

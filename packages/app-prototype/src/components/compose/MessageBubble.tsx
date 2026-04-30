@@ -8,8 +8,8 @@ interface MessageBubbleProps {
   message: ServerMessage
   isFirstInGroup?: boolean
   isNew?: boolean
-  /** Fallback model label when the message row predates model stamping. */
-  fallbackModel?: string
+  /** Agent name to display in the message header. */
+  agentName?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
   /** When false, internal tool-call/stderr entries inside `events` content
@@ -22,12 +22,12 @@ export function MessageBubble({
   message,
   isFirstInGroup = true,
   isNew = false,
-  fallbackModel,
+  agentName,
   onAttachmentClick,
   developerMode = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  const modelLabel = message.model ?? fallbackModel ?? 'Agent'
+  const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
   const hasAttachments = !!message.attachments && message.attachments.length > 0
 

@@ -57,9 +57,6 @@ let createdAgentId: string | undefined;
 beforeAll(async () => {
   if (SKIP) return;
 
-  // Real Docker path: explicitly clear the fake driver.
-  delete process.env.DESK_SANDBOX_DRIVER;
-
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tools-models-it-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });

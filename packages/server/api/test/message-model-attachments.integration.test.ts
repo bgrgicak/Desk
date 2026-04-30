@@ -50,7 +50,6 @@ beforeAll(async () => {
 
   process.env.DESK_SEED_USERNAME = "attach-user";
   process.env.DESK_SEED_PASSWORD = "pw";
-  process.env.DESK_SANDBOX_DRIVER = "fake";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-attach-"));

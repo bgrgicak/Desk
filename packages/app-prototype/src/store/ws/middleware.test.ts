@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { applyEventToCache } from './middleware'
-import { bumpFileChangeCounter } from '../slices/derivedSlice'
+import { bumpFileChangeCounter, bumpWorkspaceChangeCounter } from '../slices/derivedSlice'
 
 describe('applyEventToCache', () => {
   describe('library.changed', () => {
@@ -41,6 +41,20 @@ describe('applyEventToCache', () => {
     })
   })
 
+  describe('workspace.synced', () => {
+    it('dispatches bumpWorkspaceChangeCounter with the workspaceId', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'workspace.synced',
+        payload: { workspaceId: 'wks_1' },
+      })
+
+      expect(dispatched).toContainEqual(bumpWorkspaceChangeCounter('wks_1'))
+    })
+  })
+
   describe('artifact.created', () => {
     it('dispatches pushArtifactUpdate with the artifact details', () => {
       const dispatched: unknown[] = []
@@ -50,14 +64,11 @@ describe('applyEventToCache', () => {
       applyEventToCache(dispatch, {
         type: 'artifact.created',
         payload: {
-          id: 'file_1',
           path: 'workspaces/wks_1/chats/cht_1/report.md',
           name: 'report.md',
-          mimeType: 'text/markdown',
+          mime: 'text/markdown',
           size: 512,
-          workspaceId: 'wks_1',
           createdAt: now,
-          updatedAt: now,
         },
       })
 

@@ -46,10 +46,6 @@ export async function execInSandbox(
   workspaceSlug: string,
   opts: ExecInSandboxOptions,
 ): Promise<ExecInSandboxResult> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
-    return fakeExecInSandbox(opts);
-  }
-
   const handle = await createOrReuse(workspaceId, workspaceSlug, undefined, opts.providerKeys);
 
   const { dockerSocketPath } = await import("./docker.js");
@@ -132,30 +128,4 @@ export async function execInSandbox(
       });
     });
   });
-}
-
-// The fake path is used by unit tests and offline dev. It recognises a small
-// set of commands that the host control plane issues today; anything else
-// returns a stub success so callers still get a well-formed result.
-function fakeExecInSandbox(opts: ExecInSandboxOptions): ExecInSandboxResult {
-  const cmd = opts.argv.join(" ");
-  if (cmd.startsWith("opencode models")) {
-    const provider = opts.argv[2];
-    // Free opencode models are always present (no API key required).
-    // Paid provider models appear only when the corresponding key is injected.
-    const free = [
-      "opencode/big-pickle",
-      "opencode/gpt-5-nano",
-      "opencode/hy3-preview-free",
-    ];
-    const paid = Object.keys(opts.providerKeys ?? {}).flatMap((k) => {
-      if (k === "ANTHROPIC_API_KEY") return ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"];
-      if (k === "OPENAI_API_KEY") return ["openai/gpt-5", "openai/gpt-4o"];
-      return [];
-    });
-    const all = [...free, ...paid];
-    const lines = provider ? all.filter((m) => m.startsWith(`${provider}/`)) : all;
-    return { exitCode: 0, stdout: lines.join("\n") + "\n", stderr: "", timedOut: false };
-  }
-  return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
 }

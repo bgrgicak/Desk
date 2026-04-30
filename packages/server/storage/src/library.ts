@@ -202,6 +202,7 @@ export async function listLibrary(
       mime: guessMime(abs),
       size: stat.size,
       createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
     });
   }
   fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

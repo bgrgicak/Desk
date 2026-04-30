@@ -1,7 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter } from "../slices/derivedSlice";
 import { getSessionToken } from "@/auth/session";
 import type { ServerMessage, WsEvent } from "../types";
 
@@ -216,6 +216,10 @@ export function applyEventToCache(
     case "library.changed": {
       dispatch(api.util.invalidateTags([{ type: "LibraryFile", id: "LIST" }]));
       dispatch(bumpFileChangeCounter(event.payload.path));
+      break;
+    }
+    case "workspace.synced": {
+      dispatch(bumpWorkspaceChangeCounter(event.payload.workspaceId));
       break;
     }
     case "message.log_appended": {

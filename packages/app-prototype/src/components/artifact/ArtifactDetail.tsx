@@ -272,6 +272,7 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
           collapsed={panelCollapsed}
           onCollapse={() => setPanelCollapsed(!panelCollapsed)}
           artifact={artifact}
+          workspaceId={activeWorkspaceId}
           update={update}
           isUpdateRead={isUpdateRead}
           onDismissUpdate={onDismissUpdate}
@@ -286,6 +287,8 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
           agentModel={artifact.agentModel}
           collapsed={panelCollapsed}
           onCollapse={() => setPanelCollapsed(!panelCollapsed)}
+          artifact={artifact}
+          workspaceId={activeWorkspaceId}
           update={update}
           isUpdateRead={isUpdateRead}
           onDismissUpdate={onDismissUpdate}

@@ -1,9 +1,5 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { listModels, parseModelsOutput } from "../src/models.js";
-
-beforeAll(() => {
-  process.env.DESK_SANDBOX_DRIVER = "fake";
-});
+import { describe, it, expect } from "vitest";
+import { parseModelsOutput } from "../src/models.js";
 
 describe("parseModelsOutput", () => {
   it("parses provider/model lines", () => {
@@ -22,20 +18,5 @@ describe("parseModelsOutput", () => {
     expect(out).toEqual([
       { id: "ok/yes", provider: "ok" },
     ]);
-  });
-});
-
-describe("listModels (fake sandbox)", () => {
-  it("returns a non-empty model list", async () => {
-    const models = await listModels("agt_test", "desk");
-    expect(models.length).toBeGreaterThan(0);
-    expect(models[0].id.includes("/")).toBe(true);
-    expect(models[0].provider).toBe(models[0].id.split("/")[0]);
-  });
-
-  it("filters by provider", async () => {
-    const models = await listModels("agt_test", "desk", { provider: "opencode" });
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.provider === "opencode")).toBe(true);
   });
 });

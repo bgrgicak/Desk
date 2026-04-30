@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
-import { useMockChat } from '@/hooks/use-mock-chat'
+import { useServerChat } from '@/hooks/use-server-chat'
 import { cn } from '@/lib/utils'
 import type { TodayItem, TodayBand, Chat } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
@@ -377,10 +377,14 @@ function TodayItemDetail({
     timestamp: item.timestamp,
   }] : []
 
-  const { messages, isTyping, sendMessage } = useMockChat({
-    initialMessages,
-    mode: 'conversation',
-  })
+  const serverChat = useServerChat(
+    item.workspaceId,
+    `desk.todaychat.${item.workspaceId}.${item.id}`,
+    item.ask,
+  )
+  const messages = [...initialMessages, ...serverChat.messages]
+  const isTyping = serverChat.isTyping
+  const sendMessage = serverChat.sendMessage
 
   useEffect(() => {
     if (scrollRef.current) {

@@ -49,7 +49,7 @@ export interface ChatThreadProps {
   chatId: string
   /** When true the messages query is skipped (used for the "new chat" stub). */
   skipQuery?: boolean
-  fallbackModel?: string
+  agentName?: string
   developerMode?: boolean
   /** Additional "sending" state from the parent's mutation (POST /messages). */
   isSending?: boolean
@@ -76,7 +76,7 @@ export interface ChatThreadProps {
 export function ChatThread({
   chatId,
   skipQuery = false,
-  fallbackModel,
+  agentName,
   developerMode = false,
   isSending = false,
   highlightMessageId,
@@ -152,7 +152,7 @@ export function ChatThread({
             >
               <MessageBubble
                 message={msg}
-                fallbackModel={fallbackModel}
+                agentName={agentName}
                 isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
                 isNew={showNewBadge && msg.id === lastAssistantId}
                 onAttachmentClick={onAttachmentClick}

@@ -763,12 +763,9 @@ export function ChatView({
     return () => clearTimeout(t)
   }, [chat.id])
 
-  // Fallback model label for assistant rows predating per-message model
-  // stamping: look up the chat's agent and use its configured model.
-  // Post-stamp rows carry their own `model` field and don't hit this path.
   const { data: agents } = useGetAgentsQuery()
-  const fallbackModel =
-    agents?.find(a => a.id === chat.agentId)?.model ?? 'Agent'
+  const agentName =
+    agents?.find(a => a.id === chat.agentId)?.name ?? 'Agent'
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -822,7 +819,7 @@ export function ChatView({
         <ChatThread
           chatId={chat.id}
           skipQuery={isNewChat}
-          fallbackModel={fallbackModel}
+          agentName={agentName}
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}

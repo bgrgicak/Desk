@@ -74,6 +74,13 @@ export const LibraryChangedEventSchema = z.object({
   }),
 });
 
+export const WorkspaceSyncedEventSchema = z.object({
+  type: z.literal("workspace.synced"),
+  payload: z.object({
+    workspaceId: z.string(),
+  }),
+});
+
 export const WsEventSchema = z.discriminatedUnion("type", [
   ChatUpdatedEventSchema,
   ChatDeletedEventSchema,
@@ -83,6 +90,7 @@ export const WsEventSchema = z.discriminatedUnion("type", [
   MessageStreamingEventSchema,
   ArtifactCreatedEventSchema,
   LibraryChangedEventSchema,
+  WorkspaceSyncedEventSchema,
 ]);
 export type WsEvent = z.infer<typeof WsEventSchema>;
 
