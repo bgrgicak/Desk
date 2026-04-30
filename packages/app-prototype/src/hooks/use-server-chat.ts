@@ -100,7 +100,13 @@ export function useServerChat(
         }
       }
 
-      await postMessage({ chatId: activeChatId, content }).unwrap()
+      await postMessage({
+        chatId: activeChatId,
+        content,
+        ...(staticAttachments && staticAttachments.length > 0
+          ? { attachments: staticAttachments }
+          : {}),
+      }).unwrap()
     },
     [workspaceId, chatId, workspaceAgents, title, staticAttachments, createChat, postMessage, setChatId, pinChatLibraryRef],
   )
