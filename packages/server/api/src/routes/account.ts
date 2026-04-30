@@ -1,15 +1,18 @@
-import pg from "pg";
-import { queries } from "@desk/db";
-import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
 
-export async function getMe(pool: pg.Pool, userId: string) {
+type ProviderMetaEntry = { name?: string };
+type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
+
+export async function getMe(pool: Pool, userId: string) {
   const user = await queries.users.findById(pool, userId);
   if (!user) throw new NotFoundError("User not found");
   return user;
 }
 
 export async function patchMe(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   data: { username?: string; email?: string; avatarPath?: string },
 ) {
@@ -19,7 +22,7 @@ export async function patchMe(
 }
 
 export async function changePassword(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   data: { currentPassword: string; newPassword: string },
 ) {
@@ -32,7 +35,7 @@ export async function changePassword(
  * does not actually remove data.
  */
 export async function deleteMe(
-  _pool: pg.Pool,
+  _pool: Pool,
   _userId: string,
 ): Promise<{ ok: true; message: string }> {
   return { ok: true, message: "Account marked for deletion" };
@@ -50,7 +53,7 @@ function maskKey(value: string): string {
  * can render a complete form.
  */
 export async function getProviders(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
 ): Promise<{ providers: Record<string, string | null> }> {
   const stored = await queries.userSettings.getProviderKeys(pool, userId);
@@ -66,7 +69,7 @@ export async function getProviders(
  * replaces it. Names not present in the body are left alone.
  */
 export async function setProviders(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   data: { providers: Record<string, string | null> },
 ): Promise<{ providers: Record<string, string | null> }> {
@@ -84,5 +87,48 @@ export async function setProviders(
     }
   }
   await queries.userSettings.mergeProviderKeys(pool, userId, data.providers);
+
+  const written = Object.entries(data.providers)
+    .filter(([, v]) => v !== null)
+    .map(([k]) => k);
+  const deleted = Object.entries(data.providers)
+    .filter(([, v]) => v === null)
+    .map(([k]) => k);
+  if (written.length > 0) {
+    await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "write", written, "user_update");
+  }
+  if (deleted.length > 0) {
+    await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "delete", deleted, "user_update");
+  }
+
   return getProviders(pool, userId);
+}
+
+/**
+ * Returns per-provider display metadata for the current user.
+ * Response: `{ meta: Record<string, { name?: string }> }`
+ */
+export async function getProvidersMeta(
+  pool: Pool,
+  userId: string,
+): Promise<{ meta: ProviderMetaMap }> {
+  const meta = await queries.userSettings.getProviderMeta(pool, userId);
+  return { meta };
+}
+
+/**
+ * Partial-update provider metadata. Each entry is merged into the stored
+ * object; a null entry removes that provider's metadata. Keys not present
+ * in the body are left alone.
+ */
+export async function setProvidersMeta(
+  pool: Pool,
+  userId: string,
+  data: { meta: Record<string, ProviderMetaEntry | null> },
+): Promise<{ meta: ProviderMetaMap }> {
+  if (!data || typeof data.meta !== "object" || data.meta === null) {
+    throw new ValidationError("Missing meta object");
+  }
+  const meta = await queries.userSettings.mergeProviderMeta(pool, userId, data.meta);
+  return { meta };
 }

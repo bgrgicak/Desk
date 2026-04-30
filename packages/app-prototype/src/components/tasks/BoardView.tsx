@@ -29,8 +29,8 @@ import type { Task } from '@/data/ui-types'
 const COLUMNS: { id: Task['status']; label: string }[] = [
   { id: 'todo',      label: 'To do'     },
   { id: 'active',    label: 'Active'    },
-  { id: 'complete',  label: 'Complete'  },
   { id: 'scheduled', label: 'Scheduled' },
+  { id: 'complete',  label: 'Complete'  },
 ]
 
 const PLACEHOLDER_ID = '__placeholder__'

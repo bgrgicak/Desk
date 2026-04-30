@@ -1,16 +1,19 @@
-import pg from "pg";
+import { type Pool } from "@agent-desk/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
-import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, type AttachmentRef, type Message, type WsEvent } from "@desk/shared";
+import { Cron } from "croner";
+import { queries } from "@agent-desk/db";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatAttachmentsDir,
   listNoteHistory,
   materializeNote,
   notesDir,
+  pinLibraryFileToChat,
+  saveChatAttachmentToLibrary,
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
@@ -18,12 +21,7 @@ import {
   type FileRef,
   type NoteVersion,
   type StorageContext,
-} from "@desk/storage";
-
-interface SchedulerCancelAdapter {
-  removeAt: (id: string) => Promise<void>;
-  removeCron: (id: string) => Promise<void>;
-}
+} from "@agent-desk/storage";
 
 /**
  * Subset of the run manager the patch-message route needs to drive
@@ -35,49 +33,12 @@ export interface MessageLifecycleOps {
   pauseMessage(messageId: string): Promise<Message | null>;
   resumeMessage(messageId: string): Promise<Message | null>;
   cancelScheduledMessage(messageId: string): Promise<Message | null>;
-}
-
-/**
- * Cancels the at/cron entry a single message owned via `schedulerRef`.
- * Best-effort: a stale ref (already fired, already removed) is swallowed
- * so deletion isn't blocked on infra drift. Shared by per-message delete
- * and by the per-chat cascade.
- */
-async function cancelSchedulerRef(
-  msg: Message,
-  adapter: SchedulerCancelAdapter | null,
-): Promise<void> {
-  const ref = msg.schedulerRef;
-  if (!ref || !adapter) return;
-  try {
-    if (ref.kind === "at") await adapter.removeAt(ref.id);
-    else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-  } catch {
-    // Stale refs are OK.
-  }
-}
-
-async function cancelSchedulerRefsForChat(
-  pool: pg.Pool,
-  chatId: string,
-  adapter: SchedulerCancelAdapter | null,
-): Promise<void> {
-  if (!adapter) return;
-  const { rows } = await pool.query(
-    `SELECT id, scheduler_ref FROM messages
-     WHERE chat_id = $1 AND scheduler_ref IS NOT NULL`,
-    [chatId],
-  );
-  for (const row of rows) {
-    const ref = row.scheduler_ref as { kind?: string; id?: string } | null;
-    if (!ref || !ref.id) continue;
-    try {
-      if (ref.kind === "at") await adapter.removeAt(ref.id);
-      else if (ref.kind === "cron") await adapter.removeCron(ref.id);
-    } catch {
-      // Stale refs are OK.
-    }
-  }
+  /** Re-compute execute_at after a PATCH that changes schedule fields
+   * without crossing a state boundary. For cron tasks this means calling
+   * croner to get the next occurrence. */
+  rescheduleMessage(messageId: string): Promise<Message | null>;
+  /** Claims the row and runs the agent in-process. */
+  fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }>;
 }
 
 /**
@@ -85,27 +46,27 @@ async function cancelSchedulerRefsForChat(
  * that need to build a filesystem path from a bare chatId. Throws if the
  * chat is missing.
  */
-async function workspaceSlugForChat(pool: pg.Pool, chatId: string): Promise<string> {
+async function workspaceSlugForChat(pool: Pool, chatId: string): Promise<string> {
   const { rows } = await pool.query<{ path: string }>(
-    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = $1`,
+    `SELECT w.path FROM chats c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = ?`,
     [chatId],
   );
   if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
   return rows[0].path;
 }
 
-export async function listChats(pool: pg.Pool, workspaceId: string) {
+export async function listChats(pool: Pool, workspaceId: string) {
   return queries.chats.listWithLatestMessage(pool, workspaceId);
 }
 
-export async function getChat(pool: pg.Pool, id: string) {
+export async function getChat(pool: Pool, id: string) {
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
 
 export async function createChat(
-  pool: pg.Pool,
+  pool: Pool,
   data: { workspaceId: string; agentId: string; title: string; goal?: string },
 ) {
   return queries.chats.insert(pool, {
@@ -115,7 +76,7 @@ export async function createChat(
 }
 
 export async function patchChat(
-  pool: pg.Pool,
+  pool: Pool,
   id: string,
   data: { title?: string; goal?: string; agentId?: string },
 ) {
@@ -125,7 +86,7 @@ export async function patchChat(
 }
 
 export async function listMessages(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   opts?: { cursor?: string },
 ) {
@@ -133,25 +94,105 @@ export async function listMessages(
 }
 
 /**
- * User sends a chat message. Inserts two rows:
- *   1. The user's message (role=user, immutable) — carries the text.
- *   2. A pending system trigger with `agent_turn` content that references
- *      the user message id. fireMessage resolves the referenced user
- *      message at fire time and uses its text as the prompt, so the
- *      payload is never duplicated.
+ * User sends a message into a chat. Two write shapes depending on kind:
  *
- * Callers (app.ts) get the trigger's id back to schedule the fire.
+ * - `kind='chat'` (default): a user-role text row plus a pending system
+ *   `agent_turn` trigger that references the user message. fireMessage
+ *   resolves the trigger at fire time, reads the parent user message's
+ *   text as the prompt. No duplication of payload.
+ * - `kind='task'` or `'ai_note'`: a single self-firing row. The schedule
+ *   (`executeAt` / `cron`) lives directly on it; fireMessage dispatches
+ *   on `kind` to know what to run. No separate trigger.
+ *
+ * Callers (app.ts) get the trigger's id (or the message id for self-firing
+ * kinds) back to schedule the fire.
  */
 const SendMessageSchema = z.object({
   content: z.string(),
   attachments: z.array(AttachmentRefSchema).optional(),
+  kind: z.enum(MESSAGE_KINDS).optional(),
+  title: z.string().optional(),
+  executeAt: z.string().optional(),
+  cron: z.string().optional(),
+  goal: z.string().optional(),
 });
 
+/**
+ * Translates a multipart `POST /chats/{id}/messages` form into the JSON
+ * body shape `sendMessage` expects. Files land under
+ * `.chats/{id}/attachments/` (the canonical chat-attachment home);
+ * `uploadArtifact` handles same-name collisions by appending `-N`.
+ *
+ * Form fields:
+ *   content           — message text (required, may be empty)
+ *   attachment        — file part(s); repeated for multi-attachment sends
+ *   attachments       — JSON array of AttachmentRef for refs without a
+ *                       file body (library mentions)
+ *   kind/title/executeAt/cron — optional, same semantics as the JSON path
+ */
+export async function buildSendMessageBodyFromForm(
+  storage: StorageContext,
+  chatId: string,
+  form: FormData,
+): Promise<unknown> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const content = typeof form.get("content") === "string" ? (form.get("content") as string) : "";
+
+  // Library-mention refs ride alongside file uploads — same array on the
+  // wire, distinguished only by whether a file part is present.
+  const refsRaw = form.get("attachments");
+  const refs: AttachmentRef[] = [];
+  if (typeof refsRaw === "string" && refsRaw !== "") {
+    const parsed = z.array(AttachmentRefSchema).safeParse(JSON.parse(refsRaw));
+    if (!parsed.success) {
+      throw new ValidationError(`Invalid 'attachments' JSON: ${parsed.error.message}`);
+    }
+    refs.push(...parsed.data);
+  }
+
+  const fileParts = form.getAll("attachment").filter((p): p is File => p instanceof Blob);
+  const uploaded: AttachmentRef[] = [];
+  for (const part of fileParts) {
+    const name = part.name || "upload";
+    const mime = part.type || "application/octet-stream";
+    const stream = Readable.from(Buffer.from(await part.arrayBuffer()));
+    const ref = await uploadArtifact(storage, {
+      workspaceId: chat.workspaceId,
+      workspaceSlug: ws.path,
+      chatId,
+      name,
+      mime,
+      stream,
+    });
+    uploaded.push({
+      path: ref.path,
+      name: ref.name,
+      mime: ref.mime,
+      size: ref.size,
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    content,
+    attachments: [...refs, ...uploaded],
+  };
+  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
+    const v = form.get(k);
+    if (typeof v === "string" && v !== "") body[k] = v;
+  }
+  return body;
+}
+
 export async function sendMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
+  opts?: { role?: "user" | "agent" | "system" },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -165,11 +206,44 @@ export async function sendMessage(
   const attachments: AttachmentRef[] | undefined =
     data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
 
+  const kind: MessageKind = data.kind ?? "chat";
+
+  // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
+  // dispatches by kind. The "userMessage" / "triggerId" pair in the return
+  // value is a chat-shape concession — both ids point at the same row so
+  // app.ts can schedule the message id without branching.
+  if (kind !== "chat") {
+    const messageId = generateId("message");
+    let executeAt = data.executeAt ?? null;
+    if (data.cron && !executeAt) {
+      const next = new Cron(data.cron).nextRun();
+      if (!next) throw new ValidationError(`cron expression "${data.cron}" has no future occurrences`);
+      executeAt = next.toISOString();
+    }
+    const message = await queries.messages.insert(pool, {
+      id: messageId,
+      chatId,
+      role: opts?.role ?? "user",
+      content: { type: "text", text: data.content },
+      attachments,
+      kind,
+      title: data.title ?? null,
+      state: "pending",
+      executeAt,
+      cron: data.cron ?? null,
+      agentId: chat.agentId,
+    });
+    emit({ type: "message.appended", payload: message });
+    return { userMessage: message, triggerId: messageId };
+  }
+
   const userMessage = await queries.messages.insert(pool, {
     id: generateId("message"),
     chatId,
     role: "user",
-    content: { type: "text", text: data.content },
+    content: data.goal
+      ? { type: "text", text: data.content, goal: data.goal }
+      : { type: "text", text: data.content },
     attachments,
   });
 
@@ -195,13 +269,12 @@ export async function sendMessage(
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
- * State transitions delegate to the run manager so the OS-level at/cron
- * entry is actually removed or re-installed; content-only patches (e.g.
- * user editing a note body) snapshot the prior note and take the plain
- * DB update path.
+ * State transitions delegate to the run manager (pause/resume/cancel);
+ * content-only patches (e.g. user editing a note body) snapshot the prior
+ * note and take the plain DB update path.
  */
 export async function patchMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
@@ -218,14 +291,19 @@ export async function patchMessage(
       `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
     );
   }
-  if (data.state === "pending" && current.state !== "paused") {
+  // A no-op state patch (e.g. `state: 'pending'` on an already-pending row)
+  // is allowed and falls through to the field-only path below — the kanban
+  // board sends the column's target state on every drop without inspecting
+  // the row's current state.
+  const stateTransition = data.state !== undefined && data.state !== current.state;
+  // For non-task messages the running state is claimed atomically by
+  // fireMessage — a manual flip would race with the executor. Task messages
+  // (kind='task') are different: the executor claims the task_run child, so
+  // the parent's running state is only a kanban-position signal and can be
+  // patched freely.
+  if (stateTransition && current.state === "running" && current.kind !== "task") {
     throw new ValidationError(
-      `state can only be patched to 'pending' from 'paused'`,
-    );
-  }
-  if (data.state === "paused" && current.state !== "pending") {
-    throw new ValidationError(
-      `state can only be patched to 'paused' from 'pending'`,
+      `cannot patch state of a running message; cancel or wait for it to finish`,
     );
   }
 
@@ -246,13 +324,13 @@ export async function patchMessage(
     }
   }
 
-  // Lifecycle transitions route through the scheduler so OS-level at/cron
-  // entries are added/removed in sync with the DB state. A state patch
-  // with no other fields is delegated entirely; a combined content+state
-  // patch first writes content, then transitions.
-  if (data.state && lifecycleOps) {
-    if (data.content !== undefined) {
-      await queries.messages.updateMessage(pool, messageId, { content: data.content });
+  // Apply non-state fields first so the lifecycle op observes the new
+  // schedule when it runs (e.g. resumeMessage sees the updated execute_at).
+  if (stateTransition && lifecycleOps) {
+    const preTransition = { ...data };
+    delete preTransition.state;
+    if (Object.keys(preTransition).length > 0) {
+      await queries.messages.updateMessage(pool, messageId, preTransition);
     }
     let updated: Message | null = null;
     if (data.state === "paused") updated = await lifecycleOps.pauseMessage(messageId);
@@ -262,10 +340,53 @@ export async function patchMessage(
     return updated;
   }
 
+  // Non-transition path: apply the DB update, then if the schedule changed,
+  // let rescheduleMessage recompute execute_at from the new cron expression.
   const updated = await queries.messages.updateMessage(pool, messageId, data);
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
+  if (lifecycleOps && (data.executeAt !== undefined || data.cron !== undefined)) {
+    const synced = await lifecycleOps.rescheduleMessage(messageId);
+    return synced ?? updated;
+  }
   emit({ type: "message.updated", payload: updated });
   return updated;
+}
+
+/**
+ * Runs a task message on demand. Used by the kanban "drag to Active"
+ * gesture: forces the row back to `pending` then dispatches the agent.
+ * Re-fires terminal rows (succeeded/failed/cancelled) too — the column
+ * drop is the user's "do it again, now" intent. Idempotent if the row
+ * is already running: returns the current row without firing twice.
+ */
+export async function runMessage(
+  pool: Pool,
+  chatId: string,
+  messageId: string,
+  ops: MessageLifecycleOps,
+  emit: (event: WsEvent) => void,
+): Promise<Message> {
+  const current = await queries.messages.findById(pool, messageId);
+  if (!current || current.chatId !== chatId) {
+    throw new NotFoundError(`Message not found in chat: ${messageId}`);
+  }
+  if (current.state === "running") return current;
+
+  // Reset to pending so fireMessage can claim it.
+  const reset = await queries.messages.updateMessage(pool, messageId, { state: "pending" });
+  if (!reset) throw new NotFoundError(`Message not found: ${messageId}`);
+  emit({ type: "message.updated", payload: reset });
+
+  // Fire-and-forget. fireMessage's claimPending flips the row to
+  // 'running' and broadcasts message.updated; the kanban picks that up
+  // over WS and moves the card to the Active column. The full agent
+  // run continues in the background.
+  ops.fireMessage(messageId).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(`runMessage fireMessage failed for ${messageId}:`, err);
+  });
+
+  return reset;
 }
 
 /**
@@ -283,27 +404,23 @@ export async function getNoteHistory(
 }
 
 /**
- * Deletes a message. Cancels any at/cron scheduler entry this message
- * owned via scheduler_ref. Idempotent — deleting an already-gone
- * message returns 404; deleting with no scheduler_ref just removes
- * the row.
+ * Deletes a message. Idempotent — deleting an already-gone message
+ * returns 404.
  */
 export async function deleteMessage(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  adapter: SchedulerCancelAdapter | null,
 ): Promise<void> {
   const msg = await queries.messages.findById(pool, messageId);
   if (!msg || msg.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
 
-  await cancelSchedulerRef(msg, adapter);
   const slug = await workspaceSlugForChat(pool, chatId);
 
-  await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+  await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
 
   // Move log file to trash if present.
   const logPath = path.join(
@@ -348,9 +465,14 @@ export async function getMessageLogs(
  * `note`: a materialized mirror of a `note`-content message, written by
  * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
  * read-only from the client's perspective — they're owned by the DB row.
+ *
+ * `label` is an optional human-friendly name the UI shows alongside the
+ * raw file name (e.g. notes always carry "Chat notes" so the listing
+ * doesn't expose the messageId-based filename as the primary label).
  */
 export type ChatFileRef = FileRef & {
   kind: "attachment" | "note";
+  label?: string;
 };
 
 /**
@@ -407,6 +529,7 @@ export async function listAttachments(
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
         kind: "note",
+        label: "Chat notes",
       });
     }
   }
@@ -424,20 +547,18 @@ export async function listAttachments(
  * caller can broadcast the event correctly.
  */
 export async function deleteChat(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   chatId: string,
-  adapter: SchedulerCancelAdapter | null,
   emit: (event: WsEvent) => void,
 ): Promise<{ ok: true }> {
   const chat = await queries.chats.findById(pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
 
-  await cancelSchedulerRefsForChat(pool, chatId, adapter);
   const ws = await queries.workspaces.findById(pool, chat.workspaceId);
 
   // FK ON DELETE CASCADE drops messages rows transactionally with the chat.
-  await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+  await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
 
   if (ws) {
     await trashChatDirectories(storage.home, ws.path, chatId).catch(() => {
@@ -459,10 +580,16 @@ export async function deleteChat(
  * agent artifacts). Returns a FileRef with the new workspace-relative
  * path.
  */
-export async function uploadAttachmentToChat(
+/**
+ * Pins a library file into the chat's "In this chat" sidebar by
+ * symlinking it under `.chats/{chatId}/attachments/`. The library file
+ * stays where it is — only a link is created, so deleting the chat
+ * doesn't affect the workspace library.
+ */
+export async function pinLibraryFile(
   storage: StorageContext,
   chatId: string,
-  data: { name: string; mime: string; content: Buffer },
+  libraryPath: string,
   emit: (event: WsEvent) => void,
 ): Promise<FileRef> {
   const chat = await queries.chats.findById(storage.pool, chatId);
@@ -470,18 +597,42 @@ export async function uploadAttachmentToChat(
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
-  const stream = Readable.from(data.content);
-
-  const file = await uploadArtifact(storage, {
-    workspaceId: chat.workspaceId,
-    workspaceSlug: ws.path,
-    chatId,
-    name: data.name,
-    mime: data.mime,
-    stream,
-  });
-
+  const file = await pinLibraryFileToChat(storage, ws.path, chatId, libraryPath);
   emit({ type: "artifact.created", payload: file });
+  return file;
+}
+
+/**
+ * Promotes a chat attachment from `.chats/{chatId}/attachments/` into the
+ * primary workspace library. The original location becomes a symlink to the
+ * new path, so the chat's "In this chat" sidebar continues to surface the
+ * file. `attachmentName` is a basename (e.g. `chart.png`); `destSubpath`
+ * (optional) is a workspace-root-relative library folder.
+ */
+export async function saveAttachmentToLibrary(
+  storage: StorageContext,
+  chatId: string,
+  attachmentName: string,
+  destSubpath: string | undefined,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const file = await saveChatAttachmentToLibrary(
+    storage,
+    ws.path,
+    chatId,
+    attachmentName,
+    destSubpath,
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: file.path, op: "added" },
+  });
 
   return file;
 }

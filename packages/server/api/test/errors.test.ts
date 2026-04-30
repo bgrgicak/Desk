@@ -6,7 +6,7 @@ import {
   ValidationError,
   ConflictError,
   InternalError,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 import { errorToStatus } from "../src/errors.js";
 
 describe("errorToStatus", () => {

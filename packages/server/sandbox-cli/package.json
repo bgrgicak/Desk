@@ -1,20 +1,17 @@
 {
-  "name": "@desk/sandbox-cli",
+  "name": "@agent-desk/sandbox-cli",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "desk": "dist/desk.js"
+    "desk-agent": "dist/desk.js"
   },
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@desk/shared": "*",
-    "zod": "^3.23.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",

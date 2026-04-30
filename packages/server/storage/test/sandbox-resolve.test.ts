@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ValidationError } from "@desk/shared";
+import { ValidationError } from "@agent-desk/shared";
 import { resolveHostPath } from "../src/layout.js";
 
 describe("resolveHostPath", () => {

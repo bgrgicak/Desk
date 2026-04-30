@@ -1,6 +1,16 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Resolve workspace deps via the `@agent-desk/dev` export condition so vitest
+  // pulls TS source from each package's src/ directly instead of stale
+  // dist/ builds. Mirrors the root vitest.config.ts.
+  resolve: { conditions: ["@agent-desk/dev"] },
+  ssr: {
+    resolve: {
+      conditions: ["@agent-desk/dev"],
+      externalConditions: ["@agent-desk/dev"],
+    },
+  },
   test: {
     include: ["test/**/*.test.ts"],
     testTimeout: 30_000,

@@ -1,10 +1,31 @@
 /**
- * Slice 16 — Settings → Providers panel.
+ * Slice 16 — Settings → Connections → Claude detail.
  *
  * Saving a provider key calls PUT /me/providers and the masked echo
- * comes back from GET /me/providers on reload.
+ * comes back from GET /me/providers on reload. The API-key input lives
+ * inside the Claude connection's detail page.
  */
 import { test, expect } from "../fixtures";
+
+async function openClaudeConnection(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: /Customize/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: /^Connections$/i }).click();
+  // Connections list is derived from /me/providers — only configured kinds
+  // appear. On first run the list is empty so we open the picker; on reload
+  // (after a key is saved) the Claude row exists and we edit it directly.
+  // Wait briefly for the async fetch to settle before deciding.
+  const claudeRow = dialog.locator("div.group", { hasText: /^Claude/ }).first();
+  try {
+    await claudeRow.waitFor({ state: "visible", timeout: 3_000 });
+    await claudeRow.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: /^Edit$/ }).click();
+  } catch {
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await dialog.getByRole("button", { name: /^Claude/ }).click();
+  }
+  return dialog;
+}
 
 test("storing an Anthropic key persists and echoes back masked", async ({
   loggedInPage,
@@ -13,11 +34,8 @@ test("storing an Anthropic key persists and echoes back masked", async ({
 }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
-  const dialog = loggedInPage.getByRole("dialog");
-  await dialog.getByRole("button", { name: /^Agents$/i }).click();
+  let dialog = await openClaudeConnection(loggedInPage);
 
-  // Providers panel is rendered below the agents list.
   const input = dialog.getByTestId("provider-key-ANTHROPIC_API_KEY");
   await expect(input).toBeVisible();
 
@@ -36,9 +54,10 @@ test("storing an Anthropic key persists and echoes back masked", async ({
 
   // Reload — the masked echo from /me/providers is shown.
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
-  await loggedInPage.getByRole("dialog").getByRole("button", { name: /^Agents$/i }).click();
-  const inputAfterReload = loggedInPage.getByTestId("provider-key-ANTHROPIC_API_KEY");
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+  dialog = await openClaudeConnection(loggedInPage);
+
+  const inputAfterReload = dialog.getByTestId("provider-key-ANTHROPIC_API_KEY");
   await expect(inputAfterReload).toBeVisible();
   // Server masks with `...` separator. Wait for the GET /me/providers to
   // populate the input (RTK Query is async).

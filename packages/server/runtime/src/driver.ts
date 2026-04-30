@@ -24,11 +24,28 @@ export interface RunOptions {
    */
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
-   * Provider API keys to inject when the sandbox container is first created.
-   * Used only for the initial creation; existing containers keep their env.
-   * Omit to fall back to the host process env.
+   * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle" or
+   * "anthropic/claude-sonnet-4-6". When omitted, opencode picks its default.
+   */
+  model?: string;
+  /**
+   * Provider API keys injected as env vars on every `docker exec` call, so
+   * a key added after the container was first created takes effect immediately
+   * without requiring a container restart or recreation.
    */
   providerKeys?: Record<string, string>;
+  /**
+   * Per-run sandbox session token. The driver passes it into the container
+   * as `DESK_SANDBOX_TOKEN`; the in-sandbox `desk` CLI forwards it to the
+   * REST API as `X-Desk-Sandbox-Token`. Omit in fake-driver tests that
+   * don't exercise the CLI.
+   */
+  sandboxToken?: string;
+  /**
+   * URL the in-sandbox `desk` CLI POSTs to. Resolves to the host-side
+   * desk-server (typically `http://host.docker.internal:${PORT}`).
+   */
+  apiUrl?: string;
 }
 
 export interface LogEvent {
@@ -119,14 +136,16 @@ export function shSingleQuote(s: string): string {
 export function buildOpencodeCommand(opts: {
   agentFileId?: string;
   attachments?: string[];
+  model?: string;
 }): string[] {
   const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
   const fileFlags = (opts.attachments ?? [])
     .map((p) => ` --file ${shSingleQuote(toSandboxPath(p))}`)
     .join("");
+  const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
   return [
     "sh", "-c",
-    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags} --dangerously-skip-permissions --format json`,
+    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`,
   ];
 }
 
@@ -136,7 +155,7 @@ const activeExecs = new Map<string, { containerId: string; execId: string }>();
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, dockerSocketPath } = await import("./docker.js");
+      const { createOrReuse, dockerSocketPath, providerKeyEnv } = await import("./docker.js");
       const Docker = (await import("dockerode")).default;
       const docker = new Docker({ socketPath: dockerSocketPath() });
 
@@ -153,14 +172,18 @@ function createRealDriver(): SandboxDriver {
       const cmd = buildOpencodeCommand({
         agentFileId: opts.agentFileId,
         attachments: opts.attachments,
+        model: opts.model,
       });
 
       const exec = await container.exec({
         Cmd: cmd,
         Env: [
-          `DESK_TOOL_TOKEN=${opts.runId}`,
-          `DESK_TOOL_SOCKET=/run/desk/tools.sock`,
           `DESK_PROMPT=${fullPrompt}`,
+          ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
+          ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
+          // Inject provider keys per-exec so a key added after the container
+          // was created takes effect immediately without recreation.
+          ...providerKeyEnv(opts.providerKeys),
         ],
         AttachStdout: true,
         AttachStderr: true,

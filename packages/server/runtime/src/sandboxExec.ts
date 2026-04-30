@@ -10,7 +10,7 @@
  */
 
 import { PassThrough } from "node:stream";
-import { createOrReuse } from "./docker.js";
+import { createOrReuse, providerKeyEnv } from "./docker.js";
 
 export interface ExecInSandboxOptions {
   /** Command + args to run inside the container. */
@@ -22,9 +22,9 @@ export interface ExecInSandboxOptions {
   /** Extra environment variables. */
   env?: Record<string, string>;
   /**
-   * AI-provider credentials to inject when the sandbox is created on demand.
-   * Only used if the container doesn't exist yet; existing containers keep
-   * their original env. Omit to fall back to reading from host process env.
+   * AI-provider credentials to inject. Used both when the sandbox is created
+   * on demand and on every exec, so reused containers pick up rotated or
+   * newly-saved keys without a restart. Omit to fall back to host process env.
    */
   providerKeys?: Record<string, string>;
 }
@@ -57,10 +57,14 @@ export async function execInSandbox(
   const docker = new Docker({ socketPath: dockerSocketPath() });
   const container = docker.getContainer(handle.containerId);
 
+  const keyEnv = providerKeyEnv(opts.providerKeys);
+  const extraEnv = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : [];
+  const execEnv = [...keyEnv, ...extraEnv];
+
   const exec = await container.exec({
     Cmd: opts.argv,
     ...(opts.user ? { User: opts.user } : {}),
-    Env: opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : undefined,
+    Env: execEnv.length > 0 ? execEnv : undefined,
     AttachStdout: true,
     AttachStderr: true,
   });
@@ -137,12 +141,19 @@ function fakeExecInSandbox(opts: ExecInSandboxOptions): ExecInSandboxResult {
   const cmd = opts.argv.join(" ");
   if (cmd.startsWith("opencode models")) {
     const provider = opts.argv[2];
-    const all = [
-      "anthropic/claude-opus-4-7",
-      "anthropic/claude-sonnet-4-6",
-      "anthropic/claude-haiku-4-5",
-      "openai/gpt-5",
+    // Free opencode models are always present (no API key required).
+    // Paid provider models appear only when the corresponding key is injected.
+    const free = [
+      "opencode/big-pickle",
+      "opencode/gpt-5-nano",
+      "opencode/hy3-preview-free",
     ];
+    const paid = Object.keys(opts.providerKeys ?? {}).flatMap((k) => {
+      if (k === "ANTHROPIC_API_KEY") return ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"];
+      if (k === "OPENAI_API_KEY") return ["openai/gpt-5", "openai/gpt-4o"];
+      return [];
+    });
+    const all = [...free, ...paid];
     const lines = provider ? all.filter((m) => m.startsWith(`${provider}/`)) : all;
     return { exitCode: 0, stdout: lines.join("\n") + "\n", stderr: "", timedOut: false };
   }

@@ -1,20 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { motion } from 'framer-motion'
 import {
   Link2,
   Download,
   Trash2,
   MoreHorizontal,
-  Bot,
   ExternalLink,
   Pencil,
   Check,
-  Plus,
-  PanelRightClose,
   PanelRight,
   Save,
-  User,
-  ChevronDown,
   ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -31,7 +25,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -45,7 +38,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import type { ContextItem, Artifact } from '@/data/ui-types'
-import { getRelativeTime, getArtifactIcon, getFolderPath } from '@/data/ui-types'
+import { getArtifactIcon, getFolderPath } from '@/data/ui-types'
 import { fileKindForItem, fileKindFrom, iconForItem } from '@/data/file-kind'
 import {
   useDeleteLibraryFileMutation,
@@ -55,9 +48,14 @@ import {
 import { toFolderList } from '@/store/selectors/library'
 import { downloadLibraryFile, fetchLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
+import { ConversationPanel } from '@/components/artifact/ConversationPanel'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { usePrefs } from '@/hooks/use-prefs'
+
+const AUTO_SAVE_DEBOUNCE_MS = 1_000
+const SAVED_BADGE_TTL_MS = 2_000
 
 interface ContextDetailProps {
   item: ContextItem
@@ -78,15 +76,8 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
 
-  // Pre-populate notes with file description for files that can't be previewed
-  const defaultNotes = (item.type === 'file' && !canPreview(item)) ? item.content : ''
-  const [notes, setNotes] = useState(defaultNotes)
-  const [isEditingNotes, setIsEditingNotes] = useState(false)
-  const [folder, setFolder] = useState(item.folder || '')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [notesExpanded, setNotesExpanded] = useState(true)
-  const [detailsExpanded, setDetailsExpanded] = useState(true)
 
   // File content fetched on demand for preview. Text files (notes, uri-list
   // links, csv/json/code, …) arrive as `previewText`; binary previews (images,
@@ -197,6 +188,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const isDirty = isTextEditable && editorValue != null && editorValue !== previewText
 
   const [saveLibraryContent, saveState] = useSaveLibraryContentMutation()
+  const [savedAt, setSavedAt] = useState<number | null>(null)
   const handleSave = useCallback(async () => {
     if (!activeWorkspaceId || !isDirty || editorValue == null) return
     try {
@@ -207,12 +199,37 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         contentType: item.mimeType || 'text/plain',
       }).unwrap()
       setPreviewText(editorValue)
+      setSavedAt(Date.now())
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
         description: err instanceof Error ? err.message : undefined,
       })
     }
   }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, saveLibraryContent])
+
+  // Auto-save: when the pref is on, debounce a save after the last
+  // edit. The Save button stays available as a "save now" affordance.
+  const { autoSave } = usePrefs()
+  useEffect(() => {
+    if (!autoSave || !isDirty || saveState.isLoading) return
+    const t = window.setTimeout(handleSave, AUTO_SAVE_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [autoSave, isDirty, saveState.isLoading, handleSave])
+
+  // Drop the "Saved" badge after a moment so the button reverts to its
+  // idle "Save" label.
+  useEffect(() => {
+    if (savedAt == null) return
+    const t = window.setTimeout(() => setSavedAt(null), SAVED_BADGE_TTL_MS)
+    return () => window.clearTimeout(t)
+  }, [savedAt])
+
+  const showSavedBadge = !isDirty && !saveState.isLoading && savedAt != null
+  const saveLabel = saveState.isLoading
+    ? 'Saving…'
+    : showSavedBadge
+    ? 'Saved'
+    : 'Save'
 
   // "Related artifacts" — the server has no explicit artifact-to-context
   // relation yet. We hydrate against the library and filter by the ids
@@ -226,7 +243,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const folders = activeWorkspaceId
     ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
     : []
-  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(toArtifactFromFile)
+  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(f => toArtifactFromFile(f, []))
   const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
   const FileIcon = iconForItem(item)
 
@@ -317,9 +334,13 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                   className="text-xs"
                   onClick={handleSave}
                   disabled={!isDirty || saveState.isLoading}
+                  data-testid="library-save"
+                  data-save-state={
+                    saveState.isLoading ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
+                  }
                 >
                   <Save className="h-3.5 w-3.5 mr-1.5" />
-                  {saveState.isLoading ? 'Saving…' : 'Save'}
+                  {saveLabel}
                 </Button>
               )}
 
@@ -351,12 +372,12 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {sidebarCollapsed && (
+              {panelCollapsed && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setSidebarCollapsed(false)}
+                  onClick={() => setPanelCollapsed(false)}
                 >
                   <PanelRight className="h-4 w-4" />
                 </Button>
@@ -558,185 +579,13 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         </div>
       </div>
 
-      {/* Right sidebar — metadata */}
-      <div className={`hidden lg:flex shrink-0 transition-all duration-300 overflow-hidden ${sidebarCollapsed ? 'w-0' : 'w-[340px]'}`}>
-        <motion.div
-          initial={{ opacity: 0, x: 40 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-          className="flex h-full w-[340px] flex-col border-l bg-background"
-        >
-          {/* Sidebar header */}
-          <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0">
-            <span className="text-sm font-medium">Details</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 rounded-full"
-              onClick={() => setSidebarCollapsed(true)}
-            >
-              <PanelRightClose className="h-4 w-4" />
-            </Button>
-          </div>
-
-          {/* Sidebar content */}
-          <div className="flex-1 overflow-y-auto">
-            {/* Notes for AI */}
-            <div className="border-b">
-              <button
-                onClick={() => setNotesExpanded(!notesExpanded)}
-                className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-              >
-                <span className="text-sm font-medium text-foreground">Notes for AI</span>
-                {notesExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-              </button>
-              {notesExpanded && (
-                <div className="px-4 pb-4">
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Extra context the AI will see when using this item.
-                  </p>
-                  {isEditingNotes || !notes ? (
-                    <div>
-                      <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        onFocus={() => setIsEditingNotes(true)}
-                        placeholder="e.g., Focus on the APAC region when analyzing this data."
-                        className="w-full min-h-[80px] rounded-lg border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 resize-none transition-all"
-                      />
-                      {isEditingNotes && (
-                        <div className="flex justify-end gap-2 mt-2">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setIsEditingNotes(false)}>Cancel</Button>
-                          <Button size="sm" className="h-7 text-xs" onClick={() => setIsEditingNotes(false)}>Save</Button>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div
-                      className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-foreground/80 cursor-pointer hover:bg-muted/50 transition-colors"
-                      onClick={() => setIsEditingNotes(true)}
-                    >
-                      {notes}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Details section */}
-            <div className="border-b">
-              <button
-                onClick={() => setDetailsExpanded(!detailsExpanded)}
-                className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-              >
-                <span className="text-sm font-medium text-foreground">About</span>
-                {detailsExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-              </button>
-              {detailsExpanded && (
-                <div className="px-4 pb-4 space-y-3">
-                  {/* Folder */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Folder</span>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className="flex items-center gap-1 text-xs text-foreground hover:text-foreground/80 transition-colors">
-                          {folder || 'None'}
-                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-36">
-                        {['Finance', 'Strategy', 'Design', 'Research'].map(f => (
-                          <DropdownMenuItem key={f} onClick={() => setFolder(f)} className={folder === f ? 'bg-muted' : ''}>{f}</DropdownMenuItem>
-                        ))}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem><Plus className="h-3.5 w-3.5 mr-2" />New folder</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
-                  {/* Uploaded by */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Uploaded by</span>
-                    <div className="flex items-center gap-1.5">
-                      {item.uploadedBy === 'user' ? (
-                        <>
-                          <User className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-xs text-foreground">You</span>
-                        </>
-                      ) : (
-                        <>
-                          <Bot className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-xs text-foreground">Claude</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Added */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Added</span>
-                    <span className="text-xs text-foreground">
-                      {item.addedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </span>
-                  </div>
-
-                  {/* Last accessed */}
-                  {item.lastAccessed && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">Last accessed</span>
-                      <span className="text-xs text-foreground">{getRelativeTime(item.lastAccessed)}</span>
-                    </div>
-                  )}
-
-                  {/* Type */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Type</span>
-                    <span className="text-xs text-foreground capitalize">{item.type}</span>
-                  </div>
-
-                  {/* File size */}
-                  {item.fileSize && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">Size</span>
-                      <span className="text-xs text-foreground">{item.fileSize}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Used in */}
-            <div className="px-4 py-3">
-              <span className="text-sm font-medium text-foreground">Used in</span>
-              {relatedArtifacts.length > 0 ? (
-                <div className="mt-2 space-y-1">
-                  {relatedArtifacts.map(artifact => (
-                    <button
-                      key={artifact.id}
-                      onClick={() => onArtifactClick?.(artifact)}
-                      className="flex items-center gap-2.5 w-full rounded-lg px-2.5 py-2 text-left hover:bg-muted/50 transition-colors group"
-                    >
-                      {(() => { const Icon = getArtifactIcon(artifact.type); return <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> })()}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-foreground group-hover:text-primary truncate transition-colors">
-                          {artifact.name}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {getRelativeTime(artifact.createdAt)}
-                        </p>
-                      </div>
-                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground/60 mt-2">
-                  Not yet used to create any artifacts.
-                </p>
-              )}
-            </div>
-          </div>
-        </motion.div>
+      {/* Right panel — conversation + details */}
+      <div className={`hidden lg:flex shrink-0 transition-all duration-300 overflow-hidden ${panelCollapsed ? 'w-0' : 'w-[380px]'}`}>
+        <ConversationPanel
+          initialMessages={[]}
+          item={item}
+          onCollapse={() => setPanelCollapsed(true)}
+        />
       </div>
 
       {/* Delete confirmation dialog */}

@@ -1,7 +1,7 @@
-import pg from "pg";
-import { queries } from "@desk/db";
-import { NotFoundError } from "@desk/shared";
-import type { Workspace, Agent, Chat, Message } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { NotFoundError } from "@agent-desk/shared";
+import type { Workspace, Agent, Chat, Message } from "@agent-desk/shared";
 
 /**
  * Ownership checks for per-request authorization. Each helper returns the
@@ -11,7 +11,7 @@ import type { Workspace, Agent, Chat, Message } from "@desk/shared";
  */
 
 export async function requireOwnedWorkspace(
-  pool: pg.Pool,
+  pool: Pool,
   workspaceId: string,
   userId: string,
 ): Promise<Workspace> {
@@ -23,7 +23,7 @@ export async function requireOwnedWorkspace(
 }
 
 export async function requireOwnedAgent(
-  pool: pg.Pool,
+  pool: Pool,
   agentId: string,
   userId: string,
 ): Promise<Agent> {
@@ -35,7 +35,7 @@ export async function requireOwnedAgent(
 }
 
 export async function requireOwnedChat(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   userId: string,
 ): Promise<Chat> {
@@ -49,7 +49,7 @@ export async function requireOwnedChat(
 }
 
 export async function requireOwnedMessage(
-  pool: pg.Pool,
+  pool: Pool,
   chatId: string,
   messageId: string,
   userId: string,

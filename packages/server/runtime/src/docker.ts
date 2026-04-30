@@ -5,8 +5,11 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
-import { PROVIDER_KEY_VARS } from "@desk/shared";
-import { resolveDeskHome } from "@desk/storage";
+import * as fssync from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
+import { resolveDeskHome } from "@agent-desk/storage";
 import {
   bindsFromPlan,
   buildDefaultMountPlan,
@@ -14,12 +17,14 @@ import {
 } from "./mounts.js";
 
 /**
- * Resolves the Docker socket path from the active docker context.
- * Falls back to the default `/var/run/docker.sock`.
+ * Resolves the Docker socket path. Order of preference:
+ *   1. DOCKER_HOST env var (unix:// only — TCP not supported here).
+ *   2. `docker context inspect` for the current context.
+ *   3. Linux default at /var/run/docker.sock.
+ *   4. macOS Docker Desktop's per-user socket at ~/.docker/run/docker.sock.
  */
 function resolveDockerSocket(): string {
   if (process.env.DOCKER_HOST) {
-    // e.g. "unix:///run/user/1000/docker.sock"
     const match = process.env.DOCKER_HOST.match(/^unix:\/\/(.+)/);
     if (match) return match[1];
   }
@@ -31,7 +36,11 @@ function resolveDockerSocket(): string {
     const match = host.match(/^unix:\/\/(.+)/);
     if (match) return match[1];
   } catch { /* fall through */ }
-  return "/var/run/docker.sock";
+  const linuxDefault = "/var/run/docker.sock";
+  if (fssync.existsSync(linuxDefault)) return linuxDefault;
+  const macDesktop = path.join(os.homedir(), ".docker", "run", "docker.sock");
+  if (fssync.existsSync(macDesktop)) return macDesktop;
+  return linuxDefault;
 }
 
 /** Cached socket path. */
@@ -60,7 +69,10 @@ export async function ensureImage(): Promise<void> {
   try {
     await docker.getImage("desk/sandbox:v1").inspect();
   } catch {
-    console.warn("desk/sandbox:v1 image not found. Run install.sh to build it.");
+    console.warn(
+      "desk/sandbox:v1 image not found. Build it from packages/server/runtime/Dockerfile.sandbox " +
+      "or run `desk init` (if using @agent-desk/cli) to build it.",
+    );
   }
 }
 
@@ -96,19 +108,13 @@ export async function createOrReuse(
 
   const deskHome = home ?? resolveDeskHome();
   const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
-  const toolSocket = process.env.DESK_TOOL_SOCKET;
-  // Only mount the tool socket when it actually exists on the host. Binding
-  // a non-existent path makes Docker create an empty directory there, which
-  // then confuses the sandbox CLI. With the socket absent, the in-sandbox
-  // CLI surfaces a clear "tool socket missing" error instead.
-  const expectedBinds = [
-    ...bindsFromPlan(plan),
-    ...(toolSocket ? [`${toolSocket}:/run/desk/tools.sock`] : []),
-  ];
+  const expectedBinds = bindsFromPlan(plan);
+  const expectedUser = sandboxUser();
 
-  // Reuse the container only if its image and binds still match the current
-  // plan; otherwise tear it down and fall through to the create path. Bind
-  // order isn't meaningful to Docker, so compare as sets.
+  // Reuse the container only if its image, binds, and runtime user still
+  // match the current expectation; otherwise tear it down and fall through
+  // to the create path. Bind order isn't meaningful to Docker, so compare
+  // as sets.
   try {
     const existing = docker.getContainer(containerName);
     const info = await existing.inspect();
@@ -119,7 +125,8 @@ export async function createOrReuse(
       .catch(() => null);
     const imageMatches = currentImageId !== null && info.Image === currentImageId;
     const mountsMatch = bindsEqual(info.HostConfig?.Binds, expectedBinds);
-    if (imageMatches && mountsMatch) {
+    const userMatches = (info.Config?.User ?? "") === expectedUser;
+    if (imageMatches && mountsMatch && userMatches) {
       if (!info.State.Running) await existing.start();
       return { containerId: info.Id, workspaceId };
     }
@@ -134,22 +141,96 @@ export async function createOrReuse(
     await fs.mkdir(entry.sourcePath, { recursive: true });
   }
 
-  const container = await docker.createContainer({
+  const createSpec = {
     name: containerName,
     Image: "desk/sandbox:v1",
+    // Run as the host user that owns the workspace bind. The image bakes
+    // an `agent` user at UID 2000, but the workspace dir on disk is owned
+    // by whoever runs desk-server; using their uid:gid keeps writes both
+    // ways (host → sandbox and sandbox → host) without any chown dance.
+    User: expectedUser,
     Env: providerKeyEnv(providerKeys),
     HostConfig: {
       CapDrop: ["ALL"],
       NetworkMode: "bridge",
+      // host-gateway lets the in-sandbox `desk` CLI reach the host-side
+      // desk-server REST API as `host.docker.internal`. The bridge default
+      // gives the container an IP but no DNS name for the host, so without
+      // this the agent has no route back to /sandbox/messages.
+      ExtraHosts: ["host.docker.internal:host-gateway"],
       PidsLimit: 256,
       Memory: 512 * 1024 * 1024,
       Tmpfs: { "/tmp": "" },
       Binds: expectedBinds,
     },
-  });
+  };
+  let container;
+  try {
+    container = await docker.createContainer(createSpec);
+  } catch (err) {
+    // Race: two startSandbox() calls for the same workspace can both pass
+    // the inspect() check (404 → not found) and both try to create. The
+    // loser sees a 409 Conflict. The winner has already produced a usable
+    // container with matching binds (we'd have reused it above otherwise),
+    // so reuse it instead of failing the fire.
+    if ((err as { statusCode?: number }).statusCode === 409) {
+      const winner = docker.getContainer(containerName);
+      const winnerInfo = await winner.inspect();
+      if (!winnerInfo.State.Running) await winner.start();
+      return { containerId: winnerInfo.Id, workspaceId };
+    }
+    throw err;
+  }
   await container.start();
   const info = await container.inspect();
   return { containerId: info.Id, workspaceId };
+}
+
+/**
+ * Returns the `User` value to pass to Docker — `<uid>:<gid>` that the
+ * sandbox should run as.
+ *
+ * Rootful docker: the workspace bind-mount is owned by whoever runs
+ * desk-server; running the sandbox as the same uid keeps reads/writes
+ * symmetric without any chown dance. → use process uid/gid.
+ *
+ * Rootless docker: host uid N → container uid 0 (the daemon runner is
+ * the user-namespace root). Files owned by the host user appear as
+ * root:root inside the container, so the sandbox must run as 0:0 to
+ * write through the bind. → use 0:0.
+ *
+ * Override via DESK_SANDBOX_USER for the rare case where neither rule
+ * fits (CI matrices, custom docker daemons, etc).
+ */
+export function sandboxUser(): string {
+  if (process.env.DESK_SANDBOX_USER) return process.env.DESK_SANDBOX_USER;
+  if (isRootlessDocker()) return "0:0";
+  // process.getuid()/getgid() are POSIX-only — undefined on Windows. We
+  // never run desk-server on Windows, so the cast keeps types honest
+  // without a runtime branch.
+  const uid = (process.getuid?.() ?? 0);
+  const gid = (process.getgid?.() ?? 0);
+  return `${uid}:${gid}`;
+}
+
+let _rootlessCache: boolean | undefined;
+/**
+ * Detects whether the active docker context is rootless. Caches the result
+ * because `docker info` adds ~150ms per call and the answer is stable for
+ * the lifetime of the process.
+ */
+function isRootlessDocker(): boolean {
+  if (_rootlessCache !== undefined) return _rootlessCache;
+  try {
+    const out = execFileSync(
+      "docker", ["info", "--format", "{{.SecurityOptions}}"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] },
+    );
+    _rootlessCache = out.includes("rootless");
+  } catch {
+    _rootlessCache = false;
+  }
+  return _rootlessCache;
 }
 
 /** Order-insensitive equality for Docker bind-mount strings. */
@@ -172,7 +253,7 @@ function bindsEqual(actual: string[] | undefined, expected: string[]): boolean {
  * Only keys with non-empty values are emitted, so opencode's auto-detection
  * doesn't light up empty providers.
  */
-function providerKeyEnv(keys?: Record<string, string>): string[] {
+export function providerKeyEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
   const source: Record<string, string | undefined> = keys ?? process.env;
   for (const name of PROVIDER_KEY_VARS) {

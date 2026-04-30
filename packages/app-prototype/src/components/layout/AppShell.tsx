@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
-  LayoutGrid, Zap, FolderOpen, Plus, Search,
-  SlidersHorizontal,
+  Pin, PinOff, Zap, FolderOpen, Plus,
+  ListFilter, SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
-  FileText, ImageIcon, Table, Globe, Play,
+  FileText,
+  ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -44,25 +46,36 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
+import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
-import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import type { Chat, Artifact, InboxItem, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
+import { iconForItem } from '@/data/file-kind'
+import { DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
   useGetWorkspacesQuery,
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
   useSearchQuery,
+  useGetAgentsQuery,
 } from '@/store/api'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
+import { useScrolledUnder } from '@/hooks/use-scrolled-under'
+import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
 
-export type View = 'today' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
+export type View = 'today' | 'pinned' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
 const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
-  { view: 'desk',    icon: LayoutGrid,  label: 'Desk'    },
-  { view: 'tasks',   icon: Zap,         label: 'Tasks'   },
-  { view: 'context', icon: FolderOpen,  label: 'Library' },
+  { view: 'context', icon: FolderOpen, label: 'Library' },
+  { view: 'tasks',   icon: Zap,        label: 'Tasks'   },
 ]
 
 // Fallback used only while the /workspaces query is in flight — the real
@@ -77,24 +90,37 @@ const LOADING_WORKSPACE: WorkspaceInfo = {
 }
 
 const CHATS_PER_PAGE = 10
+const PINNED_PER_PAGE = 5
+
+const EMPTY_FILTER: ChatFilterValues = { goalKind: null, agentId: null, updatesOnly: false, artifactsOnly: false }
 
 function sortedChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
 }
 
-function getChatIcon(chat: Chat, artifacts: Artifact[]): LucideIcon {
-  if (chat.artifactIds?.[0]) {
-    const artifact = artifacts.find(a => a.id === chat.artifactIds![0])
-    if (artifact) return getArtifactIcon(artifact.type)
+// Picker-aligned icons for the inferred goal of the chat.
+// Source of truth: ChatInput's GOALS list — keep these in sync so the
+// sidebar mirrors what the user picked / typed about.
+const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
+  app:       Zap,
+  document:  FileText,
+  image:     ImageIcon,
+  data:      Table,
+  site:      Globe,
+  run:       Play,
+  task:      ListTodo,
+  scheduled: CalendarClock,
+}
+
+function getChatIcon(chat: Chat): LucideIcon {
+  if (chat.goalKind) return GOAL_ICONS[chat.goalKind]
+  switch (chat.kind) {
+    case 'task':
+    case 'task_run':
+      return ListTodo
+    default:
+      return MessageSquare
   }
-  const t = chat.title.toLowerCase()
-  if (t.match(/build|make|app|tracker|dashboard|tool|calculator/)) return Zap
-  if (t.match(/site|website|landing|portfolio/))                    return Globe
-  if (t.match(/image|design|logo|illustration|palette|visual/))    return ImageIcon
-  if (t.match(/spreadsheet|data|table|csv|metrics|numbers|chart/)) return Table
-  if (t.match(/run|schedule|automate|monitor|sync/))               return Play
-  if (t.match(/write|draft|plan|strategy|brief|report|email|doc|summary|summarise|summarize/)) return FileText
-  return MessageSquare
 }
 
 interface AppShellProps {
@@ -108,7 +134,6 @@ interface AppShellProps {
   onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
   unreadCount?: number
-  deskUnreadCount?: number
   readChatIds?: Set<string>
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void
@@ -116,11 +141,16 @@ interface AppShellProps {
   activeWorkspaceId: string
   onSelectWorkspace: (id: string) => void
   onGlobalToday: () => void
-  onNavigateWorkspace: (id: string, view: WorkspaceNavView) => void
   // ── Today sheet ──
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
   onSignOut?: () => void
+  onChatWithAgent?: (agentId: string) => void
+  pinnedItems?: ContextItem[]
+  onPinnedItemClick?: (item: ContextItem) => void
+  onPinItem?: (itemId: string) => void
+  onUnpinItem?: (item: ContextItem) => void
+  selectedItemId?: string | null
 }
 
 export function AppShell({
@@ -134,30 +164,133 @@ export function AppShell({
   onChatClick,
   onDeleteChat,
   unreadCount = 0,
-  deskUnreadCount = 0,
   readChatIds = new Set(),
   isDetailOpen = false,
   onArtifactClick,
   activeWorkspaceId,
   onSelectWorkspace,
   onGlobalToday,
-  onNavigateWorkspace,
   todaySheetOpen = false,
   onTodaySheetClose,
   onSignOut,
+  onChatWithAgent,
+  pinnedItems = [],
+  onPinnedItemClick,
+  onPinItem,
+  onUnpinItem,
+  selectedItemId,
 }: AppShellProps) {
   const [chatPage, setChatPage] = useState(1)
+  const [pinnedPage, setPinnedPage] = useState(1)
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
+  const [chatsCollapsed, setChatsCollapsed] = useState(false)
+  const [isDraggingLibraryItem, setIsDraggingLibraryItem] = useState(false)
+  const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
+  const pinnedDropCounter = useRef(0)
+  const [isInsetDropOver, setIsInsetDropOver] = useState(false)
+  const insetDropCounter = useRef(0)
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
+  const [chatSearchValue, setChatSearchValue] = useState('')
   // Server-side search — live query when the palette has ≥2 chars.
   const searchEnabled = chatSearchQuery.trim().length >= 2
   const { data: searchResults } = useSearchQuery(
     { q: chatSearchQuery.trim(), scope: 'all' },
     { skip: !searchEnabled },
   )
+
+  const [appliedFilter, setAppliedFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
+  const [pendingFilter, setPendingFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const hasActiveFilter =
+    appliedFilter.goalKind !== null ||
+    appliedFilter.agentId !== null ||
+    appliedFilter.updatesOnly ||
+    appliedFilter.artifactsOnly
+
+  const { data: agents = [] } = useGetAgentsQuery()
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined)
+
+  const appDispatch = useAppDispatch()
+  const pendingSettingsSection = useAppSelector(s => s.ui.pendingSettingsSection)
+  useEffect(() => {
+    if (!pendingSettingsSection) return
+    setSettingsInitialSection(pendingSettingsSection)
+    setSettingsOpen(true)
+    appDispatch(setPendingSettingsSection(null))
+  }, [pendingSettingsSection, appDispatch])
+  const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
+
+  // Detect library item drags globally so the pinned section can show a dropzone.
+  useEffect(() => {
+    const handleDragStart = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes(DRAG_TYPE_LIBRARY_ITEM)) {
+        setIsDraggingLibraryItem(true)
+      }
+    }
+    const handleDragEnd = () => {
+      setIsDraggingLibraryItem(false)
+      setIsPinnedDropOver(false)
+      pinnedDropCounter.current = 0
+    }
+    document.addEventListener('dragstart', handleDragStart)
+    document.addEventListener('dragend', handleDragEnd)
+    return () => {
+      document.removeEventListener('dragstart', handleDragStart)
+      document.removeEventListener('dragend', handleDragEnd)
+    }
+  }, [])
+
+  const handlePinnedDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    e.preventDefault()
+    pinnedDropCounter.current += 1
+    setIsPinnedDropOver(true)
+  }
+  const handlePinnedDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+  const handlePinnedDragLeave = () => {
+    pinnedDropCounter.current = Math.max(0, pinnedDropCounter.current - 1)
+    if (pinnedDropCounter.current === 0) setIsPinnedDropOver(false)
+  }
+  const handlePinnedDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    pinnedDropCounter.current = 0
+    setIsPinnedDropOver(false)
+    setIsDraggingLibraryItem(false)
+    const itemId = e.dataTransfer.getData(DRAG_TYPE_LIBRARY_ITEM)
+    if (itemId) onPinItem?.(itemId)
+  }
+
+  const handleInsetDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
+    e.preventDefault()
+    insetDropCounter.current += 1
+    setIsInsetDropOver(true)
+  }
+  const handleInsetDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+  const handleInsetDragLeave = () => {
+    insetDropCounter.current = Math.max(0, insetDropCounter.current - 1)
+    if (insetDropCounter.current === 0) setIsInsetDropOver(false)
+  }
+  const handleInsetDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    insetDropCounter.current = 0
+    setIsInsetDropOver(false)
+    const itemId = e.dataTransfer.getData(DRAG_TYPE_PINNED_ITEM)
+    const item = pinnedItems.find(i => i.id === itemId)
+    if (item) onUnpinItem?.(item)
+  }
 
   // Server-backed workspaces. The WorkspaceBar/Settings components still
   // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
@@ -173,9 +306,16 @@ export function AppShell({
   const activeWorkspace =
     displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
 
-  const allChats        = sortedChats(chats)
-  const visibleChats    = allChats.slice(0, chatPage * CHATS_PER_PAGE)
-  const hasMore         = allChats.length > visibleChats.length
+  const allChats = sortedChats(chats)
+  const filteredChats = allChats.filter(chat => {
+    if (appliedFilter.goalKind && chat.goalKind !== appliedFilter.goalKind) return false
+    if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
+    if (appliedFilter.updatesOnly && !(chat.unread && !readChatIds.has(chat.id))) return false
+    if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
+    return true
+  })
+  const visibleChats = filteredChats.slice(0, chatPage * CHATS_PER_PAGE)
+  const hasMore      = filteredChats.length > visibleChats.length
 
   return (
     <div className="flex flex-col h-dvh overflow-hidden bg-muted bg-cover bg-center" style={{ '--topbar-height': '51px', backgroundImage: 'url(/background2.jpg)' } as React.CSSProperties}>
@@ -250,8 +390,6 @@ export function AppShell({
           todayUnreadCount={unreadCount}
           onGlobalToday={onGlobalToday}
           onSelectWorkspace={onSelectWorkspace}
-          onNavigate={onNavigateWorkspace}
-          onCompose={onCompose}
           onSignOut={onSignOut}
         />
 
@@ -272,27 +410,134 @@ export function AppShell({
                     <Icon className="h-4 w-4" />
                     <span>{label}</span>
                   </SidebarMenuButton>
-                  {view === 'desk' && deskUnreadCount > 0 && (
-                    <SidebarMenuBadge className="text-muted-foreground text-xs font-medium !top-1/2 !-translate-y-1/2 mr-1">
-                      {deskUnreadCount}
-                    </SidebarMenuBadge>
-                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
 
-            {/* "Recent AI chats" label + search + new chat buttons */}
-            <div className="flex items-center justify-between px-2 mt-3">
-              <span className="text-xs font-medium text-foreground/70">Recent AI chats</span>
-              <div className="flex items-center gap-0.5">
+            {/* ── Pinned items section ── */}
+            <div
+              className="mt-3"
+              onDragEnter={handlePinnedDragEnter}
+              onDragOver={handlePinnedDragOver}
+              onDragLeave={handlePinnedDragLeave}
+              onDrop={handlePinnedDrop}
+            >
+              <div className="group flex items-center px-2 mb-2 gap-1">
+                <span className="text-xs font-medium text-foreground/70">Pinned</span>
                 <button
-                  onClick={() => setChatSearchOpen(true)}
-                  title="Search chats"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
+                  onClick={() => setPinnedCollapsed(c => !c)}
+                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
+                  aria-label={pinnedCollapsed ? 'Expand Pinned' : 'Collapse Pinned'}
                 >
-                  <Search className="h-3.5 w-3.5" />
-                  <span className="sr-only">Search chats</span>
+                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${pinnedCollapsed ? '-rotate-90' : ''}`} />
                 </button>
+              </div>
+              {!pinnedCollapsed && (
+                isDraggingLibraryItem ? (
+                  <div className={`mx-2 rounded-lg border border-dashed p-4 min-h-[52px] flex items-center justify-center transition-colors ${
+                    isPinnedDropOver
+                      ? 'border-primary/40 bg-primary/5'
+                      : 'border-foreground/20 bg-foreground/5'
+                  }`}>
+                    <p className="text-xs text-muted-foreground">Drop here to pin</p>
+                  </div>
+                ) : pinnedItems.length === 0 ? (
+                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
+                    <p className="text-xs text-muted-foreground">
+                      Pin or drag items from Library to see them here.
+                    </p>
+                  </div>
+                ) : (
+                  <SidebarMenu>
+                    {pinnedItems.slice(0, pinnedPage * PINNED_PER_PAGE).map(item => {
+                      const ItemIcon = iconForItem(item)
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            isActive={item.id === selectedItemId}
+                            onClick={() => onPinnedItemClick?.(item)}
+                            className="text-foreground/70"
+                            draggable
+                            onDragStart={(e: React.DragEvent) => {
+                              e.dataTransfer.effectAllowed = 'move'
+                              e.dataTransfer.setData(DRAG_TYPE_PINNED_ITEM, item.id)
+                            }}
+                          >
+                            <ItemIcon className="h-4 w-4 shrink-0" />
+                            <span className="truncate">{item.name}</span>
+                          </SidebarMenuButton>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <SidebarMenuAction showOnHover onClick={e => e.stopPropagation()} className="!right-2">
+                                <MoreHorizontal />
+                                <span className="sr-only">Item options</span>
+                              </SidebarMenuAction>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent side="right" align="start" className="w-36">
+                              <DropdownMenuItem onClick={() => onUnpinItem?.(item)}>
+                                <PinOff className="h-4 w-4 mr-2" />
+                                Unpin
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </SidebarMenuItem>
+                      )
+                    })}
+                    {pinnedItems.length > pinnedPage * PINNED_PER_PAGE && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton onClick={() => setPinnedPage(p => p + 1)} className="text-muted-foreground">
+                          <ChevronDown className="h-4 w-4 shrink-0" />
+                          <span>Show more</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                  </SidebarMenu>
+                )
+              )}
+            </div>
+
+            {/* Chats label + filter + new chat buttons */}
+            <div className="group flex items-center justify-between px-2 mt-3">
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-foreground/70">Chats</span>
+                <button
+                  onClick={() => setChatsCollapsed(c => !c)}
+                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
+                  aria-label={chatsCollapsed ? 'Expand Chats' : 'Collapse Chats'}
+                >
+                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${chatsCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+              </div>
+              <div className={`flex items-center gap-0.5 ${chatsCollapsed ? 'invisible pointer-events-none' : ''}`}>
+                <Popover
+                  open={filterOpen}
+                  onOpenChange={(open) => {
+                    if (!open) setPendingFilter(appliedFilter)
+                    setFilterOpen(open)
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <button
+                      title="Filter chats"
+                      className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
+                    >
+                      <ListFilter className="h-3.5 w-3.5" />
+                      <span className="sr-only">Filter chats</span>
+                      {hasActiveFilter && (
+                        <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-auto p-0">
+                    <ChatFilterPopover
+                      agents={agents}
+                      values={pendingFilter}
+                      onChange={setPendingFilter}
+                      onApply={() => { setAppliedFilter(pendingFilter); setFilterOpen(false) }}
+                      onCancel={() => { setPendingFilter(appliedFilter); setFilterOpen(false) }}
+                    />
+                  </PopoverContent>
+                </Popover>
                 <button
                   onClick={onCompose}
                   title="New chat"
@@ -306,21 +551,41 @@ export function AppShell({
           </SidebarHeader>
 
           {/* ── Content: scrollable chat list ── */}
-          <SidebarContent>
-            <SidebarGroup className="px-2 py-0">
+          <SidebarContent ref={sidebarScrollRef}>
+            {!chatsCollapsed && <SidebarGroup className="px-2 py-0">
               <SidebarGroupContent className="pb-10">
+                {filteredChats.length === 0 && (
+                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
+                    {hasActiveFilter ? (
+                      <p className="text-xs text-muted-foreground">
+                        No chats found.{' '}
+                        <button
+                          className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors"
+                          onClick={() => { setAppliedFilter(EMPTY_FILTER); setPendingFilter(EMPTY_FILTER) }}
+                        >
+                          Clear filters
+                        </button>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        <button onClick={onCompose} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors">Start a chat</button>
+                        {' '}with an AI agent to see it here.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <SidebarMenu>
                   {visibleChats.map(chat => {
-                    const ChatIcon = getChatIcon(chat, artifacts)
+                    const ChatIcon = getChatIcon(chat)
                     return (
                       <SidebarMenuItem key={chat.id}>
                         <SidebarMenuButton
                           isActive={chat.id === selectedChatId && !isDetailOpen}
                           onClick={() => onChatClick(chat)}
-                          className="pr-7 text-muted-foreground"
+                          className="pr-7 text-foreground/70"
                         >
                           <div className="relative shrink-0">
-                            <ChatIcon className="h-4 w-4 text-muted-foreground" />
+                            <ChatIcon className="h-4 w-4" />
                             {chat.unread && !readChatIds.has(chat.id) && (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
                             )}
@@ -359,11 +624,11 @@ export function AppShell({
                   )}
                 </SidebarMenu>
               </SidebarGroupContent>
-            </SidebarGroup>
+            </SidebarGroup>}
           </SidebarContent>
 
           {/* ── Footer: Customize only ── */}
-          <SidebarFooter className="border-t">
+          <SidebarFooter className={cn('border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => setSettingsOpen(true)}>
@@ -376,9 +641,22 @@ export function AppShell({
         </Sidebar>
 
         {/* Main content */}
-        <SidebarInset className="rounded-xl overflow-hidden shadow-xs">
-          <main className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
+        <SidebarInset
+          className="rounded-xl overflow-hidden shadow-xs mr-2 mb-2 md:peer-data-[state=collapsed]:ml-2"
+          onDragEnter={handleInsetDragEnter}
+          onDragOver={handleInsetDragOver}
+          onDragLeave={handleInsetDragLeave}
+          onDrop={handleInsetDrop}
+        >
+          <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
             {children}
+            {isInsetDropOver && (
+              <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 backdrop-blur-[1px]">
+                <p className="text-sm font-medium text-primary/70 bg-background/80 rounded-md px-3 py-2 shadow-sm">
+                  Drop here to unpin
+                </p>
+              </div>
+            )}
           </main>
         </SidebarInset>
 
@@ -394,11 +672,6 @@ export function AppShell({
             >
               <div className="relative">
                 <Icon className="h-5 w-5" />
-                {view === 'desk' && deskUnreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-medium text-primary-foreground">
-                    {deskUnreadCount}
-                  </span>
-                )}
               </div>
               <span className="text-[10px] font-medium">{label}</span>
             </button>
@@ -421,6 +694,7 @@ export function AppShell({
         onOpenChange={setSettingsOpen}
         workspace={activeWorkspace}
         canDeleteWorkspace={workspaces.length > 1}
+        initialSection={settingsInitialSection}
         onUpdateWorkspace={updated => {
           void patchWorkspaceMutation({
             id: updated.id,
@@ -432,6 +706,7 @@ export function AppShell({
             },
           })
         }}
+        onChatWithAgent={onChatWithAgent}
         onDeleteWorkspace={() => {
           void deleteWorkspaceMutation(activeWorkspace.id).then(() => {
             const next = workspaces.filter(w => w.id !== activeWorkspace.id)
@@ -443,14 +718,16 @@ export function AppShell({
       {/* ── Chat search command palette ── */}
       <CommandDialog
         open={chatSearchOpen}
-        onOpenChange={(open) => { setChatSearchOpen(open); if (!open) setChatSearchQuery('') }}
+        onOpenChange={(open) => { setChatSearchOpen(open); if (!open) { setChatSearchQuery(''); setChatSearchValue('') } }}
         showCloseButton={false}
         className="top-[20%] translate-y-0"
+        value={chatSearchValue}
+        onValueChange={setChatSearchValue}
       >
         <CommandInput
           placeholder="Search chats and artifacts…"
           value={chatSearchQuery}
-          onValueChange={setChatSearchQuery}
+          onValueChange={(v) => { setChatSearchQuery(v); setChatSearchValue('') }}
         />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
@@ -459,12 +736,13 @@ export function AppShell({
           {!chatSearchQuery.trim() && (
             <CommandGroup heading="Recent chats">
               {allChats.slice(0, 5).map(chat => {
-                const ChatIcon = getChatIcon(chat, artifacts)
+                const ChatIcon = getChatIcon(chat)
                 return (
                   <CommandItem
                     key={chat.id}
-                    value={chat.title}
-                    onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery('') }}
+                    value={chat.id}
+                    keywords={[chat.title]}
+                    onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                   >
                     <ChatIcon className="h-4 w-4 text-muted-foreground" />
                     <span className="truncate">{chat.title}</span>
@@ -482,15 +760,17 @@ export function AppShell({
                   .filter(r => r.type === 'chat')
                   .map(r => {
                     const chat = allChats.find(c => c.id === r.id)
-                    const ChatIcon = chat ? getChatIcon(chat, artifacts) : MessageSquare
+                    const ChatIcon = chat ? getChatIcon(chat) : MessageSquare
                     return (
                       <CommandItem
                         key={r.id}
-                        value={r.title}
+                        value={r.id}
+                        keywords={[r.title]}
                         onSelect={() => {
                           if (chat) onChatClick(chat)
                           setChatSearchOpen(false)
                           setChatSearchQuery('')
+                          setChatSearchValue('')
                         }}
                       >
                         <ChatIcon className="h-4 w-4 text-muted-foreground" />
@@ -506,7 +786,7 @@ export function AppShell({
                   .map(r => {
                     const artifact = artifacts.find(a => a.id === r.id)
                     if (!artifact) return (
-                      <CommandItem key={r.id} value={r.title}>
+                      <CommandItem key={r.id} value={r.id} keywords={[r.title]}>
                         <FileText className="h-4 w-4 text-muted-foreground" />
                         <span className="truncate">{r.title}</span>
                       </CommandItem>
@@ -515,8 +795,9 @@ export function AppShell({
                     return (
                     <CommandItem
                       key={artifact.id}
-                      value={artifact.name}
-                      onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery('') }}
+                      value={artifact.id}
+                      keywords={[artifact.name]}
+                      onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                     >
                       <ArtifactIcon className="h-4 w-4 text-muted-foreground" />
                       <span className="truncate">{artifact.name}</span>

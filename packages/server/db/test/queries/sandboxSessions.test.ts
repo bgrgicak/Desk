@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
-import { generateId } from "@desk/shared";
+import { type Pool } from "../../src/pool.js";
+import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as agents from "../../src/queries/agents.js";
 import * as sandboxSessions from "../../src/queries/sandboxSessions.js";
 import * as users from "../../src/queries/users.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let agentId: string;
 let userId: string;
 
@@ -68,9 +68,9 @@ describe("sandboxSessions queries", () => {
       tokenHash: "temp_hash",
     });
 
-    await pool.query("DELETE FROM agents WHERE id = $1", [tempAgentId]);
+    await pool.query("DELETE FROM agents WHERE id = ?", [tempAgentId]);
 
-    const { rows } = await pool.query("SELECT * FROM sandbox_sessions WHERE id = $1", [tempSessionId]);
+    const { rows } = await pool.query("SELECT * FROM sandbox_sessions WHERE id = ?", [tempSessionId]);
     expect(rows).toHaveLength(0);
   });
 });

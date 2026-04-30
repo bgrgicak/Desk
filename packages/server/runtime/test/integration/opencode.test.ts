@@ -1,16 +1,16 @@
 /**
- * Integration test: executes a trivial OpenCode prompt end-to-end
- * against the real Anthropic API inside a real Docker sandbox.
+ * Integration test: executes a trivial OpenCode prompt end-to-end using the
+ * free opencode/big-pickle model inside a real Docker sandbox.
  *
- * Runs automatically when ANTHROPIC_API_KEY is set and Docker is available.
- * Requires: Docker daemon, ANTHROPIC_API_KEY, desk/sandbox:v1 image.
+ * Runs automatically when Docker is available and the desk/sandbox:v1 image
+ * is present. No API key required — uses the free opencode provider.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 
@@ -23,9 +23,20 @@ function dockerAvailable(): boolean {
   }
 }
 
-const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
-const SKIP = !HAS_KEY || !dockerAvailable();
+function sandboxImageAvailable(): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
+
+// Free model — no API key required.
+const FREE_MODEL = "opencode/big-pickle";
 
 let home: string;
 const testAgentId = "agt_opencode_int_test";
@@ -54,12 +65,7 @@ afterAll(async () => {
 
 describeIf("opencode end-to-end", () => {
   it("execRun streams log events from a real OpenCode invocation", async () => {
-    // Scope the container's provider env to Anthropic only. If OPENAI_API_KEY
-    // leaks in from the host env, opencode's auto-detection picks an OpenAI
-    // default (e.g. gpt-5.3-chat-latest) that the project may not have access
-    // to, and the run fails before any model output is produced.
-    const providerKeys = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "" };
-    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, providerKeys);
+    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, {});
     const driver = createDriver();
     const logs: LogEvent[] = [];
 
@@ -67,8 +73,9 @@ describeIf("opencode end-to-end", () => {
       runId: "run_ai_test_1",
       prompt: "Say exactly: HELLO_DESK_TEST",
       workspaceSlug: testWorkspaceSlug,
+      model: FREE_MODEL,
+      providerKeys: {},
       onLog: (evt) => logs.push(evt),
-      providerKeys,
     });
 
     expect(result.exitCode).toBe(0);
@@ -78,33 +85,31 @@ describeIf("opencode end-to-end", () => {
     expect(combined).toContain("HELLO_DESK_TEST");
 
     await stopSandbox(handle);
-  }, 120_000); // 2 minute timeout for AI call
+  }, 300_000); // 5 minutes — free model may be slower than paid
 
   it("execRun forwards attachments to opencode via --file so the model sees their contents", async () => {
     // The full attachment story (workspace-relative path → /home/agent/<rel>
     // → opencode --file → model sees content) only works if every seam is
-    // right. A sentinel string is the simplest end-to-end probe: if the
-    // model quotes it, all the wiring held; if not, we don't have to guess
-    // which seam broke — every other test in the suite will narrow it.
+    // right. A sentinel string is the simplest end-to-end probe.
     const sentinel = "PINEAPPLE-42-DESK-ATTACHMENT-PROBE";
     const wsRoot = workspaceRootPath(home, testWorkspaceSlug);
     await fs.writeFile(
       path.join(wsRoot, "sentinel.txt"),
-      `The secret word is ${sentinel}.\n`,
+      `The test token is ${sentinel}.\n`,
     );
 
-    const providerKeys = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "" };
-    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, providerKeys);
+    const handle = await createOrReuse(testAgentId, testWorkspaceSlug, home, {});
     const driver = createDriver();
     const logs: LogEvent[] = [];
 
     const result = await driver.execRun(testAgentId, {
       runId: "run_attach_probe_1",
-      prompt: "Quote the secret word from the attached file verbatim.",
+      prompt: "Print the test token from the attached file exactly as written.",
       workspaceSlug: testWorkspaceSlug,
       attachments: ["sentinel.txt"],
+      model: FREE_MODEL,
+      providerKeys: {},
       onLog: (evt) => logs.push(evt),
-      providerKeys,
     });
 
     expect(result.exitCode).toBe(0);
@@ -112,5 +117,5 @@ describeIf("opencode end-to-end", () => {
     expect(combined).toContain(sentinel);
 
     await stopSandbox(handle);
-  }, 120_000);
+  }, 300_000); // 5 minutes — free model may be slower than paid
 });

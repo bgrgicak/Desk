@@ -4,12 +4,12 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import pg from "pg";
+import { type Pool } from "@agent-desk/db";
 import {
   NotFoundError,
   MAX_UPLOAD_BYTES,
   ValidationError,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 import {
   chatAttachmentsDir,
   resolveHostPath,
@@ -17,7 +17,7 @@ import {
   trashDir,
   workspaceRootPath,
 } from "./layout.js";
-import { ID_PREFIXES } from "@desk/shared";
+import { ID_PREFIXES } from "@agent-desk/shared";
 
 /**
  * Per-request storage context — carries the DB pool + Desk home root.
@@ -25,7 +25,7 @@ import { ID_PREFIXES } from "@desk/shared";
  * every workspace's files live under their own directory.
  */
 export interface StorageContext {
-  pool: pg.Pool;
+  pool: Pool;
   home: string;
 }
 
@@ -55,6 +55,14 @@ export interface FileRef {
   mime: string;
   size: number;
   createdAt: string;
+  /** ID of the agent that *last* created or edited this file, if known. */
+  agentId?: string;
+  /** ID of the agent that *originally* created this file, if known. Stays
+   * stable even after subsequent human or agent edits — used by the
+   * Library UI to show a "by AI" provenance label. */
+  creatorAgentId?: string;
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean;
 }
 
 /** Extension-to-mime guesser used when the caller didn't provide one. */
@@ -285,6 +293,136 @@ export async function overwriteFile(
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
+  return fileRefFromDisk(ctx.home, slug, relPath);
+}
+
+/**
+ * Pins an existing library file to a chat by symlinking it into the
+ * chat's `.chats/{chatId}/attachments/` directory. The library file is
+ * not copied or moved — the symlink exists purely so `listAttachments`
+ * surfaces the pinned file in the chat's "In this chat" sidebar list.
+ *
+ * Idempotent: if a symlink with the same basename already points at the
+ * same target, returns its FileRef unchanged. On basename collision with
+ * a different target, falls back to the same `name-1.ext` rename scheme
+ * `uploadArtifact` uses.
+ *
+ * Returns a FileRef whose `path` is the symlink's workspace-relative
+ * path (under `.chats/{chatId}/attachments/`). `fs.stat` follows the
+ * link, so size / createdAt reflect the underlying library file.
+ */
+export async function pinLibraryFileToChat(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  libraryRelPath: string,
+): Promise<FileRef> {
+  const targetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const targetStat = await fs.stat(targetAbs).catch(() => null);
+  if (!targetStat) throw new NotFoundError(`File not found: ${libraryRelPath}`);
+  if (!targetStat.isFile()) throw new ValidationError(`Not a file: ${libraryRelPath}`);
+
+  const root = workspaceRootPath(ctx.home, slug);
+  const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+
+  // A library path that already lives inside this chat's attachments dir
+  // is already pinned (or is a chat-local upload). Pinning it would
+  // create a self-referential symlink — refuse.
+  if (targetAbs === attDir || targetAbs.startsWith(attDir + path.sep)) {
+    throw new ValidationError(`Cannot pin a file that is already a chat attachment: ${libraryRelPath}`);
+  }
+
+  const desiredName = path.basename(targetAbs);
+  rejectHiddenName(desiredName);
+
+  const sameNameAbs = path.join(attDir, desiredName);
+  const existingTarget = await fs.readlink(sameNameAbs).catch(() => null);
+  if (existingTarget !== null) {
+    // Existing symlink at the desired name. If it points at the same
+    // library file, this pin is a no-op — return its FileRef.
+    const resolvedExisting = path.isAbsolute(existingTarget)
+      ? existingTarget
+      : path.resolve(attDir, existingTarget);
+    if (resolvedExisting === targetAbs) {
+      const stat = await fs.stat(sameNameAbs).catch(() => null);
+      if (stat) {
+        const relPath = path.relative(root, sameNameAbs).split(path.sep).join("/");
+        return {
+          path: relPath,
+          name: desiredName,
+          mime: guessMime(desiredName),
+          size: stat.size,
+          createdAt: stat.birthtime.toISOString(),
+        };
+      }
+    }
+  }
+
+  const linkPath = await uniqueDestPath(attDir, desiredName);
+  await fs.symlink(targetAbs, linkPath);
+
+  const stat = await fs.stat(linkPath);
+  const relPath = path.relative(root, linkPath).split(path.sep).join("/");
+  return {
+    path: relPath,
+    name: path.basename(linkPath),
+    mime: guessMime(linkPath),
+    size: stat.size,
+    createdAt: stat.birthtime.toISOString(),
+  };
+}
+
+/**
+ * Promotes a chat attachment from `.chats/{chatId}/attachments/` into the
+ * primary workspace library (optionally inside `destSubpath`). The original
+ * location is replaced with a symlink to the new path so the chat's
+ * `listAttachments()` continues to surface the file.
+ *
+ * `attachmentName` must be a basename — the source is always
+ * `.chats/{chatId}/attachments/{attachmentName}`. Rejects when the source is
+ * already a symlink (i.e. a previously-pinned library file): a chat-pinned
+ * library reference is already in the library, so re-saving is meaningless.
+ *
+ * Name collisions in the destination directory are resolved by suffixing
+ * `-1`, `-2`, …, mirroring `uploadArtifact`'s scheme.
+ */
+export async function saveChatAttachmentToLibrary(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  attachmentName: string,
+  destSubpath?: string,
+): Promise<FileRef> {
+  if (path.basename(attachmentName) !== attachmentName) {
+    throw new ValidationError(`Invalid attachment name: ${attachmentName}`);
+  }
+  rejectHiddenName(attachmentName);
+
+  const sub = validateLibrarySubpath(destSubpath);
+  const root = workspaceRootPath(ctx.home, slug);
+  const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+  const srcAbs = path.join(attDir, attachmentName);
+
+  const srcStat = await fs.lstat(srcAbs).catch(() => null);
+  if (!srcStat) throw new NotFoundError(`Attachment not found: ${attachmentName}`);
+  if (srcStat.isSymbolicLink()) {
+    throw new ValidationError(
+      `Attachment is already a library reference: ${attachmentName}`,
+    );
+  }
+  if (!srcStat.isFile()) throw new ValidationError(`Not a file: ${attachmentName}`);
+
+  const destDir = sub ? path.join(root, sub) : root;
+  await fs.mkdir(destDir, { recursive: true });
+  const destAbs = await uniqueDestPath(destDir, attachmentName);
+
+  await fs.rename(srcAbs, destAbs);
+  // Best-effort: leave a symlink at the old path so the chat still shows
+  // the file via `listAttachments`. If the symlink can't be created the
+  // save still succeeded — the chat sidebar will just lose the row.
+  await fs.symlink(destAbs, srcAbs).catch(() => {});
+
+  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
 }
 

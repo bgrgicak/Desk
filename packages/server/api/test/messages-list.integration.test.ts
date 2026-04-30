@@ -11,41 +11,20 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, queries, hashPassword } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
-import { generateId, type Message } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, queries, hashPassword } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId, type Message } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_messages_list_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 
 interface SeededUser {
   userId: string;
@@ -125,11 +104,10 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     name: `agent-${suffix}`,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
       [ws, agentId],
     );
   }
@@ -173,13 +151,19 @@ async function insertMessage(
   owner: SeededUser,
   data: {
     chatId: string;
-    role: "user" | "agent" | "system" | "tool";
+    role: "user" | "agent" | "system";
     content: unknown;
     state?: string | null;
     executeAt?: string | null;
     cron?: string | null;
+    kind?: string | null;
+    title?: string | null;
   },
 ): Promise<string> {
+  // SQLite stores created_at at millisecond precision, and the awaitingUser
+  // query (and any "latest in chat" logic) tiebreaks ties on random nanoid id.
+  // Sleep 2 ms so successive seed inserts always land in distinct ms buckets.
+  await new Promise((r) => setTimeout(r, 2));
   const id = generateId("message");
   await queries.messages.insert(pool, {
     id,
@@ -189,6 +173,8 @@ async function insertMessage(
     state: data.state,
     executeAt: data.executeAt,
     cron: data.cron,
+    kind: data.kind,
+    title: data.title,
   });
   const row = await queries.messages.findById(pool, id);
   if (!row) throw new Error("Seed insert failed");
@@ -197,20 +183,10 @@ async function insertMessage(
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  // Per-test-file SQLite file so workers don't collide on the same DB.
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-messages-list-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-messages-list-"));
@@ -219,7 +195,6 @@ beforeAll(async () => {
 
   const runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async () => ({ exitCode: 0 }),
   });
   server = createApp({ pool, storage: { pool, home }, runManager });
@@ -309,13 +284,15 @@ beforeAll(async () => {
     content: { type: "note", body: "summary" },
     state: "succeeded",
   });
-  //  11. system ai_note_request pending, scheduled
+  //  11. system ai_note_request pending, scheduled — `kind='ai_note'` mirrors
+  //      what scheduleAiNote() writes today.
   await insertMessage(alpha, {
     chatId: alpha.chatB,
     role: "system",
     content: { type: "ai_note_request" },
     state: "pending",
     executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    kind: "ai_note",
   });
   //  12. agent "artifactRef" succeeded (unscheduled)
   await insertMessage(alpha, {
@@ -323,6 +300,19 @@ beforeAll(async () => {
     role: "agent",
     content: { type: "artifactRef", path: "chats/y/attachments/b.pdf", name: "b.pdf" },
     state: "succeeded",
+  });
+
+  //  13. user-defined task in chatA2 (wsA), unscheduled, kind=task with a
+  //      title — exercises the message-as-task path. Lives in chatA2 (not
+  //      chatA1) so it doesn't displace the awaiting-user fixture, which
+  //      relies on message #4 being the latest in chatA1.
+  await insertMessage(alpha, {
+    chatId: alpha.chatA2,
+    role: "user",
+    content: { type: "text", text: "Audit Q2 numbers" },
+    state: "pending",
+    kind: "task",
+    title: "Audit Q2 numbers",
   });
 
   // Beta gets one message so cross-tenant tests have something to lean on.
@@ -335,31 +325,21 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 describe("GET /messages — unfiltered", () => {
-  it("returns all 12 seeded messages for the caller, ordered createdAt DESC", async () => {
+  it("returns all 13 seeded messages for the caller, ordered createdAt DESC", async () => {
     const res = await request("GET", "/messages", alpha.token);
     expect(res.status).toBe(200);
     const body = res.body as { items: Message[]; nextCursor?: string };
-    expect(body.items).toHaveLength(12);
+    expect(body.items).toHaveLength(13);
 
     // Ordering: newest first.
     for (let i = 1; i < body.items.length; i++) {
@@ -382,8 +362,8 @@ describe("GET /messages — workspace/chat scoping", () => {
     const items = (res.body as { items: Message[] }).items;
     const wsAChats = new Set([alpha.chatA1, alpha.chatA2]);
     for (const m of items) expect(wsAChats.has(m.chatId)).toBe(true);
-    // 4 in chatA1 + 4 in chatA2 = 8.
-    expect(items).toHaveLength(8);
+    // 4 in chatA1 + 5 in chatA2 (incl. the kind='task' seed) = 9.
+    expect(items).toHaveLength(9);
   });
 
   it("workspaceId=wsB returns only messages from wsB chats", async () => {
@@ -460,7 +440,86 @@ describe("GET /messages — scheduled", () => {
     for (const m of unsched) {
       expect(Boolean(m.executeAt) || Boolean(m.cron)).toBe(false);
     }
-    expect(sched.length + unsched.length).toBe(12);
+    expect(sched.length + unsched.length).toBe(13);
+  });
+
+  // The exact call the Tasks page in app-prototype issues today:
+  // useGetMessagesQuery({ workspaceId, scheduled: true }). Documents the
+  // current contract — tasks are messages with execute_at/cron, scoped to
+  // the active workspace.
+  it("workspaceId + scheduled=true returns only scheduled rows in that workspace", async () => {
+    const res = await request(
+      "GET",
+      `/messages?workspaceId=${alpha.wsA}&scheduled=true`,
+      alpha.token,
+    );
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Message[] }).items;
+    // Seeded scheduled rows in wsA: #5 (executeAt), #6 (cron). #11 is in wsB.
+    expect(items).toHaveLength(2);
+    const wsAChats = new Set([alpha.chatA1, alpha.chatA2]);
+    for (const m of items) {
+      expect(wsAChats.has(m.chatId)).toBe(true);
+      expect(Boolean(m.executeAt) || Boolean(m.cron)).toBe(true);
+    }
+  });
+});
+
+// `kind` is the message-kind discriminator (chat / task / ai_note), distinct
+// from `contentKind` which filters on `content.type`. The Tasks page will
+// migrate to `?kind=task`; system mechanisms like ai-note refresh stay
+// invisible to that surface because they're `kind='ai_note'`. See
+// packages/server/docs/plans/message-as-task.md.
+describe("GET /messages — kind", () => {
+  it("kind=task returns only the task-kind row", async () => {
+    const res = await request("GET", "/messages?kind=task", alpha.token);
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Message[] }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("task");
+    expect(items[0].title).toBe("Audit Q2 numbers");
+  });
+
+  it("kind=ai_note returns only the ai_note row", async () => {
+    const res = await request("GET", "/messages?kind=ai_note", alpha.token);
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Message[] }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("ai_note");
+    expect((items[0].content as { type: string }).type).toBe("ai_note_request");
+  });
+
+  it("kind=task,ai_note returns both", async () => {
+    const res = await request("GET", "/messages?kind=task,ai_note", alpha.token);
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Message[] }).items;
+    expect(items).toHaveLength(2);
+    const kinds = new Set(items.map((m) => m.kind));
+    expect(kinds).toEqual(new Set(["task", "ai_note"]));
+  });
+
+  it("kind=task is workspace-scoped when combined with workspaceId", async () => {
+    // Task is in wsA; wsB query returns nothing.
+    const wsBRes = await request(
+      "GET",
+      `/messages?workspaceId=${alpha.wsB}&kind=task`,
+      alpha.token,
+    );
+    expect(wsBRes.status).toBe(200);
+    expect((wsBRes.body as { items: Message[] }).items).toHaveLength(0);
+
+    const wsARes = await request(
+      "GET",
+      `/messages?workspaceId=${alpha.wsA}&kind=task`,
+      alpha.token,
+    );
+    expect(wsARes.status).toBe(200);
+    expect((wsARes.body as { items: Message[] }).items).toHaveLength(1);
+  });
+
+  it("invalid kind is rejected with 400", async () => {
+    const res = await request("GET", "/messages?kind=bogus", alpha.token);
+    expect(res.status).toBe(400);
   });
 });
 
@@ -486,8 +545,8 @@ describe("GET /messages — contentKind", () => {
     for (const m of items) {
       expect((m.content as { type: string }).type).toBe("text");
     }
-    // Seeded: #1, #4, #9 = 3 text messages.
-    expect(items).toHaveLength(3);
+    // Seeded: #1, #4, #9, #13 = 4 text messages.
+    expect(items).toHaveLength(4);
   });
 
   it("contentKind=toolCall,artifactRef returns both", async () => {
@@ -557,8 +616,8 @@ describe("GET /messages — pagination", () => {
     );
     expect(thirdRes.status).toBe(200);
     const third = thirdRes.body as { items: Message[]; nextCursor?: string };
-    // 12 total → 5 + 5 + 2.
-    expect(third.items).toHaveLength(2);
+    // 13 total → 5 + 5 + 3.
+    expect(third.items).toHaveLength(3);
     expect(third.nextCursor).toBeUndefined();
 
     const unpagedRes = await request("GET", "/messages", alpha.token);
@@ -619,8 +678,8 @@ describe("GET /messages — malformed input", () => {
     expect(res.status).toBe(200);
     const items = (res.body as { items: Message[] }).items;
     expect(items.length).toBeLessThanOrEqual(200);
-    // We only seeded 12, so all show up.
-    expect(items).toHaveLength(12);
+    // We only seeded 13, so all show up.
+    expect(items).toHaveLength(13);
   });
 
   it("invalid limit (non-integer) → 400", async () => {
@@ -641,7 +700,7 @@ describe("GET /messages — ordering stability", () => {
       const id = generateId("message");
       await pool.query(
         `INSERT INTO messages (id, chat_id, role, content, state, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [id, beta.chatA1, "user", JSON.stringify({ type: "text", text: `tie-${i}` }), "pending", fixed],
       );
       ids.push(id);

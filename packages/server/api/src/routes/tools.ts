@@ -1,7 +1,7 @@
-import pg from "pg";
-import { NotFoundError, ValidationError } from "@desk/shared";
-import { queries } from "@desk/db";
-import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@desk/runtime";
+import { type Pool } from "@agent-desk/db";
+import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { queries } from "@agent-desk/db";
+import { listModels as runtimeListModels, SandboxExecError, type ModelRef } from "@agent-desk/runtime";
 import { resolveProviderKeys } from "../providerKeys.js";
 
 /**
@@ -15,7 +15,7 @@ import { resolveProviderKeys } from "../providerKeys.js";
  * Foundation of host-initiated sandboxed tool calling per ARCHITECTURE.md §7.
  */
 export async function listModels(
-  pool: pg.Pool,
+  pool: Pool,
   opts: { provider?: string },
 ): Promise<ModelRef[]> {
   if (opts.provider !== undefined && !/^[A-Za-z0-9_.-]+$/.test(opts.provider)) {
@@ -27,7 +27,14 @@ export async function listModels(
   const [firstWorkspace] = await queries.workspaces.list(pool);
   if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
 
-  const providerKeys = await resolveProviderKeys(pool);
+  let providerKeys: Record<string, string>;
+  try {
+    providerKeys = await resolveProviderKeys(pool);
+  } catch {
+    // Decryption failure (key rotation, corrupted data). Proceed with no keys
+    // so the sandbox can still list provider-agnostic models.
+    providerKeys = {};
+  }
 
   try {
     return await runtimeListModels(firstWorkspace.id, firstWorkspace.path, {

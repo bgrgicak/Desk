@@ -1,10 +1,12 @@
-import pg from "pg";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 import {
+  MESSAGE_KINDS,
   MESSAGE_STATES,
   ValidationError,
+  type MessageKind,
   type MessageState,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
@@ -43,7 +45,7 @@ function parseBool(name: string, raw: string): boolean {
  * returning an empty list.
  */
 export async function listMessages(
-  pool: pg.Pool,
+  pool: Pool,
   userId: string,
   query: URLSearchParams,
 ) {
@@ -101,6 +103,30 @@ export async function listMessages(
     contentKinds = parsed;
   }
 
+  const kindRaw = query.get("kind");
+  let kinds: MessageKind[] | undefined;
+  if (kindRaw !== null && kindRaw !== "") {
+    const parsed = parseCsv(kindRaw);
+    for (const k of parsed) {
+      if (!(MESSAGE_KINDS as readonly string[]).includes(k)) {
+        throw new ValidationError(`Invalid kind: ${k}`);
+      }
+    }
+    kinds = parsed as MessageKind[];
+  }
+
+  const parentIdRaw = query.get("parentId");
+  let parentId: string | undefined;
+  if (parentIdRaw !== null && parentIdRaw !== "") {
+    // Match the message id format (msg_<nanoid>). The check rejects garbage
+    // without requiring a DB round-trip; missing/unknown ids will just
+    // return an empty list naturally.
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(parentIdRaw)) {
+      throw new ValidationError(`Invalid parentId: ${parentIdRaw}`);
+    }
+    parentId = parentIdRaw;
+  }
+
   const sinceRaw = query.get("since");
   let since: string | undefined;
   if (sinceRaw !== null && sinceRaw !== "") {
@@ -134,6 +160,8 @@ export async function listMessages(
     scheduled,
     awaitingUser,
     contentKinds,
+    kinds,
+    parentId,
     since,
     cursor,
     limit,

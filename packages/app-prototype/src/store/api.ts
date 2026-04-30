@@ -23,14 +23,29 @@ const rawBaseQuery = fetchBaseQuery({
   prepareHeaders: (headers) => {
     const token = getSessionToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
+    // Self-healing: server upserts users.timezone when this drifts.
+    // Resolved per-request so a user moving between zones is captured
+    // without a re-login. Wrapped in try/catch because Intl is unavailable
+    // in some test environments.
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) headers.set("X-Client-Timezone", tz);
+    } catch {
+      /* ignore */
+    }
     return headers;
   },
 });
 
 /**
- * If an authed call returns 401 the stored token is dead. Clearing it
- * and forcing a reload kicks the user back through ensureSession().
+ * If an authed call returns 401 the stored token is dead. Clear it and
+ * reload so the App outer-render check sees no token and renders the
+ * LoginScreen — without a reload the React tree stays wedged on the stale
+ * token (the check runs once at mount and doesn't subscribe to
+ * sessionStorage). The one-shot guard keeps a 401-storm from looping
+ * the page.
  */
+let reloadingFor401 = false;
 const baseQuery: BaseQueryFn<
   Parameters<typeof rawBaseQuery>[0],
   unknown,
@@ -48,6 +63,10 @@ const baseQuery: BaseQueryFn<
     } catch {
       /* ignore */
     }
+    if (!reloadingFor401 && typeof window !== "undefined") {
+      reloadingFor401 = true;
+      window.location.reload();
+    }
   }
   return result;
 };
@@ -63,6 +82,7 @@ function buildMessagesQuery(f: MessagesFilter): string {
     params.set("awaitingUser", String(f.awaitingUser));
   if (f.contentKind && f.contentKind.length > 0)
     params.set("contentKind", f.contentKind.join(","));
+  if (f.kind && f.kind.length > 0) params.set("kind", f.kind.join(","));
   if (f.since) params.set("since", f.since);
   if (f.limit !== undefined) params.set("limit", String(f.limit));
   if (f.cursor) params.set("cursor", f.cursor);
@@ -96,6 +116,7 @@ export const api = createApi({
     "LibraryFile",
     "ChatArtifact",
     "ProviderKeys",
+    "ProvidersMeta",
     "Models",
   ],
   endpoints: (build) => ({
@@ -138,6 +159,28 @@ export const api = createApi({
       transformResponse: (r: { providers: Record<string, string | null> }) =>
         r.providers,
       invalidatesTags: ["ProviderKeys"],
+    }),
+    getProvidersMeta: build.query<
+      Record<string, { name?: string }>,
+      void
+    >({
+      query: () => "/me/providers/meta",
+      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+        r.meta,
+      providesTags: ["ProvidersMeta"],
+    }),
+    putProvidersMeta: build.mutation<
+      Record<string, { name?: string }>,
+      Record<string, { name?: string } | null>
+    >({
+      query: (meta) => ({
+        url: "/me/providers/meta",
+        method: "PUT",
+        body: { meta },
+      }),
+      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+        r.meta,
+      invalidatesTags: ["ProvidersMeta"],
     }),
 
     // ── Workspaces ────────────────────────────────────────────────────
@@ -194,7 +237,6 @@ export const api = createApi({
         name: string;
         instructions?: string;
         model?: string;
-        toolAllowlist?: string[];
       }
     >({
       query: (body) => ({ url: "/agents", method: "POST", body }),
@@ -215,6 +257,9 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { id }) => [
         { type: "Agent", id },
         { type: "Agent", id: "LIST" },
+        // WorkspaceAgents extends Agent — invalidate so the compose picker
+        // picks up the renamed agent without a full reload.
+        { type: "WorkspaceAgents", id: "LIST" },
       ],
     }),
     deleteAgent: build.mutation<{ ok: true }, string>({
@@ -308,6 +353,7 @@ export const api = createApi({
       invalidatesTags: (_r, _e, id) => [
         { type: "Chat", id },
         { type: "Chat", id: "LIST" },
+        { type: "Message", id: "CROSS" },
       ],
     }),
 
@@ -326,15 +372,50 @@ export const api = createApi({
     }),
     postChatMessage: build.mutation<
       ServerMessage,
-      { chatId: string; content: string; attachments?: AttachmentRef[] }
+      {
+        chatId: string;
+        content: string;
+        attachments?: AttachmentRef[];
+        /** Files to upload with this message. Switches the request to
+         * multipart so the server writes them under
+         * `.chats/{chatId}/messages/{msgId}/` keyed by the new message
+         * id (no upload-then-attach two-step). */
+        files?: File[];
+        kind?: "chat" | "task" | "ai_note";
+        title?: string;
+        executeAt?: string;
+        cron?: string;
+        goal?: string;
+      }
     >({
-      query: ({ chatId, content, attachments }) => ({
-        url: `/chats/${chatId}/messages`,
-        method: "POST",
-        body: attachments && attachments.length > 0 ? { content, attachments } : { content },
-      }),
+      query: ({ chatId, content, attachments, files, kind, title, executeAt, cron, goal }) => {
+        const url = `/chats/${chatId}/messages`;
+        if (files && files.length > 0) {
+          const fd = new FormData();
+          fd.append("content", content);
+          if (attachments && attachments.length > 0) {
+            fd.append("attachments", JSON.stringify(attachments));
+          }
+          for (const f of files) fd.append("attachment", f, f.name);
+          if (kind) fd.append("kind", kind);
+          if (title) fd.append("title", title);
+          if (executeAt) fd.append("executeAt", executeAt);
+          if (cron) fd.append("cron", cron);
+          if (goal) fd.append("goal", goal);
+          return { url, method: "POST", body: fd };
+        }
+        const body: Record<string, unknown> = { content };
+        if (attachments && attachments.length > 0) body.attachments = attachments;
+        if (kind) body.kind = kind;
+        if (title) body.title = title;
+        if (executeAt) body.executeAt = executeAt;
+        if (cron) body.cron = cron;
+        if (goal) body.goal = goal;
+        return { url, method: "POST", body };
+      },
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
+        { type: "Message", id: "CROSS" },
         { type: "Chat", id: chatId },
         { type: "Chat", id: "LIST" },
       ],
@@ -349,6 +430,8 @@ export const api = createApi({
           state: "cancelled" | "pending" | "paused";
           executeAt: string | null;
           cron: string | null;
+          title: string | null;
+          assigneeId: string | null;
         }>;
       }
     >({
@@ -375,6 +458,19 @@ export const api = createApi({
         { type: "Message", id: "CROSS" },
       ],
     }),
+    runMessage: build.mutation<
+      ServerMessage,
+      { chatId: string; messageId: string }
+    >({
+      query: ({ chatId, messageId }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/run`,
+        method: "POST",
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "Message", id: `CHAT_${chatId}` },
+        { type: "Message", id: "CROSS" },
+      ],
+    }),
 
     // ── Cross-chat messages (runs, today) ─────────────────────────────
     getMessages: build.query<ListMessagesResponse, MessagesFilter>({
@@ -385,13 +481,15 @@ export const api = createApi({
     // ── Library ───────────────────────────────────────────────────────
     getLibrary: build.query<
       ListLibraryResponse,
-      { workspaceId?: string; cursor?: string; limit?: number } | void
+      { workspaceId?: string; cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean } | void
     >({
       query: (arg) => {
         const p = new URLSearchParams();
         if (arg?.workspaceId) p.set("workspaceId", arg.workspaceId);
         if (arg?.cursor) p.set("cursor", arg.cursor);
         if (arg?.limit !== undefined) p.set("limit", String(arg.limit));
+        if (arg?.showHidden) p.set("showHidden", "true");
+        if (arg?.pinned) p.set("pinned", "true");
         const qs = p.toString();
         return qs ? `/library?${qs}` : "/library";
       },
@@ -499,22 +597,63 @@ export const api = createApi({
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
     }),
-    uploadChatArtifact: build.mutation<
+    // Pins a workspace-library file to the chat by symlinking it into
+    // `.chats/{chatId}/attachments/`. The library file is untouched.
+    // Idempotent — pinning the same file twice is a no-op server-side.
+    pinChatLibraryRef: build.mutation<
       ServerFile,
-      { chatId: string; file: File }
+      { chatId: string; path: string }
     >({
-      query: ({ chatId, file }) => {
-        const fd = new FormData();
-        fd.append("file", file, file.name);
-        return {
-          url: `/chats/${chatId}/attachments`,
-          method: "POST",
-          body: fd,
-        };
-      },
+      query: ({ chatId, path }) => ({
+        url: `/chats/${chatId}/library-refs`,
+        method: "POST",
+        body: { path },
+      }),
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
       ],
+    }),
+    // Promotes a chat-scoped attachment to the primary workspace library.
+    // The original `.chats/{chatId}/attachments/{name}` becomes a symlink
+    // pointing at the new library path so the chat's "In this chat" list
+    // continues to surface the file.
+    saveChatAttachmentToLibrary: build.mutation<
+      ServerFile,
+      { chatId: string; name: string; destSubpath?: string }
+    >({
+      query: ({ chatId, name, destSubpath }) => ({
+        url: `/chats/${chatId}/save-to-library`,
+        method: "POST",
+        body: { name, ...(destSubpath ? { destSubpath } : {}) },
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "ChatArtifact", id: `CHAT_${chatId}` },
+        { type: "LibraryFile", id: "LIST" },
+      ],
+    }),
+
+    // ── Library pins ─────────────────────────────────────────────────
+    pinLibraryItem: build.mutation<
+      { ok: true },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/workspaces/${workspaceId}/library-pins`,
+        method: "POST",
+        body: { path },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
+    unpinLibraryItem: build.mutation<
+      { ok: true },
+      { workspaceId: string; path: string }
+    >({
+      query: ({ workspaceId, path }) => ({
+        url: `/workspaces/${workspaceId}/library-pins`,
+        method: "DELETE",
+        body: { path },
+      }),
+      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
 
     // ── Search ────────────────────────────────────────────────────────
@@ -548,6 +687,8 @@ export const {
   useChangePasswordMutation,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetProvidersMetaQuery,
+  usePutProvidersMetaMutation,
   useGetWorkspacesQuery,
   useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,
@@ -567,6 +708,7 @@ export const {
   usePostChatMessageMutation,
   usePatchMessageMutation,
   useDeleteMessageMutation,
+  useRunMessageMutation,
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
@@ -577,7 +719,10 @@ export const {
   useCreateLibraryLinkMutation,
   useMoveLibraryEntryMutation,
   useGetChatArtifactsQuery,
-  useUploadChatArtifactMutation,
+  usePinChatLibraryRefMutation,
+  useSaveChatAttachmentToLibraryMutation,
+  usePinLibraryItemMutation,
+  useUnpinLibraryItemMutation,
   useSearchQuery,
   useGetModelsQuery,
 } = api;

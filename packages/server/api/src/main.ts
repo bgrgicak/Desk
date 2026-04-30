@@ -4,37 +4,48 @@
  * Reads runtime config from env, wires up storage + scheduler + run manager,
  * starts the HTTP + WS server on $PORT, and runs migrations + seed on boot.
  *
- * Kept tiny on purpose — real behaviour lives in `app.ts`. This file only
- * hosts the I/O boundary that systemd drives.
+ * Kept tiny on purpose — real behaviour lives in `app.ts`. This file is the
+ * I/O boundary the host launcher (`dev.sh` / `desk start`) drives.
  */
 import * as fs from "node:fs/promises";
-import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@desk/db";
+import * as path from "node:path";
+import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@agent-desk/db";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   enforceLogRetention,
   reconcileArtifactRefs,
   resolveDeskHome,
-} from "@desk/storage";
-import { queries } from "@desk/db";
-import { createRunManager, createAdapter, reconcile, sweepStaleRuns } from "@desk/scheduler";
-import { auditSandboxMounts } from "@desk/runtime";
+} from "@agent-desk/storage";
+import { queries } from "@agent-desk/db";
+import { createRunManager } from "@agent-desk/scheduler";
+import { auditSandboxMounts } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
+import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
-import type { WsEvent } from "@desk/shared";
+import type { WsEvent } from "@agent-desk/shared";
 
-const PORT = parseInt(process.env.PORT ?? "8080", 10);
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgresql:///desk?host=/var/run/postgresql";
+const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const DESK_HOME = resolveDeskHome();
+// Default to ~/Desk/.database/desk.sqlite3. Dotfile parent so the DB
+// stays out of any in-app library listing of ~/Desk; tests override
+// DESK_DB_PATH to a per-run mkdtemp path.
+const DESK_DB_PATH =
+  process.env.DESK_DB_PATH
+  ?? path.join(DESK_HOME, "Desk", ".database", "desk.sqlite3");
 
 async function main(): Promise<void> {
-  const pool = createPool({ connectionString: DATABASE_URL });
+  // better-sqlite3 doesn't create parent directories — make sure the
+  // tree exists before opening the file (a fresh ~/Desk doesn't have
+  // .database yet).
+  await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
+  const pool = createPool({ path: DESK_DB_PATH });
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
   await seedIfEmpty(pool);
   await seedProviderKeysFromEnv(pool);
+  await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this
   // value and the bind source the runtime computes once dropped every user
@@ -46,8 +57,8 @@ async function main(): Promise<void> {
   if (!process.env.DESK_HOME) {
     // eslint-disable-next-line no-console
     console.warn(
-      "DESK_HOME is not set explicitly. Falling back to $HOME or /home/desk; " +
-        "set DESK_HOME in /etc/desk-server/env to pin the on-disk root.",
+      "DESK_HOME is not set explicitly. Falling back to $HOME; " +
+        "set DESK_HOME to pin the on-disk root.",
     );
   }
   const drift = await auditSandboxMounts(DESK_HOME);
@@ -100,46 +111,23 @@ async function main(): Promise<void> {
   retentionTimer.unref();
 
   // Broadcast targets the single v1 user.
-  const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
-  const broadcastUserId: string | undefined = rows[0]?.id;
-
-  const adapter = createAdapter();
-
-  // Repair drift between pending messages and the at/cron daemons:
-  // reinstall missing entries, fire overdue at-jobs immediately, and
-  // garbage-collect orphan scheduler entries. Without this, a lost or
-  // missed at-job leaves the message stuck in `pending` with a past
-  // execute_at, which the UI renders as "Overdue since …".
-  try {
-    await reconcile(pool, adapter);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("scheduler reconcile failed:", err);
-  }
-
-  // Periodic sweep for runs that go stale while the server is up — e.g.
-  // an at-job the daemon silently dropped, or a message whose executeAt
-  // has passed without a fire. sweepStaleRuns is the same repair logic
-  // reconcile runs at boot, minus the orphan GC (which is boot-only).
-  const SWEEP_INTERVAL_MS = parseInt(
-    process.env.DESK_SCHEDULER_SWEEP_INTERVAL_MS ?? "300000",
-    10,
+  const { rows } = await pool.query<{ id: string }>(
+    "SELECT id FROM users LIMIT 1",
   );
-  const sweepTimer = setInterval(() => {
-    void sweepStaleRuns(pool, adapter).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.error("scheduler sweep failed:", err);
-    });
-  }, SWEEP_INTERVAL_MS);
-  sweepTimer.unref();
+  const broadcastUserId: string | undefined = rows[0]?.id;
 
   const runManager = createRunManager({
     pool,
-    adapter,
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
   });
+
+  const POLL_INTERVAL_MS = parseInt(
+    process.env.DESK_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
+    10,
+  );
+  const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
 
   const server = createApp({
     pool,
@@ -158,6 +146,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);
+    clearInterval(pollTimer);
+    clearInterval(retentionTimer);
     clearConnections();
     server.close();
     await pool.end();

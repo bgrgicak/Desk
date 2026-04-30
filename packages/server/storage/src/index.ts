@@ -20,6 +20,8 @@ export {
   moveFile,
   deleteFile,
   overwriteFile,
+  pinLibraryFileToChat,
+  saveChatAttachmentToLibrary,
   trashChatDirectories,
   resolveForSandbox,
   validateLibrarySubpath,

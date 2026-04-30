@@ -122,6 +122,12 @@ export interface ContextItem {
   addedAt: Date
   usedBy: string[]
   uploadedBy: 'user' | 'ai'
+  /** Display name of the agent that originally created this file, when
+   * `uploadedBy === 'ai'`. Used to show an inline provenance badge on
+   * library cards. */
+  agentName?: string
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean
   lastAccessed?: Date
   relatedArtifactIds: string[]
   fileSize?: string
@@ -141,7 +147,7 @@ export interface TaskOccurrence {
   id: string
   startedAt: Date
   endedAt: Date
-  status: 'completed' | 'failed' | 'active'
+  status: 'completed' | 'failed' | 'active' | 'scheduled'
   statusText?: string
 }
 
@@ -213,6 +219,18 @@ export interface Run {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
+export type ChatKind = 'chat' | 'task' | 'task_run'
+
+export type ChatGoalKind =
+  | 'app'
+  | 'document'
+  | 'image'
+  | 'data'
+  | 'site'
+  | 'run'
+  | 'task'
+  | 'scheduled'
+
 export interface Chat {
   id: string
   title: string
@@ -224,6 +242,16 @@ export interface Chat {
   unread?: boolean
   workspaceId?: string
   agentId?: string
+  /**
+   * Drives the chat-list icon (fallback signal). Newest user-action
+   * message kind, falling back to `'chat'`.
+   */
+  kind?: ChatKind
+  /**
+   * Drives the chat-list icon (primary signal when set). Inferred from
+   * the newest user-role text message — `app` / `data` / `site` / etc.
+   */
+  goalKind?: ChatGoalKind | null
 }
 
 // ── Settings / Connections (catalog of integrations the UI can render) ───────

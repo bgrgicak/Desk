@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, ensureWorkspaceLayout, tmpDir, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 import {
   projectMounts,
   teardownMounts,
@@ -57,15 +57,6 @@ describe("mounts", () => {
     expect(mounts.attachmentsInSandbox).toBe(
       `${SANDBOX_HOME}/.chats/cht_test12345678901234567/attachments`,
     );
-  });
-
-  it("projectMounts writes a manifest with host + in-sandbox paths", async () => {
-    const manifestPath = path.join(tmpDir(home), "manifests", "manifest-run_mount1.json");
-    const raw = await fs.readFile(manifestPath, "utf-8");
-    const manifest = JSON.parse(raw);
-    expect(manifest.runId).toBe("run_mount1");
-    expect(manifest.host.workspace).toBe(workspaceRootPath(home, TEST_SLUG));
-    expect(manifest.inSandbox.home).toBe(SANDBOX_HOME);
   });
 
   it("containerBinds binds the workspace root at /home/agent rw", () => {

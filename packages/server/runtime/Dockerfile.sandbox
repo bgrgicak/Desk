@@ -18,28 +18,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g opencode-ai --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
-# Install @desk/sandbox-cli binary from builder stage
-COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-cli/desk.js
-RUN printf '#!/usr/bin/env node\n' | cat - /usr/local/lib/desk-cli/desk.js > /usr/local/bin/desk && \
-    chmod +x /usr/local/bin/desk
-
-# Copy skill file
-COPY sandbox-cli/skill.md /opt/desk/skills/desk-cli.md
+# Install @agent-desk/sandbox-cli binary from builder stage. esbuild's `banner`
+# config already prepends `#!/usr/bin/env node`, so we just symlink — adding
+# a second shebang here would break the file as a Node entry point. The bin
+# is `desk-agent`: `desk` is reserved for the host CLI (@agent-desk/cli); the
+# in-sandbox callback tool is what `desk-agent task schedule` invokes.
+COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-agent-cli/desk-agent.js
+RUN ln -s /usr/local/lib/desk-agent-cli/desk-agent.js /usr/local/bin/desk-agent && \
+    chmod +x /usr/local/lib/desk-agent-cli/desk-agent.js
 
 # Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first
 # start (idempotent via `cp -rn`). See runtime/sandbox-entrypoint.sh.
 COPY runtime/sandbox-entrypoint.sh /usr/local/bin/desk-sandbox-entrypoint
 RUN chmod +x /usr/local/bin/desk-sandbox-entrypoint
 
-# Unprivileged in-container user. Its uid must match the host user that
-# owns the workspace bind-mount (the VM's `desk` service user): the
-# workspace root is mounted as $HOME, so host-written files (agent .md,
-# attachments, notes) need to be writable by the in-container agent, and
-# in-container writes need to stay readable by the host service.
-#
-# Running as root here doesn't help — the container's HostConfig sets
-# CapDrop:ALL, which drops CAP_DAC_OVERRIDE, so even uid 0 obeys normal
-# DAC rules and can't write to a dir owned by a different uid.
+# Baseline `agent` user. The image ships with this baked at AGENT_UID=2000
+# so a `docker run` without a per-run --user has *some* unprivileged user
+# to run as — but desk-server always passes `--user` of the host process
+# (or 0:0 under rootless docker) so the runtime uid is whoever spawned
+# the sandbox. /home/agent is the bind-mount target; the workspace root
+# on the host lands there directly, so reads/writes both directions just
+# work without any chown dance.
 ARG AGENT_UID=2000
 RUN groupadd --gid "$AGENT_UID" agent \
  && useradd --uid "$AGENT_UID" --gid "$AGENT_UID" --create-home --shell /bin/bash agent

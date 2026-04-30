@@ -21,51 +21,31 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, seedIfEmpty, queries } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { resetInternalTokenCache } from "../src/auth/internal.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_msg_model_attachments_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
 let userToken: string;
-let internalToken: string;
 let chatId: string;
 let agentModel: string;
+let runManager: ReturnType<typeof createRunManager>;
+let dbPath: string;
 /** Captures the prompt + forwarded attachments seen by the fake driver on each fireMessage call. */
 const promptsSeen: { prompt: string; attachments?: string[] }[] = [];
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally { await admin.end(); }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-attach-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "attach-user";
@@ -77,15 +57,8 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  const tokenPath = path.join(home, "internal-token");
-  internalToken = "internaltoken123456789012345678901";
-  await fs.writeFile(tokenPath, internalToken, { mode: 0o600 });
-  process.env.DESK_INTERNAL_TOKEN_PATH = tokenPath;
-  resetInternalTokenCache();
-
-  const runManager = createRunManager({
+  runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async (runId, _a, prompt, onLog, runOpts) => {
       promptsSeen.push({ prompt, attachments: runOpts?.attachments });
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed the attached file." });
@@ -101,7 +74,7 @@ beforeAll(async () => {
   agentModel = agentRows[0].model as string;
   chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, wsRows[0].id, agentRows[0].id, "Attach Chat"],
   );
 
@@ -114,20 +87,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
-  resetInternalTokenCache();
-  delete process.env.DESK_INTERNAL_TOKEN_PATH;
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally { await admin.end(); }
 });
 
 function request(method: string, urlPath: string, body?: unknown, bearer?: string | null): Promise<{ status: number; body: unknown }> {
@@ -158,18 +124,16 @@ async function login(): Promise<string> {
 }
 
 async function fireTriggerFor(messageId: string): Promise<void> {
-  // Walk the chat to find the newest agent_turn trigger for this user message.
   const { rows } = await pool.query(
     `SELECT id FROM messages
-     WHERE chat_id = $1 AND role = 'system' AND content->>'type' = 'agent_turn'
-       AND content->>'userMessageId' = $2
+     WHERE chat_id = ? AND role = 'system' AND json_extract(content, '$.type') = 'agent_turn'
+       AND json_extract(content, '$.userMessageId') = ?
      ORDER BY created_at DESC LIMIT 1`,
     [chatId, messageId],
   );
   const triggerId = rows[0]?.id as string;
   expect(triggerId).toBeDefined();
-  const res = await request("POST", "/internal/messages/fire", { messageId: triggerId }, internalToken);
-  expect(res.status).toBe(200);
+  await runManager.fireMessage(triggerId);
 }
 
 describe("POST /chats/{id}/messages with attachments", () => {
@@ -315,14 +279,34 @@ describe("GET /library/content for chat attachments", () => {
     expect(meta.size).toBe(fileBody.length);
   });
 
-  it("rejects other dot-prefixed paths (e.g. .chats/<id>/notes/) with 404", async () => {
+  it("serves a chat-owned note via /library/meta with a 'Chat notes' label", async () => {
+    const noteFilename = "msg_open_me.md";
+    const notePath = `.chats/${chatId}/notes/${noteFilename}`;
+    const noteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes");
+    await fs.mkdir(noteDir, { recursive: true });
+    await fs.writeFile(path.join(noteDir, noteFilename), "# Running summary\n");
+
     const noteRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/notes/anything.md`)}`,
+      `/library/meta?path=${encodeURIComponent(notePath)}`,
       undefined,
       userToken,
     );
-    expect(noteRes.status).toBe(404);
+    expect(noteRes.status).toBe(200);
+    const meta = noteRes.body as { path: string; name: string; label?: string };
+    expect(meta.path).toBe(notePath);
+    expect(meta.name).toBe(noteFilename);
+    expect(meta.label).toBe("Chat notes");
+  });
+
+  it("still rejects other dot-prefixed paths (e.g. .chats/<id>/logs/) with 404", async () => {
+    const logRes = await request(
+      "GET",
+      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/logs/anything.log`)}`,
+      undefined,
+      userToken,
+    );
+    expect(logRes.status).toBe(404);
   });
 });
 
@@ -370,7 +354,7 @@ describe("fireMessage stamps model on the assistant row", () => {
 
     const { rows } = await pool.query(
       `SELECT id, model FROM messages
-       WHERE chat_id = $1 AND role = 'agent' AND parent_id IS NOT NULL
+       WHERE chat_id = ? AND role = 'agent' AND parent_id IS NOT NULL
        ORDER BY created_at DESC LIMIT 1`,
       [chatId],
     );
@@ -387,12 +371,10 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
     const requestId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-       VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
       [requestId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
-    const fire = await request("POST", "/internal/messages/fire", { messageId: requestId }, internalToken);
-    expect(fire.status).toBe(200);
-    const { childIds } = fire.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
     const notePath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
@@ -406,11 +388,10 @@ describe("notes/{id}.md is materialized when ai_note_request fires", () => {
     const reqId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-       VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
       [reqId, chatId, JSON.stringify({ type: "ai_note_request" })],
     );
-    const fire = await request("POST", "/internal/messages/fire", { messageId: reqId }, internalToken);
-    const { childIds } = fire.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(reqId);
     const noteId = childIds[0];
 
     const patched = await request(

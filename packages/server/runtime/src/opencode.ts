@@ -1,4 +1,4 @@
-import pg from "pg";
+import { type Pool } from "@agent-desk/db";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -17,6 +17,13 @@ export interface ExecRunOptions {
   agent: AgentFileInput;
   /** Workspace-relative paths to forward to opencode as `--file` flags. */
   attachments?: string[];
+  /**
+   * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
+   * to `http://host.docker.internal:35138` when omitted.
+   */
+  apiUrl?: string;
+  /** Provider API keys forwarded into every exec so they're always current. */
+  providerKeys?: Record<string, string>;
   onLog: (event: LogEvent) => void;
 }
 
@@ -25,14 +32,15 @@ export interface ExecRunOptions {
  * Mints a session token, projects mounts, runs OpenCode, then cleans up.
  */
 export async function execRun(
-  pool: pg.Pool,
+  pool: Pool,
   handle: SandboxHandle,
   opts: ExecRunOptions,
 ): Promise<ExecResult> {
-  // Session identifies the agent (not the workspace) so tool auth knows
-  // which agent is asking. Workspace is recorded alongside so tool handlers
-  // route filesystem ops to the right on-disk slug.
-  const { session } = await mintToken(pool, opts.agent.agentId, {
+  // The session token authenticates the in-sandbox `desk` CLI back to the
+  // host REST API for the duration of this run; we revoke it in `finally`.
+  // Token resolves to (session, agent) server-side via
+  // `authenticateSandboxToken`; the agent's userId then gates ownership.
+  const { token, session } = await mintToken(pool, opts.agent.agentId, {
     runId: opts.runId,
     workspaceId: opts.workspaceId,
   });
@@ -73,6 +81,9 @@ export async function execRun(
       workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
+      sandboxToken: token,
+      apiUrl: opts.apiUrl ?? "http://host.docker.internal:35138",
+      providerKeys: opts.providerKeys,
       onLog: opts.onLog,
     });
     return result;

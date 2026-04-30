@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ID_PREFIXES, ValidationError } from "@desk/shared";
+import { ID_PREFIXES, ValidationError } from "@agent-desk/shared";
 import { workspaceRootPath } from "./layout.js";
 
 function validateChatId(chatId: string): void {

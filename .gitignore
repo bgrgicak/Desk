@@ -6,3 +6,5 @@ dist/
 packages/app/test-results/
 test-results/
 *.tsbuildinfo
+.DS_Store
+NvVars

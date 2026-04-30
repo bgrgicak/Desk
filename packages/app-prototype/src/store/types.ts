@@ -4,7 +4,7 @@
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 
-export type MessageRole = "user" | "agent" | "system" | "tool";
+export type MessageRole = "user" | "agent" | "system";
 export type MessageState =
   | "pending"
   | "running"
@@ -50,7 +50,6 @@ export interface ServerAgent {
   name: string;
   instructions: string;
   model: string;
-  toolAllowlist: string[];
 }
 
 /** Membership row from `GET /workspaces/:id/agents`: agent + enrollment timestamp. */
@@ -77,6 +76,28 @@ export interface ServerChat {
   updatedAt: string;
   awaitingUser: boolean;
   unread: boolean;
+  /**
+   * Drives the chat-list icon (fallback signal). Newest user-action
+   * message kind (`task` / `task_run`), with `'chat'` as the fallback.
+   * `ai_note` is auto-emitted on every chat turn and is treated as a
+   * fallback. Only populated by /chats list responses.
+   */
+  kind?: "chat" | "task" | "task_run";
+  /**
+   * Drives the chat-list icon (primary signal when set). Inferred from
+   * the newest user-role text message — `app` / `data` / `site` / etc.
+   * Null when no user text exists or no heuristic matches.
+   */
+  goalKind?:
+    | "app"
+    | "document"
+    | "image"
+    | "data"
+    | "site"
+    | "run"
+    | "task"
+    | "scheduled"
+    | null;
 }
 
 export interface AttachmentRef {
@@ -103,9 +124,15 @@ export interface ServerMessage {
   state?: MessageState;
   parentId?: string;
   agentId?: string;
+  assigneeId?: string;
   startedAt?: string;
   endedAt?: string;
   updatedAt?: string;
+  /** Discriminates the message's surface — `chat` (default), `task`,
+   * `task_run` (execution record child of a task), or `ai_note`. */
+  kind?: "chat" | "task" | "task_run" | "ai_note";
+  /** Display name for tasks; null/missing for ordinary chat messages. */
+  title?: string | null;
 }
 
 export interface ServerFile {
@@ -120,6 +147,20 @@ export interface ServerFile {
    * note from `.chats/{id}/notes/`. Library responses omit it.
    */
   kind?: "attachment" | "note";
+  /**
+   * Optional human-friendly label rendered alongside the raw file name.
+   * Notes carry "Chat notes" so the UI doesn't surface the messageId-based
+   * filename as the primary label.
+   */
+  label?: string;
+  /** ID of the agent that last created or edited this file, if known. */
+  agentId?: string;
+  /** ID of the agent that *originally* created this file. Stays stable
+   * even after subsequent edits, so the Library UI can show a durable
+   * "by AI" provenance label. */
+  creatorAgentId?: string;
+  /** Whether this file is pinned in the workspace's Pinned view. */
+  pinned?: boolean;
 }
 
 /**
@@ -154,6 +195,10 @@ export interface MessagesFilter {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKind?: string[];
+  /** Message-kind discriminator (`task`, `ai_note`, `chat`). The Tasks
+   * page filters on `task`. Distinct from `contentKind` which targets
+   * `content.type`. */
+  kind?: ("chat" | "task" | "ai_note")[];
   since?: string;
   limit?: number;
   cursor?: string;

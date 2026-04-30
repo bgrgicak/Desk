@@ -1,13 +1,11 @@
-import pg from "pg";
-import { WorkspaceAgentSchema, type WorkspaceAgent, NotFoundError } from "@desk/shared";
-
-type Queryable = pg.Pool | pg.PoolClient;
+import { type Pool } from "../pool.js";
+import { WorkspaceAgentSchema, type WorkspaceAgent, NotFoundError } from "@agent-desk/shared";
 
 function rowToWorkspaceAgent(row: Record<string, unknown>): WorkspaceAgent {
   return WorkspaceAgentSchema.parse({
     workspaceId: row.workspace_id,
     agentId: row.agent_id,
-    addedAt: (row.added_at as Date).toISOString(),
+    addedAt: row.added_at as string,
   });
 }
 
@@ -16,36 +14,39 @@ function rowToWorkspaceAgent(row: Record<string, unknown>): WorkspaceAgent {
  * Callers that need a fallback "default" agent pick the first row.
  */
 export async function listForWorkspace(
-  db: Queryable,
+  db: Pool,
   workspaceId: string,
 ): Promise<WorkspaceAgent[]> {
+  // Tie-break by ROWID so rows added in the same millisecond keep their
+  // insertion order. SQLite's added_at default has ms precision but two
+  // calls in the same tick still collide; ROWID is monotonic per insert.
   const { rows } = await db.query(
-    "SELECT * FROM workspace_agents WHERE workspace_id = $1 ORDER BY added_at",
+    "SELECT * FROM workspace_agents WHERE workspace_id = ? ORDER BY added_at, ROWID",
     [workspaceId],
   );
   return rows.map(rowToWorkspaceAgent);
 }
 
 export async function findForWorkspace(
-  db: Queryable,
+  db: Pool,
   workspaceId: string,
   agentId: string,
 ): Promise<WorkspaceAgent | null> {
   const { rows } = await db.query(
-    "SELECT * FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+    "SELECT * FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
     [workspaceId, agentId],
   );
   return rows.length ? rowToWorkspaceAgent(rows[0]) : null;
 }
 
 export async function addToWorkspace(
-  db: Queryable,
+  db: Pool,
   workspaceId: string,
   agentId: string,
 ): Promise<WorkspaceAgent> {
   const { rows } = await db.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2)
+     VALUES (?, ?)
      ON CONFLICT (workspace_id, agent_id) DO NOTHING
      RETURNING *`,
     [workspaceId, agentId],
@@ -57,14 +58,14 @@ export async function addToWorkspace(
 }
 
 export async function removeFromWorkspace(
-  db: Queryable,
+  db: Pool,
   workspaceId: string,
   agentId: string,
 ): Promise<void> {
   const current = await findForWorkspace(db, workspaceId, agentId);
   if (!current) throw new NotFoundError(`Agent not enabled in workspace: ${agentId}`);
   await db.query(
-    "DELETE FROM workspace_agents WHERE workspace_id = $1 AND agent_id = $2",
+    "DELETE FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
     [workspaceId, agentId],
   );
 }

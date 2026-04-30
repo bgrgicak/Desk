@@ -134,8 +134,8 @@ The user home directory stores Desk-managed data such as:
 
 The filesystem is the storage substrate, but not the only Desk source of truth.
 
-* Postgres remains the authoritative metadata layer for user-to-home mapping, workspace and chat structure, file registry, ownership, grants, and audit metadata
-* Postgres is the sole database; it also serves as the context/session store and supports any required sync patterns
+* SQLite remains the authoritative metadata layer for user-to-home mapping, workspace and chat structure, file registry, ownership, grants, and audit metadata
+* SQLite is the sole database; it also serves as the context/session store and supports any required sync patterns
 * Linux ownership and permissions enforce low-level boundaries but do not replace Desk metadata
 
 #### 9.5 Recommended directory layout
@@ -183,8 +183,8 @@ Guidelines:
 * A workspace may also be granted access to selected user directories outside `~/Desk/`, such as `~/Projects/NAME`
 * Broader home-directory attachment, such as `~/`, is a later capability and not part of the now phase
 * These external directories remain user-owned paths; Desk should treat them as attached or shared workspace sources rather than relocating them into `~/Desk/`
-* Outputs are primarily stored in Postgres rather than as durable files by default
-* Stable files and attachments should have IDs or stable names that map cleanly from Postgres
+* Outputs are primarily stored in SQLite rather than as durable files by default
+* Stable files and attachments should have IDs or stable names that map cleanly from SQLite
 * Persistent sandbox storage is a separate subsystem from user-owned durable storage
 
 #### 9.6 Linux account strategy
@@ -227,7 +227,7 @@ At the host filesystem level:
 At the Desk policy level:
 
 * The user defines what each agent may access within the user-owned data tree, including any workspace-attached external directories
-* Desk persists those grants in Postgres
+* Desk persists those grants in SQLite
 * File Manager and orchestration enforce the allowed projections into the sandbox
 * Agents are execution actors, not the durable storage owners
 
@@ -239,14 +239,14 @@ Create:
 * Create home directory
 * Create the initial `~/Desk/` subtree and standard subdirectories
 * Create persistent sandbox storage roots outside the user home
-* Register mappings and metadata in Postgres
+* Register mappings and metadata in SQLite
 
 Use:
 
 * Resolve allowed workspace/chat/file paths through Desk policy
 * Resolve any workspace-attached external directories granted by the user
 * Dynamically mount selected user-owned paths into the sandbox as runs require them Persist:
-* Persist structured message outputs to Postgres
+* Persist structured message outputs to SQLite
 * Persist files created in writable workspace areas when the run is allowed to modify workspace data
 * Keep long-lived environment state in persistent sandbox storage Cleanup:
 * Support retention and cleanup for cache, stale attachments, and sandbox state according to policy Delete/deprovision:
@@ -255,7 +255,7 @@ Use:
 
 #### 9.11 File classes to distinguish in metadata
 
-Postgres should distinguish at least:
+SQLite should distinguish at least:
 
 * Attachment files
 * Workspace files
@@ -273,7 +273,7 @@ Desk should be able to answer:
 * Which run created or modified it
 * Whether it originated as a user attachment, agent output, or imported project file
 
-Therefore filesystem paths should be linked to stable logical file records in Postgres.
+Therefore filesystem paths should be linked to stable logical file records in SQLite.
 
 #### 9.13 Now / Next / Later stance for this component
 
@@ -284,7 +284,7 @@ Now:
 * Desk-managed subtree under the user home
 * Persistent sandbox storage outside the user home
 * Dynamic mount/unmount of workspace and chat paths into warm sandboxes
-* Postgres-backed registry and grants
+* SQLite-backed registry and grants
 * No general cross-user or cross-agent sharing
 
 Next:
@@ -301,7 +301,7 @@ Later:
 
 ### 10. Context Store
 
-Stored in Postgres.
+Stored in SQLite.
 
 * Chat/session documents and context records
 * Project/group context
@@ -309,11 +309,11 @@ Stored in Postgres.
 * Project → file links
 * Workspace links to attached external user directories
 * Agent runtime context records
-* Sync-friendly state model built on Postgres
+* Sync-friendly state model built on SQLite
 
 ### 11. Relational Metadata & Permission Store
 
-Stored in Postgres.
+Stored in SQLite.
 
 * File registry
 * User-defined permissions and grants for agent access

@@ -1,4 +1,4 @@
-import { DeskError } from "@desk/shared";
+import { DeskError } from "@agent-desk/shared";
 
 /** Maps DeskError codes to HTTP status codes. */
 export function errorToStatus(err: DeskError): number {

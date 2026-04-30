@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Reorder } from 'framer-motion'
 import {
-  Inbox, Sun, Moon, LayoutGrid, Zap, FolderOpen,
+  Inbox, Sun, Moon, Search,
   HelpCircle, LogOut, User, CreditCard, Settings2,
-  MessageSquare, FileText, Plus, Columns2, Pencil, Trash2,
+  Plus, Columns2, Pencil, Trash2,
 } from 'lucide-react'
+import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -21,26 +22,21 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from '@/components/ui/command'
-import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import { useCreateWorkspaceMutation, useGetMeQuery } from '@/store/api'
-import { logout } from '@/auth/auto-login'
+import { useCreateWorkspaceMutation, useDeleteWorkspaceMutation, useGetMeQuery, usePatchWorkspaceMutation } from '@/store/api'
+import { logout } from '@/auth/session'
 import type { View } from './AppShell'
 
 function initialsOf(name: string): string {
@@ -100,7 +96,7 @@ export interface WorkspaceInfo {
   unreadCount: number
 }
 
-export type WorkspaceNavView = Extract<View, 'desk' | 'tasks' | 'context'>
+export type WorkspaceNavView = Extract<View, 'pinned' | 'desk' | 'tasks' | 'context'>
 
 interface WorkspaceBarProps {
   workspaces: WorkspaceInfo[]
@@ -109,8 +105,6 @@ interface WorkspaceBarProps {
   todayUnreadCount: number
   onGlobalToday: () => void
   onSelectWorkspace: (id: string) => void
-  onNavigate: (id: string, view: WorkspaceNavView) => void
-  onCompose?: () => void
   onSignOut?: () => void
 }
 
@@ -122,8 +116,6 @@ export function WorkspaceBar({
   todayUnreadCount,
   onGlobalToday,
   onSelectWorkspace,
-  onNavigate,
-  onCompose,
   onSignOut,
 }: WorkspaceBarProps) {
   // Current user — fetched once on mount via RTK Query. Falls back to a
@@ -131,12 +123,17 @@ export function WorkspaceBar({
   const { data: me } = useGetMeQuery()
   const [createWorkspaceMutation, { isLoading: isCreating }] =
     useCreateWorkspaceMutation()
+  const [patchWorkspaceMutation, { isLoading: isPatching }] =
+    usePatchWorkspaceMutation()
+  const [deleteWorkspaceMutation] =
+    useDeleteWorkspaceMutation()
   const account = me
     ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
     : ACCOUNT_PLACEHOLDER
 
-  // Command palette
-  const [commandOpen, setCommandOpen] = useState(false)
+  const { open: openGlobalPalette } = useGlobalPalette()
+
+  const [pendingDeleteWorkspaceId, setPendingDeleteWorkspaceId] = useState<string | null>(null)
 
   // Dark mode
   const [isDark, setIsDark] = useState(false)
@@ -185,21 +182,14 @@ export function WorkspaceBar({
     setCreateOpen(true)
   }
 
-  const deleteWorkspace = (wsId: string) => {
-    setOrderedWorkspaces(prev => prev.filter(w => w.id !== wsId))
-  }
-
-  // Global ⌘K shortcut
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setCommandOpen(v => !v)
-      }
+  const deleteWorkspace = async (wsId: string) => {
+    try {
+      await deleteWorkspaceMutation(wsId).unwrap()
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('delete workspace failed:', err)
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }
 
   return (
     <>
@@ -247,14 +237,15 @@ export function WorkspaceBar({
                   <ContextMenuTrigger asChild>
                     <button
                       onClick={() => onSelectWorkspace(ws.id)}
+                      data-testid={`workspace-tab-${ws.id}`}
                       className={`relative flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors cursor-pointer select-none ${
                         isActive
-                          ? 'bg-background text-foreground shadow-xs'
+                          ? 'bg-background/60 text-foreground'
                           : 'text-foreground/70 hover:text-foreground hover:bg-background/40'
                       }`}
                     >
                       <span className="text-base leading-none">{ws.emoji}</span>
-                      <span>{ws.name}</span>
+                      <span>{ws.name.length > 16 ? ws.name.slice(0, 16) + '…' : ws.name}</span>
                       {ws.unreadCount > 0 && (
                         <span className={`flex h-5 min-w-5 items-center justify-center rounded-full border px-1.5 text-xs font-medium ${
                           isActive
@@ -274,10 +265,10 @@ export function WorkspaceBar({
                     <ContextMenuSeparator />
                     <ContextMenuItem onSelect={() => startEditing(ws)}>
                       <Pencil className="h-4 w-4" />
-                      Edit
+                      Customize
                     </ContextMenuItem>
                     <ContextMenuItem
-                      onSelect={() => deleteWorkspace(ws.id)}
+                      onSelect={() => setPendingDeleteWorkspaceId(ws.id)}
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -304,6 +295,15 @@ export function WorkspaceBar({
         {/* ── Right-side controls ── */}
         <div className="ml-auto flex items-center gap-1 shrink-0">
 
+          {/* Global search · Ask AI */}
+          <button
+            onClick={() => openGlobalPalette()}
+            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
+            title="Search · Ask AI (⌘K)"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+
           {/* Dark mode toggle */}
           <button
             onClick={toggleDark}
@@ -325,7 +325,7 @@ export function WorkspaceBar({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                data-testid="account-avatar"
+                {...(me ? { 'data-testid': 'account-avatar' } : {})}
                 className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5"
               >
                 {account.initials}
@@ -356,40 +356,6 @@ export function WorkspaceBar({
           </DropdownMenu>
         </div>
       </div>
-
-      {/* ── Command palette ── */}
-      <CommandDialog open={commandOpen} onOpenChange={setCommandOpen} showCloseButton={false} className="top-[20%] translate-y-0">
-        <CommandInput placeholder="Search or jump to..." />
-        <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-          <CommandGroup heading="Go to">
-            <CommandItem onSelect={() => { onGlobalToday(); setCommandOpen(false) }}>
-              <Inbox />Inbox
-            </CommandItem>
-            {orderedWorkspaces.map(ws => (
-              <CommandItem key={ws.id} onSelect={() => { onSelectWorkspace(ws.id); setCommandOpen(false) }}>
-                <span className="text-base leading-none w-4 text-center">{ws.emoji}</span>
-                {ws.name}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-          <CommandSeparator />
-          <CommandGroup heading="Views">
-            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'desk');    setCommandOpen(false) }}><LayoutGrid />Desk</CommandItem>
-            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'tasks');   setCommandOpen(false) }}><Zap />Tasks</CommandItem>
-            <CommandItem onSelect={() => { onNavigate(activeWorkspaceId, 'context'); setCommandOpen(false) }}><FolderOpen />Library</CommandItem>
-          </CommandGroup>
-          {onCompose && (
-            <>
-              <CommandSeparator />
-              <CommandGroup heading="Create">
-                <CommandItem onSelect={() => { onCompose(); setCommandOpen(false) }}><MessageSquare />New chat</CommandItem>
-                <CommandItem onSelect={() => { onCompose(); setCommandOpen(false) }}><FileText />New artifact</CommandItem>
-              </CommandGroup>
-            </>
-          )}
-        </CommandList>
-      </CommandDialog>
 
       {/* ── Create / edit workspace modal ── */}
       <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) resetForm() }}>
@@ -473,17 +439,23 @@ export function WorkspaceBar({
               Cancel
             </Button>
             <Button
-              disabled={!newName.trim() || isCreating}
+              disabled={!newName.trim() || isCreating || isPatching}
               onClick={async () => {
                 if (editingWorkspace) {
-                  // TODO: editing from this dialog is still client-state only;
-                  // use the Customize modal for persistent edits.
-                  setOrderedWorkspaces(prev =>
-                    prev.map(w => w.id === editingWorkspace.id
-                      ? { ...w, name: newName.trim(), emoji: newEmoji, bg: newColor, description: newDescription }
-                      : w
-                    )
-                  )
+                  try {
+                    await patchWorkspaceMutation({
+                      id: editingWorkspace.id,
+                      patch: {
+                        name: newName.trim(),
+                        description: newDescription,
+                        icon: newEmoji,
+                        color: newColor,
+                      },
+                    }).unwrap()
+                  } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.error('patch workspace failed:', err)
+                  }
                   setCreateOpen(false)
                   resetForm()
                   return
@@ -509,6 +481,32 @@ export function WorkspaceBar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={pendingDeleteWorkspaceId !== null}
+        onOpenChange={open => { if (!open) setPendingDeleteWorkspaceId(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove the workspace and all its content. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingDeleteWorkspaceId) deleteWorkspace(pendingDeleteWorkspaceId)
+                setPendingDeleteWorkspaceId(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

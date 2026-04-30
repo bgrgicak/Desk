@@ -11,36 +11,14 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, queries, hashPassword } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createRunManager, createMemoryAdapter } from "@desk/scheduler";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, queries, hashPassword } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_ownership_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
 
 interface Seeded {
   userId: string;
@@ -51,10 +29,11 @@ interface Seeded {
   messageId: string;
 }
 
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
+let dbPath: string;
 let alpha: Seeded;
 let beta: Seeded;
 
@@ -86,25 +65,24 @@ async function seedUser(suffix: string): Promise<Seeded> {
     name: `agent-${suffix}`,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
 
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
-     VALUES ($1, $2)`,
+     VALUES (?, ?)`,
     [workspaceId, agentId],
   );
 
   const chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, workspaceId, agentId, `chat-${suffix}`],
   );
 
   const messageId = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content)
-     VALUES ($1, $2, 'user', $3)`,
+     VALUES (?, ?, 'user', ?)`,
     [messageId, chatId, JSON.stringify({ type: "text", text: `hello from ${suffix}` })],
   );
 
@@ -152,24 +130,9 @@ function request(
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try {
-    await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
-  } catch {
-    /* ok */
-  }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ownership-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ownership-"));
@@ -178,7 +141,6 @@ beforeAll(async () => {
 
   const runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async () => ({ exitCode: 0 }),
   });
   server = createApp({ pool, storage: { pool, home }, runManager });
@@ -190,23 +152,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 describe("G8: cross-user access returns 404", () => {

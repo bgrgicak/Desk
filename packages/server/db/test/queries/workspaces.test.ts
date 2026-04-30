@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import pg from "pg";
-import { generateId } from "@desk/shared";
+import { type Pool } from "../../src/pool.js";
+import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
 import * as workspaces from "../../src/queries/workspaces.js";
 
-let pool: pg.Pool;
+let pool: Pool;
 let userId: string;
 
 beforeAll(async () => {
@@ -73,7 +73,7 @@ describe("workspaces queries", () => {
     const tempPath = await workspaces.reserveWorkspacePath(pool, "TempWS");
     await workspaces.insert(pool, { id: tempWsId, userId: tempUserId, name: "TempWS", path: tempPath });
 
-    await pool.query("DELETE FROM users WHERE id = $1", [tempUserId]);
+    await pool.query("DELETE FROM users WHERE id = ?", [tempUserId]);
     const ws = await workspaces.findById(pool, tempWsId);
     expect(ws).toBeNull();
   });

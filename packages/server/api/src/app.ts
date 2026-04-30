@@ -1,11 +1,14 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import pg from "pg";
-import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
-import type { StorageContext } from "@desk/storage";
-import type { createRunManager } from "@desk/scheduler";
-import { requireAuth } from "./auth/middleware.js";
+import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { type Pool } from "@agent-desk/db";
+import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import type { StorageContext } from "@agent-desk/storage";
+import type { createRunManager } from "@agent-desk/scheduler";
+import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
+import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {
   requireOwnedAgent,
@@ -16,7 +19,6 @@ import {
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
-import { HEALTH_MESSAGE } from "./health-message.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -36,7 +38,7 @@ import {
 type RunManager = ReturnType<typeof createRunManager>;
 
 export interface AppOptions {
-  pool: pg.Pool;
+  pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
   /** The userId to broadcast events to (v1: single user). */
@@ -62,6 +64,17 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
   const raw = await readRawBody(req);
   if (raw.length === 0) return {};
   return JSON.parse(raw.toString());
+}
+
+/**
+ * Default destination for `/internal/backup`. Lands next to the live DB
+ * inside `~/Desk/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of `~/Desk`. Uses
+ * UTC date so multi-region rsync targets don't fight over filenames.
+ */
+function defaultBackupPath(deskHome: string): string {
+  const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -116,7 +129,7 @@ export function createApp(opts: AppOptions): Server {
       // Auth
       let userId: string;
       try {
-        userId = requireAuth(path, req.headers.authorization);
+        userId = await requireAuth(pool, path, req.headers.authorization);
       } catch (err) {
         if (err instanceof DeskError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
@@ -125,6 +138,15 @@ export function createApp(opts: AppOptions): Server {
         }
         return;
       }
+
+      // Self-healing timezone: every authed request carries X-Client-Timezone
+      // from the app; the helper UPDATEs only when it drifts. Failure is
+      // non-fatal — never block a real request because the timezone write
+      // hiccuped.
+      recordClientTimezone(pool, userId, req.headers["x-client-timezone"]).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("recordClientTimezone failed:", err);
+      });
 
       const segments = path.split("/").filter(Boolean);
       const params: RouteParams = { path, segments, userId, query: url.searchParams };
@@ -143,6 +165,7 @@ export function createApp(opts: AppOptions): Server {
 
   // WebSocket upgrade handler
   server.on("upgrade", (req, socket, head) => {
+    void (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== "/ws") {
       socket.destroy();
@@ -157,7 +180,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    const userId = verifySession(token);
+    const userId = await verifySession(pool, token);
     if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -224,26 +247,68 @@ export function createApp(opts: AppOptions): Server {
       ws.readyState = 3;
       removeConnection(userId, ws);
     });
+    })().catch((err) => {
+      console.error("WebSocket upgrade failed:", err);
+      try { socket.destroy(); } catch { /* ignore */ }
+    });
   });
 
   async function dispatch(method: string, params: RouteParams, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { segments, userId, query } = params;
     const path = params.path;
 
-    // Health check — used by install.sh + VM e2e tests to confirm the server is up.
+    // Health check — confirms the server is up.
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end(HEALTH_MESSAGE);
+      res.end("hello world");
       return;
     }
 
-    // Internal routes — loopback + shared-secret auth (not the user session).
-    if (path === "/internal/messages/fire" && method === "POST") {
+    // Online backup. The pool opens its DB with locking_mode=EXCLUSIVE,
+    // which blocks other connections (including a host-side
+    // `sqlite3 .backup` CLI) from opening the file. `VACUUM INTO` runs
+    // on the existing connection, produces a checkpointed snapshot,
+    // and works while the server is up — exactly what BACKUP.md needs.
+    //
+    // Path defaults to ${DESK_HOME}/Desk/backups/desk-<ISO date>.sqlite3
+    // (alongside the live DB, on the host mount). Request body may
+    // override with `{ "path": "..." }`; the path must not already
+    // exist (VACUUM INTO refuses to overwrite).
+    if (path === "/internal/backup" && method === "POST") {
       requireInternal(req);
-      const body = await parseBody(req) as { messageId?: string };
-      if (!body.messageId) throw new ValidationError("Missing messageId");
-      const result = await runManager.fireMessage(body.messageId);
-      sendJson(res, 200, { ok: true, ...result });
+      const body = await parseBody(req) as { path?: string };
+      const targetPath = body.path ?? defaultBackupPath(storage.home);
+      const targetDir = pathDirname(targetPath);
+      await fsMkdir(targetDir, { recursive: true });
+      pool.exec(`VACUUM INTO '${targetPath.replace(/'/g, "''")}'`);
+      const stat = await fsStat(targetPath);
+      sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
+      return;
+    }
+
+    // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
+    // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
+    // and we use the agent's userId to gate the chat ownership check.
+    if (path === "/sandbox/messages" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      const chatId = body.chatId;
+      await requireOwnedChat(pool, chatId, agent.userId);
+
+      // Default kind = "task" for sandbox-issued messages: the agent calls
+      // this from `desk-agent task schedule`, so a chat reply isn't the intent.
+      // Caller can still override (e.g. kind="ai_note") if they have a
+      // reason to.
+      const sendBody = { kind: "task", ...body };
+      delete (sendBody as { chatId?: string }).chatId;
+
+      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
+      sendJson(res, 201, userMessage);
       return;
     }
 
@@ -255,7 +320,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/logout" && method === "POST") {
-      const result = authRoutes.handleLogout(req.headers.authorization);
+      const result = await authRoutes.handleLogout(pool, req.headers.authorization);
       sendJson(res, 200, result);
       return;
     }
@@ -291,6 +356,17 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/me/providers" && method === "PUT") {
       const body = await parseBody(req) as { providers: Record<string, string | null> };
       const result = await accountRoutes.setProviders(pool, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/me/providers/meta" && method === "GET") {
+      const result = await accountRoutes.getProvidersMeta(pool, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/me/providers/meta" && method === "PUT") {
+      const body = await parseBody(req) as { meta: Record<string, { name?: string } | null> };
+      const result = await accountRoutes.setProvidersMeta(pool, userId, body);
       sendJson(res, 200, result);
       return;
     }
@@ -348,6 +424,26 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Library pin routes
+    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "POST") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const filePath = typeof body?.path === "string" ? body.path : "";
+      if (!filePath) throw new ValidationError("Missing 'path' in body");
+      await libraryRoutes.pin(storage, segments[1], filePath);
+      sendJson(res, 201, { ok: true });
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "DELETE") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const filePath = typeof body?.path === "string" ? body.path : "";
+      if (!filePath) throw new ValidationError("Missing 'path' in body");
+      await libraryRoutes.unpin(storage, segments[1], filePath);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     // Agent routes
     if (path === "/agents" && method === "GET") {
       const result = await agentRoutes.listAgents(pool, userId);
@@ -355,7 +451,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/agents" && method === "POST") {
-      const body = await parseBody(req) as { name: string; instructions?: string; model?: string; toolAllowlist?: string[] };
+      const body = await parseBody(req) as { name: string; instructions?: string; model?: string };
       const result = await agentRoutes.createAgent(pool, userId, body);
       sendJson(res, 201, result);
       return;
@@ -417,7 +513,6 @@ export function createApp(opts: AppOptions): Server {
         pool,
         storage,
         segments[1],
-        runManager.adapter,
         emitEvent,
       );
       sendJson(res, 200, result);
@@ -432,11 +527,21 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req);
+      const ct = (req.headers["content-type"] ?? "").toLowerCase();
+      const body = ct.startsWith("multipart/form-data")
+        ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
+        : await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Fire the pending trigger message (messages-as-truth path) and
-      // schedule an ai-note refresh for this chat.
+      // Self-firing kinds (task / ai_note): execute_at is computed at insert
+      // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
+      if (userMessage.kind && userMessage.kind !== "chat") {
+        sendJson(res, 201, userMessage);
+        return;
+      }
+
+      // Default chat path: fire the pending trigger message and schedule
+      // an ai-note refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`fireMessage for trigger ${triggerId} failed:`, err);
@@ -453,6 +558,12 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "run" && segments.length === 5 && method === "POST") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
+      const result = await chatRoutes.runMessage(pool, segments[1], segments[3], runManager, emitEvent);
+      sendJson(res, 200, result);
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
@@ -461,7 +572,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3], runManager.adapter);
+      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3]);
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -483,20 +594,38 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "POST") {
+    if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
-      const form = await parseMultipart(req);
-      const part = form.get("file");
-      if (!(part instanceof Blob)) {
-        throw new ValidationError("Missing 'file' part in multipart body");
+      const body = (await parseBody(req)) as { path?: unknown };
+      const libraryPath = typeof body?.path === "string" ? body.path : "";
+      if (!libraryPath) {
+        throw new ValidationError("Missing 'path' in body");
       }
-      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
-      const mime = part.type || "application/octet-stream";
-      const content = Buffer.from(await part.arrayBuffer());
-      const result = await chatRoutes.uploadAttachmentToChat(
+      const result = await chatRoutes.pinLibraryFile(
         storage,
         segments[1],
-        { name, mime, content },
+        libraryPath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "save-to-library" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
+      const attachmentName = typeof body?.name === "string" ? body.name : "";
+      if (!attachmentName) {
+        throw new ValidationError("Missing 'name' in body");
+      }
+      const destSubpath =
+        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
+          ? body.destSubpath
+          : undefined;
+      const result = await chatRoutes.saveAttachmentToLibrary(
+        storage,
+        segments[1],
+        attachmentName,
+        destSubpath,
         emitEvent,
       );
       sendJson(res, 201, result);
@@ -512,8 +641,9 @@ export function createApp(opts: AppOptions): Server {
       const cursor = query.get("cursor") ?? undefined;
       const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
       const showHidden = query.get("showHidden") === "true";
+      const pinned = query.get("pinned") === "true";
       const result = wsId
-        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden })
+        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden, pinned })
         : { items: [] };
       sendJson(res, 200, result);
       return;
@@ -576,7 +706,13 @@ export function createApp(opts: AppOptions): Server {
       const wsId = await requireWorkspaceId(pool, userId, query);
       await requireReadablePathInWorkspace(pool, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
-      sendJson(res, 200, result);
+      // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
+      // user-friendly "Chat notes" label so the detail view doesn't title
+      // the page with the messageId-based filename.
+      const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
+        ? { ...result, label: "Chat notes" }
+        : result;
+      sendJson(res, 200, decorated);
       return;
     }
     if (path === "/library/download" && method === "GET") {

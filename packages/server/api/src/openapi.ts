@@ -230,7 +230,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet" } },
+          responses: { "200": { description: "Chat array with last-message snippet, `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `ai_note` fall back), and `goalKind` (`app`/`data`/`site`/etc. inferred from the newest user-role text — drives the sidebar icon when set, with `kind` as the fallback signal)." } },
         },
         post: {
           summary: "Create chat",
@@ -580,6 +580,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
             { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
+            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|ai_note`). Distinct from `contentKind`." },
+            { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },
             { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
             { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
@@ -608,13 +610,13 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/tools/models": {
         get: {
           summary: "List AI models that are ready to use",
-          description: "Returns the set of models reachable with currently configured provider credentials (server-wide, not agent-scoped). Every returned model is ready — opencode only surfaces models for providers whose API key is present in the sandbox env. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid provider models (anthropic, openai) appear only when the corresponding API key is configured. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
           parameters: [
-            { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"anthropic\"." },
+            { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"opencode\"." },
           ],
           responses: {
             "200": {
-              description: "Array of ready-to-use models",
+              description: "Array of available models",
               content: {
                 "application/json": {
                   schema: {
@@ -622,8 +624,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
                     items: {
                       type: "object",
                       properties: {
-                        id: { type: "string", description: "Opencode canonical id, e.g. \"anthropic/claude-opus-4-7\"." },
-                        provider: { type: "string", description: "Provider portion of id, e.g. \"anthropic\"." },
+                        id: { type: "string", description: "Opencode canonical id, e.g. \"opencode/big-pickle\"." },
+                        provider: { type: "string", description: "Provider portion of id, e.g. \"opencode\"." },
                       },
                       required: ["id", "provider"],
                     },

@@ -6,7 +6,7 @@ import {
   clearConnections,
   connectionCount,
 } from "../src/ws/registry.js";
-import type { WsEvent } from "@desk/shared";
+import type { WsEvent } from "@agent-desk/shared";
 
 // Fake WebSocket
 function createFakeWs() {

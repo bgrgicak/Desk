@@ -56,9 +56,6 @@ test("editing workspace name + description + color from the Customize modal pers
   await expect(
     loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
-  await expect(
-    loggedInPage.getByRole("button", { name: /🚀/ }).first(),
-  ).toBeVisible({ timeout: 5_000 });
 
   // Confirm the server actually stored it.
   const res = await fetch(`${serverUrl}/workspaces`, {
@@ -82,9 +79,6 @@ test("editing workspace name + description + color from the Customize modal pers
   await expect(
     loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
-  await expect(
-    loggedInPage.getByRole("button", { name: /🚀/ }).first(),
-  ).toBeVisible({ timeout: 5_000 });
 });
 
 test("creating a workspace from the top-bar form persists to the server", async ({

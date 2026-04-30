@@ -9,7 +9,7 @@ import path from 'path'
 // under /api/* get stripped of that prefix and proxied to the
 // desk-server. WebSocket calls to /ws are proxied verbatim with WS
 // upgrade support.
-const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:3013'
+const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:35138'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
 const APP_PORT = Number(process.env.DESK_APP_PORT ?? 5173)
 
@@ -35,6 +35,12 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // Resolve workspace deps (@agent-desk/shared, @agent-desk/db) via the `@agent-desk/dev`
+    // export condition so Vite pulls TS source from each package's src/
+    // directly. Without this it walks the default `import` condition
+    // (e.g. @agent-desk/shared/dist/index.js), which only exists after a
+    // separate `tsc` build of the package — and silently goes stale.
+    conditions: ['@agent-desk/dev'],
   },
   // Bind explicitly to 127.0.0.1 (default `host: false` resolves
   // `localhost` and on stock GH runners that lands on ::1 only — the e2e

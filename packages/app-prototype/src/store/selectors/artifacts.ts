@@ -26,8 +26,8 @@ export function toArtifactFromFile(f: ServerFile): Artifact {
     id: f.path,
     name: f.name,
     type: artifactType(f.mime, f.name),
-    agentName: "Agent", // TODO(api-gap): server doesn't carry authorship yet
-    agentModel: "", // ditto
+    agentName: "Agent",
+    agentModel: "",
     createdAt: created,
     updatedAt: created,
     content: "",

@@ -14,11 +14,26 @@ function keyPath(): string {
 }
 
 /**
- * Loads the encryption key from disk, generating it on first boot if missing.
- * Creates parent dirs, writes 32 random bytes at mode 0600.
+ * Loads the AES-256 encryption key. Priority:
+ * 1. DESK_SECRET_KEY env var (base64-encoded 32 bytes) — set at deploy time
+ *    from a secrets manager so the key never touches disk on the server.
+ * 2. Key file at DESK_SECRET_KEY_PATH (default /home/desk/secret.key);
+ *    generated automatically on first boot for dev/self-hosted setups.
  */
 export function ensureSecretKey(): Buffer {
   if (cachedKey) return cachedKey;
+
+  const envKey = process.env.DESK_SECRET_KEY;
+  if (envKey) {
+    const buf = Buffer.from(envKey, "base64");
+    if (buf.length !== KEY_BYTES) {
+      throw new Error(
+        `DESK_SECRET_KEY decoded to ${buf.length} bytes; expected ${KEY_BYTES}`,
+      );
+    }
+    cachedKey = buf;
+    return buf;
+  }
 
   const p = keyPath();
   try {

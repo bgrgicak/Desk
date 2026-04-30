@@ -110,7 +110,7 @@ Lists chats in one of the caller's workspaces.
 Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
-2. Drops the chat row from Postgres; `ON DELETE CASCADE` removes its messages.
+2. Drops the chat row from SQLite; `ON DELETE CASCADE` removes its messages.
 3. Moves the chat's on-disk subtree `~/Desk/workspaces/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 
@@ -121,6 +121,17 @@ Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE retur
 Accepts `multipart/form-data` with a single part named `file`. The part's
 filename and `Content-Type` become the artifact's name and MIME. Returns
 `201 Created` with the file record.
+
+### POST /chats/{id}/library-refs
+
+Pins an existing workspace-library file into the chat's "In this chat"
+sidebar by symlinking it under `.chats/{chatId}/attachments/`. Body:
+`{ path: string }` (workspace-root-relative path of the library file).
+The library file itself is not copied or moved. Idempotent — pinning
+the same target twice returns the same FileRef. Returns `201 Created`
+with the symlink's FileRef. Returns `404` for an unknown library path,
+`400` if `path` already lives inside the chat's own attachments
+directory.
 
 ### Message content types
 
@@ -208,8 +219,8 @@ if `currentPassword` does not match.
 Returns every known AI provider key name with its value either masked
 (first 6 + last 4 characters) or `null` when unset. Keys are encrypted
 at rest in the `user_settings` table using AES-256-GCM; the encryption
-key lives on disk at `DESK_SECRET_KEY_PATH` (default
-`/home/desk/secret.key`).
+key comes from `DESK_SECRET_KEY` (preferred) or a 32-byte file at
+`DESK_SECRET_KEY_PATH`.
 
 ### PUT /me/providers
 
@@ -217,8 +228,8 @@ Partial update. Body is `{ providers: { NAME: VALUE | null, ... } }`. A
 `null` value deletes the named key; any string value sets it. Names not
 present in the body are left untouched. Unknown names return 400.
 
-The set of known names is `PROVIDER_KEY_VARS` in `@desk/shared`. In
-dev, values seed from `/desk/.env` once per user (gated by `DESK_DEV=1`);
+The set of known names is `PROVIDER_KEY_VARS` in `@agent-desk/shared`. In
+dev, values seed from the repo's `.env` once per user (gated by `DESK_DEV=1`);
 in prod, the UI is the only way to populate them.
 
 ## Library

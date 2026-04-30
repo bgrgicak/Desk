@@ -1,106 +1,115 @@
 #!/usr/bin/env bash
-# Starts the full dev stack:
-#   - app-prototype Vite dev server on the host (http://localhost:5173/)
-#   - desk-server in tsx-watch mode inside the VM, streaming logs
+# Starts the full dev stack on the host:
+#   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
+#   - app-prototype Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
 #
-# Ctrl+C shuts both down cleanly — vite gets SIGTERM, dev-override.sh
-# reverts the systemd override on its own trap.
+# No VM, no systemd, no port forwards. One Ctrl+C kills both via the
+# process-group trap below.
 set -uo pipefail
 
-# Enable job control so the backgrounded subshell becomes its own
-# process-group leader. Without this, kill -- -PGID can't reach the
-# vite/node children and they survive Ctrl+C, binding ports 5174+
-# on subsequent runs.
+# Enable job control so the backgrounded subshells become their own
+# process-group leaders. Without this, kill -- -PGID can't reach
+# tsx-watch / vite children and they survive Ctrl+C, binding ports
+# 5174+ / 8081+ on subsequent runs.
 set -m
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-VM_SH="${SCRIPT_DIR}/vm.sh"
-INSTANCE="${DESK_INSTANCE:-dev}"
-NAME="desk-${INSTANCE}"
 
-# 1. Bootstrap workspace deps.
-#
-#    Also handles https://github.com/npm/cli/issues/4828 — a package-lock.json
-#    written on a different OS (e.g. Linux CI) locks in Linux-specific
-#    @rolldown/binding-* optional deps, so npm installs them on macOS too and
-#    vite crashes at startup with "Cannot find native binding".
-#    Fix: after any install, verify the platform binding is present; if not,
-#    nuke ALL workspace node_modules AND package-lock.json and reinstall so npm
-#    re-resolves optional deps for the current platform from scratch.
+# 0. Pin host Node to the major version in .nvmrc.
+NVMRC_MAJOR="$(awk -F. 'NR==1{gsub(/^v/,"",$1); print $1}' "${REPO_ROOT}/.nvmrc" 2>/dev/null || true)"
+HOST_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+if [ -n "$NVMRC_MAJOR" ] && [ "$HOST_MAJOR" != "$NVMRC_MAJOR" ]; then
+  echo "ERROR: host Node is v${HOST_MAJOR:-?} but .nvmrc requires v${NVMRC_MAJOR}." >&2
+  echo "       Run \`nvm install ${NVMRC_MAJOR} && nvm use\` (or your equivalent) and retry." >&2
+  exit 1
+fi
 
-# Returns 0 if the rolldown native binding for the current OS/arch is present.
-rolldown_binding_ok() {
-  local os arch
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  arch="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
-  find "${REPO_ROOT}/node_modules/@rolldown" -maxdepth 2 \
-    -path "*binding-${os}-${arch}*" -name "*.node" 2>/dev/null | grep -q .
-}
-
-# Removes every workspace node_modules + package-lock.json so npm re-resolves
-# optional deps for the current platform from scratch.
-full_clean() {
-  rm -rf \
-    "${REPO_ROOT}/node_modules" \
-    "${REPO_ROOT}/packages"/*/node_modules \
-    "${REPO_ROOT}/packages"/server/*/node_modules \
-    "${REPO_ROOT}/package-lock.json"
-}
-
-if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ]; then
+# 1. Ensure workspace deps are installed.
+if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ] || [ ! -x "${REPO_ROOT}/node_modules/.bin/tsx" ]; then
   echo "==> Installing workspace dependencies"
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
-# Always verify rolldown binding (catches stale-lockfile or partial-install cases).
-if ! rolldown_binding_ok; then
-  echo "==> rolldown native binding missing — platform mismatch in lockfile. Reinstalling…"
-  full_clean
-  (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
+# 2. Ensure DESK_SECRET_KEY is persisted in the repo .env (gitignored).
+#    The DB encryption module prefers DESK_SECRET_KEY over its on-disk
+#    fallback at $DESK_HOME/secret.key, so pinning it here keeps the
+#    user_settings.provider_keys_encrypted blob decryptable across
+#    host reinstalls and ~/Desk wipes.
+ENV_FILE="${REPO_ROOT}/.env"
+desk_secret_key=""
+if [ -f "$ENV_FILE" ]; then
+  desk_secret_key="$(grep -E '^DESK_SECRET_KEY=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | sed -E 's/^DESK_SECRET_KEY=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
+fi
+if [ -z "$desk_secret_key" ]; then
+  echo "==> Generating DESK_SECRET_KEY (32 bytes, base64) → ${ENV_FILE}"
+  desk_secret_key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+  touch "$ENV_FILE"
+  if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then
+    printf '\n' >> "$ENV_FILE"
+  fi
+  printf 'DESK_SECRET_KEY=%s\n' "$desk_secret_key" >> "$ENV_FILE"
 fi
 
-# 2. Ensure the dev VM is running. dev-override.sh just bails if it isn't,
-#    which is hostile on a clean clone — bring it up automatically.
-vm_status="$(limactl list --format '{{.Status}}' "$NAME" 2>/dev/null || true)"
-if [ "$vm_status" != "Running" ]; then
-  echo "==> VM $NAME is not running — starting it (this can take a few minutes the first time)"
-  "$VM_SH" up
-fi
+# 3. Ensure ~/Desk/ exists. desk-server's main.ts mkdirs the rest of the
+#    layout (.database, workspaces, .trash, .tmp, backups) on boot.
+DESK_HOME_DEFAULT="${HOME}"
+mkdir -p "${DESK_HOME_DEFAULT}/Desk"
 
-# 3. Kill any stale process holding port 5173 from a previous run.
-if lsof -ti :5173 >/dev/null 2>&1; then
-  echo "==> Port 5173 in use — killing stale process…"
-  lsof -ti :5173 | xargs kill -9 2>/dev/null || true
-fi
+# 4. Kill stale processes holding our ports from a previous run.
+for port in 5173 35138; do
+  if lsof -ti ":${port}" >/dev/null 2>&1; then
+    echo "==> Port ${port} in use — killing stale process…"
+    lsof -ti ":${port}" | xargs kill -9 2>/dev/null || true
+  fi
+done
 
-# Run vite in the background so its stdout interleaves with journalctl.
+# 5. Start desk-server (tsx watch) in the background.
 (
   cd "$REPO_ROOT"
+  set -a
+  # shellcheck disable=SC1090
+  [ -f "$ENV_FILE" ] && . "$ENV_FILE"
+  set +a
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions @agent-desk/dev"
+  export PORT="${PORT:-35138}"
+  export DESK_HOME="${DESK_HOME:-$DESK_HOME_DEFAULT}"
+  exec npx tsx watch packages/server/api/src/main.ts
+) &
+SERVER_PID=$!
+
+# 6. Start vite (app-prototype) in the background.
+(
+  cd "$REPO_ROOT"
+  export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:35138}"
   exec npm -w app run dev
 ) &
 VITE_PID=$!
 
+SERVER_PORT="${PORT:-35138}"
+APP_PORT="${DESK_APP_PORT:-5173}"
+
 cleanup() {
-  # Send SIGTERM to the vite process group so npm + node + esbuild all
-  # die. -$PGID targets every process whose pgid == VITE_PID (possible
-  # because of `set -m` above).
   if kill -0 "$VITE_PID" 2>/dev/null; then
     kill -TERM -- "-$VITE_PID" 2>/dev/null || kill -TERM "$VITE_PID" 2>/dev/null || true
-    # Give them a moment, then force-kill any stragglers.
-    sleep 1
-    kill -KILL -- "-$VITE_PID" 2>/dev/null || true
   fi
-  # Belt-and-braces: kill anything left from this repo's prototype vite or port 5173.
-  pkill -f "packages/app-prototype/node_modules/.*/vite" 2>/dev/null || true
-  lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill -TERM -- "-$SERVER_PID" 2>/dev/null || kill -TERM "$SERVER_PID" 2>/dev/null || true
+  fi
+  sleep 1
+  kill -KILL -- "-$VITE_PID" 2>/dev/null || true
+  kill -KILL -- "-$SERVER_PID" 2>/dev/null || true
+  # Belt-and-braces: anything left on our ports.
+  for port in "$APP_PORT" "$SERVER_PORT"; do
+    lsof -ti ":${port}" 2>/dev/null | xargs kill -9 2>/dev/null || true
+  done
 }
 trap cleanup EXIT INT TERM
 
-echo "==> Vite dev server starting (pid $VITE_PID) on http://localhost:5173/"
-echo "==> Streaming desk-server logs from the VM. Ctrl+C stops both."
+echo "==> desk-server starting (pid $SERVER_PID) on http://127.0.0.1:${SERVER_PORT}/"
+echo "==> Vite dev server starting (pid $VITE_PID) on http://127.0.0.1:${APP_PORT}/"
+echo "==> Ctrl+C stops both."
 
-# dev-override.sh installs its own trap that reverts the systemd override
-# when it exits. Run in the foreground (not exec) so our EXIT trap above
-# still fires and kills vite when dev-override.sh returns.
-"${SCRIPT_DIR}/dev-override.sh"
+# Wait for either child to exit, then trigger cleanup.
+wait -n "$SERVER_PID" "$VITE_PID" 2>/dev/null || true

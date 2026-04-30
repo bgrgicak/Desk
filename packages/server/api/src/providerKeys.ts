@@ -1,5 +1,5 @@
-import pg from "pg";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 
 /**
  * Resolves the provider API keys that should populate the sandbox env.
@@ -9,7 +9,7 @@ import { queries } from "@desk/db";
  * workspace → user → keys.
  */
 export async function resolveProviderKeys(
-  pool: pg.Pool,
+  pool: Pool,
 ): Promise<Record<string, string>> {
   const { rows } = await pool.query(
     "SELECT id FROM users ORDER BY created_at LIMIT 1",

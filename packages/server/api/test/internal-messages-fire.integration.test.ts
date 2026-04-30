@@ -1,12 +1,11 @@
 /**
- * End-to-end test for POST /internal/messages/fire (M6b).
+ * Integration tests for message firing, PATCH/DELETE/logs, and note versioning.
  *
- * Verifies that firing a pending scheduled message claims it atomically,
- * runs the agent in-process, finalizes the state, and emits a child
- * output message. Also covers:
- *   - idempotence: firing the same message twice only fires once
- *   - ai_note_request content produces a note-content child
- *   - auth rejection (missing/wrong token, non-loopback not testable here)
+ * Covers:
+ *   - PATCH / DELETE / GET logs on /chats/{id}/messages/{id}
+ *   - Note versioning via note-history
+ *   - POST /chats/{id}/messages deduplication
+ *   - POST /chats/{id}/messages/{id}/run (force-fire)
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -14,47 +13,27 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, seedIfEmpty, queries } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { resetInternalTokenCache } from "../src/auth/internal.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_internal_msg_fire_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(process.env.DESK_TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://desk:desk@127.0.0.1:55432/desk");
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
-let token: string;
 let chatId: string;
+let runManager: ReturnType<typeof createRunManager>;
+let dbPath: string;
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally { await admin.end(); }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "msgfire-user";
@@ -66,15 +45,8 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  const tokenPath = path.join(home, "internal-token");
-  token = "qwertyuiopasdfghjklzxcvbnm123456";
-  await fs.writeFile(tokenPath, token, { mode: 0o600 });
-  process.env.DESK_INTERNAL_TOKEN_PATH = tokenPath;
-  resetInternalTokenCache();
-
-  const runManager = createRunManager({
+  runManager = createRunManager({
     pool,
-    adapter: createMemoryAdapter(),
     execRunFn: async (runId, _a, _p, onLog) => {
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed vacation plans." });
       return { exitCode: 0 };
@@ -84,12 +56,11 @@ beforeAll(async () => {
   const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
   const broadcastUserId = userRows[0].id as string;
 
-  // Seed a chat so messages have a home.
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   chatId = generateId("chat");
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
     [chatId, wsRows[0].id, agentRows[0].id, "Fire Chat"],
   );
 
@@ -99,23 +70,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
-  resetInternalTokenCache();
-  delete process.env.DESK_INTERNAL_TOKEN_PATH;
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, [testDbName]);
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally { await admin.end(); }
 });
 
-function postInternal(pathStr: string, body: unknown, bearer: string | null): Promise<{ status: number; body: unknown }> {
+function postJson(pathStr: string, body: unknown, bearer: string | null): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (bearer !== null) headers.Authorization = `Bearer ${bearer}`;
@@ -141,94 +105,11 @@ async function insertPendingMessage(content: unknown): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
-     VALUES ($1, $2, 'system', $3, 'pending', now() + interval '1 hour')`,
+     VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
     [id, chatId, JSON.stringify(content)],
   );
   return id;
 }
-
-describe("POST /internal/messages/fire", () => {
-  it("rejects missing token", async () => {
-    const res = await postInternal("/internal/messages/fire", { messageId: "msg_x" }, null);
-    expect(res.status).toBe(401);
-  });
-
-  it("rejects wrong token", async () => {
-    const res = await postInternal("/internal/messages/fire", { messageId: "msg_x" }, "not-the-real-token-zzzzzzzzzzzzzzz");
-    expect(res.status).toBe(401);
-  });
-
-  it("returns 400 when messageId is missing", async () => {
-    const res = await postInternal("/internal/messages/fire", {}, token);
-    expect(res.status).toBe(400);
-  });
-
-  it("fires a pending text message, runs the agent, produces an events child", async () => {
-    const messageId = await insertPendingMessage({ type: "text", text: "Summarize X." });
-
-    const res = await postInternal("/internal/messages/fire", { messageId }, token);
-    expect(res.status).toBe(200);
-    const body = res.body as { ok: boolean; fired: boolean; childIds: string[] };
-    expect(body.fired).toBe(true);
-    expect(body.childIds.length).toBe(1);
-
-    // Parent message transitioned to succeeded.
-    const parent = await queries.messages.findById(pool, messageId);
-    expect(parent?.state).toBe("succeeded");
-    expect(parent?.startedAt).toBeDefined();
-    expect(parent?.endedAt).toBeDefined();
-
-    // Child message attributed to parent, with structured events content.
-    // The fake driver in this suite emits plain text (no JSON events), so
-    // the log captures it as `unparsed` entries — still reachable via the
-    // UI's text-derivation fallback.
-    const child = await queries.messages.findById(pool, body.childIds[0]);
-    expect(child?.parentId).toBe(messageId);
-    expect(child?.role).toBe("agent");
-    const content = child!.content as {
-      type: "events";
-      log: Array<{ kind: string; line?: string }>;
-    };
-    expect(content.type).toBe("events");
-    const joined = content.log
-      .filter((e) => e.kind === "unparsed")
-      .map((e) => e.line ?? "")
-      .join("\n");
-    expect(joined).toContain("vacation plans");
-  });
-
-  it("fires an ai_note_request message, producing a note-content child", async () => {
-    const messageId = await insertPendingMessage({ type: "ai_note_request" });
-
-    const res = await postInternal("/internal/messages/fire", { messageId }, token);
-    expect(res.status).toBe(200);
-    const body = res.body as { ok: boolean; fired: boolean; childIds: string[] };
-    expect(body.fired).toBe(true);
-    expect(body.childIds.length).toBe(1);
-
-    const child = await queries.messages.findById(pool, body.childIds[0]);
-    const content = child!.content as { type: string; body?: string };
-    expect(content.type).toBe("note");
-    expect(content.body).toContain("vacation plans");
-  });
-
-  it("is idempotent — second fire on the same message is a no-op", async () => {
-    const messageId = await insertPendingMessage({ type: "text", text: "Idempotence test." });
-
-    const first = await postInternal("/internal/messages/fire", { messageId }, token);
-    expect((first.body as { fired: boolean }).fired).toBe(true);
-
-    const second = await postInternal("/internal/messages/fire", { messageId }, token);
-    expect((second.body as { fired: boolean }).fired).toBe(false);
-    expect((second.body as { childIds: string[] }).childIds.length).toBe(0);
-  });
-
-  it("no-op for a non-existent messageId (fired:false, no state change)", async () => {
-    const res = await postInternal("/internal/messages/fire", { messageId: "msg_does_not_exist_12345" }, token);
-    expect(res.status).toBe(200);
-    expect((res.body as { fired: boolean }).fired).toBe(false);
-  });
-});
 
 describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
   async function userRequest(
@@ -236,8 +117,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    // Get a user session token.
-    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
@@ -260,10 +140,8 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
   }
 
   it("PATCH updates a note message's body", async () => {
-    // Fire an ai_note_request to produce a note message.
     const requestId = await insertPendingMessage({ type: "ai_note_request" });
-    const fireRes = await postInternal("/internal/messages/fire", { messageId: requestId }, token);
-    const { childIds } = fireRes.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(requestId);
     const noteId = childIds[0];
 
     const patched = await userRequest(
@@ -282,6 +160,96 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(res.status).toBe(400);
   });
 
+  it("PATCH executeAt:null on a scheduled row clears the schedule", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Scheduled→Todo" });
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { executeAt: null });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeUndefined();
+  });
+
+  it("PATCH state:pending+executeAt:null restores a cancelled row to plain todo", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Complete→Todo" });
+    const cancel = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "cancelled" });
+    expect(cancel.status).toBe(200);
+    expect((cancel.body as { state: string }).state).toBe("cancelled");
+
+    const restore = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(restore.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeUndefined();
+    expect(row?.cron).toBeUndefined();
+  });
+
+  it("PATCH state:pending on a cancelled row with executeAt stays pending with schedule intact", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "Complete→Scheduled" });
+    const cancel = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "cancelled" });
+    expect(cancel.status).toBe(200);
+
+    const resume = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(resume.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+    expect(row?.executeAt).toBeDefined();
+  });
+
+  it("PATCH state:pending on an already-pending row is a no-op (does not 400)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "no-op pending" });
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  it("PATCH state:pending restores a succeeded row to pending (re-run)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "succeeded→todo" });
+    await pool.query(
+      `UPDATE messages SET state = 'succeeded', execute_at = NULL,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+      [mid],
+    );
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  it("PATCH state:pending restores a failed row to pending (re-run)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "failed→todo" });
+    await pool.query(
+      `UPDATE messages SET state = 'failed', execute_at = NULL,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+      [mid],
+    );
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      state: "pending",
+      executeAt: null,
+      cron: null,
+    });
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("pending");
+  });
+
+  it("PATCH state:pending on a running row is rejected", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "running guard" });
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = ?`, [mid]);
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, { state: "pending" });
+    expect(res.status).toBe(400);
+  });
+
   it("DELETE removes the message", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "delete me" });
     const res = await userRequest("DELETE", `/chats/${chatId}/messages/${mid}`);
@@ -291,7 +259,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
 
   it("GET /chats/{id}/messages/{id}/logs returns the log body after a fire", async () => {
     const mid = await insertPendingMessage({ type: "text", text: "log me" });
-    await postInternal("/internal/messages/fire", { messageId: mid }, token);
+    await runManager.fireMessage(mid);
 
     const res = await userRequest("GET", `/chats/${chatId}/messages/${mid}/logs`);
     expect(res.status).toBe(200);
@@ -304,6 +272,62 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     const res = await userRequest("GET", `/chats/${chatId}/messages/${mid}/logs`);
     expect(res.status).toBe(404);
   });
+
+  it("POST /run on a pending row dispatches the agent and the run finalizes", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "drag to active" });
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+
+    for (let i = 0; i < 50; i++) {
+      const row = await queries.messages.findById(pool, mid);
+      if (row?.state === "succeeded") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("succeeded");
+    expect(row?.startedAt).toBeDefined();
+    expect(row?.endedAt).toBeDefined();
+  });
+
+  it("POST /run re-fires a succeeded row", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "rerun me" });
+    await pool.query(
+      `UPDATE messages SET state = 'succeeded', execute_at = NULL,
+                           started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'),
+                           ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour')
+       WHERE id = ?`,
+      [mid],
+    );
+    const before = await queries.messages.findById(pool, mid);
+    const beforeStart = before?.startedAt;
+
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+
+    for (let i = 0; i < 50; i++) {
+      const row = await queries.messages.findById(pool, mid);
+      if (row?.state === "succeeded" && row.startedAt && row.startedAt !== beforeStart) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("succeeded");
+    expect(row?.startedAt).not.toBe(beforeStart);
+  });
+
+  it("POST /run on a running row is a no-op (returns the row unchanged)", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "already running" });
+    await pool.query(`UPDATE messages SET state = 'running' WHERE id = ?`, [mid]);
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row?.state).toBe("running");
+  });
+
+  it("POST /run rejects a wrong chatId with 404", async () => {
+    const mid = await insertPendingMessage({ type: "text", text: "wrong chat" });
+    const res = await userRequest("POST", `/chats/chat_does_not_exist/messages/${mid}/run`);
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("Note versioning via note-history (G6)", () => {
@@ -312,7 +336,7 @@ describe("Note versioning via note-history (G6)", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
@@ -335,10 +359,8 @@ describe("Note versioning via note-history (G6)", () => {
   }
 
   it("PATCH on a note snapshots the previous body and surfaces it via GET /note-history", async () => {
-    // Create a note-content message by firing an ai_note_request.
     const requestId = await insertPendingMessage({ type: "ai_note_request" });
-    const fireRes = await postInternal("/internal/messages/fire", { messageId: requestId }, token);
-    const { childIds } = fireRes.body as { childIds: string[] };
+    const { childIds } = await runManager.fireMessage(requestId);
     const noteId = childIds[0];
 
     const beforeHistory = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
@@ -365,20 +387,17 @@ describe("Note versioning via note-history (G6)", () => {
     const afterSecond = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
     const versionsB = (afterSecond.body as { versions: Array<{ body: string }> }).versions;
     expect(versionsB.length).toBe(2);
-    // Newest first.
     expect(versionsB[0].body).toBe("User rewrite 1.");
     expect(versionsB[1].body).toContain("vacation plans");
   });
 
   it("firing an ai_note_request snapshots the prior note before the new child lands", async () => {
-    // First fire: produces the initial note.
     const firstRequest = await insertPendingMessage({ type: "ai_note_request" });
-    const firstFire = await postInternal("/internal/messages/fire", { messageId: firstRequest }, token);
-    const firstNoteId = (firstFire.body as { childIds: string[] }).childIds[0];
+    const { childIds: firstChildIds } = await runManager.fireMessage(firstRequest);
+    const firstNoteId = firstChildIds[0];
 
-    // Second fire: should snapshot the first note before inserting the new one.
     const secondRequest = await insertPendingMessage({ type: "ai_note_request" });
-    await postInternal("/internal/messages/fire", { messageId: secondRequest }, token);
+    await runManager.fireMessage(secondRequest);
 
     const history = await userRequest(
       "GET",
@@ -396,7 +415,7 @@ describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const loginRes = await postInternal("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
@@ -428,22 +447,26 @@ describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
     );
     expect(sent.status).toBe(201);
 
-    const { rows } = await pool.query(
-      `SELECT id, role, content FROM messages WHERE chat_id = $1`,
+    const { rows: rawRows } = await pool.query(
+      `SELECT id, role, content FROM messages WHERE chat_id = ?`,
       [chatId],
     );
+    // SQLite stores JSON as TEXT; parse at the test boundary.
+    const rows = rawRows.map((r) => ({
+      ...r,
+      content: JSON.parse(r.content as string) as { type?: string; text?: string; userMessageId?: string },
+    }));
 
-    const textRows = rows.filter((r: { content: { type?: string; text?: string } }) =>
+    const textRows = rows.filter((r) =>
       r.content?.type === "text" && r.content?.text === uniqueText,
     );
     expect(textRows.length).toBe(1);
     expect(textRows[0].role).toBe("user");
 
-    const triggerRows = rows.filter((r: { content: { type?: string } }) => r.content?.type === "agent_turn");
-    const ourTrigger = triggerRows.find((r: { content: { userMessageId?: string } }) =>
+    const triggerRows = rows.filter((r) => r.content?.type === "agent_turn");
+    const ourTrigger = triggerRows.find((r) =>
       r.content.userMessageId === textRows[0].id,
     );
     expect(ourTrigger).toBeDefined();
   });
-
 });

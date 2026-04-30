@@ -1,10 +1,12 @@
-import pg from "pg";
-import { generateId, PROVIDER_KEY_VARS, TOOLS, type ToolName } from "@desk/shared";
+import { type Pool, transact } from "./pool.js";
+import { generateId, PROVIDER_KEY_VARS } from "@agent-desk/shared";
 import { hashPassword } from "./passwords.js";
 import * as userSettings from "./queries/userSettings.js";
 
-export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
-  const { rows } = await pool.query("SELECT count(*)::int AS c FROM users");
+export async function seedIfEmpty(pool: Pool): Promise<void> {
+  const { rows } = await pool.query<{ c: number }>(
+    "SELECT count(*) AS c FROM users",
+  );
   if (rows[0].c > 0) return;
 
   const username = process.env.DESK_SEED_USERNAME ?? "desk";
@@ -14,51 +16,41 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
   const agentId = generateId("agent");
   const workspaceId = generateId("workspace");
 
-  const toolNames = Object.keys(TOOLS) as ToolName[];
+  // hashPassword is the only async work — done before the tx so the
+  // tx callback stays synchronous.
   const passwordHash = await hashPassword(password);
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    await client.query(
+  transact(pool, (client) => {
+    client.querySync(
       `INSERT INTO users (id, username, password_hash, email)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES (?, ?, ?, ?)`,
       [userId, username, passwordHash, `${username}@desk.local`],
     );
 
-    await client.query(
-      `INSERT INTO agents (id, user_id, name, instructions, model, tool_allowlist)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+    client.querySync(
+      `INSERT INTO agents (id, user_id, name, instructions, model)
+       VALUES (?, ?, ?, ?, ?)`,
       [
         agentId,
         userId,
         "Desk",
         "You are Desk, a helpful AI assistant.",
-        "anthropic/claude-sonnet-4-20250514",
-        JSON.stringify(toolNames),
+        "opencode/big-pickle",
       ],
     );
 
-    await client.query(
+    client.querySync(
       `INSERT INTO workspaces (id, user_id, name, path)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES (?, ?, ?, ?)`,
       [workspaceId, userId, "Desk", "desk"],
     );
 
-    await client.query(
+    client.querySync(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
-       VALUES ($1, $2)`,
+       VALUES (?, ?)`,
       [workspaceId, agentId],
     );
-
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**
@@ -67,7 +59,7 @@ export async function seedIfEmpty(pool: pg.Pool): Promise<void> {
  *
  * Gated by DESK_DEV=1 so prod can never leak host env into the DB.
  */
-export async function seedProviderKeysFromEnv(pool: pg.Pool): Promise<void> {
+export async function seedProviderKeysFromEnv(pool: Pool): Promise<void> {
   if (process.env.DESK_DEV !== "1") return;
 
   const envKeys: Record<string, string> = {};

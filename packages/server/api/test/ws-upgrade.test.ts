@@ -1,18 +1,33 @@
-import { describe, it, expect, afterEach, afterAll } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
 import * as net from "node:net";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, queries } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections, connectionCount, broadcast } from "../src/ws/registry.js";
 
-// Minimal stubs for AppOptions — we only need the WS upgrade path
-function stubOpts(): AppOptions {
+let pool: Pool;
+let home: string;
+let userId: string;
+let dbPath: string;
+
+function appOpts(): AppOptions {
   return {
-    pool: {} as any,
-    storage: {} as any,
-    runManager: { enqueueRun: async () => ({}), cancelRun: async () => {}, cancelJob: async () => {}, adapter: {} } as any,
-    broadcastUserId: "usr_wstest",
+    pool,
+    storage: { pool, home },
+    runManager: createRunManager({
+      pool,
+      execRunFn: async () => ({ exitCode: 0 }),
+    }),
+    broadcastUserId: userId,
   };
 }
 
@@ -21,19 +36,11 @@ function getServerPort(server: http.Server): number {
   return addr.port;
 }
 
-afterEach(() => {
-  clearSessions();
-  clearConnections();
-});
-
 let servers: http.Server[] = [];
-afterAll(() => {
-  for (const s of servers) s.close();
-});
 
 function startServer(): Promise<http.Server> {
   return new Promise((resolve) => {
-    const server = createApp(stubOpts());
+    const server = createApp(appOpts());
     server.listen(0, () => {
       servers.push(server);
       resolve(server);
@@ -46,13 +53,13 @@ function startServer(): Promise<http.Server> {
  */
 function rawUpgrade(
   port: number,
-  path: string,
+  reqPath: string,
 ): Promise<{ response: string; socket: net.Socket }> {
   return new Promise((resolve, reject) => {
     const key = crypto.randomBytes(16).toString("base64");
     const socket = net.createConnection({ port, host: "127.0.0.1" }, () => {
       socket.write(
-        `GET ${path} HTTP/1.1\r\n` +
+        `GET ${reqPath} HTTP/1.1\r\n` +
         `Host: 127.0.0.1:${port}\r\n` +
         `Upgrade: websocket\r\n` +
         `Connection: Upgrade\r\n` +
@@ -73,6 +80,38 @@ function rawUpgrade(
     setTimeout(() => reject(new Error("Upgrade timeout")), 3000);
   });
 }
+
+beforeAll(async () => {
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-upgrade-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
+  await runMigrations(pool);
+
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-upgrade-"));
+  await ensureLayout(home);
+  process.env.DESK_HOME = home;
+
+  userId = generateId("user");
+  await queries.users.insert(pool, {
+    id: userId,
+    username: "ws-upgrade-test",
+    passwordHash: "$2b$10$placeholder",
+    email: "ws-upgrade@example.com",
+  });
+});
+
+afterEach(async () => {
+  await clearSessions(pool);
+  clearConnections();
+});
+
+afterAll(async () => {
+  for (const s of servers) s.close();
+  if (pool) await pool.end();
+  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+  delete process.env.DESK_HOME;
+});
 
 describe("WebSocket upgrade", () => {
   it("rejects upgrade without token", async () => {
@@ -99,7 +138,7 @@ describe("WebSocket upgrade", () => {
     const server = await startServer();
     const port = getServerPort(server);
 
-    const token = issueSession("usr_wstest");
+    const token = await issueSession(pool, userId);
     const { response, socket } = await rawUpgrade(port, `/ws?token=${token}`);
 
     expect(response).toContain("101 Switching Protocols");
@@ -116,9 +155,8 @@ describe("WebSocket upgrade", () => {
   it("receives a broadcast event after upgrade", async () => {
     const server = await startServer();
     const port = getServerPort(server);
-    const userId = "usr_wstest";
 
-    const token = issueSession(userId);
+    const token = await issueSession(pool, userId);
     const { response, socket } = await rawUpgrade(port, `/ws?token=${token}`);
 
     expect(response).toContain("101 Switching Protocols");
@@ -176,7 +214,7 @@ describe("WebSocket upgrade", () => {
     const server = await startServer();
     const port = getServerPort(server);
 
-    const token = issueSession("usr_wstest");
+    const token = await issueSession(pool, userId);
 
     await expect(rawUpgrade(port, `/other?token=${token}`)).rejects.toThrow();
   });

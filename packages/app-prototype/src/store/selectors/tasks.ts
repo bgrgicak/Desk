@@ -18,6 +18,7 @@ function colorFor(id: string): Task["color"] {
 }
 
 function nameFor(m: ServerMessage): string {
+  if (m.title && m.title.trim().length > 0) return m.title;
   if (m.content.type === "text") {
     const first = m.content.text.split("\n")[0].trim();
     return first.length > 0 ? first : "(empty)";
@@ -26,20 +27,11 @@ function nameFor(m: ServerMessage): string {
   return m.content.type;
 }
 
-/**
- * Map a server `Message.state` onto the trunk-derived `Task['status']`.
- * Server has no `complete` state; `succeeded` and `cancelled` both fold
- * into `complete`, paused/pending fold into `scheduled`. `todo` is a
- * UI-only column reachable through the BoardView → status PATCH.
- */
 function statusFor(m: ServerMessage): Task["status"] {
   if (m.state === "running") return "active";
-  if (m.state === "succeeded") return "complete";
-  if (m.state === "failed") return "complete"; // surface failure via statusText
-  if (m.state === "cancelled") return "complete";
-  if (m.state === "paused") return "scheduled";
-  if (m.state === "pending") return "scheduled";
-  return "scheduled";
+  if (m.state === "succeeded" || m.state === "failed" || m.state === "cancelled") return "complete";
+  if (m.executeAt || m.cron) return "scheduled";
+  return "todo";
 }
 
 function statusTextFor(m: ServerMessage): string {
@@ -92,7 +84,7 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
       id: `${m.id}-upcoming`,
       startedAt: when,
       endedAt: when,
-      status: "active",
+      status: "scheduled",
     });
   }
 
@@ -107,7 +99,7 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
     agentName: agent?.name ?? "Agent",
     status,
     statusText: statusTextFor(m),
-    assigneeId: agent?.id,
+    assigneeId: m.assigneeId ?? agent?.id,
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,

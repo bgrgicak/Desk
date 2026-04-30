@@ -3,36 +3,24 @@
   "private": true,
   "workspaces": [
     "packages/server/*",
-    "packages/app-prototype"
+    "packages/app-prototype",
+    "packages/agent-desk-cli"
   ],
   "scripts": {
-    "vm:up": "packages/server/setup/scripts/vm.sh up",
-    "vm:halt": "packages/server/setup/scripts/vm.sh halt",
-    "vm:destroy": "packages/server/setup/scripts/vm.sh destroy",
-    "vm:reload": "packages/server/setup/scripts/vm.sh reload",
-    "vm:provision": "packages/server/setup/scripts/vm.sh provision",
-    "vm:ssh": "packages/server/setup/scripts/vm.sh ssh",
-    "vm:ssh-desk": "packages/server/setup/scripts/vm.sh ssh-desk",
-    "vm:status": "packages/server/setup/scripts/vm.sh status",
-    "vm:snapshot": "packages/server/setup/scripts/vm.sh snapshot",
-    "vm:restore": "packages/server/setup/scripts/vm.sh restore",
-    "vm:reset": "packages/server/setup/scripts/vm.sh reset",
+    "preinstall": "node -e \"const want='22';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
     "dev": "packages/server/setup/scripts/dev.sh",
-    "dev:server": "packages/server/setup/scripts/dev-override.sh",
     "dev:app": "npm -w app run dev",
-    "dev:revert": "packages/server/setup/scripts/vm.sh exec \"sudo rm -f /etc/systemd/system/desk-server.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart desk-server\"",
-    "start": "packages/server/setup/scripts/vm.sh exec sudo systemctl start desk-server",
-    "stop": "packages/server/setup/scripts/vm.sh exec sudo systemctl stop desk-server",
-    "logs": "packages/server/setup/scripts/vm.sh exec journalctl -fu desk-server",
     "build": "nx run-many -t build",
-    "openapi": "npm run openapi:dump --workspace=@desk/api",
+    "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
     "typecheck": "nx run-many -t typecheck",
     "test": "vitest run --passWithNoTests",
-    "test:host": "vitest run packages/server/api/test/ && npm -w app test --if-present",
-    "test:vm": "packages/server/setup/scripts/vm.sh exec \"cd /desk && set -a && . ./.env && set +a && DATABASE_URL=postgresql://desk:desk@127.0.0.1:5432/desk sg docker -c 'env ANTHROPIC_API_KEY=\\$ANTHROPIC_API_KEY DATABASE_URL=\\$DATABASE_URL npx vitest run --passWithNoTests --exclude packages/server/api/test'\"",
-    "test:e2e": "vitest run --config packages/server/setup/vitest.e2e.config.ts"
+    "test:host": "vitest run --passWithNoTests",
+    "test:e2e": "npm -w app run test:e2e"
   },
   "devDependencies": {
     "nx": "22.6.5"
+  },
+  "engines": {
+    "node": "^22.0.0"
   }
 }

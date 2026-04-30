@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // started by globalSetup, because Playwright's built-in webServer starts
 // BEFORE globalSetup — which means the DESK_API_URL env var the Vite
 // proxy config reads would be unset and it would proxy to the developer's
-// local :3013. See e2e/fixtures/global-server.ts.
+// local :3000. See e2e/fixtures/global-server.ts.
 const VITE_URL = "http://127.0.0.1:5179";
 
 export default defineConfig({

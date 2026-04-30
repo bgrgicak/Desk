@@ -1,14 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import pg from "pg";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 import {
   workspaceRootPath,
   loadGitignoreFrame,
   isGitIgnored,
   type IgnoreFrame,
   type StorageContext,
-} from "@desk/storage";
+} from "@agent-desk/storage";
 
 export interface SearchResult {
   type: "file" | "chat" | "message";
@@ -70,7 +70,7 @@ async function walkFiles(
  * `showHidden` flips the library scope to include hidden files too.
  */
 export async function search(
-  pool: pg.Pool,
+  pool: Pool,
   storage: StorageContext,
   query: string,
   scope: "artifacts" | "chats" | "library" | "all" = "all",
@@ -127,10 +127,13 @@ export async function search(
 
   if (scope === "all" || scope === "chats") {
     const pattern = `%${query}%`;
+    // SQLite's LIKE is case-insensitive for ASCII by default — sufficient
+    // for the latin-script titles users create. Bind params in textual
+    // order: workspaceId first when present, then the pattern.
     const sql = workspaceId
-      ? `SELECT id, title FROM chats WHERE workspace_id = $2 AND title ILIKE $1 ORDER BY updated_at DESC LIMIT 20`
-      : `SELECT id, title FROM chats WHERE title ILIKE $1 ORDER BY updated_at DESC LIMIT 20`;
-    const params = workspaceId ? [pattern, workspaceId] : [pattern];
+      ? `SELECT id, title FROM chats WHERE workspace_id = ? AND title LIKE ? ORDER BY updated_at DESC LIMIT 20`
+      : `SELECT id, title FROM chats WHERE title LIKE ? ORDER BY updated_at DESC LIMIT 20`;
+    const params = workspaceId ? [workspaceId, pattern] : [pattern];
     const { rows } = await pool.query(sql, params);
     for (const row of rows) {
       results.push({ type: "chat", id: row.id as string, title: row.title as string });

@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
@@ -25,13 +25,18 @@ function dockerAvailable(): boolean {
   }
 }
 
-// `opencode models` only emits providers that have a real key configured,
-// so without ANTHROPIC_API_KEY the listing comes back empty and the
-// "must contain an anthropic model" assertion can't be true. Mirror the
-// gating from opencode.test.ts so this skips cleanly in keyless envs
-// (CI without the secret) and runs everywhere it can.
-const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
-const SKIP = !dockerAvailable() || !HAS_KEY;
+// Free opencode models are always present — no API key required.
+// Gate only on Docker + the sandbox image.
+function sandboxImageAvailable(): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
@@ -80,13 +85,36 @@ describeIf("sandbox model listing (real Docker)", () => {
       expect(m.id.length).toBeGreaterThan(m.provider.length + 1);
     }
 
-    // Anthropic must be present — it's the provider Desk ships with.
-    expect(all.some((m) => m.provider === "anthropic")).toBe(true);
+    // Free opencode models must always be present — no API key required.
+    expect(all.some((m) => m.provider === "opencode")).toBe(true);
 
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, { provider: "anthropic" });
+    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, { provider: "opencode" });
     expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
+    expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
 
     await stopSandbox(handle);
+  }, 60_000);
+
+  // Paid-provider tests — skipped when the corresponding key is absent.
+  const itIfAnthropic = process.env.ANTHROPIC_API_KEY ? it : it.skip;
+  itIfAnthropic("listModels filters to anthropic when key is present", async () => {
+    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
+      provider: "anthropic",
+      providerKeys: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
+    });
+    expect(filtered.length).toBeGreaterThan(0);
+    expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
+    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
+  }, 60_000);
+
+  const itIfOpenAI = process.env.OPENAI_API_KEY ? it : it.skip;
+  itIfOpenAI("listModels filters to openai when key is present", async () => {
+    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
+      provider: "openai",
+      providerKeys: { OPENAI_API_KEY: process.env.OPENAI_API_KEY! },
+    });
+    expect(filtered.length).toBeGreaterThan(0);
+    expect(filtered.every((m) => m.provider === "openai")).toBe(true);
+    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
   }, 60_000);
 });

@@ -1,5 +1,5 @@
 import type { ContextItem, Folder } from "@/data/ui-types";
-import type { ServerFile, ServerFolder } from "../types";
+import type { ServerAgent, ServerFile, ServerFolder } from "../types";
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -27,19 +27,31 @@ function folderIdForFile(filePath: string): string | null {
 /**
  * Folder hierarchy is derived from the server's `ServerFolder[]`
  * directly; the workspaceId is a no-op in v1 but kept in the signature
- * for forward compatibility.
+ * for forward compatibility. `agents`, when provided, lets the selector
+ * resolve a display name for the originating agent.
  */
-export function toContextItem(f: ServerFile, _workspaceId: string): ContextItem {
+export function toContextItem(
+  f: ServerFile,
+  _workspaceId: string,
+  agents: ServerAgent[] = [],
+): ContextItem {
+  const creatorAgent = f.creatorAgentId
+    ? agents.find((a) => a.id === f.creatorAgentId)
+    : undefined;
   return {
     id: f.path,
     type: inferType(f.mime),
-    name: f.name,
+    // Prefer the server's display label when present (e.g. "Chat notes")
+    // so notes don't surface the messageId-based filename as their title.
+    name: f.label ?? f.name,
     content: "",
     folder: undefined,
     folderId: folderIdForFile(f.path),
     addedAt: new Date(f.createdAt),
     usedBy: [],
-    uploadedBy: "user",
+    uploadedBy: f.creatorAgentId ? "ai" : "user",
+    agentName: creatorAgent?.name,
+    pinned: f.pinned ?? false,
     lastAccessed: undefined,
     relatedArtifactIds: [],
     fileSize: humanSize(f.size),

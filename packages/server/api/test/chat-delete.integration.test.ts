@@ -1,7 +1,7 @@
 /**
  * Integration tests for `DELETE /chats/:id` (feature-gap-matrix.md §4.2.4).
  *
- * Real Postgres, real filesystem, real scheduler adapter — follows the harness
+ * Real Postgres, real filesystem — follows the harness
  * used by workspace-scoped-listing.integration.test.ts and multi-ws.test.ts.
  * Seeds one user with two chats (plus a second tenant) and exercises the
  * delete route end-to-end: DB rows vanish, on-disk directories land in
@@ -15,42 +15,20 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import pg from "pg";
-import { runMigrations, queries, hashPassword } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
-import { createMemoryAdapter, createRunManager } from "@desk/scheduler";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, queries, hashPassword } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const workerId = process.env.VITEST_WORKER_ID ?? "0";
-const testDbName = `desk_chat_delete_${workerId}`;
-
-function adminConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = "/postgres";
-  return url.toString();
-}
-function testConn(): string {
-  const url = new URL(
-    process.env.DESK_TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      "postgresql://desk:desk@127.0.0.1:55432/desk",
-  );
-  url.pathname = `/${testDbName}`;
-  return url.toString();
-}
-
-let pool: pg.Pool;
+let pool: Pool;
 let server: http.Server;
 let port: number;
 let home: string;
-let adapter: ReturnType<typeof createMemoryAdapter>;
+let dbPath: string;
 let alpha: SeededUser;
 let beta: SeededUser;
 
@@ -187,10 +165,9 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     name: `agent-${suffix}`,
     instructions: "",
     model: "anthropic/claude-sonnet-4-5",
-    toolAllowlist: [],
   });
   await pool.query(
-    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
     [workspaceId, agentId],
   );
 
@@ -207,7 +184,6 @@ async function createChatWithPayload(
   chatId: string;
   userMessageId: string;
   scheduledMessageId: string;
-  atJobId: string;
   attachmentRel: string;
 }> {
   const chatId = generateId("chat");
@@ -228,12 +204,8 @@ async function createChatWithPayload(
     content: { type: "text", text: "hello" },
   });
 
-  // Insert a pending scheduled message with a real at-job in the scheduler
-  // adapter. Deleting the chat must cancel the at-job via the adapter.
-  const atJobId = await adapter.scheduleAt(
-    `echo fire ${chatId}`,
-    "now + 1 hour",
-  );
+  // Insert a pending scheduled message. Deleting the chat cascades messages,
+  // so the poll loop will never pick this up after deletion.
   const scheduledMessageId = generateId("message");
   await queries.messages.insert(pool, {
     id: scheduledMessageId,
@@ -242,7 +214,6 @@ async function createChatWithPayload(
     content: { type: "text", text: "scheduled" },
     state: "pending",
     executeAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    schedulerRef: { kind: "at", id: atJobId },
   });
 
   // Seed an on-disk attachment + a log, both under the chat's hidden tree.
@@ -255,34 +226,21 @@ async function createChatWithPayload(
   await fs.writeFile(path.join(logsDir, `${scheduledMessageId}.log`), "stdout\tready\n");
 
   const attachmentRel = `.chats/${chatId}/attachments/hello.txt`;
-  return { chatId, userMessageId, scheduledMessageId, atJobId, attachmentRel };
+  return { chatId, userMessageId, scheduledMessageId, attachmentRel };
 }
 
 beforeAll(async () => {
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-    await admin.query(`CREATE DATABASE ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
-
-  pool = new pg.Pool({ connectionString: testConn() });
-  try { await pool.query("CREATE EXTENSION IF NOT EXISTS pg_trgm"); } catch { /* ok */ }
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-delete-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-delete-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  adapter = createMemoryAdapter();
   const runManager = createRunManager({
     pool,
-    adapter,
     execRunFn: async () => ({ exitCode: 0 }),
   });
 
@@ -304,34 +262,21 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  clearSessions();
+  await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.DESK_HOME;
-
-  const admin = new pg.Pool({ connectionString: adminConn() });
-  try {
-    await admin.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`,
-      [testDbName],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${testDbName}`);
-  } finally {
-    await admin.end();
-  }
 });
 
 describe("DELETE /chats/:id", () => {
-  it("deletes the chat, cascades messages, trashes on-disk dirs, and cancels scheduler refs", async () => {
-    const { chatId, scheduledMessageId, atJobId } = await createChatWithPayload(
+  it("deletes the chat, cascades messages, and trashes on-disk dirs", async () => {
+    const { chatId, scheduledMessageId } = await createChatWithPayload(
       alpha,
       "happy-path chat",
     );
-
-    // Sanity: adapter knows about the at-job and the chat + messages exist.
-    expect((await adapter.listAt()).some((j) => j.id === atJobId)).toBe(true);
 
     const ws = await openWs(alpha.token);
 
@@ -346,22 +291,18 @@ describe("DELETE /chats/:id", () => {
     expect(msgs.status).toBe(404);
 
     const { rows: chatRows } = await pool.query(
-      "SELECT id FROM chats WHERE id = $1",
+      "SELECT id FROM chats WHERE id = ?",
       [chatId],
     );
     expect(chatRows).toHaveLength(0);
     const { rows: msgRows } = await pool.query(
-      "SELECT id FROM messages WHERE chat_id = $1",
+      "SELECT id FROM messages WHERE chat_id = ?",
       [chatId],
     );
     expect(msgRows).toHaveLength(0);
 
-    // Scheduler at-job cancelled.
-    expect((await adapter.listAt()).some((j) => j.id === atJobId)).toBe(false);
-
-    // The scheduled message row is gone (FK cascade), which on its own
-    // proves the cancel path ran — a leaked at-job would still be in the
-    // adapter list above.
+    // Scheduled message row is gone (FK cascade) — the poll loop will never
+    // pick it up again since the row no longer exists.
     const row = await queries.messages.findById(pool, scheduledMessageId);
     expect(row).toBeNull();
 
@@ -392,7 +333,6 @@ describe("DELETE /chats/:id", () => {
 
   it("cross-tenant: 404 when user X deletes user Y's chat; Y's chat untouched", async () => {
     const { chatId: betaChatId } = await createChatWithPayload(beta, "beta's chat");
-
     const res = await request("DELETE", `/chats/${betaChatId}`, alpha.token);
     expect(res.status).toBe(404);
 
@@ -426,7 +366,7 @@ describe("DELETE /chats/:id", () => {
       icon: "",
     });
     await pool.query(
-      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES ($1, $2)`,
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
       [wsId, alpha.agentId],
     );
 
@@ -448,9 +388,9 @@ describe("DELETE /chats/:id", () => {
     const del = await request("DELETE", `/workspaces/${wsId}`, alpha.token);
     expect(del.status).toBe(200);
 
-    const { rows: chatRows } = await pool.query("SELECT id FROM chats WHERE id = $1", [chatId]);
+    const { rows: chatRows } = await pool.query("SELECT id FROM chats WHERE id = ?", [chatId]);
     expect(chatRows).toHaveLength(0);
-    const { rows: msgRows } = await pool.query("SELECT id FROM messages WHERE id = $1", [messageId]);
+    const { rows: msgRows } = await pool.query("SELECT id FROM messages WHERE id = ?", [messageId]);
     expect(msgRows).toHaveLength(0);
   });
 });

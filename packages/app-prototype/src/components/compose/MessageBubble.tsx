@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, StickyNote, Paperclip } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
+import { MarkdownContent } from '@/components/MarkdownContent'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -11,6 +12,10 @@ interface MessageBubbleProps {
   fallbackModel?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
+  /** When false, internal tool-call/stderr entries inside `events` content
+   *  are stripped — only the agent's text reply surfaces. ChatView already
+   *  filters out fully-tool `events` rows at the list level. */
+  developerMode?: boolean
 }
 
 export function MessageBubble({
@@ -19,6 +24,7 @@ export function MessageBubble({
   isNew = false,
   fallbackModel,
   onAttachmentClick,
+  developerMode = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = message.model ?? fallbackModel ?? 'Agent'
@@ -26,6 +32,9 @@ export function MessageBubble({
   const hasAttachments = !!message.attachments && message.attachments.length > 0
 
   if (isUser) {
+    if (message.kind === 'task_run' && message.content.type === 'text') {
+      return <TaskRunChip prompt={message.content.text} />
+    }
     return (
       <div className="flex flex-col items-end gap-1.5">
         {hasAttachments && (
@@ -72,47 +81,34 @@ export function MessageBubble({
           ))}
         </div>
       )}
-      <MessageContentView content={message.content} />
+      <MessageContentView content={message.content} developerMode={developerMode} />
     </div>
   )
 }
 
-function MessageContentView({ content }: { content: MessageContent }) {
+function MessageContentView({ content, developerMode }: { content: MessageContent; developerMode: boolean }) {
   switch (content.type) {
     case 'text':
-      return (
-        <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-          {content.text}
-        </p>
-      )
-    case 'note':
-      return <NoteBlock body={content.body} />
+      return <MarkdownContent text={content.text} />
     case 'artifactRef':
       return <ArtifactRefRow path={content.path} name={content.name} />
     case 'events':
-      return <EventsView log={content.log} />
+      return <EventsView log={content.log} developerMode={developerMode} />
     case 'toolCall':
+      // Filtered upstream when developerMode is false; defensive guard here.
+      if (!developerMode) return null
       return <ToolCallChip toolName={content.toolName} args={content.args} />
     case 'toolResult':
+      if (!developerMode) return null
       return <ToolResultChip toolName={content.toolName} result={content.result} />
+    case 'note':
     case 'ai_note_request':
     case 'agent_turn':
-      // System rows — shouldn't reach here (filtered upstream), but render
-      // nothing instead of throwing so a stray row doesn't blank the chat.
+      // Filtered out of the bubble stream upstream — notes surface in the
+      // Artifacts panel; ai_note_request / agent_turn drive the typing
+      // indicator. Render nothing if a stray row reaches this layer.
       return null
   }
-}
-
-function NoteBlock({ body }: { body: string }) {
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3 text-sm leading-relaxed whitespace-pre-wrap">
-      <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground font-medium">
-        <StickyNote className="h-3 w-3" />
-        Note
-      </div>
-      {body}
-    </div>
-  )
 }
 
 function ArtifactRefRow({ path, name }: { path: string; name?: string }) {
@@ -158,6 +154,15 @@ function AttachmentCard({
   )
 }
 
+function TaskRunChip({ prompt }: { prompt: string }) {
+  const preview = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt
+  return (
+    <CollapsibleChip icon={<ListTodo className="h-3 w-3" />} label={`task run: ${preview}`}>
+      <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">{prompt}</pre>
+    </CollapsibleChip>
+  )
+}
+
 function ToolCallChip({ toolName, args }: { toolName: string; args: Record<string, unknown> }) {
   return (
     <CollapsibleChip icon={<Wrench className="h-3 w-3" />} label={`called ${toolName}`}>
@@ -179,11 +184,13 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log }: { log: AgentLogEntry[] }) {
+function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMode: boolean }) {
   // Render entries in log order (old → new). Consecutive text deltas and
   // consecutive stderr lines fold into single chunks so streaming chat
   // doesn't fragment into dozens of tiny paragraphs, but tool calls /
   // results still appear between the text that preceded and followed them.
+  // When developer mode is off, only text chunks survive — tool events and
+  // stderr are dropped so the user sees just the agent's reply.
   type Chunk =
     | { kind: 'text'; text: string }
     | { kind: 'event'; entry: AgentLogEntry }
@@ -209,11 +216,11 @@ function EventsView({ log }: { log: AgentLogEntry[] }) {
       if (entry.event.type === 'text') {
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
-      } else {
+      } else if (developerMode) {
         chunks.push({ kind: 'event', entry })
       }
     } else if (entry.kind === 'stderr') {
-      appendStderr(entry.line)
+      if (developerMode) appendStderr(entry.line)
     } else if (!sawEvent) {
       // Unparsed stdout from drivers that don't emit JSON events (fake
       // driver, plain-text tests) — treat as text-like output.
@@ -226,11 +233,7 @@ function EventsView({ log }: { log: AgentLogEntry[] }) {
       {chunks.map((c, i) => {
         if (c.kind === 'text') {
           if (!c.text.trim()) return null
-          return (
-            <p key={i} className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-              {c.text.trim()}
-            </p>
-          )
+          return <MarkdownContent key={i} text={c.text.trim()} />
         }
         if (c.kind === 'event') {
           return <EventRow key={i} entry={c.entry} />

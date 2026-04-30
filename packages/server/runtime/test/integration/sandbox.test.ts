@@ -7,8 +7,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 import { createOrReuse, stopSandbox, ensureImage, dockerSocketPath } from "../../src/docker.js";
+import { execInSandbox } from "../../src/sandboxExec.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
 
 function dockerAvailable(): boolean {
@@ -20,7 +21,16 @@ function dockerAvailable(): boolean {
   }
 }
 
-const SKIP = !dockerAvailable();
+function sandboxImageAvailable(): boolean {
+  try {
+    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
@@ -186,6 +196,36 @@ describeIf("sandbox integration", () => {
       if (prev === undefined) delete process.env[envKey];
       else process.env[envKey] = prev;
     }
+  });
+
+  it("execInSandbox refreshes provider keys on a reused container", async () => {
+    // Regression: a sandbox first created without keys (or with stale keys)
+    // used to keep that env until tear-down, so opencode would hit Anthropic
+    // with an empty/old token even after the user saved a new one. The fix
+    // injects providerKeys at each exec; this test pins that behaviour.
+    const envKey = "ANTHROPIC_API_KEY";
+    const stale = "sk-stale-original";
+    const fresh = "sk-fresh-rotated";
+
+    // Recreate the container so it starts with the "stale" value baked in.
+    try {
+      const Docker = (await import("dockerode")).default;
+      const docker = new Docker({ socketPath: dockerSocketPath() });
+      const old = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
+      await old.stop({ t: 2 }).catch(() => {});
+      await old.remove({ force: true }).catch(() => {});
+    } catch { /* ok */ }
+
+    await createOrReuse(testWorkspaceId, testWorkspaceSlug, home, { [envKey]: stale });
+
+    const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["sh", "-c", `echo "$${envKey}"`],
+      providerKeys: { [envKey]: fresh },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(fresh);
+    expect(result.stdout).not.toContain(stale);
   });
 
   it("stopSandbox stops the container", async () => {
