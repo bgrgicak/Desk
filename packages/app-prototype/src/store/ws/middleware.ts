@@ -216,6 +216,16 @@ export function applyEventToCache(
     case "library.changed": {
       dispatch(api.util.invalidateTags([{ type: "LibraryFile", id: "LIST" }]));
       dispatch(bumpFileChangeCounter(event.payload.path));
+      // Renames retarget chat-attachment symlinks (Files panel) and
+      // rewrite message-attachment paths (chat bubbles). The server
+      // tells us which chats were touched so we only refetch those.
+      // Per-chat ChatArtifact tags need exact-match invalidation —
+      // RTK Query's type-only invalidation wouldn't reach `CHAT_<id>`.
+      for (const chatId of event.payload.affectedChatIds ?? []) {
+        dispatch(
+          api.util.invalidateTags([{ type: "ChatArtifact", id: `CHAT_${chatId}` }]),
+        );
+      }
       break;
     }
     case "workspace.synced": {

@@ -71,6 +71,10 @@ export const LibraryChangedEventSchema = z.object({
     /** Workspace-relative path of the file that changed. */
     path: z.string(),
     op: z.enum(["added", "removed", "updated", "moved"]),
+    /** Chats whose attachment-symlinks or message-attachment refs were
+     * retargeted by this change. Set on `op: "moved"` so the client can
+     * invalidate per-chat caches (Files panel, etc.); other ops omit it. */
+    affectedChatIds: z.array(z.string()).optional(),
   }),
 });
 

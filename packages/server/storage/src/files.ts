@@ -121,7 +121,7 @@ function rejectHiddenName(name: string): void {
 }
 
 /** Generates a non-colliding filename inside `dir` for a desired `name`. */
-async function uniqueDestPath(dir: string, name: string): Promise<string> {
+export async function uniqueDestPath(dir: string, name: string): Promise<string> {
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
   let candidate = name;

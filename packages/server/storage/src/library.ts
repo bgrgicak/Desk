@@ -13,6 +13,7 @@ import {
 } from "./layout.js";
 import {
   uploadArtifact,
+  uniqueDestPath,
   validateLibrarySubpath,
   type FileRef,
   type StorageContext,
@@ -288,7 +289,7 @@ export async function moveLibraryEntry(
   slug: string,
   fromRel: string,
   toRel: string,
-): Promise<{ kind: "file" | "folder"; path: string }> {
+): Promise<{ kind: "file" | "folder"; path: string; affectedChatIds: string[] }> {
   // Both sides must be safe, non-hidden workspace-root-relative paths.
   validateLibrarySubpath(fromRel);
   const toSub = validateLibrarySubpath(toRel);
@@ -324,12 +325,15 @@ export async function moveLibraryEntry(
   // in files.ts) write absolute targets, so a rename leaves them
   // dangling; this walk rewrites the link to the new absolute path.
   // Best-effort: any failure is swallowed so the rename itself stays
-  // committed.
-  await retargetChatAttachmentSymlinks(ctx, slug, fromAbs, toAbs).catch(() => {});
+  // committed. The returned chat-id set lets the caller invalidate
+  // those chats' Files-panel caches.
+  const affected = await retargetChatAttachmentSymlinks(ctx, slug, fromAbs, toAbs)
+    .catch(() => new Set<string>());
 
   return {
     kind: fromStat.isDirectory() ? "folder" : "file",
     path: toRel,
+    affectedChatIds: Array.from(affected),
   };
 }
 
@@ -345,10 +349,11 @@ async function retargetChatAttachmentSymlinks(
   slug: string,
   fromAbs: string,
   toAbs: string,
-): Promise<void> {
+): Promise<Set<string>> {
   const chatsRoot = chatsDir(ctx.home, slug);
   const chatIds = await fs.readdir(chatsRoot).catch(() => [] as string[]);
   const fromWithSep = fromAbs.endsWith(path.sep) ? fromAbs : fromAbs + path.sep;
+  const affected = new Set<string>();
 
   for (const chatId of chatIds) {
     const attDir = path.join(chatsRoot, chatId, "attachments");
@@ -375,15 +380,33 @@ async function retargetChatAttachmentSymlinks(
       }
       if (newTarget === null) continue;
 
+      // Track this chat as affected before attempting the rewrite — even
+      // if unlink/symlink fail, the chat's Files panel is showing stale
+      // data and should be re-fetched.
+      affected.add(chatId);
+
+      // File renames change the basename (foo.txt → bar.txt) and the
+      // sidebar reads its display name from the link filename, so the
+      // link itself has to follow. Folder renames preserve basenames,
+      // so this branch is a no-op for them. uniqueDestPath disambiguates
+      // against any other entry already at that name (matches how
+      // pinLibraryFileToChat resolves its initial collisions).
+      const desiredName = path.basename(newTarget);
+      let nextLinkPath = linkPath;
+      if (path.basename(linkPath) !== desiredName) {
+        nextLinkPath = await uniqueDestPath(attDir, desiredName);
+      }
+
       try {
         await fs.unlink(linkPath);
-        await fs.symlink(newTarget, linkPath);
+        await fs.symlink(newTarget, nextLinkPath);
       } catch {
         // Leave the original (now-dangling) link in place rather than
         // failing the rename. listAttachments filters dead links out.
       }
     }
   }
+  return affected;
 }
 
 /**

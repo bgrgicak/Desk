@@ -198,9 +198,27 @@ export async function move(
   } else {
     await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, from, to);
   }
+  // Library paths are also embedded in `messages.attachments[].path` for
+  // every chat-message that referenced this file (composer "Use in chat",
+  // library mentions). Rewrite those so the chip in the message bubble
+  // doesn't 404 after rename. Best-effort: a query failure here doesn't
+  // undo the move. Each touched message is broadcast as `message.updated`
+  // so the existing client middleware patches its per-chat cache.
+  const touched = await queries.messages
+    .retargetAttachmentPaths(ctx.pool, workspaceId, from, to)
+    .catch(() => [] as Awaited<ReturnType<typeof queries.messages.retargetAttachmentPaths>>);
+  for (const m of touched) {
+    emit({ type: "message.updated", payload: m });
+  }
+  // Union of chats whose symlinks were retargeted (Files-panel listing)
+  // and chats whose messages were rewritten (message-bubble chips). The
+  // client uses this to invalidate per-chat caches.
+  const affectedChatIds = Array.from(
+    new Set([...result.affectedChatIds, ...touched.map((m) => m.chatId)]),
+  );
   emit({
     type: "library.changed",
-    payload: { workspaceId, path: to, op: "moved" },
+    payload: { workspaceId, path: to, op: "moved", affectedChatIds },
   });
   return result;
 }
