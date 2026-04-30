@@ -151,7 +151,7 @@ function AppInner() {
   const readChatIds = new Set(readChatIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
-  const { data: serverAgents } = useGetAgentsQuery()
+  const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
   const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
     { skip: !activeWorkspaceId },
@@ -191,7 +191,7 @@ function AppInner() {
     { workspaceId: activeWorkspaceId, kind: ['task'] },
     { skip: !activeWorkspaceId },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, serverAgents ?? []))
+  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
@@ -445,10 +445,10 @@ function AppInner() {
     { skip: !activeWorkspaceId },
   )
   const libraryItems: ContextItem[] = activeWorkspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, serverAgents ?? []))
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? []))
     : []
   const pinnedItems = libraryItems.filter(i => i.pinned)
-  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f, serverAgents ?? []))
+  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f))
 
   // Files already in `/library` are by definition in the user's library —
   // mark them as saved so any inline "Save to Library" affordance is
@@ -492,7 +492,7 @@ function AppInner() {
   const selectedContextItem: ContextItem | null =
     libraryItem ??
     (needsMetaFallback && fallbackFile && activeWorkspaceId
-      ? toContextItem(fallbackFile, activeWorkspaceId, serverAgents ?? [])
+      ? toContextItem(fallbackFile, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? [])
       : null)
 
 
