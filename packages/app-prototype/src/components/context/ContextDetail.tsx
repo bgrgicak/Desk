@@ -274,16 +274,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         path: item.id,
         body: editorValue,
         contentType: item.mimeType || 'text/plain',
-<<<<<<< HEAD
-      }).unwrap()
-      setPreviewText(editorValue)
-      setSavedAt(Date.now())
-      headingLinkedRef.current = false
-||||||| parent of 032c4d8 (feat(library): add preview/edit support for HTML files)
-      }).unwrap()
-      setPreviewText(editorValue)
-      setSavedAt(Date.now())
-=======
         etag: previewEtag,
       })
       if (result.conflict) {
@@ -293,8 +283,8 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         setPreviewText(editorValue)
         if (result.etag) setPreviewEtag(result.etag)
         setSavedAt(Date.now())
+        headingLinkedRef.current = false
       }
->>>>>>> 032c4d8 (feat(library): add preview/edit support for HTML files)
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
         description: err instanceof Error ? err.message : undefined,
@@ -544,7 +534,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
-<<<<<<< HEAD
           {item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
@@ -568,43 +557,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                     />
                   </>
                 ) : (
-||||||| parent of 032c4d8 (feat(library): add preview/edit support for HTML files)
-          {item.type === 'note' ? (
-            <div className="flex-1 min-h-0 bg-background">
-              {editorValue !== null ? (
-                <TextFileEditor
-                  value={editorValue}
-                  onChange={setEditorValue}
-                  filename={item.name}
-                  mimeType={item.mimeType}
-                />
-              ) : (
-                <div className="flex items-center justify-center py-12">
-=======
-          {item.type === 'note' ? (
-            <div className="flex-1 min-h-0 bg-background">
-              {conflictContent !== null && editorValue !== null ? (
-                <MergeEditor
-                  yours={editorValue}
-                  theirs={conflictContent}
-                  onChange={setEditorValue}
-                  onResolve={() => setConflictContent(null)}
-                  filename={item.name}
-                />
-              ) : showPreview && editorValue !== null ? (
-                <div className="p-6 overflow-y-auto h-full">
-                  <MarkdownContent text={editorValue} />
-                </div>
-              ) : editorValue !== null ? (
-                <TextFileEditor
-                  value={editorValue}
-                  onChange={setEditorValue}
-                  filename={item.name}
-                  mimeType={item.mimeType}
-                />
-              ) : (
-                <div className="flex items-center justify-center py-12">
->>>>>>> 032c4d8 (feat(library): add preview/edit support for HTML files)
                   <p className="text-sm text-muted-foreground">
                     {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
                   </p>
