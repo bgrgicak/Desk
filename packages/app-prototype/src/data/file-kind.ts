@@ -63,6 +63,18 @@ function hasRealExtension(name: string): boolean {
   return name.includes('.', 1)
 }
 
+export function isMarkdownFile(name: string, mimeType?: string | null): boolean {
+  const ext = getExt(name)
+  const mime = (mimeType ?? '').toLowerCase()
+  return ext === 'md' || ext === 'markdown' || ext === 'mdx' || mime === 'text/markdown'
+}
+
+export function isHtmlFile(name: string, mimeType?: string | null): boolean {
+  const ext = getExt(name)
+  const mime = (mimeType ?? '').toLowerCase()
+  return ext === 'html' || ext === 'htm' || mime === 'text/html'
+}
+
 export function fileKindFrom(name: string, mimeType?: string | null): FileKind {
   const mime = (mimeType ?? '').toLowerCase()
   const ext = getExt(name)

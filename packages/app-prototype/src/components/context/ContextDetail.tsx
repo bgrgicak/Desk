@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useSelector } from 'react-redux'
 import {
   Link2,
@@ -40,26 +41,24 @@ import {
 } from '@/components/ui/alert-dialog'
 import type { ContextItem, Artifact } from '@/data/ui-types'
 import { getArtifactIcon, getFolderPath } from '@/data/ui-types'
-import { fileKindForItem, fileKindFrom, iconForItem } from '@/data/file-kind'
+import { fileKindForItem, fileKindFrom, iconForItem, isMarkdownFile, isHtmlFile } from '@/data/file-kind'
 import {
   useDeleteLibraryFileMutation,
   useGetLibraryQuery,
   useMoveLibraryEntryMutation,
-  useSaveLibraryContentMutation,
 } from '@/store/api'
 import { toFolderList } from '@/store/selectors/library'
-import { downloadLibraryFile, fetchLibraryContent } from '@/store/library-download'
+import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
+import { MergeEditor } from './MergeEditor'
+import { MarkdownContent } from '@/components/MarkdownContent'
 import { ConversationPanel } from '@/components/artifact/ConversationPanel'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { usePrefs } from '@/hooks/use-prefs'
-import { usePersistedState } from '@/hooks/use-persisted-state'
 import type { RootState } from '@/store/store'
-import { selectFileChangeCounter } from '@/store/slices/derivedSlice'
+import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
 
-const AUTO_SAVE_DEBOUNCE_MS = 1_000
 const SAVED_BADGE_TTL_MS = 2_000
 
 interface ContextDetailProps {
@@ -87,11 +86,15 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
   const [panelCollapsed, setPanelCollapsed] = usePersistedState<boolean>('desk.context.sidebarCollapsed', false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [showPreview, setShowPreview] = usePersistedState(
+    `desk.library.${item.id}.previewMode`,
+    isMarkdownFile(item.name, item.mimeType) || isHtmlFile(item.name, item.mimeType),
+  )
 
-  // Bumped by the WS middleware whenever `library.changed` fires for this path.
-  // Adding it as a dep to the fetch effect causes an automatic re-fetch when an
-  // agent writes new content to the file currently on screen.
   const fileChangeCounter = useSelector((s: RootState) => selectFileChangeCounter(s, item.id))
+  const workspaceChangeCounter = useSelector((s: RootState) =>
+    selectWorkspaceChangeCounter(s, activeWorkspaceId ?? '')
+  )
 
   // File content fetched on demand for preview. Text files (notes, uri-list
   // links, csv/json/code, …) arrive as `previewText`; binary previews (images,
@@ -101,9 +104,13 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   // might render but can't (e.g. HEIC in non-Safari browsers) so we fall back
   // to the download prompt.
   const [previewText, setPreviewText] = useState<string | null>(null)
+  const [previewEtag, setPreviewEtag] = useState<string | null>(null)
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [mediaLoadFailed, setMediaLoadFailed] = useState(false)
+  // When non-null, the user's save conflicted with an agent write.
+  // Holds the server's current content so the merge view can display it.
+  const [conflictContent, setConflictContent] = useState<string | null>(null)
 
   const kind = fileKindForItem(item)
 
@@ -124,10 +131,12 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     if (isItemChange) {
       // Switching to a different file: full reset including the editor.
       setPreviewText(null)
+      setPreviewEtag(null)
       setPreviewBlobUrl(null)
       setPreviewError(null)
       setMediaLoadFailed(false)
       setEditorValue(null)
+      setConflictContent(null)
       editorInitFor.current = null
     }
 
@@ -140,7 +149,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     const editorAtStart = editorValueRef.current
     const previewAtStart = previewTextRef.current
     void fetchLibraryContent({ workspaceId: activeWorkspaceId, path: item.id })
-      .then(async (blob) => {
+      .then(async ({ blob, etag }) => {
         if (cancelled) return
         const effectiveKind = fileKindFrom(item.name, blob.type || item.mimeType)
         if (effectiveKind === 'docx') {
@@ -156,10 +165,11 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           const htmlBlob = new Blob([htmlDoc], { type: 'text/html' })
           createdUrl = URL.createObjectURL(htmlBlob)
           setPreviewBlobUrl(createdUrl)
-        } else if (effectiveKind === 'text' || item.type === 'link' || item.type === 'note') {
+        } else if (effectiveKind === 'text' || effectiveKind === 'html' || item.type === 'link' || item.type === 'note') {
           const text = await blob.text()
           if (cancelled) return
           setPreviewText(text)
+          setPreviewEtag(etag)
           // On initial load (item switch): always populate the editor.
           // On background refresh: only update the editor when the user has
           // no unsaved local changes — this preserves in-progress edits while
@@ -167,6 +177,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           // diffing keeps the cursor position stable across external updates.
           if (isItemChange || editorAtStart === previewAtStart) {
             setEditorValue(text)
+            setConflictContent(null)
             editorInitFor.current = item.id
           }
         } else {
@@ -184,11 +195,10 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  // fileChangeCounter is intentionally included so a WS library.changed event
-  // for this path triggers a re-fetch. The editorValue/previewText reads use
-  // refs (editorAtStart / previewAtStart) so they don't need to be in deps.
+  // fileChangeCounter/workspaceChangeCounter trigger re-fetch on agent writes.
+  // editorValue/previewText reads use refs so they don't need to be in deps.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, item.id, item.type, item.mimeType, item.name, fileChangeCounter])
+  }, [activeWorkspaceId, item.id, item.type, item.mimeType, item.name, fileChangeCounter, workspaceChangeCounter])
 
   const handleDownload = async () => {
     if (!activeWorkspaceId) return
@@ -235,53 +245,73 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   useEffect(() => { previewTextRef.current = previewText }, [previewText])
 
   const isTextEditable =
-    (kind === 'text' && item.type === 'file') || item.type === 'note'
+    ((kind === 'text' || kind === 'html') && item.type === 'file') || item.type === 'note'
+  const isMarkdown = isMarkdownFile(item.name, item.mimeType)
+  const isHtml = isHtmlFile(item.name, item.mimeType)
   const isDirty = isTextEditable && editorValue != null && editorValue !== previewText
 
-  const [saveLibraryContent, saveState] = useSaveLibraryContentMutation()
+  const [isSaving, setIsSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  const [htmlPreviewBlobUrl, setHtmlPreviewBlobUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isHtml || !showPreview || editorValue == null) {
+      setHtmlPreviewBlobUrl(null)
+      return
+    }
+    const blob = new Blob([editorValue], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    setHtmlPreviewBlobUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [isHtml, showPreview, editorValue])
+
   const handleSave = useCallback(async () => {
     if (!activeWorkspaceId || !isDirty || editorValue == null) return
+    setIsSaving(true)
     try {
-      await saveLibraryContent({
+      const result = await saveLibraryContent({
         workspaceId: activeWorkspaceId,
         path: item.id,
-        content: editorValue,
+        body: editorValue,
         contentType: item.mimeType || 'text/plain',
+<<<<<<< HEAD
       }).unwrap()
       setPreviewText(editorValue)
       setSavedAt(Date.now())
       headingLinkedRef.current = false
+||||||| parent of 032c4d8 (feat(library): add preview/edit support for HTML files)
+      }).unwrap()
+      setPreviewText(editorValue)
+      setSavedAt(Date.now())
+=======
+        etag: previewEtag,
+      })
+      if (result.conflict) {
+        setConflictContent(result.content)
+        setPreviewEtag(result.etag)
+      } else {
+        setPreviewText(editorValue)
+        if (result.etag) setPreviewEtag(result.etag)
+        setSavedAt(Date.now())
+      }
+>>>>>>> 032c4d8 (feat(library): add preview/edit support for HTML files)
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
         description: err instanceof Error ? err.message : undefined,
       })
+    } finally {
+      setIsSaving(false)
     }
-  }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, saveLibraryContent])
+  }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, previewEtag])
 
-  // Auto-save: when the pref is on, debounce a save after the last
-  // edit. The Save button stays available as a "save now" affordance.
-  const { autoSave } = usePrefs()
-  useEffect(() => {
-    if (!autoSave || !isDirty || saveState.isLoading) return
-    const t = window.setTimeout(handleSave, AUTO_SAVE_DEBOUNCE_MS)
-    return () => window.clearTimeout(t)
-  }, [autoSave, isDirty, saveState.isLoading, handleSave])
-
-  // Drop the "Saved" badge after a moment so the button reverts to its
-  // idle "Save" label.
   useEffect(() => {
     if (savedAt == null) return
     const t = window.setTimeout(() => setSavedAt(null), SAVED_BADGE_TTL_MS)
     return () => window.clearTimeout(t)
   }, [savedAt])
 
-  const showSavedBadge = !isDirty && !saveState.isLoading && savedAt != null
-  const saveLabel = saveState.isLoading
-    ? 'Saving…'
-    : showSavedBadge
-    ? 'Saved'
-    : 'Save'
+  const showSavedBadge = !isDirty && !isSaving && savedAt != null
+  const saveLabel = isSaving ? 'Saving…' : showSavedBadge ? 'Saved' : 'Save'
 
   // Document editor state for notes: a separate heading textarea and body
   // textarea. Content is stored as `heading\n\nbody` in the file; on first
@@ -446,16 +476,28 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           })()}
           actions={
             <>
+              {isTextEditable && (isMarkdown || isHtml) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs"
+                  onClick={() => setShowPreview(p => !p)}
+                  data-testid="library-preview-toggle"
+                >
+                  {showPreview ? 'Edit' : 'Preview'}
+                </Button>
+              )}
+
               {isTextEditable && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="text-xs"
                   onClick={handleSave}
-                  disabled={!isDirty || saveState.isLoading}
+                  disabled={!isDirty || isSaving}
                   data-testid="library-save"
                   data-save-state={
-                    saveState.isLoading ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
+                    isSaving ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
                   }
                 >
                   {saveLabel}
@@ -502,6 +544,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
+<<<<<<< HEAD
           {item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
@@ -525,6 +568,43 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                     />
                   </>
                 ) : (
+||||||| parent of 032c4d8 (feat(library): add preview/edit support for HTML files)
+          {item.type === 'note' ? (
+            <div className="flex-1 min-h-0 bg-background">
+              {editorValue !== null ? (
+                <TextFileEditor
+                  value={editorValue}
+                  onChange={setEditorValue}
+                  filename={item.name}
+                  mimeType={item.mimeType}
+                />
+              ) : (
+                <div className="flex items-center justify-center py-12">
+=======
+          {item.type === 'note' ? (
+            <div className="flex-1 min-h-0 bg-background">
+              {conflictContent !== null && editorValue !== null ? (
+                <MergeEditor
+                  yours={editorValue}
+                  theirs={conflictContent}
+                  onChange={setEditorValue}
+                  onResolve={() => setConflictContent(null)}
+                  filename={item.name}
+                />
+              ) : showPreview && editorValue !== null ? (
+                <div className="p-6 overflow-y-auto h-full">
+                  <MarkdownContent text={editorValue} />
+                </div>
+              ) : editorValue !== null ? (
+                <TextFileEditor
+                  value={editorValue}
+                  onChange={setEditorValue}
+                  filename={item.name}
+                  mimeType={item.mimeType}
+                />
+              ) : (
+                <div className="flex items-center justify-center py-12">
+>>>>>>> 032c4d8 (feat(library): add preview/edit support for HTML files)
                   <p className="text-sm text-muted-foreground">
                     {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
                   </p>
@@ -602,7 +682,47 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                 </div>
               )}
             </div>
-          ) : kind === 'html' || kind === 'docx' ? (
+          ) : kind === 'html' ? (
+            <div className="flex-1 min-h-0 bg-background">
+              {conflictContent !== null && editorValue !== null ? (
+                <MergeEditor
+                  yours={editorValue}
+                  theirs={conflictContent}
+                  onChange={setEditorValue}
+                  onResolve={() => setConflictContent(null)}
+                  filename={item.name}
+                />
+              ) : showPreview && editorValue !== null ? (
+                <div className="flex-1 flex flex-col bg-white h-full">
+                  {htmlPreviewBlobUrl ? (
+                    <iframe
+                      title={item.name}
+                      src={htmlPreviewBlobUrl}
+                      sandbox="allow-same-origin"
+                      className="flex-1 w-full border-0 bg-white"
+                    />
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center">
+                      <p className="text-sm text-muted-foreground">Loading…</p>
+                    </div>
+                  )}
+                </div>
+              ) : editorValue !== null ? (
+                <TextFileEditor
+                  value={editorValue}
+                  onChange={setEditorValue}
+                  filename={item.name}
+                  mimeType={item.mimeType}
+                />
+              ) : (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-sm text-muted-foreground">
+                    {previewError ? `Failed to load file: ${previewError}` : 'Loading…'}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : kind === 'docx' ? (
             <div className="flex-1 flex flex-col bg-white">
               {previewBlobUrl ? (
                 <iframe
@@ -666,7 +786,19 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
             </div>
           ) : kind === 'text' && (item.type === 'file' || item.mimeType === 'text/markdown') ? (
             <div className="flex-1 min-h-0 bg-background">
-              {editorValue !== null ? (
+              {conflictContent !== null && editorValue !== null ? (
+                <MergeEditor
+                  yours={editorValue}
+                  theirs={conflictContent}
+                  onChange={setEditorValue}
+                  onResolve={() => setConflictContent(null)}
+                  filename={item.name}
+                />
+              ) : showPreview && editorValue !== null ? (
+                <div className="p-6 overflow-y-auto h-full">
+                  <MarkdownContent text={editorValue} />
+                </div>
+              ) : editorValue !== null ? (
                 <TextFileEditor
                   value={editorValue}
                   onChange={setEditorValue}
@@ -710,6 +842,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
         <ConversationPanel
           initialMessages={[]}
           item={item}
+          workspaceId={activeWorkspaceId}
           onCollapse={() => setPanelCollapsed(true)}
         />
       </div>
