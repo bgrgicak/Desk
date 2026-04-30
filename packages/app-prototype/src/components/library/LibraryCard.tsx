@@ -6,6 +6,7 @@ import {
   FolderPlus,
   MessageSquarePlus,
   MoreHorizontal,
+  Pencil,
   Pin,
   PinOff,
   Trash2,
@@ -41,6 +42,7 @@ interface LibraryCardProps {
   onClick?: () => void
   onUseInChat?: () => void
   onDownload?: () => void
+  onRename?: () => void
   onMove?: () => void
   onDelete?: () => void
   isPinned?: boolean
@@ -65,6 +67,7 @@ export function LibraryCard({
   onClick,
   onUseInChat,
   onDownload,
+  onRename,
   onMove,
   onDelete,
   isPinned,
@@ -117,6 +120,12 @@ export function LibraryCard({
           <DropdownMenuItem onClick={onDownload}>
             <Download className="h-4 w-4 mr-2" />
             Download
+          </DropdownMenuItem>
+        )}
+        {onRename && (
+          <DropdownMenuItem onClick={onRename}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Rename
           </DropdownMenuItem>
         )}
         {onMove && (

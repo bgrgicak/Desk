@@ -6,12 +6,12 @@ import {
   MoreHorizontal,
   ExternalLink,
   Pencil,
-  Check,
   PanelRight,
   Save,
   ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Breadcrumb,
@@ -21,6 +21,14 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,6 +51,7 @@ import { fileKindForItem, fileKindFrom, iconForItem } from '@/data/file-kind'
 import {
   useDeleteLibraryFileMutation,
   useGetLibraryQuery,
+  useMoveLibraryEntryMutation,
   useSaveLibraryContentMutation,
 } from '@/store/api'
 import { toFolderList } from '@/store/selectors/library'
@@ -65,6 +74,9 @@ interface ContextDetailProps {
   /** Jump back to the Library view with the given folder open.
    * Pass `null` to land on the Library root. */
   onNavigateToFolder: (folderId: string | null) => void
+  /** Called after a successful rename so the parent can update the
+   * URL/route to the new workspace-relative path. */
+  onItemPathChange?: (newPath: string) => void
 }
 
 function canPreview(item: ContextItem): boolean {
@@ -72,9 +84,10 @@ function canPreview(item: ContextItem): boolean {
   return fileKindForItem(item) !== 'unknown'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder, onItemPathChange }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
+  const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
 
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -167,9 +180,33 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     }
   }
 
-  // Editable name (for file / link items — notes use the inline title editor)
-  const [itemName, setItemName] = useState(item.name)
-  const [isEditingItemName, setIsEditingItemName] = useState(false)
+  // Rename modal (for file / link items — notes use the inline title editor).
+  // The parent re-keys this component on item.id, so initial state is always
+  // fresh for the current item — no syncing effect needed.
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameValue, setRenameValue] = useState(item.name)
+
+  const handleRename = async () => {
+    if (!activeWorkspaceId) return
+    const name = renameValue.trim()
+    if (!name || name === item.name) {
+      setRenameOpen(false)
+      return
+    }
+    const slash = item.id.lastIndexOf('/')
+    const parent = slash >= 0 ? item.id.slice(0, slash) : ''
+    const to = parent ? `${parent}/${name}` : name
+    try {
+      await moveLibraryEntry({ workspaceId: activeWorkspaceId, from: item.id, to }).unwrap()
+      toast.success(`Renamed to "${name}"`)
+      setRenameOpen(false)
+      onItemPathChange?.(to)
+    } catch (err) {
+      toast.error(`Rename failed`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
 
   // Editable text content for text-kind files and notes. `editorValue`
   // is the working copy; when it diverges from `previewText` (the last
@@ -293,29 +330,12 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                       <FileIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       {item.type === 'note' ? (
                         <span className="truncate">{item.name}</span>
-                      ) : isEditingItemName ? (
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                          <input
-                            type="text"
-                            value={itemName}
-                            onChange={(e) => setItemName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') setIsEditingItemName(false)
-                              if (e.key === 'Escape') { setItemName(item.name); setIsEditingItemName(false) }
-                            }}
-                            className="flex-1 min-w-0 bg-transparent text-sm font-semibold outline-none border-b-2 border-primary pb-0.5"
-                            autoFocus
-                          />
-                          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setIsEditingItemName(false)}>
-                            <Check className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
                       ) : (
                         <button
-                          onClick={() => setIsEditingItemName(true)}
+                          onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}
                           className="flex items-center gap-1 min-w-0 group hover:text-foreground/70 transition-colors"
                         >
-                          <span className="truncate">{itemName}</span>
+                          <span className="truncate">{item.name}</span>
                           <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                         </button>
                       )}
@@ -365,6 +385,12 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
+                  {item.type !== 'note' && (
+                    <DropdownMenuItem onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}>
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Rename
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
                     <Trash2 className="h-4 w-4 mr-2" />
                     Delete
@@ -626,6 +652,48 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rename dialog */}
+      <Dialog
+        open={renameOpen}
+        onOpenChange={(open) => {
+          setRenameOpen(open)
+          if (!open) setRenameValue(item.name)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename {item.type === 'link' ? 'link' : 'file'}</DialogTitle>
+            <DialogDescription>
+              Give the {item.type === 'link' ? 'link' : 'file'} a new name. Include the extension.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm font-medium text-foreground">Name</label>
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRename()
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button>
+            <Button
+              disabled={
+                !renameValue.trim() ||
+                renameValue.trim() === item.name ||
+                moveState.isLoading
+              }
+              onClick={() => void handleRename()}
+            >
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -5,7 +5,12 @@ import { Readable } from "node:stream";
 import { type Pool } from "@agent-desk/db";
 import ignore, { type Ignore } from "ignore";
 import { NotFoundError, ValidationError } from "@agent-desk/shared";
-import { workspaceRootPath, trashDir, resolveHostPath } from "./layout.js";
+import {
+  workspaceRootPath,
+  trashDir,
+  resolveHostPath,
+  chatsDir,
+} from "./layout.js";
 import {
   uploadArtifact,
   validateLibrarySubpath,
@@ -313,10 +318,71 @@ export async function moveLibraryEntry(
   await fs.mkdir(path.dirname(toAbs), { recursive: true });
   await fs.rename(fromAbs, toAbs);
 
+  // Re-point chat attachment symlinks (`.chats/{chatId}/attachments/`)
+  // that targeted the moved entry. Chat pins (see pinLibraryFileToChat
+  // in files.ts) write absolute targets, so a rename leaves them
+  // dangling; this walk rewrites the link to the new absolute path.
+  // Best-effort: any failure is swallowed so the rename itself stays
+  // committed.
+  await retargetChatAttachmentSymlinks(ctx, slug, fromAbs, toAbs).catch(() => {});
+
   return {
     kind: fromStat.isDirectory() ? "folder" : "file",
     path: toRel,
   };
+}
+
+/**
+ * Walks every chat's `attachments/` directory and rewrites any symlink
+ * whose absolute target was `fromAbs` (file rename) or sat under
+ * `fromAbs/` (folder rename) so it points to the matching path under
+ * `toAbs` instead. Each per-link update is best-effort and non-fatal —
+ * a bad link is left as-is rather than aborting the rename.
+ */
+async function retargetChatAttachmentSymlinks(
+  ctx: LibraryContext,
+  slug: string,
+  fromAbs: string,
+  toAbs: string,
+): Promise<void> {
+  const chatsRoot = chatsDir(ctx.home, slug);
+  const chatIds = await fs.readdir(chatsRoot).catch(() => [] as string[]);
+  const fromWithSep = fromAbs.endsWith(path.sep) ? fromAbs : fromAbs + path.sep;
+
+  for (const chatId of chatIds) {
+    const attDir = path.join(chatsRoot, chatId, "attachments");
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(attDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isSymbolicLink()) continue;
+      const linkPath = path.join(attDir, entry.name);
+      const target = await fs.readlink(linkPath).catch(() => null);
+      if (target === null) continue;
+      const resolved = path.isAbsolute(target)
+        ? target
+        : path.resolve(attDir, target);
+
+      let newTarget: string | null = null;
+      if (resolved === fromAbs) {
+        newTarget = toAbs;
+      } else if (resolved.startsWith(fromWithSep)) {
+        newTarget = toAbs + resolved.slice(fromAbs.length);
+      }
+      if (newTarget === null) continue;
+
+      try {
+        await fs.unlink(linkPath);
+        await fs.symlink(newTarget, linkPath);
+      } catch {
+        // Leave the original (now-dangling) link in place rather than
+        // failing the rename. listAttachments filters dead links out.
+      }
+    }
+  }
 }
 
 /**
