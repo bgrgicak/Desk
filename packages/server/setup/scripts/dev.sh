@@ -131,4 +131,8 @@ echo "==> Vite dev server starting (pid $VITE_PID) on http://127.0.0.1:${APP_POR
 echo "==> Ctrl+C stops both."
 
 # Wait for either child to exit, then trigger cleanup.
-wait -n "$SERVER_PID" "$VITE_PID" 2>/dev/null || true
+# Note: `wait -n` requires bash 4.3+, but macOS ships with bash 3.2 — so we
+# poll instead. Exits when either PID dies; the EXIT trap then kills the other.
+while kill -0 "$SERVER_PID" 2>/dev/null && kill -0 "$VITE_PID" 2>/dev/null; do
+  sleep 1
+done
