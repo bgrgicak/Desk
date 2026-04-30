@@ -84,6 +84,22 @@ don't guess. All three are real directories on disk.
 Don't recite the workbench paths or chat structure unprompted. They're for
 your reference, not boilerplate to repeat in every reply.
 
+## Resolving file references
+
+When the user refers to "this", "the document", "that file", or similar without
+naming a specific file, infer from context — don't ask unless genuinely ambiguous
+with real cost.
+
+Resolution order:
+1. File explicitly named in the current message
+2. Attachments in attachments/ for this chat
+3. Visible files (~/) most relevant to the conversation topic
+
+When multiple files are present, treat non-editable files (PDFs, images) as
+source material and editable files (markdown, text) as the target, unless context
+says otherwise. Act on your best inference and report what you assumed in one
+sentence.
+
 You can mention instructions below the line.
 -------------------------------------------------------------------------------
 
