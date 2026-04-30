@@ -8,3 +8,5 @@ test-results/
 *.tsbuildinfo
 .DS_Store
 NvVars
+.claude/scheduled_tasks.lock
+.playwright-mcp

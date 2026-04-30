@@ -58,8 +58,6 @@ import {
 import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
-  FALLBACK_MODELS_BY_PROVIDER,
-  MODEL_PROVIDER_BY_KIND,
   PROVIDER_KEY_BY_KIND,
   type Connection,
   type ConnectionKind,
@@ -487,13 +485,12 @@ function providerLabel(provider: string): string {
   return provider
 }
 
-// Returns models grouped by provider, merging /tools/models with fallback
-// catalogs for any provider whose key is configured. This keeps the
-// provider/model dropdowns functional even when the sandbox model
-// listing endpoint is empty or failing.
+// Builds a provider → model map from the live /tools/models response.
+// opencode is the single source of truth; no fallbacks are injected.
+// The agent's current model is always included so an existing selection
+// is never silently dropped (e.g. if the sandbox is temporarily down).
 function buildModelIndex(
   apiModels: ModelRef[],
-  providerKeys: Record<string, string | null>,
   currentModel: string,
 ): Map<string, ModelRef[]> {
   const byProvider = new Map<string, ModelRef[]>()
@@ -509,19 +506,8 @@ function buildModelIndex(
 
   for (const m of apiModels) add(m)
 
-  // Fallback models for providers whose key is configured but the API
-  // returned nothing (e.g. /tools/models is failing).
-  for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
-    const providerId = MODEL_PROVIDER_BY_KIND[kind]
-    if (!providerId) continue
-    if (!providerKeys[envKey]) continue
-    if (byProvider.has(providerId)) continue
-    const fallback = FALLBACK_MODELS_BY_PROVIDER[providerId] ?? []
-    for (const f of fallback) add({ provider: providerId, id: f.id, label: f.label })
-  }
-
   // Always surface the agent's current model so editing an existing
-  // agent doesn't drop the selection if the model isn't in either list.
+  // agent doesn't drop the selection if the model isn't in the live list.
   if (currentModel && !seenIds.has(currentModel)) {
     const slash = currentModel.indexOf('/')
     const provider = slash > 0 ? currentModel.slice(0, slash) : 'unknown'
@@ -656,39 +642,18 @@ function AgentDetail({
   onDelete: (id: string) => void
 }) {
   const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
-  const providers = useMemo(
-    () => [...modelIndex.keys()].sort((a, b) => a.localeCompare(b)),
-    [modelIndex],
-  )
-
   const flatModels = useMemo(() => {
     const out: ModelRef[] = []
     for (const ms of modelIndex.values()) out.push(...ms)
     return out
   }, [modelIndex])
 
-  const initialModel    = existing?.model ?? flatModels[0]?.id ?? ''
-  const initialModelRef = flatModels.find(m => m.id === initialModel)
-  const initialProvider = initialModelRef?.provider ?? providers[0] ?? ''
+  const initialModel = existing?.model ?? flatModels[0]?.id ?? ''
 
   const [name, setName]                 = useState(existing?.name ?? '')
-  const [provider, setProvider]         = useState(initialProvider)
   const [model, setModel]               = useState(initialModel)
   const [instructions, setInstructions] = useState(existing?.instructions ?? '')
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
-
-  const modelOptions = useMemo(
-    () => modelIndex.get(provider) ?? [],
-    [modelIndex, provider],
-  )
-
-  const handleProviderChange = (next: string) => {
-    setProvider(next)
-    const list = modelIndex.get(next) ?? []
-    if (!list.some(m => m.id === model)) {
-      setModel(list[0]?.id ?? '')
-    }
-  }
 
   const canSave = name.trim().length > 0 && model.trim().length > 0
   const handleSave = () => {
@@ -711,30 +676,20 @@ function AgentDetail({
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
         </Field>
 
-        <Field label="Provider" help="Determines which models are available.">
-          <SelectDropdown
-            value={provider}
-            placeholder={providers.length ? 'Select provider' : 'No providers configured'}
-            onChange={handleProviderChange}
-            disabled={providers.length === 0}
-            options={providers.map(p => ({ value: p, label: providerLabel(p) }))}
-          />
-        </Field>
-
         <Field label="Model">
           <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
-            <PopoverTrigger asChild disabled={!provider || modelOptions.length === 0}>
+            <PopoverTrigger asChild disabled={flatModels.length === 0}>
               <button
                 type="button"
-                disabled={!provider || modelOptions.length === 0}
+                disabled={flatModels.length === 0}
                 className={cn(
                   'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs text-left flex items-center justify-between gap-2 transition-colors',
                   'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none',
-                  (!provider || modelOptions.length === 0) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
+                  flatModels.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
                 )}
               >
                 <span className={cn('truncate', !model && 'text-muted-foreground')}>
-                  {(modelOptions.find(m => m.id === model)?.label ?? model) || (provider ? 'Select model' : 'Pick a provider first')}
+                  {(flatModels.find(m => m.id === model)?.label ?? model) || 'Select model'}
                 </span>
                 <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
               </button>
@@ -744,18 +699,20 @@ function AgentDetail({
                 <CommandInput placeholder="Search models…" />
                 <CommandList>
                   <CommandEmpty>No models found.</CommandEmpty>
-                  <CommandGroup>
-                    {modelOptions.map(m => (
-                      <CommandItem
-                        key={m.id}
-                        value={m.id}
-                        keywords={[m.label ?? m.id]}
-                        onSelect={() => { setModel(m.id); setModelPickerOpen(false) }}
-                      >
-                        {m.label ?? m.id}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
+                  {[...modelIndex.entries()].map(([prov, models]) => (
+                    <CommandGroup key={prov} heading={providerLabel(prov)}>
+                      {models.map(m => (
+                        <CommandItem
+                          key={m.id}
+                          value={m.id}
+                          keywords={[m.label ?? m.id, prov]}
+                          onSelect={() => { setModel(m.id); setModelPickerOpen(false) }}
+                        >
+                          {m.label ?? m.id}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  ))}
                 </CommandList>
               </Command>
             </PopoverContent>
@@ -1150,14 +1107,12 @@ function ConnectionDetail({
 type DefaultView = 'pinned' | 'desk' | 'tasks' | 'context'
 
 export interface PrefsShape {
-  autoSave: boolean
   defaultView: DefaultView
   showBadges: boolean
   developerMode: boolean
 }
 
 const PREFS_DEFAULTS: PrefsShape = {
-  autoSave: true,
   defaultView: 'tasks',
   showBadges: true,
   developerMode: false,
@@ -1233,17 +1188,6 @@ function PreferencesSection() {
 
   return (
     <div className="flex flex-col">
-      <PreferenceRow
-        title="Auto-save library edits"
-        description="Automatically save changes while editing files in your Library."
-      >
-        <Switch
-          data-testid="prefs-auto-save"
-          checked={prefs.autoSave}
-          onCheckedChange={v => update({ autoSave: v })}
-        />
-      </PreferenceRow>
-
       <PreferenceRow
         title="Show unread badges"
         description="Display unread counts on workspace tabs and nav items."
@@ -1496,8 +1440,8 @@ export function SettingsModal({
   }
 
   const modelIndex = useMemo(
-    () => buildModelIndex(models ?? [], providerKeysMap, editingAgentModel),
-    [models, providerKeysMap, editingAgentModel],
+    () => buildModelIndex(models ?? [], editingAgentModel),
+    [models, editingAgentModel],
   )
 
   // ── Route key for page transitions ────────────────────────────────────────

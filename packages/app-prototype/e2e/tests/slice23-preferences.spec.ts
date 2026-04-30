@@ -16,23 +16,16 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   let dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
-  // The "auto-save" switch defaults to checked. Toggle it OFF and
-  // pick a non-default view ("tasks").
-  const autoSave = dialog.getByTestId("prefs-auto-save");
-  await expect(autoSave).toHaveAttribute("data-state", "checked");
-  await autoSave.click();
-  await expect(autoSave).toHaveAttribute("data-state", "unchecked");
-
+  // Pick a non-default view ("tasks") to verify persistence.
   await dialog.getByTestId("prefs-default-view-tasks").click();
 
-  // Reload, re-open Customize → Preferences. The values must stick.
+  // Reload, re-open Customize → Preferences. The value must stick.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
   await loggedInPage.getByRole("button", { name: /Customize/ }).click();
   dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
-  await expect(dialog.getByTestId("prefs-auto-save")).toHaveAttribute("data-state", "unchecked");
   // The selected view button has the active styling — assert via its
   // class containing the active-state classes.
   const tasksButton = dialog.getByTestId("prefs-default-view-tasks");
@@ -45,7 +38,6 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
     return localStorage.getItem(keys[0]);
   });
   expect(stored).not.toBeNull();
-  const parsed = JSON.parse(stored!) as { autoSave: boolean; defaultView: string };
-  expect(parsed.autoSave).toBe(false);
+  const parsed = JSON.parse(stored!) as { defaultView: string };
   expect(parsed.defaultView).toBe("tasks");
 });

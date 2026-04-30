@@ -65,11 +65,6 @@ export interface SandboxDriver {
   cancelRun(runId: string): Promise<void>;
 }
 
-/**
- * Creates the appropriate sandbox driver based on environment.
- * DESK_SANDBOX_DRIVER=fake → fake driver (for tests)
- * Otherwise → real Docker driver
- */
 export function createDriver(): SandboxDriver {
   if (process.env.DESK_SANDBOX_DRIVER === "fake") {
     return createFakeDriver();
@@ -94,11 +89,8 @@ function createFakeDriver(): SandboxDriver {
       let seq = 0;
       for (const line of lines) {
         if (cancelled.has(runId)) {
-          return { exitCode: 130 }; // SIGINT
+          return { exitCode: 130 };
         }
-        // Await async onLog returns so the fake driver matches the real
-        // driver's contract: execRun must not resolve before every log
-        // has been persisted. See RunOptions.onLog for background.
         await onLog({ runId, seq: seq++, kind: "stdout", payload: line });
         await new Promise((r) => setTimeout(r, 10));
       }

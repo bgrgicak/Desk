@@ -508,6 +508,7 @@ export async function listAttachments(
       mime: "application/octet-stream",
       size: stat.size,
       createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
       kind: "attachment",
     });
   }
@@ -528,6 +529,7 @@ export async function listAttachments(
         mime: "text/markdown",
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
+        updatedAtMs: String(stat.mtimeMs),
         kind: "note",
         label: "Chat notes",
       });

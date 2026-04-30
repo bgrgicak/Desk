@@ -55,6 +55,8 @@ export interface FileRef {
   mime: string;
   size: number;
   createdAt: string;
+  /** Last-modified time as a Unix millisecond timestamp string — used as an ETag. */
+  updatedAtMs: string;
   /** ID of the agent that *last* created or edited this file, if known. */
   agentId?: string;
   /** ID of the agent that *originally* created this file, if known. Stays
@@ -199,6 +201,7 @@ export async function uploadArtifact(
     mime: input.mime || guessMime(input.name),
     size: stat.size,
     createdAt: stat.birthtime.toISOString(),
+    updatedAtMs: String(stat.mtimeMs),
   };
 }
 
@@ -213,6 +216,7 @@ async function fileRefFromDisk(home: string, slug: string, relPath: string): Pro
     mime: guessMime(abs),
     size: stat.size,
     createdAt: stat.birthtime.toISOString(),
+    updatedAtMs: String(stat.mtimeMs),
   };
 }
 
@@ -353,6 +357,7 @@ export async function pinLibraryFileToChat(
           mime: guessMime(desiredName),
           size: stat.size,
           createdAt: stat.birthtime.toISOString(),
+          updatedAtMs: String(stat.mtimeMs),
         };
       }
     }
@@ -369,6 +374,7 @@ export async function pinLibraryFileToChat(
     mime: guessMime(linkPath),
     size: stat.size,
     createdAt: stat.birthtime.toISOString(),
+    updatedAtMs: String(stat.mtimeMs),
   };
 }
 

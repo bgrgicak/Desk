@@ -16,7 +16,6 @@ import {
   createOrReuse,
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
-  createDriver,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
@@ -324,16 +323,6 @@ export function createRunManager(opts: RunManagerOptions) {
       let result: { exitCode: number };
       if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
-      } else if (process.env.DESK_SANDBOX_DRIVER === "fake") {
-        const driver = createDriver();
-        result = await driver.execRun(workspaceId, {
-          runId,
-          prompt,
-          workspaceSlug,
-          agentFileId: agentId,
-          attachments,
-          onLog,
-        });
       } else {
         const home = resolveDeskHome();
         const handle = await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
@@ -407,8 +396,10 @@ export function createRunManager(opts: RunManagerOptions) {
           await materializeNote(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child });
+        emit({ type: "workspace.synced", payload: { workspaceId } });
         return { fired: true, childIds: [child.id] };
       }
+      emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [] };
     } catch (err) {
       logStream.end();
@@ -543,7 +534,7 @@ export function createRunManager(opts: RunManagerOptions) {
   async function resumeMessage(messageId: string): Promise<Message | null> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return null;
-    if (msg.state === "running" || msg.state === "pending") return msg;
+    if (msg.state === "pending") return msg;
     const patch: Parameters<typeof queries.messages.updateMessage>[2] = { state: "pending" };
     if (msg.cron && !msg.executeAt) {
       patch.executeAt = computeNextRun(msg.cron);

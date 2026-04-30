@@ -8,8 +8,8 @@ interface MessageBubbleProps {
   message: ServerMessage
   isFirstInGroup?: boolean
   isNew?: boolean
-  /** Fallback model label when the message row predates model stamping. */
-  fallbackModel?: string
+  /** Agent name to display in the message header. */
+  agentName?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
   /** When false, internal tool-call/stderr entries inside `events` content
@@ -22,12 +22,12 @@ export function MessageBubble({
   message,
   isFirstInGroup = true,
   isNew = false,
-  fallbackModel,
+  agentName,
   onAttachmentClick,
   developerMode = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  const modelLabel = message.model ?? fallbackModel ?? 'Agent'
+  const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
   const hasAttachments = !!message.attachments && message.attachments.length > 0
 
@@ -185,15 +185,12 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
 }
 
 function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMode: boolean }) {
-  // Render entries in log order (old → new). Consecutive text deltas and
-  // consecutive stderr lines fold into single chunks so streaming chat
-  // doesn't fragment into dozens of tiny paragraphs, but tool calls /
-  // results still appear between the text that preceded and followed them.
-  // When developer mode is off, only text chunks survive — tool events and
-  // stderr are dropped so the user sees just the agent's reply.
+  // Render entries in log order (old → new). Consecutive text deltas fold
+  // into single paragraphs. Consecutive tool events fold into a single
+  // collapsed group so they don't dominate the thread in dev mode.
   type Chunk =
     | { kind: 'text'; text: string }
-    | { kind: 'event'; entry: AgentLogEntry }
+    | { kind: 'events'; entries: AgentLogEntry[] }
     | { kind: 'stderr'; lines: string[] }
 
   const chunks: Chunk[] = []
@@ -209,6 +206,11 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
     if (last && last.kind === 'stderr') last.lines.push(line)
     else chunks.push({ kind: 'stderr', lines: [line] })
   }
+  const appendEvent = (entry: AgentLogEntry) => {
+    const last = chunks[chunks.length - 1]
+    if (last && last.kind === 'events') last.entries.push(entry)
+    else chunks.push({ kind: 'events', entries: [entry] })
+  }
 
   for (const entry of log) {
     if (entry.kind === 'event') {
@@ -217,7 +219,7 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
       } else if (developerMode) {
-        chunks.push({ kind: 'event', entry })
+        appendEvent(entry)
       }
     } else if (entry.kind === 'stderr') {
       if (developerMode) appendStderr(entry.line)
@@ -235,8 +237,8 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
           if (!c.text.trim()) return null
           return <MarkdownContent key={i} text={c.text.trim()} />
         }
-        if (c.kind === 'event') {
-          return <EventRow key={i} entry={c.entry} />
+        if (c.kind === 'events') {
+          return <EventGroup key={i} entries={c.entries} />
         }
         return <StderrBlock key={i} lines={c.lines} />
       })}
@@ -244,16 +246,33 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
   )
 }
 
-function EventRow({ entry }: { entry: AgentLogEntry }) {
-  if (entry.kind !== 'event') return null
-  const ev = entry.event
-  const label = labelForEvent(ev)
+function EventGroup({ entries }: { entries: AgentLogEntry[] }) {
+  const [open, setOpen] = useState(false)
+  if (entries.length === 0) return null
+  const count = entries.length
   return (
-    <CollapsibleChip icon={<Wrench className="h-3 w-3" />} label={label}>
-      <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">
-        {safeStringify(ev)}
-      </pre>
-    </CollapsibleChip>
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1 text-[11px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors"
+      >
+        <Wrench className="h-2.5 w-2.5" />
+        <span>{count} tool event{count === 1 ? '' : 's'}</span>
+        <ChevronRight className={`h-2.5 w-2.5 transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1">
+          {entries.map((entry, i) => entry.kind === 'event' && (
+            <CollapsibleChip key={i} icon={<Wrench className="h-3 w-3" />} label={labelForEvent(entry.event)}>
+              <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">
+                {safeStringify(entry.event)}
+              </pre>
+            </CollapsibleChip>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

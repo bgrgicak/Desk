@@ -96,13 +96,11 @@ const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task'
 
 function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
   const { wsId } = useParams<{ wsId: string }>()
-  const { data: agents } = useGetAgentsQuery()
   const { developerMode } = usePrefs()
   const [postMessage] = usePostChatMessageMutation()
   const [isSending, setIsSending] = useState(false)
 
   const chatUrl = wsId ? buildPath(wsId, 'desk', { chat: chatId, message: messageId ?? null }) : null
-  const fallbackModel = agents?.find(a => a.name === agentName)?.model ?? agentName ?? 'Agent'
 
   async function handleSend(text: string) {
     if (!text.trim() || isSending) return
@@ -119,7 +117,7 @@ function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentNa
   return (
     <ChatThread
       chatId={chatId}
-      fallbackModel={fallbackModel}
+      agentName={agentName}
       developerMode={developerMode}
       isSending={isSending}
       filterMessage={hidePanelTaskRows}

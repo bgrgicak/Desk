@@ -25,7 +25,6 @@ beforeAll(async () => {
 
   process.env.DESK_SEED_USERNAME = "cron-user";
   process.env.DESK_SEED_PASSWORD = "pw";
-  process.env.DESK_SANDBOX_DRIVER = "fake";
   await seedIfEmpty(pool);
 
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");

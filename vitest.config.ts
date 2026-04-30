@@ -26,6 +26,12 @@ export default defineConfig({
   // `ssr.resolve.externalConditions` key is the one that matters for
   // workspace-as-node_modules deps under vitest's SSR loader.
   resolve: {
+    alias: {
+      // Mirror the `@/` path alias from packages/app-prototype/vite.config.ts
+      // so that app-prototype unit tests (e.g. store/ws/middleware.test.ts) can
+      // import from `@/store/…`, `@/auth/…`, etc.
+      "@": path.resolve(import.meta.dirname, "packages/app-prototype/src"),
+    },
     conditions: ["@agent-desk/dev"],
   },
   ssr: {

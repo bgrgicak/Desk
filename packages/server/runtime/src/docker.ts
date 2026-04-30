@@ -61,8 +61,6 @@ export interface SandboxHandle {
  * Called by the installer, not at runtime.
  */
 export async function ensureImage(): Promise<void> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") return;
-
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
 
@@ -98,10 +96,6 @@ export async function createOrReuse(
   providerKeys?: Record<string, string>,
   mountPlan?: MountPlan,
 ): Promise<SandboxHandle> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
-    return { containerId: `fake-${workspaceId}`, workspaceId };
-  }
-
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
   const containerName = `desk-sandbox-${workspaceId}`;
@@ -279,7 +273,6 @@ export interface SandboxBindDrift {
 }
 
 export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift[]> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") return [];
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
   const expectedPrefix = `${home}/Desk/workspaces/`;
@@ -318,8 +311,6 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
  * Stops a sandbox container.
  */
 export async function stopSandbox(handle: SandboxHandle): Promise<void> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") return;
-
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
 

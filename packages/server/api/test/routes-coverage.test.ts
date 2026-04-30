@@ -36,7 +36,6 @@ beforeAll(async () => {
 
   process.env.DESK_SEED_USERNAME = "testuser";
   process.env.DESK_SEED_PASSWORD = "testpass";
-  process.env.DESK_SANDBOX_DRIVER = "fake";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));

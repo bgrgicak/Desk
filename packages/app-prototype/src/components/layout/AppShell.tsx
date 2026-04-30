@@ -359,6 +359,7 @@ export function AppShell({
               <TodayDetailPanel
                 key={selectedTodayItem.id}
                 item={selectedTodayItem}
+                workspaceId={chats.find(c => c.id === selectedTodayItem.runId)?.workspaceId}
                 focusInput={focusTodayInput}
                 onFocusConsumed={() => setFocusTodayInput(false)}
                 onClose={() => setSelectedTodayItem(null)}

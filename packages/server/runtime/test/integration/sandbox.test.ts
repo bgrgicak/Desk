@@ -39,8 +39,6 @@ const testWorkspaceSlug = "int-sandbox-test";
 
 beforeAll(async () => {
   if (SKIP) return;
-  // Make sure we're not using the fake driver
-  delete process.env.DESK_SANDBOX_DRIVER;
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-int-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);

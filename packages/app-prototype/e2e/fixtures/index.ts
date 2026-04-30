@@ -13,12 +13,13 @@ export { expect };
 
 interface Fixtures {
   serverUrl: string;
+  serverHome: string;
   token: string;
   loggedInPage: import("@playwright/test").Page;
 }
 
 interface Handle {
-  server: { url: string };
+  server: { url: string; home: string };
   vite: { url: string };
 }
 
@@ -38,6 +39,10 @@ function readHandle(): Handle {
 export const test = base.extend<Fixtures>({
   serverUrl: async ({}, use) => {
     await use(readHandle().server.url);
+  },
+
+  serverHome: async ({}, use) => {
+    await use(readHandle().server.home);
   },
 
   token: async ({ serverUrl }, use) => {

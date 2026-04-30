@@ -23,7 +23,6 @@ beforeAll(async () => {
 
   process.env.DESK_SEED_USERNAME = "testuser";
   process.env.DESK_SEED_PASSWORD = "testpass";
-  process.env.DESK_SANDBOX_DRIVER = "fake";
   await seedIfEmpty(pool);
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");

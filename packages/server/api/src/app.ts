@@ -738,6 +738,7 @@ export function createApp(opts: AppOptions): Server {
         "Content-Type": file.mime,
         "Content-Disposition": `inline; filename="${file.name}"`,
         "Content-Length": String(file.size),
+        "ETag": `"${file.updatedAtMs}"`,
       });
       stream.pipe(res);
       return;
@@ -747,8 +748,30 @@ export function createApp(opts: AppOptions): Server {
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
       requireLibraryPathInWorkspace(p, wsId);
-      const result = await libraryRoutes.saveContent(storage, wsId, p, req, emitEvent);
-      sendJson(res, 200, result);
+      const rawIfMatch = req.headers["if-match"];
+      // Strip quotes from ETag header value: "123" → 123
+      const ifMatch = rawIfMatch ? rawIfMatch.replace(/^"|"$/g, "") : undefined;
+      try {
+        const result = await libraryRoutes.saveContent(storage, wsId, p, req, emitEvent, ifMatch);
+        sendJson(res, 200, result);
+      } catch (err) {
+        if (err instanceof (await import("@agent-desk/shared")).ConflictError) {
+          const { stream: currentStream, file: currentFile } = await libraryRoutes.download(storage, wsId, p);
+          const chunks: Buffer[] = [];
+          await new Promise<void>((resolve, reject) => {
+            currentStream.on("data", (c: Buffer) => chunks.push(c));
+            currentStream.on("end", resolve);
+            currentStream.on("error", reject);
+          });
+          sendJson(res, 409, {
+            conflict: true,
+            content: Buffer.concat(chunks).toString("utf8"),
+            etag: currentFile.updatedAtMs,
+          });
+        } else {
+          throw err;
+        }
+      }
       return;
     }
     if (path === "/library" && method === "DELETE") {

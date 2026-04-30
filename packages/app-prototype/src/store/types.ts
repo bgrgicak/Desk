@@ -232,4 +232,5 @@ export type WsEvent =
         path: string;
         op: "added" | "removed" | "updated" | "moved";
       };
-    };
+    }
+  | { type: "workspace.synced"; payload: { workspaceId: string } };

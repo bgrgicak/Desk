@@ -21,7 +21,6 @@ beforeAll(async () => {
 
   process.env.DESK_SEED_USERNAME = "testuser";
   process.env.DESK_SEED_PASSWORD = "testpass";
-  process.env.DESK_SANDBOX_DRIVER = "fake";
   await seedIfEmpty(pool);
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
@@ -476,6 +475,26 @@ describe("scheduleAiNote", () => {
     )).rows;
     expect(after).toHaveLength(1);
     expect(after[0].id).not.toBe(first);
+  });
+});
+
+describe("workspace.synced", () => {
+  it("emits workspace.synced after a message fires successfully", async () => {
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "done" } }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "do something" });
+    await mgr.fireMessage(messageId);
+
+    const synced = events.filter((e) => e.type === "workspace.synced");
+    expect(synced.length).toBe(1);
   });
 });
 

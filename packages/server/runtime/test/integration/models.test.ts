@@ -45,7 +45,6 @@ const testWorkspaceSlug = "models-int-test";
 
 beforeAll(async () => {
   if (SKIP) return;
-  delete process.env.DESK_SANDBOX_DRIVER;
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-models-int-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);

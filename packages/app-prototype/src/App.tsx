@@ -151,7 +151,7 @@ function AppInner() {
   const readChatIds = new Set(readChatIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
-  const { data: serverAgents } = useGetAgentsQuery()
+  const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
   const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
     { skip: !activeWorkspaceId },
@@ -191,11 +191,45 @@ function AppInner() {
     { workspaceId: activeWorkspaceId, kind: ['task'] },
     { skip: !activeWorkspaceId },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, serverAgents ?? []))
+  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
   const [unpinLibraryItem] = useUnpinLibraryItemMutation()
+
+  const doCreateAndPost = useCallback(async (opts: {
+    agentId: string
+    title: string
+    content: string
+    attachments?: AttachmentRef[]
+    files?: File[]
+    kind?: 'task'
+    taskTitle?: string
+    executeAt?: string
+    goal?: string
+    pinPaths?: string[]
+  }): Promise<{ chatId: string; messageId: string }> => {
+    if (!activeWorkspaceId) throw new Error('No active workspace')
+    const chat = await createChatMutation({
+      workspaceId: activeWorkspaceId,
+      agentId: opts.agentId,
+      title: opts.title,
+    }).unwrap()
+    const msg = await postMessageMutation({
+      chatId: chat.id,
+      content: opts.content,
+      attachments: opts.attachments?.length ? opts.attachments : undefined,
+      files: opts.files?.length ? opts.files : undefined,
+      kind: opts.kind,
+      title: opts.taskTitle,
+      executeAt: opts.executeAt,
+      goal: opts.goal,
+    }).unwrap()
+    for (const path of opts.pinPaths ?? []) {
+      pinChatLibraryRefMutation({ chatId: chat.id, path }).unwrap().catch(() => {})
+    }
+    return { chatId: chat.id, messageId: msg.id }
+  }, [activeWorkspaceId, createChatMutation, postMessageMutation, pinChatLibraryRefMutation])
 
   // Agentation widget (Option+A)
   useEffect(() => {
@@ -356,33 +390,23 @@ function AppInner() {
     const itemsToPin = composeStagedItemsRef.current
     composeStagedItemsRef.current = []
     try {
-      const newChat = await createChatMutation({
-        workspaceId: activeWorkspaceId,
+      const { chatId } = await doCreateAndPost({
         agentId: pickedAgentId,
         title,
-      }).unwrap()
-      goTo({ chat: newChat.id })
-      await postMessageMutation({
-        chatId: newChat.id,
         content: message,
-        attachments: attachments && attachments.length > 0 ? attachments : undefined,
-        files: files && files.length > 0 ? files : undefined,
+        attachments,
+        files,
         kind: options?.kind,
-        title: options?.title,
+        taskTitle: options?.title,
         executeAt: options?.executeAt,
         goal: options?.goal,
-      }).unwrap()
-      // Best-effort pin: failure leaves the file usable as a message
-      // attachment, just absent from the right-sidebar "In this chat" list.
-      for (const item of itemsToPin) {
-        pinChatLibraryRefMutation({ chatId: newChat.id, path: item.id })
-          .unwrap()
-          .catch(() => {})
-      }
+        pinPaths: itemsToPin.map(i => i.id),
+      })
+      goTo({ chat: chatId })
     } catch (err) {
       toast.error('Failed to start chat', { description: extractApiError(err) })
     }
-  }, [activeWorkspaceId, workspaceServerAgents, createChatMutation, postMessageMutation, pinChatLibraryRefMutation, goTo])
+  }, [activeWorkspaceId, workspaceServerAgents, doCreateAndPost, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
@@ -399,17 +423,17 @@ function AppInner() {
     try {
       const raw = input.name?.trim() || input.instructions || 'New artifact'
       const title = raw.length > 50 ? raw.slice(0, 50) + '…' : raw
-      const newChat = await createChatMutation({ workspaceId: activeWorkspaceId, agentId: pickedAgentId, title }).unwrap()
-      await postMessageMutation({
-        chatId: newChat.id,
+      const { chatId } = await doCreateAndPost({
+        agentId: pickedAgentId,
+        title,
         content: buildArtifactPrompt(input),
         attachments: input.attachments?.length ? input.attachments : undefined,
-      }).unwrap()
-      goTo({ chat: newChat.id })
+      })
+      goTo({ chat: chatId })
     } catch (err) {
       toast.error('Failed to create artifact', { description: err instanceof Error ? err.message : undefined })
     }
-  }, [activeWorkspaceId, workspaceServerAgents, serverAgents, createChatMutation, postMessageMutation, goTo])
+  }, [activeWorkspaceId, workspaceServerAgents, serverAgents, doCreateAndPost, goTo])
 
   // Inbox badge count = server-reported awaiting-user messages.
   // Don't filter by workspace — the inbox is global.
@@ -421,10 +445,10 @@ function AppInner() {
     { skip: !activeWorkspaceId },
   )
   const libraryItems: ContextItem[] = activeWorkspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, serverAgents ?? []))
+    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? []))
     : []
   const pinnedItems = libraryItems.filter(i => i.pinned)
-  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f, serverAgents ?? []))
+  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f))
 
   // Files already in `/library` are by definition in the user's library —
   // mark them as saved so any inline "Save to Library" affordance is
@@ -468,7 +492,7 @@ function AppInner() {
   const selectedContextItem: ContextItem | null =
     libraryItem ??
     (needsMetaFallback && fallbackFile && activeWorkspaceId
-      ? toContextItem(fallbackFile, activeWorkspaceId, serverAgents ?? [])
+      ? toContextItem(fallbackFile, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? [])
       : null)
 
 
