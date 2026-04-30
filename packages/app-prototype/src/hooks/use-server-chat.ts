@@ -37,8 +37,8 @@ export interface UseServerChatReturn {
 /**
  * Real server-backed chat. Creates a new chat on first message (lazy) and
  * persists the chat id in localStorage under `storageKey` so the conversation
- * survives page reloads. Optionally attaches `staticAttachments` to every
- * outgoing message (used by useLibraryItemChat to pin the open file).
+ * survives page reloads. Optionally pins `staticAttachments` as library refs
+ * on the chat when it is first created (used by useLibraryItemChat).
  */
 export function useServerChat(
   workspaceId: string | undefined,
@@ -75,8 +75,9 @@ export function useServerChat(
     .map(serverMessageToChatMessage)
     .filter((m): m is ChatMessage => m !== null)
 
-  const lastAgentMsg = [...rawMessages].reverse().find(m => m.role === 'agent')
-  const isTyping = lastAgentMsg?.state === 'running'
+  const isTyping = rawMessages.some(
+    m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
+  )
 
   const firstAgent = workspaceAgents?.[0]
   const agentModel = firstAgent?.name ?? 'Agent'
@@ -99,13 +100,7 @@ export function useServerChat(
         }
       }
 
-      await postMessage({
-        chatId: activeChatId,
-        content,
-        ...(staticAttachments && staticAttachments.length > 0
-          ? { attachments: staticAttachments }
-          : {}),
-      }).unwrap()
+      await postMessage({ chatId: activeChatId, content }).unwrap()
     },
     [workspaceId, chatId, workspaceAgents, title, staticAttachments, createChat, postMessage, setChatId, pinChatLibraryRef],
   )
