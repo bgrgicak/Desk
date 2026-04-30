@@ -65,17 +65,36 @@ for port in 5173 35138; do
   fi
 done
 
-# 5. Start desk-server (tsx watch) in the background.
+# 5. Start desk-server (tsx watch) in the background, with auto-restart on crash.
+#    tsx watch exits when the Node process it runs also exits (e.g. on unhandled
+#    error). We restart up to MAX_SERVER_RESTARTS times before giving up, so a
+#    transient startup failure (e.g. a migration race) doesn't kill the whole dev
+#    session. A clean exit (code 0 or signal termination) stops the loop.
 (
   cd "$REPO_ROOT"
   set -a
   # shellcheck disable=SC1090
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   set +a
-  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions @agent-desk/dev"
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions @agent-desk/dev --no-warnings"
   export PORT="${PORT:-35138}"
   export DESK_HOME="${DESK_HOME:-$DESK_HOME_DEFAULT}"
-  exec npx tsx watch packages/server/api/src/main.ts
+
+  MAX_SERVER_RESTARTS=3
+  _restarts=0
+  while true; do
+    npx tsx watch packages/server/api/src/main.ts
+    _ec=$?
+    # 0 = clean shutdown; 130 = SIGINT; 143 = SIGTERM — don't retry on those.
+    [ "$_ec" -eq 0 ] || [ "$_ec" -eq 130 ] || [ "$_ec" -eq 143 ] && break
+    _restarts=$((_restarts + 1))
+    if [ "$_restarts" -ge "$MAX_SERVER_RESTARTS" ]; then
+      echo "==> desk-server: crashed ${MAX_SERVER_RESTARTS} times in a row — giving up." >&2
+      exit "$_ec"
+    fi
+    echo "==> desk-server: crashed (attempt ${_restarts}/${MAX_SERVER_RESTARTS}), restarting in 2s…" >&2
+    sleep 2
+  done
 ) &
 SERVER_PID=$!
 

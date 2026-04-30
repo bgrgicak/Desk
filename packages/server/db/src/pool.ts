@@ -1,5 +1,5 @@
 import { chmodSync } from "node:fs";
-import Database, { type Database as BetterSqlite3Db } from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
 export interface PoolConfig {
   /**
@@ -11,16 +11,16 @@ export interface PoolConfig {
 }
 
 /**
- * Per-value parameter coercion. Better-sqlite3's bind types are JS
+ * Per-value parameter coercion. node:sqlite's bind types are JS
  * primitives + Buffer + null; the rest of the codebase emits booleans,
  * Dates, and undefined freely, so we adapt at the call boundary. SQL
  * itself is now plain SQLite — no translation here.
  */
-function bindParam(p: unknown): unknown {
+function bindParam(p: unknown): null | number | bigint | string | NodeJS.ArrayBufferView {
   if (typeof p === "boolean") return p ? 1 : 0;
   if (p instanceof Date) return p.toISOString();
   if (p === undefined) return null;
-  return p;
+  return p as null | number | bigint | string | NodeJS.ArrayBufferView;
 }
 
 interface QueryResult<T> {
@@ -29,7 +29,7 @@ interface QueryResult<T> {
 }
 
 function execQuery<T>(
-  db: BetterSqlite3Db,
+  db: DatabaseSync,
   sql: string,
   params: unknown[] = [],
 ): QueryResult<T> {
@@ -42,16 +42,16 @@ function execQuery<T>(
     return { rows, rowCount: rows.length };
   }
   const info = stmt.run(...bound);
-  return { rows: [] as T[], rowCount: info.changes };
+  return { rows: [] as T[], rowCount: Number(info.changes) };
 }
 
 /**
- * SQLite-backed pool.
+ * SQLite-backed pool (backed by node:sqlite, the Node.js built-in).
  *
  * # Transaction model
  *
  * Transactions are SYNCHRONOUS. Use `transact(pool, fn)`; the callback
- * must not `await`. better-sqlite3 cannot guarantee atomicity across
+ * must not `await`. node:sqlite cannot guarantee atomicity across
  * async boundaries on a shared connection — the BEGIN/COMMIT sequence
  * happens on one connection, and any sibling handler's query lands on
  * the same connection while the event loop is yielded.
@@ -71,14 +71,14 @@ function execQuery<T>(
  * Outside, use `pool.query(...)` (Promise).
  */
 export class Pool {
-  private readonly db: BetterSqlite3Db;
+  private readonly db: DatabaseSync;
 
   constructor(config?: PoolConfig) {
     // Resolution order: explicit `path` → `DESK_DB_PATH` env (production
     // default, set by install.sh) → `:memory:` (unit-test fallback).
     const path = config?.path ?? process.env.DESK_DB_PATH ?? ":memory:";
-    this.db = new Database(path);
-    this.db.pragma("journal_mode = WAL");
+    this.db = new DatabaseSync(path);
+    this.db.exec("PRAGMA journal_mode=WAL");
     // EXCLUSIVE locking keeps the WAL index ("wal-index") in process heap
     // instead of an mmap'd `-shm` file. Two upsides for our
     // single-writer-process architecture (the API is the only thing that
@@ -95,11 +95,11 @@ export class Pool {
     // (runs on the live connection, no downtime). See BACKUP.md.
     // SQLite docs: https://www.sqlite.org/wal.html ("Use of WAL Without
     // Shared-Memory")
-    this.db.pragma("locking_mode = EXCLUSIVE");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.pragma("foreign_keys = ON");
-    this.db.pragma("busy_timeout = 5000");
-    this.db.pragma("temp_store = MEMORY");
+    this.db.exec("PRAGMA locking_mode=EXCLUSIVE");
+    this.db.exec("PRAGMA synchronous=NORMAL");
+    this.db.exec("PRAGMA foreign_keys=ON");
+    this.db.exec("PRAGMA busy_timeout=5000");
+    this.db.exec("PRAGMA temp_store=MEMORY");
 
     // The DB holds password hashes, encrypted provider-key blobs, and
     // session token hashes — anything that ends up readable to other
@@ -141,10 +141,6 @@ export class Pool {
   exec(sql: string): void {
     this.db.exec(sql);
   }
-
-  raw(): BetterSqlite3Db {
-    return this.db;
-  }
 }
 
 export function createPool(config?: PoolConfig): Pool {
@@ -164,25 +160,27 @@ type Sync<T> = T extends Promise<unknown> ? never : T;
  * the compare-and-swap pattern for async I/O around state changes.
  *
  * On exception, the transaction is rolled back and the exception
- * propagates. better-sqlite3's `db.transaction` handles the BEGIN /
- * COMMIT / ROLLBACK plumbing and supports nested calls via savepoints.
+ * propagates.
  */
 export function transact<T>(pool: Pool, fn: (db: Pool) => Sync<T>): T {
-  const wrapped = pool.raw().transaction(() => fn(pool));
+  pool.exec("BEGIN IMMEDIATE");
+  let result: Sync<T>;
   try {
-    return wrapped.immediate() as T;
+    result = fn(pool);
   } catch (err) {
-    // better-sqlite3 throws "Transaction function cannot return a promise"
-    // when the callback returned a thenable. Re-throw with an actionable
-    // message pointing at the file header so the fix path is obvious.
-    if (err instanceof Error && /promise/i.test(err.message)) {
-      throw new Error(
-        "transact() callback must be synchronous — never `await` inside. " +
-          "Move async work outside the transaction or use compare-and-swap. " +
-          "See pool.ts header for the pattern.",
-        { cause: err },
-      );
-    }
+    try { pool.exec("ROLLBACK"); } catch { /* already in error state */ }
     throw err;
   }
+  // Runtime guard: the Sync<T> type prevents Promise at compile time, but
+  // `as`-casts in JS can sneak one through.
+  if ((result as unknown) instanceof Promise) {
+    try { pool.exec("ROLLBACK"); } catch { /* already in error state */ }
+    throw new Error(
+      "transact() callback must be synchronous — never `await` inside. " +
+        "Move async work outside the transaction or use compare-and-swap. " +
+        "See pool.ts header for the pattern.",
+    );
+  }
+  pool.exec("COMMIT");
+  return result;
 }
