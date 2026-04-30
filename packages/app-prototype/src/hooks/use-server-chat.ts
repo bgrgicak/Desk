@@ -79,7 +79,7 @@ export function useServerChat(
   const isTyping = lastAgentMsg?.state === 'running'
 
   const firstAgent = workspaceAgents?.[0]
-  const agentModel = firstAgent?.model ?? 'Agent'
+  const agentModel = firstAgent?.name ?? 'Agent'
 
   const sendMessage = useCallback(
     async (content: string) => {
