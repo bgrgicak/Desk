@@ -97,6 +97,16 @@ describe("fake driver", () => {
     expect(shell).toContain(`--file '${SANDBOX_HOME}/Notes/work/inbox.md'`);
   });
 
+  it("buildOpencodeCommand includes --model when specified", () => {
+    const cmd = buildOpencodeCommand({ model: "opencode/big-pickle" });
+    expect(cmd[2]).toContain("--model 'opencode/big-pickle'");
+  });
+
+  it("buildOpencodeCommand omits --model when not specified", () => {
+    const cmd = buildOpencodeCommand({});
+    expect(cmd[2]).not.toContain("--model");
+  });
+
   it("buildOpencodeCommand survives spaces, single quotes, and leading slashes in paths", () => {
     const cmd = buildOpencodeCommand({
       attachments: [
