@@ -35,6 +35,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Suppress node:sqlite's "experimental feature" warning — it's a known
+    // limitation of Node 23; the module is stable enough for production use.
+    env: { NODE_OPTIONS: "--no-warnings" },
     exclude: [
       "**/node_modules/**",
       "**/dist/**",

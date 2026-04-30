@@ -1,14 +1,20 @@
-import argon2 from "argon2";
+import { argon2id, argon2Verify } from "hash-wasm";
+import { randomBytes } from "node:crypto";
 
-const ARGON2_OPTS: argon2.Options = {
-  type: argon2.argon2id,
-  memoryCost: 19456,
-  timeCost: 2,
+const ARGON2_OPTS = {
+  iterations: 2,
+  memorySize: 19456,
   parallelism: 1,
-};
+  hashLength: 32,
+} as const;
 
 export async function hashPassword(password: string): Promise<string> {
-  return argon2.hash(password, ARGON2_OPTS);
+  return argon2id({
+    password,
+    salt: randomBytes(16),
+    ...ARGON2_OPTS,
+    outputType: "encoded",
+  });
 }
 
 export async function verifyPassword(storedHash: string, password: string): Promise<boolean> {
@@ -17,7 +23,7 @@ export async function verifyPassword(storedHash: string, password: string): Prom
     return storedHash === `plain:${password}`;
   }
   try {
-    return await argon2.verify(storedHash, password);
+    return await argon2Verify({ hash: storedHash, password });
   } catch {
     return false;
   }
