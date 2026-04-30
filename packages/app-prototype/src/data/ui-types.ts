@@ -131,6 +131,11 @@ export interface ContextItem {
   lastAccessed?: Date
   relatedArtifactIds: string[]
   fileSize?: string
+  /** Raw byte size of the underlying file. Used to populate
+   * `AttachmentRef.size` so the inline message-bubble chip can render a
+   * size subtitle without re-fetching. `fileSize` is the formatted
+   * sibling for direct UI rendering. */
+  size?: number
   mimeType?: string
 }
 

@@ -25,6 +25,7 @@ import { ChatInput } from '@/components/compose/ChatInput'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 import {
+  useDeleteChatAttachmentMutation,
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
   useGetLibraryQuery,
@@ -33,6 +34,7 @@ import {
   usePostChatMessageMutation,
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
+import { iconForFile } from '@/data/file-kind'
 import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
@@ -396,6 +398,7 @@ function FilesPanel({
   onAddFromLibrary,
   onFileClick,
   onFileStage,
+  onFileRemove,
 }: {
   stagedFiles: UploadedFile[]
   chatFiles: ServerFile[]
@@ -406,12 +409,16 @@ function FilesPanel({
   onAddFromLibrary: (item: ContextItem) => void
   /** Double-click: open the file in detail view. */
   onFileClick?: (file: ServerFile) => void
-  /** Single-click: stage the file on the next outgoing message. */
+  /** Single-click (or kebab "Use in chat"): stage the file for the
+   * next outgoing message. */
   onFileStage?: (file: ServerFile) => void
+  /** Kebab "Remove": unlink the entry from the chat's attachments dir. */
+  onFileRemove?: (file: ServerFile) => void
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [pickerSearch, setPickerSearch] = useState('')
+  const [removingFile, setRemovingFile] = useState<ServerFile | null>(null)
 
   const handleUpload = async (entries: UploadEntry[]) => {
     await onUpload(entries)
@@ -549,21 +556,58 @@ function FilesPanel({
             <p className="px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               In this chat
             </p>
-            {filteredChatFiles.map(file => (
-              <button
-                key={`chat-${file.path}`}
-                type="button"
-                onClick={() => handleFileClick(file)}
-                disabled={!onFileClick && !onFileStage}
-                title="Click to add to message · Double-click to open"
-                className="group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors text-left disabled:cursor-default disabled:hover:bg-transparent"
-              >
-                <FileText className="h-4 w-4 shrink-0 text-muted-foreground/60" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm truncate">{file.name}</p>
+            {filteredChatFiles.map(file => {
+              const Icon = iconForFile(file.name, file.mime)
+              const interactive = onFileClick || onFileStage
+              return (
+                <div
+                  key={`chat-${file.path}`}
+                  onClick={interactive ? () => handleFileClick(file) : undefined}
+                  title="Click to add to message · Double-click to open"
+                  className={`group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors ${interactive ? 'cursor-pointer' : ''}`}
+                >
+                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{file.name}</p>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          onClick={e => e.stopPropagation()}
+                          className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                        {onFileStage && (
+                          <DropdownMenuItem onClick={() => onFileStage(file)}>
+                            <Paperclip className="h-3.5 w-3.5 mr-2" />
+                            Use in chat
+                          </DropdownMenuItem>
+                        )}
+                        {onFileClick && (
+                          <DropdownMenuItem onClick={() => onFileClick(file)}>
+                            <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                            Open
+                          </DropdownMenuItem>
+                        )}
+                        {onFileRemove && (
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => setRemovingFile(file)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            Remove
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
-              </button>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -573,6 +617,34 @@ function FilesPanel({
             : <FilesEmptyState />
         )}
       </div>
+
+      <AlertDialog
+        open={removingFile !== null}
+        onOpenChange={open => { if (!open) setRemovingFile(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove "{removingFile?.label ?? removingFile?.name}" from this chat?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The file's library entry (if any) will not be affected. Direct chat uploads are removed permanently.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (removingFile) onFileRemove?.(removingFile)
+                setRemovingFile(null)
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
       )}
     </FileDropZone>
@@ -658,6 +730,7 @@ export function ChatView({
       name: item.name,
       path: item.id,
       mime: item.mimeType,
+      size: item.size,
     }))
   )
 
@@ -682,6 +755,7 @@ export function ChatView({
   const handleSidebarUpload = handleUpload
 
   const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
+  const [deleteChatAttachment] = useDeleteChatAttachmentMutation()
 
   // Adding a library file to the chat does two things:
   // (1) stage it for the next outgoing message (existing behavior — the
@@ -695,7 +769,7 @@ export function ChatView({
     setStagedFiles(prev =>
       prev.some(s => s.id === item.id)
         ? prev
-        : [...prev, { id: item.id, name: item.name, path: item.id, mime: item.mimeType }],
+        : [...prev, { id: item.id, name: item.name, path: item.id, mime: item.mimeType, size: item.size }],
     )
     if (hasRealChatId) {
       pinChatLibraryRef({ chatId: chat.id, path: item.id })
@@ -727,6 +801,27 @@ export function ChatView({
         : [...prev, { id: file.path, name: displayName, path: file.path, mime: file.mime, size: file.size }],
     )
   }, [])
+
+  // Removes a chat attachment (kebab → "Remove" in the Files panel).
+  // Symlinks: only the link in `.chats/{chatId}/attachments/` goes away
+  // — the source library file is untouched. Direct uploads are gone for
+  // good. Also drops the row from the staging tray if it was queued.
+  const removeChatFile = useCallback((file: ServerFile) => {
+    if (!hasRealChatId) return
+    const name = file.label ?? file.name
+    setStagedFiles(prev => prev.filter(s => s.id !== file.path))
+    deleteChatAttachment({ chatId: chat.id, name: file.name })
+      .unwrap()
+      .then(() => {
+        toast.success(`Removed "${name}" from chat`)
+      })
+      .catch(err => {
+        const data = (err as { data?: { message?: string } } | undefined)?.data
+        const status = (err as { status?: number | string } | undefined)?.status
+        const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+        toast.error(`Could not remove ${name}`, { description })
+      })
+  }, [hasRealChatId, chat.id, deleteChatAttachment])
 
   // Library items for the workspace backing this chat. Used as the pool
   // for the "Add files to chat" picker in the right panel. If the chat
@@ -1015,6 +1110,7 @@ export function ChatView({
                   onAttachmentClick?.({ path: file.path, name: file.name, mime: file.mime, size: file.size })
                 }
                 onFileStage={addStagedChatFile}
+                onFileRemove={hasRealChatId ? removeChatFile : undefined}
               />
             )}
           </div>

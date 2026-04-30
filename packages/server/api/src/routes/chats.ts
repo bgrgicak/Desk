@@ -13,6 +13,7 @@ import {
   materializeNote,
   notesDir,
   pinLibraryFileToChat,
+  removeChatAttachment,
   saveChatAttachmentToLibrary,
   snapshotNote,
   trashChatDirectories,
@@ -637,4 +638,23 @@ export async function saveAttachmentToLibrary(
   });
 
   return file;
+}
+
+/**
+ * Removes a chat attachment by basename. The mutation only unlinks the
+ * entry inside `.chats/{chatId}/attachments/`: pinned library files
+ * stay put, direct chat uploads are permanently removed (no
+ * `.trash/` redirect — chat-scoped uploads are scratch, not library).
+ */
+export async function removeAttachment(
+  storage: StorageContext,
+  chatId: string,
+  attachmentName: string,
+): Promise<{ ok: true }> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+  await removeChatAttachment(storage, ws.path, chatId, attachmentName);
+  return { ok: true };
 }

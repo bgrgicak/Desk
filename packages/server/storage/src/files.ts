@@ -121,7 +121,7 @@ function rejectHiddenName(name: string): void {
 }
 
 /** Generates a non-colliding filename inside `dir` for a desired `name`. */
-async function uniqueDestPath(dir: string, name: string): Promise<string> {
+export async function uniqueDestPath(dir: string, name: string): Promise<string> {
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
   let candidate = name;
@@ -477,6 +477,34 @@ export async function deleteFile(
   const stamp = Date.now();
   const trashPath = path.join(trash, `${stamp}-${path.basename(abs)}`);
   await fs.rename(abs, trashPath);
+}
+
+/**
+ * Removes a single entry from `.chats/{chatId}/attachments/`. Works for
+ * symlinks (library pins) and regular files (direct chat uploads): the
+ * unlink only touches the entry inside the chat dir, so a pinned
+ * library file's source stays put. Hidden / dot-prefixed names are
+ * rejected because that namespace belongs to agent infrastructure and
+ * isn't user-removable from the Files panel.
+ */
+export async function removeChatAttachment(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  attachmentName: string,
+): Promise<void> {
+  if (path.basename(attachmentName) !== attachmentName) {
+    throw new ValidationError(`Invalid attachment name: ${attachmentName}`);
+  }
+  rejectHiddenName(attachmentName);
+  const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+  const linkPath = path.join(attDir, attachmentName);
+  // lstat (not stat) so a dangling symlink — pointing at a deleted
+  // library file — still reports the entry's existence and we can
+  // unlink it like any other.
+  const stat = await fs.lstat(linkPath).catch(() => null);
+  if (!stat) throw new NotFoundError(`Attachment not found: ${attachmentName}`);
+  await fs.unlink(linkPath);
 }
 
 /**

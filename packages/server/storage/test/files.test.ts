@@ -9,9 +9,12 @@ import {
   downloadFile,
   deleteFile,
   moveFile,
+  pinLibraryFileToChat,
+  removeChatAttachment,
   resolveForSandbox,
   statFile,
 } from "../src/files.js";
+import { chatAttachmentsDir, workspaceRootPath } from "../src/layout.js";
 import {
   setupTestStorage,
   teardownTestStorage,
@@ -196,6 +199,62 @@ describe("deleteFile (moves to trash)", () => {
 
   it("throws NotFoundError for unknown path", async () => {
     await expect(deleteFile(ctx, ctx.workspaceSlug,"does-not-exist.txt")).rejects.toThrow(NotFoundError);
+  });
+});
+
+describe("removeChatAttachment", () => {
+  it("unlinks a pinned library symlink without disturbing the source file", async () => {
+    const uploaded = await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "pin-source.txt",
+      mime: "text/plain",
+      stream: makeStream("payload"),
+      subpath: "PinHome",
+    });
+    await pinLibraryFileToChat(ctx, ctx.workspaceSlug, ctx.chatId, uploaded.path);
+
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "pin-source.txt");
+    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
+
+    await removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, "pin-source.txt");
+
+    await expect(fs.lstat(linkPath)).rejects.toThrow();
+    // Source file is untouched.
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const srcContent = await fs.readFile(path.join(root, uploaded.path), "utf8");
+    expect(srcContent).toBe("payload");
+  });
+
+  it("unlinks a direct chat upload (regular file)", async () => {
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    await fs.writeFile(path.join(attDir, "direct.txt"), "scratch");
+
+    await removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, "direct.txt");
+
+    await expect(fs.lstat(path.join(attDir, "direct.txt"))).rejects.toThrow();
+  });
+
+  it("rejects path-traversal and slash-bearing names", async () => {
+    await expect(
+      removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, "../escape.txt"),
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, "nested/file.txt"),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("rejects hidden / dot-prefixed names", async () => {
+    await expect(
+      removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, ".internal.txt"),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("throws NotFoundError when the attachment doesn't exist", async () => {
+    await expect(
+      removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, "ghost.txt"),
+    ).rejects.toThrow(NotFoundError);
   });
 });
 

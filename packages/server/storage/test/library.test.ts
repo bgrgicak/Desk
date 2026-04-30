@@ -326,10 +326,11 @@ describe("moveLibraryEntry", () => {
     );
 
     const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
-    const linkPath = path.join(attDir, "linked-original.txt");
+    const oldLinkPath = path.join(attDir, "linked-original.txt");
+    const newLinkPath = path.join(attDir, "linked-renamed.txt");
     const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
 
-    expect(await fs.readlink(linkPath)).toBe(
+    expect(await fs.readlink(oldLinkPath)).toBe(
       path.join(root, "Symlinks/File/linked-original.txt"),
     );
 
@@ -340,12 +341,53 @@ describe("moveLibraryEntry", () => {
       "Symlinks/File/linked-renamed.txt",
     );
 
-    expect(await fs.readlink(linkPath)).toBe(
+    // Link follows the rename in name AND target so the chat sidebar's
+    // "In this chat" row reflects the new filename.
+    await expect(fs.lstat(oldLinkPath)).rejects.toThrow();
+    expect(await fs.readlink(newLinkPath)).toBe(
       path.join(root, "Symlinks/File/linked-renamed.txt"),
     );
-    // Symlink still resolves — listAttachments would surface this row.
-    const stat = await fs.stat(linkPath);
+    const stat = await fs.stat(newLinkPath);
     expect(stat.isFile()).toBe(true);
+  });
+
+  it("disambiguates symlink rename against an existing entry of the same name", async () => {
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "collide-src.txt",
+      mime: "text/plain",
+      stream: makeStream("src"),
+      subpath: "Collide",
+    });
+    await pinLibraryFileToChat(
+      ctx,
+      ctx.workspaceSlug,
+      ctx.chatId,
+      "Collide/collide-src.txt",
+    );
+
+    // A direct chat upload that happens to take the name we'll rename
+    // the library file to — uniqueDestPath should suffix the renamed
+    // link instead of clobbering the upload.
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    await fs.writeFile(path.join(attDir, "collide-target.txt"), "occupant");
+
+    await moveLibraryEntry(
+      ctx,
+      ctx.workspaceSlug,
+      "Collide/collide-src.txt",
+      "Collide/collide-target.txt",
+    );
+
+    // Original link gone, occupant intact, renamed link took -1 suffix.
+    await expect(fs.lstat(path.join(attDir, "collide-src.txt"))).rejects.toThrow();
+    const occupant = await fs.readFile(path.join(attDir, "collide-target.txt"), "utf8");
+    expect(occupant).toBe("occupant");
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    expect(await fs.readlink(path.join(attDir, "collide-target-1.txt"))).toBe(
+      path.join(root, "Collide/collide-target.txt"),
+    );
   });
 
   it("re-points chat attachment symlinks under a renamed folder", async () => {

@@ -631,6 +631,23 @@ export const api = createApi({
         { type: "LibraryFile", id: "LIST" },
       ],
     }),
+    // Removes a single entry from `.chats/{chatId}/attachments/`.
+    // Pinned library files lose only their symlink (source untouched);
+    // direct chat uploads are permanently removed. Server route accepts
+    // the basename via `?name=` to avoid filename-encoding traps in the
+    // URL path itself.
+    deleteChatAttachment: build.mutation<
+      { ok: true },
+      { chatId: string; name: string }
+    >({
+      query: ({ chatId, name }) => ({
+        url: `/chats/${chatId}/attachments?name=${encodeURIComponent(name)}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "ChatArtifact", id: `CHAT_${chatId}` },
+      ],
+    }),
 
     // ── Library pins ─────────────────────────────────────────────────
     pinLibraryItem: build.mutation<
@@ -721,6 +738,7 @@ export const {
   useGetChatArtifactsQuery,
   usePinChatLibraryRefMutation,
   useSaveChatAttachmentToLibraryMutation,
+  useDeleteChatAttachmentMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
   useSearchQuery,

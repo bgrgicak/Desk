@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
+import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 
 interface MessageBubbleProps {
@@ -131,12 +132,18 @@ function AttachmentCard({
   const className =
     'inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px] text-left'
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
+  // Subtext: byte count when known, falling back to the workspace path.
+  // Directories don't carry a useful size, so we keep the path there.
+  const subtext =
+    attachment.kind !== 'directory' && typeof attachment.size === 'number'
+      ? humanSize(attachment.size)
+      : attachment.path
   const inner = (
     <>
       <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{attachment.name}</p>
-        <p className="text-[11px] text-muted-foreground truncate">{attachment.path}</p>
+        <p className="text-[11px] text-muted-foreground truncate">{subtext}</p>
       </div>
     </>
   )

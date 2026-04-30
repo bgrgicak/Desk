@@ -1,3 +1,4 @@
+import { basename } from "node:path/posix";
 import { type Pool, transact } from "../pool.js";
 import { MessageSchema, type Message } from "@agent-desk/shared";
 
@@ -283,6 +284,96 @@ export async function updateMessage(
     params,
   );
   return rows.length ? rowToMessage(rows[0]) : null;
+}
+
+/**
+ * Rewrites `attachments[].path` on every message in `workspaceId` whose
+ * attachment refs point at a renamed library entry. Both the exact path
+ * (`path === fromPath`) and any descendant (`path` starts with
+ * `fromPath + "/"`) are rewritten — covers file rename (only exact
+ * match applies in practice) and folder rename (both apply: the folder
+ * itself plus everything under it).
+ *
+ * Returns the updated rows so the caller can broadcast `message.updated`
+ * events; clients then patch their per-chat message cache without a
+ * full refetch.
+ */
+export async function retargetAttachmentPaths(
+  db: Pool,
+  workspaceId: string,
+  fromPath: string,
+  toPath: string,
+): Promise<Message[]> {
+  const fromWithSlash = fromPath + "/";
+  // Pull every candidate row with non-null attachments in this workspace
+  // and parse JSON in JS — SQLite JSON1 can rewrite a single field but
+  // the array iteration + per-element prefix logic is clearer here, and
+  // a workspace's message volume is small enough that the extra parse
+  // doesn't matter.
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT m.id, m.attachments
+     FROM messages m
+     JOIN chats c ON c.id = m.chat_id
+     WHERE c.workspace_id = ? AND m.attachments IS NOT NULL`,
+    [workspaceId],
+  );
+
+  const updated: Message[] = [];
+  for (const row of rows) {
+    const raw = row.attachments;
+    if (typeof raw !== "string" || raw === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    let changed = false;
+    const next = parsed.map((att) => {
+      const p = (att as { path?: unknown })?.path;
+      if (typeof p !== "string") return att;
+      // Rewrite the displayed `name` alongside the path: chat attachments
+      // are sent with `name = basename(path)` (see buildSendMessageBodyFromForm
+      // and addStagedFromLibrary), and the message-bubble chip shows it as
+      // the primary title. Leaving it stale produces the "Hello.txt" /
+      // "Hello3.txt" split visible in the UI after a rename.
+      if (p === fromPath) {
+        changed = true;
+        return {
+          ...(att as Record<string, unknown>),
+          path: toPath,
+          name: basename(toPath),
+        };
+      }
+      if (p.startsWith(fromWithSlash)) {
+        changed = true;
+        // Folder rename: the descendant's basename is unchanged, so
+        // basename(newPath) === existing name. Recompute uniformly to
+        // keep the rule simple.
+        const newPath = toPath + p.slice(fromPath.length);
+        return {
+          ...(att as Record<string, unknown>),
+          path: newPath,
+          name: basename(newPath),
+        };
+      }
+      return att;
+    });
+    if (!changed) continue;
+    const result = await db.query(
+      `UPDATE messages
+       SET attachments = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?
+       RETURNING *`,
+      [JSON.stringify(next), row.id as string],
+    );
+    if (result.rows.length > 0) {
+      updated.push(rowToMessage(result.rows[0] as Record<string, unknown>));
+    }
+  }
+  return updated;
 }
 
 export interface CrossChatListOptions {

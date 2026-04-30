@@ -231,6 +231,7 @@ export type WsEvent =
         workspaceId: string;
         path: string;
         op: "added" | "removed" | "updated" | "moved";
+        affectedChatIds?: string[];
       };
     }
   | { type: "workspace.synced"; payload: { workspaceId: string } };

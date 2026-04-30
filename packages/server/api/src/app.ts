@@ -594,6 +594,14 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "DELETE") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const name = query.get("name") ?? "";
+      if (!name) throw new ValidationError("Missing 'name' query parameter");
+      const result = await chatRoutes.removeAttachment(storage, segments[1], name);
+      sendJson(res, 200, result);
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {
       await requireOwnedChat(pool, segments[1], userId);
       const body = (await parseBody(req)) as { path?: unknown };
