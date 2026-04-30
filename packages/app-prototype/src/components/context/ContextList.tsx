@@ -427,6 +427,27 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
     setNewFileName('')
   }
 
+  const handleCreateNote = async () => {
+    if (!activeWorkspaceId) return
+    const subpath = subpathFromFolderId(currentFolderId)
+    const name = 'Untitled.txt'
+    const blob = new File([''], name, { type: 'text/plain' })
+    try {
+      const serverFile = await uploadLibraryFile({
+        workspaceId: activeWorkspaceId,
+        file: blob,
+        subpath: subpath || undefined,
+      }).unwrap()
+      const item = toContextItem(serverFile, activeWorkspaceId)
+      onItemClick(item)
+    } catch (err) {
+      const data = (err as { data?: { message?: string } } | undefined)?.data
+      const status = (err as { status?: number | string } | undefined)?.status
+      const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
+      toast.error(`Failed to create note`, { description })
+    }
+  }
+
   // Folders come from the server's recursive library listing; the
   // selector maps each FolderRef to a UI Folder whose `id` is the
   // workspace-relative path so navigation and filtering just work.
@@ -657,11 +678,25 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             </Button>
           )}
 
-          {/* Add dropdown */}
+          {/* Upload dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="px-2" data-testid="library-upload-button">
+                <Upload className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Create dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="default" className="gap-1.5 text-xs" data-testid="library-add-button">
-                Add
+                Create
                 <ChevronDown className="h-3 w-3 ml-0.5" />
               </Button>
             </DropdownMenuTrigger>
@@ -673,11 +708,8 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 </>
               )}
               <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleCreateNote} data-testid="library-create-note"><StickyNote className="h-4 w-4 mr-2" />New note</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)} data-testid="library-create-folder"><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>}

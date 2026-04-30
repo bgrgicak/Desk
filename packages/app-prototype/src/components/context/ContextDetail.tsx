@@ -2,12 +2,12 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Link2,
   Download,
+  MessageSquarePlus,
   Trash2,
   MoreHorizontal,
   ExternalLink,
   Pencil,
   PanelRight,
-  Save,
   ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -62,6 +62,7 @@ import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePrefs } from '@/hooks/use-prefs'
+import { usePersistedState } from '@/hooks/use-persisted-state'
 
 const AUTO_SAVE_DEBOUNCE_MS = 1_000
 const SAVED_BADGE_TTL_MS = 2_000
@@ -74,9 +75,9 @@ interface ContextDetailProps {
   /** Jump back to the Library view with the given folder open.
    * Pass `null` to land on the Library root. */
   onNavigateToFolder: (folderId: string | null) => void
-  /** Called after a successful rename so the parent can update the
-   * URL/route to the new workspace-relative path. */
-  onItemPathChange?: (newPath: string) => void
+  /** Called after a successful rename (note title auto-rename or file
+   * rename modal) so the parent can update the URL to the new path. */
+  onRenameItem?: (newPath: string) => void
 }
 
 function canPreview(item: ContextItem): boolean {
@@ -84,12 +85,12 @@ function canPreview(item: ContextItem): boolean {
   return fileKindForItem(item) !== 'unknown'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder, onItemPathChange }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
 
-  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [panelCollapsed, setPanelCollapsed] = usePersistedState<boolean>('desk.context.sidebarCollapsed', false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   // File content fetched on demand for preview. Text files (notes, uri-list
@@ -180,9 +181,14 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     }
   }
 
-  // Rename modal (for file / link items — notes use the inline title editor).
-  // The parent re-keys this component on item.id, so initial state is always
-  // fresh for the current item — no syncing effect needed.
+  // Display name for the breadcrumb on notes — trunk's heading auto-rename
+  // (handleHeadingChange below) writes through this so the page header
+  // reflects the live heading. Non-notes show item.name directly.
+  const [itemName, setItemName] = useState(item.name)
+
+  // Rename modal (for file / link items — notes rename via the heading
+  // editor). The parent re-keys this component on item.id, so initial state
+  // is always fresh for the current item — no syncing effect needed.
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState(item.name)
 
@@ -200,7 +206,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
       await moveLibraryEntry({ workspaceId: activeWorkspaceId, from: item.id, to }).unwrap()
       toast.success(`Renamed to "${name}"`)
       setRenameOpen(false)
-      onItemPathChange?.(to)
+      onRenameItem?.(to)
     } catch (err) {
       toast.error(`Rename failed`, {
         description: err instanceof Error ? err.message : undefined,
@@ -237,6 +243,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
       }).unwrap()
       setPreviewText(editorValue)
       setSavedAt(Date.now())
+      headingLinkedRef.current = false
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
         description: err instanceof Error ? err.message : undefined,
@@ -267,6 +274,75 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     : showSavedBadge
     ? 'Saved'
     : 'Save'
+
+  // Document editor state for notes: a separate heading textarea and body
+  // textarea. Content is stored as `heading\n\nbody` in the file; on first
+  // load we parse the two parts from previewText. Changes to either part
+  // recompose editorValue so the existing auto-save mechanism just works.
+  //
+  // Heading → filename link: active only while the file still has its
+  // default "Untitled" name. As soon as the content saves or the user opens
+  // the header filename edit the link is severed.
+  const noteExt = item.name.includes('.') ? item.name.slice(item.name.lastIndexOf('.')) : ''
+  const [noteHeading, setNoteHeading] = useState('')
+  const [noteBody, setNoteBody] = useState('')
+  const headingBodyInitFor = useRef<string | null>(null)
+  const headingLinkedRef = useRef(/^Untitled(-\d+)?$/.test(item.name.replace(/\.[^/.]+$/, '')))
+  const titleRef = useRef<HTMLTextAreaElement>(null)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
+  const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (previewText == null) return
+    if (headingBodyInitFor.current === item.id) return
+    headingBodyInitFor.current = item.id
+    const sep = previewText.indexOf('\n\n')
+    if (sep === -1) {
+      setNoteHeading(previewText)
+      setNoteBody('')
+    } else {
+      setNoteHeading(previewText.slice(0, sep))
+      setNoteBody(previewText.slice(sep + 2))
+    }
+  }, [previewText, item.id])
+
+  const autoResize = (el: HTMLTextAreaElement | null) => {
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }
+  useEffect(() => { autoResize(titleRef.current) }, [noteHeading])
+  useEffect(() => { autoResize(bodyRef.current) }, [noteBody])
+
+  const handleHeadingChange = (value: string) => {
+    setNoteHeading(value)
+    setEditorValue(value ? value + '\n\n' + noteBody : noteBody)
+    if (!headingLinkedRef.current || !activeWorkspaceId) return
+    setItemName((value.trim() || 'Untitled') + noteExt)
+    if (renameTimerRef.current) clearTimeout(renameTimerRef.current)
+    renameTimerRef.current = setTimeout(async () => {
+      const stem = value.trim() || 'Untitled'
+      const currentStem = item.name.replace(/\.[^/.]+$/, '') || item.name
+      if (stem === currentStem) return
+      const newName = `${stem}${noteExt}`
+      const folder = item.folderId ?? ''
+      const newPath = folder ? `${folder}/${newName}` : newName
+      try {
+        await moveLibraryEntry({ workspaceId: activeWorkspaceId, from: item.id, to: newPath }).unwrap()
+        setItemName(newName)
+        onRenameItem?.(newPath)
+      } catch (err) {
+        toast.error('Rename failed', {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }, AUTO_SAVE_DEBOUNCE_MS)
+  }
+
+  const handleBodyChange = (value: string) => {
+    setNoteBody(value)
+    setEditorValue(noteHeading ? noteHeading + '\n\n' + value : value)
+  }
 
   // "Related artifacts" — the server has no explicit artifact-to-context
   // relation yet. We hydrate against the library and filter by the ids
@@ -329,7 +405,9 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                     <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
                       <FileIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       {item.type === 'note' ? (
-                        <span className="truncate">{item.name}</span>
+                        // Notes: name is driven by the in-page heading editor's
+                        // auto-rename (handleHeadingChange). Static here.
+                        <span className="truncate">{itemName}</span>
                       ) : (
                         <button
                           onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}
@@ -359,32 +437,27 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                     saveState.isLoading ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
                   }
                 >
-                  <Save className="h-3.5 w-3.5 mr-1.5" />
                   {saveLabel}
-                </Button>
-              )}
-
-              <Button
-                size="sm"
-                className="text-xs"
-                onClick={() => onCompose([item])}
-              >
-                Use in chat
-              </Button>
-
-              {item.type === 'file' && (
-                <Button variant="outline" size="sm" className="text-xs" onClick={handleDownload}>
-                  Download
                 </Button>
               )}
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" data-testid="library-detail-more">
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onClick={() => onCompose([item])}>
+                    <MessageSquarePlus className="h-4 w-4 mr-2" />
+                    Use in chat
+                  </DropdownMenuItem>
+                  {(item.type === 'file' || item.type === 'note') && (
+                    <DropdownMenuItem onClick={handleDownload}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Download
+                    </DropdownMenuItem>
+                  )}
                   {item.type !== 'note' && (
                     <DropdownMenuItem onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}>
                       <Pencil className="h-4 w-4 mr-2" />
@@ -414,22 +487,34 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
-          {item.type === 'note' ? (
-            <div className="flex-1 min-h-0 bg-background">
-              {editorValue !== null ? (
-                <TextFileEditor
-                  value={editorValue}
-                  onChange={setEditorValue}
-                  filename={item.name}
-                  mimeType={item.mimeType}
-                />
-              ) : (
-                <div className="flex items-center justify-center py-12">
+          {item.type === 'note' && item.mimeType !== 'text/markdown' ? (
+            <div className="flex-1 flex flex-col bg-background overflow-y-auto">
+              <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
+                {editorValue !== null ? (
+                  <>
+                    <textarea
+                      ref={titleRef}
+                      value={noteHeading}
+                      onChange={(e) => handleHeadingChange(e.target.value)}
+                      placeholder="Heading"
+                      rows={1}
+                      className="w-full resize-none overflow-hidden bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/30 outline-none leading-tight mb-4"
+                    />
+                    <textarea
+                      ref={bodyRef}
+                      value={noteBody}
+                      onChange={(e) => handleBodyChange(e.target.value)}
+                      placeholder="Start writing…"
+                      rows={1}
+                      className="w-full resize-none overflow-hidden bg-transparent text-sm text-foreground/80 placeholder:text-muted-foreground/30 outline-none leading-relaxed"
+                    />
+                  </>
+                ) : (
                   <p className="text-sm text-muted-foreground">
                     {previewError ? `Failed to load: ${previewError}` : 'Loading…'}
                   </p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           ) : item.type === 'link' ? (
             (() => {
@@ -564,7 +649,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
                 </p>
               )}
             </div>
-          ) : kind === 'text' && item.type === 'file' ? (
+          ) : kind === 'text' && (item.type === 'file' || item.mimeType === 'text/markdown') ? (
             <div className="flex-1 min-h-0 bg-background">
               {editorValue !== null ? (
                 <TextFileEditor

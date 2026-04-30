@@ -28,9 +28,7 @@ test("library upload via 'Choose file' button uploads to the server", async ({
   await page.getByRole("button", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
 
-  // The empty-state "Add" button is the one in view when nothing has been
-  // uploaded yet. On fresh e2e user it's the only one.
-  const addBtn = page.getByRole("button", { name: /^Add$/ }).first();
+  const addBtn = page.locator('[data-testid="library-upload-button"]').first();
   await addBtn.click();
 
   // File input lives beside the dropdown-menu item with this testid.
@@ -482,16 +480,11 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
   await page.reload();
   await page.waitForLoadState("networkidle");
 
-  // Navigate into the Library, open the seeded file's detail view, then
-  // click the "Use in chat" header button — the same affordance the user
-  // sees on a library file (e.g. a chat summary).
+  // Navigate into the Library and open the seeded file's detail view.
   await page.getByRole("button", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
   await page.getByText(fileName, { exact: true }).first().click();
   await page.waitForLoadState("networkidle");
-
-  // Distinguish this header button from the row-level "Use in chat" the
-  // ContextList renders by anchoring it next to the Save/Download row.
   const chatCreatePromise = page.waitForResponse(
     (res) =>
       res.request().method() === "POST" &&
@@ -509,7 +502,8 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
       /\/chats\/[^/]+\/library-refs$/.test(req.url()),
   );
 
-  await page.getByRole("button", { name: /^Use in chat$/ }).first().click();
+  await page.locator('[data-testid="library-detail-more"]').first().click();
+  await page.getByRole("menuitem", { name: /Use in chat/ }).first().click();
 
   // The new-chat input tray should already show the file as a chip —
   // it was seeded from `initialStagedItems` on mount. The tray renders
