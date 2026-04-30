@@ -543,6 +543,7 @@ function AppInner() {
               goTo({ item: artifact.id })
             }}
             onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
+            onRenameItem={(newPath) => goTo({ item: newPath })}
           />
         )}
 
