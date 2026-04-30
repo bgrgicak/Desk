@@ -22,6 +22,7 @@ export {
   overwriteFile,
   pinLibraryFileToChat,
   saveChatAttachmentToLibrary,
+  removeChatAttachment,
   trashChatDirectories,
   resolveForSandbox,
   validateLibrarySubpath,

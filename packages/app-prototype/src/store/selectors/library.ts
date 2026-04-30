@@ -1,7 +1,7 @@
 import type { ContextItem, Folder } from "@/data/ui-types";
 import type { ServerAgent, ServerFile, ServerFolder } from "../types";
 
-function humanSize(bytes: number): string {
+export function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -55,6 +55,7 @@ export function toContextItem(
     lastAccessed: undefined,
     relatedArtifactIds: [],
     fileSize: humanSize(f.size),
+    size: f.size,
     mimeType: f.mime,
   };
 }
