@@ -419,7 +419,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" data-testid="library-detail-more">
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
