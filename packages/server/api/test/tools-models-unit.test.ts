@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@desk/db", () => ({
+vi.mock("@agent-desk/db", () => ({
   queries: {
     workspaces: {
       list: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock("../src/providerKeys.js", () => ({
   resolveProviderKeys: vi.fn(),
 }));
 
-import { queries } from "@desk/db";
+import { queries } from "@agent-desk/db";
 import { resolveProviderKeys } from "../src/providerKeys.js";
 import { listModels } from "../src/routes/tools.js";
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { NotFoundError, ValidationError, MAX_UPLOAD_BYTES } from "@desk/shared";
+import { NotFoundError, ValidationError, MAX_UPLOAD_BYTES } from "@agent-desk/shared";
 import {
   uploadArtifact,
   readFile,

@@ -5,7 +5,7 @@ import {
   Zap, FileText, ImageIcon, Table, Globe, ListTodo, Target,
   type LucideIcon,
 } from 'lucide-react'
-import type { GoalKey } from '@desk/shared'
+import type { GoalKey } from '@agent-desk/shared'
 import type { ContextItem } from '@/data/ui-types'
 import {
   useGetAgentsQuery,

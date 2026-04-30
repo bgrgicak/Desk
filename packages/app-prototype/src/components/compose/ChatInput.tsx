@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import {
   CornerDownLeft, Paperclip, X,
 } from 'lucide-react'
-import { type GoalKey as SharedGoalKey } from '@desk/shared'
+import { type GoalKey as SharedGoalKey } from '@agent-desk/shared'
 import {
   ComposerPickers,
   getGoalPlaceholder,

@@ -219,8 +219,8 @@ if `currentPassword` does not match.
 Returns every known AI provider key name with its value either masked
 (first 6 + last 4 characters) or `null` when unset. Keys are encrypted
 at rest in the `user_settings` table using AES-256-GCM; the encryption
-key lives on disk at `DESK_SECRET_KEY_PATH` (default
-`/home/desk/secret.key`).
+key comes from `DESK_SECRET_KEY` (preferred) or a 32-byte file at
+`DESK_SECRET_KEY_PATH`.
 
 ### PUT /me/providers
 
@@ -228,8 +228,8 @@ Partial update. Body is `{ providers: { NAME: VALUE | null, ... } }`. A
 `null` value deletes the named key; any string value sets it. Names not
 present in the body are left untouched. Unknown names return 400.
 
-The set of known names is `PROVIDER_KEY_VARS` in `@desk/shared`. In
-dev, values seed from `/desk/.env` once per user (gated by `DESK_DEV=1`);
+The set of known names is `PROVIDER_KEY_VARS` in `@agent-desk/shared`. In
+dev, values seed from the repo's `.env` once per user (gated by `DESK_DEV=1`);
 in prod, the UI is the only way to populate them.
 
 ## Library

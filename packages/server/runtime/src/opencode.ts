@@ -1,4 +1,4 @@
-import { type Pool } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -19,7 +19,7 @@ export interface ExecRunOptions {
   attachments?: string[];
   /**
    * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
-   * to `http://host.docker.internal:8080` when omitted.
+   * to `http://host.docker.internal:35138` when omitted.
    */
   apiUrl?: string;
   /** Provider API keys forwarded into every exec so they're always current. */
@@ -82,7 +82,7 @@ export async function execRun(
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      apiUrl: opts.apiUrl ?? "http://host.docker.internal:8080",
+      apiUrl: opts.apiUrl ?? "http://host.docker.internal:35138",
       providerKeys: opts.providerKeys,
       onLog: opts.onLog,
     });

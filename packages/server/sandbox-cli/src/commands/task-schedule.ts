@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  'desk task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] <content>';
+  'desk-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] <content>';
 
 export const help = `\
-desk task schedule — create a task message in a chat. The task can be one
+desk-agent task schedule — create a task message in a chat. The task can be one
 of: scheduled (fires once at --at), recurring (fires on --cron), or manual
 (no schedule — sits as a TODO until the user runs it).
 
@@ -34,20 +34,20 @@ Optional:
 
 Examples:
   # Recurring weekday standup reminder
-  desk task schedule --chat ch_abc \\
+  desk-agent task schedule --chat ch_abc \\
       --title "Daily standup" \\
       --cron "0 9 * * 1-5" \\
       "Post the standup template to #team-engineering"
 
   # One-shot reminder
-  desk task schedule --chat ch_abc \\
+  desk-agent task schedule --chat ch_abc \\
       --title "Review migration PR" \\
       --at "2026-05-01T15:00:00Z" \\
       "Review the schema migration PR before the merge freeze"
 
   # Manual task (no schedule) — sits in the user's Tasks board until
   # they run it.
-  desk task schedule --chat ch_abc \\
+  desk-agent task schedule --chat ch_abc \\
       --title "Summarize Q1 metrics" \\
       "Pull the Q1 numbers from the deck and produce a 1-pager"
 

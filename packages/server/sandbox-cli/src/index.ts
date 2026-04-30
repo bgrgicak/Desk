@@ -31,7 +31,7 @@ async function printHelp(): Promise<void> {
     lines.push(`  ${cmd.usage}`);
   }
   lines.push("");
-  lines.push("Run `desk <command> --help` for full documentation.");
+  lines.push("Run `desk-agent <command> --help` for full documentation.");
   process.stdout.write(lines.join("\n") + "\n");
 }
 

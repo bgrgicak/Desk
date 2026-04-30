@@ -6,7 +6,7 @@ import {
   type Chat,
   type GoalKey,
   type MessageKind,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 
 function rowToChat(row: Record<string, unknown>): Chat {
   return ChatSchema.parse({

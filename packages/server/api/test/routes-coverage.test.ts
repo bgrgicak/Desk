@@ -13,13 +13,13 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@desk/db";
-import { runMigrations, seedIfEmpty } from "@desk/db";
-import { ensureLayout } from "@desk/storage";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@desk/scheduler";
+import { createRunManager } from "@agent-desk/scheduler";
 
 let pool: Pool;
 let server: http.Server;

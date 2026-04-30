@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
-import { queries } from "@desk/db";
-import { NotFoundError, type WsEvent } from "@desk/shared";
+import { queries } from "@agent-desk/db";
+import { NotFoundError, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -15,7 +15,7 @@ import {
   type StorageContext,
   type FileRef,
   type FolderRef,
-} from "@desk/storage";
+} from "@agent-desk/storage";
 
 /**
  * Resolves a workspace's on-disk slug. Used by every library route handler

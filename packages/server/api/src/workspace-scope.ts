@@ -1,7 +1,7 @@
-import { type Pool } from "@desk/db";
-import { NotFoundError, ValidationError } from "@desk/shared";
-import { queries } from "@desk/db";
-import { validateLibrarySubpath } from "@desk/storage";
+import { type Pool } from "@agent-desk/db";
+import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { queries } from "@agent-desk/db";
+import { validateLibrarySubpath } from "@agent-desk/storage";
 import { requireOwnedChat, requireOwnedWorkspace } from "./auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;

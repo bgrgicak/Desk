@@ -23,8 +23,8 @@ describe("pool path resolution", () => {
     // Pre-fix regression: production main.ts called createPool with a
     // hardcoded postgres connection string, which routed to a tmp-file
     // via a now-deleted test compat shim and silently bypassed
-    // DESK_DB_PATH. The DB ended up on tmpfs and was wiped on every
-    // vm:reset. We keep this test as a guardrail against regressions
+    // DESK_DB_PATH. The DB ended up on tmpfs and was wiped between
+    // restarts. We keep this test as a guardrail against regressions
     // in the resolution order.
     const dbPath = join(tmpDir, "desk.db");
     process.env.DESK_DB_PATH = dbPath;

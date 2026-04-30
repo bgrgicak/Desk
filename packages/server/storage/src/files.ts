@@ -4,12 +4,12 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { type Pool } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
 import {
   NotFoundError,
   MAX_UPLOAD_BYTES,
   ValidationError,
-} from "@desk/shared";
+} from "@agent-desk/shared";
 import {
   chatAttachmentsDir,
   resolveHostPath,
@@ -17,7 +17,7 @@ import {
   trashDir,
   workspaceRootPath,
 } from "./layout.js";
-import { ID_PREFIXES } from "@desk/shared";
+import { ID_PREFIXES } from "@agent-desk/shared";
 
 /**
  * Per-request storage context — carries the DB pool + Desk home root.

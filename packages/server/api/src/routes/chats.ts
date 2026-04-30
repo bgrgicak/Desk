@@ -1,11 +1,11 @@
-import { type Pool } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@desk/shared";
+import { queries } from "@agent-desk/db";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatAttachmentsDir,
@@ -21,7 +21,7 @@ import {
   type FileRef,
   type NoteVersion,
   type StorageContext,
-} from "@desk/storage";
+} from "@agent-desk/storage";
 
 /**
  * Subset of the run manager the patch-message route needs to drive

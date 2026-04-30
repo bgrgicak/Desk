@@ -31,7 +31,7 @@ describe("renderAgentFile", () => {
     // Inlined skills — desk-cli skill must appear before the user
     // instructions section so OpenCode sees it as always-on context.
     expect(result).toContain("# Desk CLI");
-    expect(result).toContain("desk task schedule");
+    expect(result).toContain("desk-agent task schedule");
     expect(result.indexOf("# Desk CLI")).toBeLessThan(result.indexOf("## User instructions"));
 
     // User instructions
@@ -76,6 +76,6 @@ describe("renderAgentFile", () => {
     });
 
     expect(result).toContain("not reported — assume UTC");
-    expect(result).toContain("RUN `desk task schedule`");
+    expect(result).toContain("RUN `desk-agent task schedule`");
   });
 });

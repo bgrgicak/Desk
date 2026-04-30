@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@desk/storage";
+import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/storage";
 
 /**
  * Mount model (workspace-as-home):

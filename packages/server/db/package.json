@@ -1,5 +1,5 @@
 {
-  "name": "@desk/db",
+  "name": "@agent-desk/db",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@desk/dev": "./src/index.ts",
+      "@agent-desk/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
@@ -20,7 +20,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@desk/shared": "*",
+    "@agent-desk/shared": "*",
     "argon2": "^0.44.0",
     "better-sqlite3": "^11.5.0",
     "zod": "^3.23.0"

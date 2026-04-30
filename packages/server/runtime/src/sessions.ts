@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@desk/db";
-import { generateId, type SandboxSession } from "@desk/shared";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { generateId, type SandboxSession } from "@agent-desk/shared";
+import { queries } from "@agent-desk/db";
 
 /**
  * Per-run sandbox session tokens. The runtime mints one before invoking

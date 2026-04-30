@@ -1,14 +1,6 @@
 {
-  "name": "@desk/setup",
+  "name": "@agent-desk/setup",
   "version": "0.0.1",
   "private": true,
-  "type": "module",
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^3.1.0"
-  }
+  "type": "module"
 }

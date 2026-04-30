@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test (host + VM suites)
+    name: Test (host suite)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -43,17 +43,15 @@ jobs:
         run: npm ci
 
       - name: Build sandbox-cli (prereq for sandbox image)
-        run: npm run build --workspace=@desk/sandbox-cli
+        run: npm run build --workspace=@agent-desk/sandbox-cli
 
       - name: Build desk/sandbox:v1 image
         working-directory: packages/server
-        # Match the in-container `agent` uid to the runner uid so the
-        # workspace bind-mount at /home/agent is writable from inside the
-        # container (CapDrop:ALL drops CAP_DAC_OVERRIDE, so uid 0 doesn't
-        # bypass DAC). Dev VMs build with AGENT_UID=2000 to match their
-        # `desk` service user; CI doesn't have one, so adapt to whoever
-        # the runner is.
-        run: docker build --build-arg AGENT_UID=$(id -u) -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        # The image bakes a baseline `agent` user at UID 2000. At runtime
+        # desk-server overrides this with `--user $(id -u):$(id -g)` of
+        # the host process (or 0:0 under rootless docker), so the build
+        # arg doesn't need tuning per-runner.
+        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 
       - name: Run unit + integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling
@@ -61,14 +59,14 @@ jobs:
         # fail after three attempts.
         run: npx vitest run --passWithNoTests --retry=2
 
-      - name: Build @desk/api (+ deps via nx) for the Playwright fixture
+      - name: Build @agent-desk/api (+ deps via nx) for the Playwright fixture
         # The Playwright fixture (`packages/app-prototype/e2e/fixtures/server.ts`)
         # spawns `node packages/server/api/dist/main.js`. nx's
         # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
         # storage, tools, runtime, scheduler) in topological order, so a
-        # single `nx build @desk/api` produces every `dist/` the spawned
+        # single `nx build @agent-desk/api` produces every `dist/` the spawned
         # process resolves through Node's default `import` condition.
-        run: npx nx build @desk/api
+        run: npx nx build @agent-desk/api
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

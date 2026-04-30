@@ -12,7 +12,7 @@ await build({
   // self-contained script that runs on any Node version with `.js`.
   format: "cjs",
   target: "node18",
-  conditions: ["@desk/dev"],
+  conditions: ["@agent-desk/dev"],
   banner: { js: "#!/usr/bin/env node" },
 });
 

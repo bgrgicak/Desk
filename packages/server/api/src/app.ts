@@ -2,10 +2,10 @@ import { createServer as httpCreateServer, type IncomingMessage, type ServerResp
 import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, join as pathJoin } from "node:path";
-import { type Pool } from "@desk/db";
-import { DeskError, ValidationError, type WsEvent } from "@desk/shared";
-import type { StorageContext } from "@desk/storage";
-import type { createRunManager } from "@desk/scheduler";
+import { type Pool } from "@agent-desk/db";
+import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import type { StorageContext } from "@agent-desk/storage";
+import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
 import { authenticateSandboxToken } from "./auth/sandboxToken.js";
@@ -19,7 +19,6 @@ import {
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
-import { HEALTH_MESSAGE } from "./health-message.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -258,10 +257,10 @@ export function createApp(opts: AppOptions): Server {
     const { segments, userId, query } = params;
     const path = params.path;
 
-    // Health check — used by install.sh + VM e2e tests to confirm the server is up.
+    // Health check — confirms the server is up.
     if (path === "/" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end(HEALTH_MESSAGE);
+      res.end("hello world");
       return;
     }
 
@@ -302,7 +301,7 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedChat(pool, chatId, agent.userId);
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
-      // this from `desk task schedule`, so a chat reply isn't the intent.
+      // this from `desk-agent task schedule`, so a chat reply isn't the intent.
       // Caller can still override (e.g. kind="ai_note") if they have a
       // reason to.
       const sendBody = { kind: "task", ...body };

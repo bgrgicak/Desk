@@ -1,6 +1,6 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { UnauthorizedError } from "@desk/shared";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { UnauthorizedError } from "@agent-desk/shared";
 import { issueSession, revokeSession } from "../auth/sessions.js";
 
 export async function handleLogin(

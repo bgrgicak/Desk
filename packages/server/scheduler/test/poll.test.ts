@@ -3,9 +3,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@desk/db";
-import { generateId } from "@desk/shared";
+import { Pool } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { generateId } from "@agent-desk/shared";
 import { Cron } from "croner";
 import { createRunManager } from "../src/runs.js";
 

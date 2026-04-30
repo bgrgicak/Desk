@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ValidationError, ID_PREFIXES } from "@desk/shared";
+import { ValidationError, ID_PREFIXES } from "@agent-desk/shared";
 
 /**
  * Single source of truth for resolving the Desk on-disk root.
@@ -10,9 +10,9 @@ import { ValidationError, ID_PREFIXES } from "@desk/shared";
  * silent split — API writing to `$HOME` while the runtime mounts `/opt/desk`
  * — caused user uploads to vanish from inside sandboxes.
  *
- * Resolution order: explicit `DESK_HOME` env var → `HOME` (the running
- * service account's home) → `/home/desk` (the `desk` system user's home,
- * pinned by `useradd --home-dir /home/desk` in install.sh).
+ * Resolution order: explicit `DESK_HOME` env var → `HOME` (the user
+ * running desk-server) → `/home/desk` (last-ditch fallback for headless
+ * environments without `$HOME`).
  */
 export function resolveDeskHome(): string {
   return process.env.DESK_HOME ?? process.env.HOME ?? "/home/desk";

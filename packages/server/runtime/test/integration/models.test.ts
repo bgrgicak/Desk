@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout } from "@desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
 import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";

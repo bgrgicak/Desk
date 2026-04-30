@@ -84,8 +84,8 @@ export class Pool {
     // single-writer-process architecture (the API is the only thing that
     // opens this file; at/cron jobs route through /internal/messages/fire):
     //   1. Removes the mmap requirement on the underlying filesystem, so
-    //      the DB works on virtiofs, 9p, or reverse-sshfs Lima mounts
-    //      without changing the durability contract.
+    //      the DB stays portable across local FS / network mounts /
+    //      bind-mounted volumes without changing the durability contract.
     //   2. Forces a single-opener invariant — a stray second process
     //      gets SQLITE_BUSY at open time instead of silently writing
     //      through a stale WAL view. Tests that simulate "server

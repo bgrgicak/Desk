@@ -1,7 +1,7 @@
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
-import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@desk/shared";
-import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@desk/storage";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
+import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@agent-desk/shared";
+import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
 
 export async function listWorkspaces(pool: Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);

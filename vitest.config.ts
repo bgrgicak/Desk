@@ -17,21 +17,21 @@ if (fs.existsSync(envPath)) {
 }
 
 export default defineConfig({
-  // Resolve workspace deps via the `@desk/dev` export condition so Vite
+  // Resolve workspace deps via the `@agent-desk/dev` export condition so Vite
   // pulls TS source from each package's src/ directly. Without this it
-  // walks the default `import` condition (e.g. @desk/shared/dist/index.js),
+  // walks the default `import` condition (e.g. @agent-desk/shared/dist/index.js),
   // which only exists after a separate `tsc` build of every package —
   // fine locally for anyone who has built once, broken on fresh CI
   // checkouts where `npm ci` does not run package build scripts. The
   // `ssr.resolve.externalConditions` key is the one that matters for
   // workspace-as-node_modules deps under vitest's SSR loader.
   resolve: {
-    conditions: ["@desk/dev"],
+    conditions: ["@agent-desk/dev"],
   },
   ssr: {
     resolve: {
-      conditions: ["@desk/dev"],
-      externalConditions: ["@desk/dev"],
+      conditions: ["@agent-desk/dev"],
+      externalConditions: ["@agent-desk/dev"],
     },
   },
   test: {

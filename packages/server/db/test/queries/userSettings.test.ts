@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Pool } from "../../src/pool.js";
-import { generateId } from "@desk/shared";
+import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as userSettings from "../../src/queries/userSettings.js";
 import * as users from "../../src/queries/users.js";

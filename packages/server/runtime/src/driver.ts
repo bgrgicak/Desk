@@ -24,6 +24,11 @@ export interface RunOptions {
    */
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
+   * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle" or
+   * "anthropic/claude-sonnet-4-6". When omitted, opencode picks its default.
+   */
+  model?: string;
+  /**
    * Provider API keys injected as env vars on every `docker exec` call, so
    * a key added after the container was first created takes effect immediately
    * without requiring a container restart or recreation.
@@ -131,14 +136,16 @@ export function shSingleQuote(s: string): string {
 export function buildOpencodeCommand(opts: {
   agentFileId?: string;
   attachments?: string[];
+  model?: string;
 }): string[] {
   const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
   const fileFlags = (opts.attachments ?? [])
     .map((p) => ` --file ${shSingleQuote(toSandboxPath(p))}`)
     .join("");
+  const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
   return [
     "sh", "-c",
-    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags} --dangerously-skip-permissions --format json`,
+    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`,
   ];
 }
 
@@ -165,6 +172,7 @@ function createRealDriver(): SandboxDriver {
       const cmd = buildOpencodeCommand({
         agentFileId: opts.agentFileId,
         attachments: opts.attachments,
+        model: opts.model,
       });
 
       const exec = await container.exec({

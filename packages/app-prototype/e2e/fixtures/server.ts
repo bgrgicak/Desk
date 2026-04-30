@@ -70,8 +70,8 @@ export async function startDeskServer(
       "",
     );
 
-  // Per-run sqlite file under a unique temp dir so parallel runs (and the
-  // VM) don't trample each other.
+  // Per-run sqlite file under a unique temp dir so parallel runs don't
+  // trample each other.
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), `desk-app-e2e-db-${runId}-`));
   const dbPath = path.join(dbDir, "test.sqlite3");
 
@@ -88,9 +88,10 @@ export async function startDeskServer(
     // does in production.
     DESK_DB_PATH: dbPath,
     DESK_HOME: home,
-    // The encryption module's default secret-key path is /home/desk/secret.key,
-    // which the host user can't write to. Pin it inside DESK_HOME so the
-    // /me/providers PUT path (encrypts keys) actually works under e2e.
+    // The encryption module falls back to a key file when DESK_SECRET_KEY
+    // is unset. Pin its path inside DESK_HOME so the /me/providers PUT
+    // (which encrypts keys) actually works under e2e even without the
+    // dev-launcher's .env writeback.
     DESK_SECRET_KEY_PATH: path.join(home, "secret.key"),
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",

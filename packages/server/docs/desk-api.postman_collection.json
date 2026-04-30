@@ -2,11 +2,11 @@
   "info": {
     "_postman_id": "e3a0d5b2-2f5a-4a4e-9b57-desk-api-v1",
     "name": "Desk API",
-    "description": "HTTP + WS gateway for the Desk personal AI assistant. Covers every route exposed by packages/server/api/src/app.ts. Login response auto-stores {{token}}. Set {{baseUrl}} to the forwarded host port of your Lima VM (default dev instance: http://localhost:3013). WebSocket upgrades live at {{baseUrl}}/ws?token={{token}}.",
+    "description": "HTTP + WS gateway for the Desk personal AI assistant. Covers every route exposed by packages/server/api/src/app.ts. Login response auto-stores {{token}}. Set {{baseUrl}} to the host desk-server (default dev instance: http://localhost:35138). WebSocket upgrades live at {{baseUrl}}/ws?token={{token}}.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3013", "type": "string" },
+    { "key": "baseUrl", "value": "http://localhost:35138", "type": "string" },
     { "key": "token", "value": "", "type": "string" },
     { "key": "username", "value": "desk", "type": "string" },
     { "key": "password", "value": "change-me-before-first-boot", "type": "string" },
@@ -624,7 +624,7 @@
           "name": "WS /ws (reference only)",
           "request": {
             "method": "GET",
-            "description": "WebSocket upgrade endpoint. Postman can connect via File → New → WebSocket Request with URL ws://localhost:3013/ws?token={{token}}. Not reachable via a regular HTTP send.",
+            "description": "WebSocket upgrade endpoint. Postman can connect via File → New → WebSocket Request with URL ws://localhost:35138/ws?token={{token}}. Not reachable via a regular HTTP send.",
             "url": {
               "raw": "{{baseUrl}}/ws?token={{token}}",
               "host": ["{{baseUrl}}"],

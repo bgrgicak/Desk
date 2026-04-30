@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Pool } from "../src/pool.js";
-import { PROVIDER_KEY_VARS } from "@desk/shared";
+import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "./helpers/db.js";
 import { seedIfEmpty, seedProviderKeysFromEnv } from "../src/seed.js";
 import * as userSettings from "../src/queries/userSettings.js";

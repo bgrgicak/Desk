@@ -1,14 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool } from "@desk/db";
-import { queries } from "@desk/db";
+import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 import {
   workspaceRootPath,
   loadGitignoreFrame,
   isGitIgnored,
   type IgnoreFrame,
   type StorageContext,
-} from "@desk/storage";
+} from "@agent-desk/storage";
 
 export interface SearchResult {
   type: "file" | "chat" | "message";
