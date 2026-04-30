@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { PanelRightClose, ChevronDown, ChevronRight, Bot, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ChatMessage } from '@/components/compose/ChatMessage'
+import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
-import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useLibraryItemChat } from '@/hooks/use-library-item-chat'
 import { useServerChat } from '@/hooks/use-server-chat'
 import { usePersistedState } from '@/hooks/use-persisted-state'
+import { usePrefs } from '@/hooks/use-prefs'
 import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate, ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
+import { toast } from 'sonner'
 
 type PanelTab = 'chat' | 'details'
 
@@ -29,30 +30,22 @@ interface ConversationPanelProps {
 }
 
 export function ConversationPanel({
-  initialMessages,
   agentModel = 'Claude Sonnet 4',
   onCollapse,
   collapsed = false,
   artifact,
   item,
   workspaceId,
-  update,
   transitionFrom,
 }: ConversationPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const { developerMode } = usePrefs()
   const tabKey = artifact ? `desk.artifact.${artifact.id}.tab` : item ? `library.item.${item.id}.tab` : null
   const [activeTab, setActiveTab] = usePersistedState<PanelTab>(tabKey, 'chat')
   const [detailsSectionOpen, setDetailsSectionOpen] = useState(true)
   const [notesSectionOpen, setNotesSectionOpen] = useState(true)
   const [artifactNotes, setArtifactNotes] = useState('')
   const [itemNotes, setItemNotes] = useState('')
-
-  const updateMsg = update ? {
-    id: `update-${update.id}`,
-    role: 'assistant' as const,
-    content: update.message,
-    timestamp: update.timestamp,
-  } : null
+  const [isSending, setIsSending] = useState(false)
 
   const libChat = useLibraryItemChat(
     workspaceId && item ? workspaceId : undefined,
@@ -60,24 +53,32 @@ export function ConversationPanel({
   )
   const artChat = useServerChat(
     workspaceId && artifact && !item ? workspaceId : undefined,
-    workspaceId && artifact ? `desk.artchat.${workspaceId}.${artifact.id}` : '',
+    '',
     artifact?.name ?? '',
   )
-  const chat = workspaceId && item ? libChat : workspaceId && artifact ? artChat : null
-  const messages = chat?.messages ?? initialMessages
-  const isTyping = chat?.isTyping ?? false
-  const sendMessage = chat?.sendMessage ?? (async () => {})
-  const displayAgentModel = chat?.agentModel ?? agentModel
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  const activeChat = workspaceId && item ? libChat : workspaceId && artifact ? artChat : null
+  const chatId = activeChat?.chatId ?? null
+  const sendMessage = activeChat?.sendMessage
+  const displayAgentModel = activeChat?.agentModel ?? agentModel
+
+  const handleSend = useCallback(async (msg: string) => {
+    if (!msg.trim() || !sendMessage || isSending) return
+    setIsSending(true)
+    try {
+      await sendMessage(msg)
+    } catch {
+      toast.error('Failed to send message')
+    } finally {
+      setIsSending(false)
     }
-  }, [messages])
+  }, [sendMessage, isSending])
 
   if (collapsed) {
     return null
   }
+
+  const draftKey = artifact ? `artifact:${artifact.id}` : item ? `library:${item.id}` : undefined
 
   return (
     <motion.div
@@ -90,7 +91,6 @@ export function ConversationPanel({
     >
       {/* Panel header */}
       <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0">
-        {/* Tab pills */}
         <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
           {(['chat', 'details'] as PanelTab[]).map(tab => (
             <button
@@ -119,38 +119,30 @@ export function ConversationPanel({
 
       {/* Chat tab */}
       {activeTab === 'chat' && (
-        <>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto">
-            <div className="space-y-6 p-4">
-              {messages.map((msg, i) => (
-                <ChatMessage
-                  key={msg.id}
-                  message={msg}
-                  agentModel={displayAgentModel}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                />
-              ))}
-              {updateMsg && (
-                <ChatMessage
-                  message={updateMsg}
-                  agentModel={displayAgentModel}
-                  isFirstInGroup={true}
-                  isNew={true}
-                />
-              )}
-              <StatusIndicator text={null} isTyping={isTyping} />
+        <ChatThread
+          chatId={chatId ?? ''}
+          skipQuery={!chatId}
+          agentName={displayAgentModel}
+          developerMode={developerMode}
+          isSending={isSending}
+          innerClassName="space-y-6 p-4"
+          emptySlot={
+            <p className="text-xs text-muted-foreground text-center pt-4">
+              Ask a question or request changes to this file.
+            </p>
+          }
+          footerSlot={
+            <div className="border-t p-3 shrink-0">
+              <ChatInput
+                onSend={(msg) => void handleSend(msg)}
+                placeholder="Ask to make changes..."
+                compact={true}
+                showGoalPicker={true}
+                draftKey={draftKey}
+              />
             </div>
-          </div>
-          <div className="border-t p-3 shrink-0">
-            <ChatInput
-              onSend={(msg) => sendMessage(msg)}
-              placeholder="Ask to make changes..."
-              compact={true}
-              showGoalPicker={true}
-              draftKey={artifact ? `artifact:${artifact.id}` : item ? `library:${item.id}` : undefined}
-            />
-          </div>
-        </>
+          }
+        />
       )}
 
       {/* Details tab */}

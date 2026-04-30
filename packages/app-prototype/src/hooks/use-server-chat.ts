@@ -15,7 +15,7 @@ export function serverMessageToChatMessage(m: ServerMessage): ChatMessage | null
   const text =
     m.content.type === 'text'
       ? m.content.text ?? ''
-      : m.content.type === 'tool_result'
+      : m.content.type === 'toolResult'
         ? '[tool result]'
         : ''
   return {
@@ -23,11 +23,11 @@ export function serverMessageToChatMessage(m: ServerMessage): ChatMessage | null
     role: m.role === 'agent' ? 'assistant' : 'user',
     content: text,
     timestamp: new Date(m.createdAt),
-    model: m.model,
   }
 }
 
-interface UseServerChatReturn {
+export interface UseServerChatReturn {
+  chatId: string | null
   messages: ChatMessage[]
   isTyping: boolean
   agentModel: string
@@ -47,13 +47,13 @@ export function useServerChat(
   staticAttachments?: AttachmentRef[],
 ): UseServerChatReturn {
   const [chatId, setChatIdState] = useState<string | null>(() =>
-    workspaceId ? localStorage.getItem(storageKey) : null,
+    workspaceId && storageKey ? localStorage.getItem(storageKey) : null,
   )
 
   const setChatId = useCallback(
     (id: string) => {
       setChatIdState(id)
-      localStorage.setItem(storageKey, id)
+      if (storageKey) localStorage.setItem(storageKey, id)
     },
     [storageKey],
   )
@@ -110,5 +110,5 @@ export function useServerChat(
     [workspaceId, chatId, workspaceAgents, title, staticAttachments, createChat, postMessage, setChatId, pinChatLibraryRef],
   )
 
-  return { messages, isTyping, agentModel, sendMessage }
+  return { chatId, messages, isTyping, agentModel, sendMessage }
 }

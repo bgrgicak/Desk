@@ -43,7 +43,6 @@ describe('serverMessageToChatMessage', () => {
     expect(result).not.toBeNull()
     expect(result!.role).toBe('assistant')
     expect(result!.content).toBe('The file is notes.md.')
-    expect(result!.model).toBe('claude-sonnet-4-5')
   })
 
   it('preserves the message id and timestamp', () => {
