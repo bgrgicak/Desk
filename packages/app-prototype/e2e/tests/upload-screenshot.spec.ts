@@ -48,7 +48,7 @@ test("library accepts a screenshot-style PNG (filename with spaces and dots)", a
   await page.getByRole("button", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
 
-  await page.getByRole("button", { name: /^Add$/ }).first().click();
+  await page.locator('[data-testid="library-upload-button"]').first().click();
 
   await page
     .locator('[data-testid="dropzone-file-input"]')
