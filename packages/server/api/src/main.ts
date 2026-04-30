@@ -25,7 +25,7 @@ import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import type { WsEvent } from "@agent-desk/shared";
 
-const PORT = parseInt(process.env.PORT ?? "8080", 10);
+const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const DESK_HOME = resolveDeskHome();
 // Default to ~/Desk/.database/desk.sqlite3. Dotfile parent so the DB
 // stays out of any in-app library listing of ~/Desk; tests override

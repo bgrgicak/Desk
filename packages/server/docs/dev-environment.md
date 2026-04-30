@@ -36,9 +36,9 @@ That:
 
 1. Generates `DESK_SECRET_KEY` into `.env` if missing.
 2. Ensures `~/Desk/` exists.
-3. Starts `desk-server` (tsx watch) on http://127.0.0.1:8080/.
+3. Starts `desk-server` (tsx watch) on http://127.0.0.1:35138/.
 4. Starts the Vite dev server on http://127.0.0.1:5173/.
-5. Wires Vite's `/api/*` proxy to `:8080`.
+5. Wires Vite's `/api/*` proxy to `:35138`.
 
 One Ctrl+C kills both.
 

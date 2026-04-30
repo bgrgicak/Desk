@@ -7,7 +7,7 @@ Monorepo for the Desk personal AI assistant.
 - **`packages/agent-desk-cli/`** — host CLI (`desk` binary).
 
 The full stack runs on the host — no VM, no systemd. The desk-server
-process serves the API on `:8080`; the Vite dev server proxies `/api/*`
+process serves the API on `:35138`; the Vite dev server proxies `/api/*`
 calls to it on `:5173`. Sandbox containers spawn against the host
 Docker daemon (rootful or rootless — both detected). State lives under
 `~/Desk/`.
@@ -53,11 +53,11 @@ docker build -f packages/server/runtime/Dockerfile.sandbox \
 ## Manual API testing
 
 ```bash
-TOKEN=$(curl -s -X POST http://127.0.0.1:8080/auth/login \
+TOKEN=$(curl -s -X POST http://127.0.0.1:35138/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"desk","password":"change-me"}' | jq -r .token)
 
-curl -s http://127.0.0.1:8080/me -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:35138/me -H "Authorization: Bearer $TOKEN"
 ```
 
 The Postman collection at

@@ -9,7 +9,7 @@ import path from 'path'
 // under /api/* get stripped of that prefix and proxied to the
 // desk-server. WebSocket calls to /ws are proxied verbatim with WS
 // upgrade support.
-const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:8080'
+const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:35138'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
 const APP_PORT = Number(process.env.DESK_APP_PORT ?? 5173)
 

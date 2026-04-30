@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts the full dev stack on the host:
-#   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-8080}/
+#   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
 #   - app-prototype Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
 #
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
@@ -58,7 +58,7 @@ DESK_HOME_DEFAULT="${HOME}"
 mkdir -p "${DESK_HOME_DEFAULT}/Desk"
 
 # 4. Kill stale processes holding our ports from a previous run.
-for port in 5173 8080; do
+for port in 5173 35138; do
   if lsof -ti ":${port}" >/dev/null 2>&1; then
     echo "==> Port ${port} in use — killing stale process…"
     lsof -ti ":${port}" | xargs kill -9 2>/dev/null || true
@@ -73,7 +73,7 @@ done
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   set +a
   export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions @agent-desk/dev"
-  export PORT="${PORT:-8080}"
+  export PORT="${PORT:-35138}"
   export DESK_HOME="${DESK_HOME:-$DESK_HOME_DEFAULT}"
   exec npx tsx watch packages/server/api/src/main.ts
 ) &
@@ -82,12 +82,12 @@ SERVER_PID=$!
 # 6. Start vite (app-prototype) in the background.
 (
   cd "$REPO_ROOT"
-  export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:8080}"
+  export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:35138}"
   exec npm -w app run dev
 ) &
 VITE_PID=$!
 
-SERVER_PORT="${PORT:-8080}"
+SERVER_PORT="${PORT:-35138}"
 APP_PORT="${DESK_APP_PORT:-5173}"
 
 cleanup() {

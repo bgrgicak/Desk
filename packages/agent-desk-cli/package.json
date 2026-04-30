@@ -1,7 +1,7 @@
 {
   "name": "@agent-desk/cli",
   "version": "0.0.1",
-  "description": "Host CLI for the Desk personal AI assistant. `npx @agent-desk/cli` boots the full stack on http://127.0.0.1:8080/.",
+  "description": "Host CLI for the Desk personal AI assistant. `npx @agent-desk/cli` boots the full stack on http://127.0.0.1:35138/.",
   "private": true,
   "type": "module",
   "bin": {

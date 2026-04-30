@@ -25,7 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(PKG_ROOT, "..", "..");
 
-const PORT = parseInt(process.env.PORT ?? "8080", 10);
+const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const APP_PORT = parseInt(process.env.DESK_APP_PORT ?? "5173", 10);
 
 function log(msg) {

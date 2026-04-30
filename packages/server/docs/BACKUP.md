@@ -30,7 +30,7 @@ that runs SQLite's `VACUUM INTO` on the live connection.
 T=$(cat /etc/desk-server/internal-token 2>/dev/null \
     || cat ~/.config/desk-server/internal-token 2>/dev/null)
 curl -sf -X POST -H "Authorization: Bearer $T" \
-  http://127.0.0.1:8080/internal/backup
+  http://127.0.0.1:35138/internal/backup
 # → {"ok":true,"path":"~/Desk/backups/desk-2026-04-28-09-15-22.sqlite3","sizeBytes":...}
 ```
 
