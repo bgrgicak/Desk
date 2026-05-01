@@ -77,7 +77,7 @@ test("chat tab shows the open-in-chat button linking to the originating chat", a
   await btn.click();
 
   await expect(loggedInPage).toHaveURL(
-    new RegExp(`/w/${seeded.workspaceId}/desk\\?.*chat=${seeded.chatId}.*message=${seeded.messageId}`),
+    new RegExp(`/w/${seeded.workspaceId}/pinned\\?.*chat=${seeded.chatId}.*message=${seeded.messageId}`),
   );
 });
 
