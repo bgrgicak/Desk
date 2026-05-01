@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react'
 import { Reorder } from 'framer-motion'
 import {
   Inbox, Sun, Moon, Search,
-  HelpCircle, LogOut, User, CreditCard, Settings2,
+  HelpCircle, LogOut, User, Monitor, Check, Settings2,
   Plus, Columns2, Pencil, Trash2,
 } from 'lucide-react'
+import { useTheme } from '@/hooks/use-theme'
+import { initialsOf } from '@/lib/initials'
+import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import {
   ContextMenu,
@@ -16,6 +19,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -38,13 +42,6 @@ import { Button } from '@/components/ui/button'
 import { useCreateWorkspaceMutation, useDeleteWorkspaceMutation, useGetMeQuery, usePatchWorkspaceMutation } from '@/store/api'
 import { logout } from '@/auth/session'
 import type { View } from './AppShell'
-
-function initialsOf(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
 
 // ── Logo ──────────────────────────────────────────────────────────────────────
 function DeskLogo({ className }: { className?: string }) {
@@ -106,6 +103,7 @@ interface WorkspaceBarProps {
   onGlobalToday: () => void
   onSelectWorkspace: (id: string) => void
   onSignOut?: () => void
+  onOpenMyAccount?: () => void
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -117,6 +115,7 @@ export function WorkspaceBar({
   onGlobalToday,
   onSelectWorkspace,
   onSignOut,
+  onOpenMyAccount,
 }: WorkspaceBarProps) {
   // Current user — fetched once on mount via RTK Query. Falls back to a
   // placeholder while in-flight so the initial render is stable.
@@ -130,18 +129,16 @@ export function WorkspaceBar({
   const account = me
     ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
     : ACCOUNT_PLACEHOLDER
+  const avatarUrl = useAvatarUrl(me?.id)
 
   const { open: openGlobalPalette } = useGlobalPalette()
 
   const [pendingDeleteWorkspaceId, setPendingDeleteWorkspaceId] = useState<string | null>(null)
 
-  // Dark mode
-  const [isDark, setIsDark] = useState(false)
-  const toggleDark = () => {
-    const next = !isDark
-    setIsDark(next)
-    document.documentElement.classList.toggle('dark', next)
-  }
+  // Theme — single source of truth in `useTheme`. The Sun/Moon button
+  // flips between explicit light/dark; the Preferences tab also exposes a
+  // 'system' option.
+  const { theme, setTheme } = useTheme()
 
   // Ordered workspaces (drag-to-reorder). We preserve any client-side
   // reordering the user has already done, but fold in new server-side
@@ -304,15 +301,6 @@ export function WorkspaceBar({
             <Search className="h-4 w-4" />
           </button>
 
-          {/* Dark mode toggle */}
-          <button
-            onClick={toggleDark}
-            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
-            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
-
           {/* Help */}
           <button
             className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
@@ -326,25 +314,48 @@ export function WorkspaceBar({
             <DropdownMenuTrigger asChild>
               <button
                 {...(me ? { 'data-testid': 'account-avatar' } : {})}
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5"
+                className="flex h-6 w-6 items-center justify-center rounded-full bg-muted border border-border text-[11px] font-semibold text-muted-foreground hover:bg-muted/70 transition-colors ml-0.5 overflow-hidden"
               >
-                {account.initials}
+                {avatarUrl
+                  ? <img src={avatarUrl} alt={account.name} className="h-full w-full object-cover" />
+                  : account.initials
+                }
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuLabel className="flex items-center gap-2.5 p-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-                  {account.initials}
+              <DropdownMenuItem
+                onSelect={onOpenMyAccount}
+                data-testid="open-my-account"
+                className="flex items-center gap-2.5 p-2.5 group/header rounded-none"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold overflow-hidden">
+                  {avatarUrl
+                    ? <img src={avatarUrl} alt={account.name} className="h-full w-full object-cover" />
+                    : account.initials
+                  }
                 </div>
-                <div className="flex min-w-0 flex-col">
+                <div className="flex min-w-0 flex-col flex-1">
                   <span className="text-sm font-medium truncate">{account.name}</span>
                   <span className="text-xs text-muted-foreground truncate">{account.email}</span>
                 </div>
-              </DropdownMenuLabel>
+                <Settings2 className="h-4 w-4 shrink-0 opacity-0 group-hover/header:opacity-60 transition-opacity" />
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem><User className="h-4 w-4" />My account</DropdownMenuItem>
-              <DropdownMenuItem><CreditCard className="h-4 w-4" />Billing</DropdownMenuItem>
-              <DropdownMenuItem><Settings2 className="h-4 w-4" />Preferences</DropdownMenuItem>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">Theme</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={e => { e.preventDefault(); setTheme('light') }}>
+                  <Sun className="h-4 w-4" />Light
+                  {theme === 'light' && <Check className="h-4 w-4 ml-auto text-foreground" />}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={e => { e.preventDefault(); setTheme('dark') }}>
+                  <Moon className="h-4 w-4" />Dark
+                  {theme === 'dark' && <Check className="h-4 w-4 ml-auto text-foreground" />}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={e => { e.preventDefault(); setTheme('system') }}>
+                  <Monitor className="h-4 w-4" />System
+                  {theme === 'system' && <Check className="h-4 w-4 ml-auto text-foreground" />}
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={onSignOut ?? (() => void logout())}

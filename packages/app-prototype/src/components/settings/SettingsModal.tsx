@@ -64,16 +64,8 @@ import {
 } from '@/data/connections'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
-
-function describeApiError(err: unknown): string {
-  if (err && typeof err === 'object') {
-    const e = err as { data?: { message?: unknown }; error?: unknown }
-    if (typeof e.data?.message === 'string') return e.data.message
-    if (typeof e.error === 'string') return e.error
-  }
-  if (err instanceof Error) return err.message
-  return 'Unknown error'
-}
+import { PreferenceRow } from '@/components/settings/shared'
+import { describeApiError } from '@/components/settings/errors'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -1151,20 +1143,6 @@ function savePrefs(userId: string | undefined, prefs: PrefsShape): void {
   } catch {
     /* ignore */
   }
-}
-
-function PreferenceRow({
-  title, description, children,
-}: { title: string; description: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-4 border-b last:border-b-0">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  )
 }
 
 function PreferencesSection() {

@@ -54,6 +54,7 @@ import {
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
+import { MyAccountModal } from '@/components/account/MyAccountModal'
 import type { Chat, Artifact, InboxItem, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
@@ -213,6 +214,7 @@ export function AppShell({
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined)
+  const [myAccountOpen, setMyAccountOpen] = useState(false)
 
   const appDispatch = useAppDispatch()
   const pendingSettingsSection = useAppSelector(s => s.ui.pendingSettingsSection)
@@ -392,6 +394,7 @@ export function AppShell({
           onGlobalToday={onGlobalToday}
           onSelectWorkspace={onSelectWorkspace}
           onSignOut={onSignOut}
+          onOpenMyAccount={() => setMyAccountOpen(true)}
         />
 
       {/* ── Sidebar + content ── */}
@@ -714,6 +717,12 @@ export function AppShell({
             if (next.length > 0) onSelectWorkspace(next[0].id)
           })
         }}
+      />
+
+      {/* ── My account modal ── */}
+      <MyAccountModal
+        open={myAccountOpen}
+        onOpenChange={setMyAccountOpen}
       />
 
       {/* ── Chat search command palette ── */}
