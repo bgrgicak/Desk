@@ -72,7 +72,10 @@ export async function listWithLatestMessage(
       ...rowToChat(r),
       lastMessageContent: r.last_message_content ?? undefined,
       kind: r.kind as MessageKind,
-      goalKind: lastUserText ? inferGoal(lastUserText) : null,
+      // The chat row's explicit goal wins; inferGoal() is the fallback for
+      // chats whose goal column was never set (legacy rows, system-seeded
+      // chats, or sends that pre-date Task 3).
+      goalKind: (r.goal as GoalKey | null) ?? (lastUserText ? inferGoal(lastUserText) : null),
     };
   });
 }

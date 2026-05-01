@@ -218,6 +218,30 @@ describe("chats queries", () => {
     expect(list.find((c) => c.id === plainChatId)?.goalKind).toBeNull();
   });
 
+  it("goalKind: explicit chats.goal beats inferGoal()", async () => {
+    // Chat is tagged 'document' on the column, but the message text would
+    // infer 'app'. The column wins — that's the source of truth from
+    // Task 3 onward.
+    const explicitChatId = generateId("chat");
+    await chats.insert(pool, {
+      id: explicitChatId,
+      workspaceId: wsId,
+      agentId,
+      title: "Explicit goal",
+      goal: "document",
+    });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: explicitChatId,
+      role: "user",
+      content: { type: "text", text: "build me an app" },
+      kind: "chat",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === explicitChatId)?.goalKind).toBe("document");
+  });
+
   it("updates meta", async () => {
     const updated = await chats.updateMeta(pool, chatId, { title: "Renamed Chat" });
     expect(updated).not.toBeNull();
