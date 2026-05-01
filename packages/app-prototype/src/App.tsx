@@ -12,7 +12,6 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
-import { DeskGrid } from '@/components/desk/DeskGrid'
 import { ContextList } from '@/components/context/ContextList'
 import { PinnedView } from '@/components/library/PinnedView'
 import { ContextDetail } from '@/components/context/ContextDetail'
@@ -47,13 +46,11 @@ import {
   setTodaySheetOpen,
   setAgentationVisible,
   markArtifactSaved,
-  markUpdateRead,
   markChatRead,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
-import { selectArtifactUpdates } from '@/store/slices/derivedSlice'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
@@ -140,14 +137,11 @@ function AppInner() {
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
-  const readUpdateIdList = useAppSelector(s => s.ui.readUpdateIds)
   const readChatIdList = useAppSelector(s => s.ui.readChatIds)
   const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
   const agentationVisible = useAppSelector(s => s.ui.agentationVisible)
-  const artifactUpdates = useAppSelector(selectArtifactUpdates)
 
   const savedArtifactIds = new Set(savedArtifactIdList)
-  const readUpdateIds = new Set(readUpdateIdList)
   const readChatIds = new Set(readChatIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
@@ -459,10 +453,6 @@ function AppInner() {
     for (const f of libraryResp.items) dispatch(markArtifactSaved(f.path))
   }, [libraryResp, dispatch])
 
-  const handleDismissUpdate = useCallback((id: string) => {
-    dispatch(markUpdateRead(id))
-  }, [dispatch])
-
   const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
   const activeChat = isNewChat
@@ -594,21 +584,6 @@ function AppInner() {
 
         {!selectedContextItem && !activeChat && activeView === 'pinned' && (
           <Navigate to={buildPath(activeWorkspaceId, 'context')} replace />
-        )}
-        {!selectedContextItem && !activeChat && activeView === 'desk' && (
-          <DeskGrid
-            artifacts={artifacts.filter(a => savedArtifactIds.has(a.id))}
-            workspaceId={activeWorkspaceId || undefined}
-            onArtifactClick={(artifact) => goTo({ artifact: artifact.id })}
-            onCreateArtifact={handleCreateArtifact}
-            onSkipToChat={(agentId) => {
-              if (agentId) dispatch(setPendingNewChatAgentId(agentId))
-              goTo({ chat: NEW_CHAT_ID })
-            }}
-            updates={artifactUpdates}
-            readUpdateIds={readUpdateIds}
-            onDismissUpdate={handleDismissUpdate}
-          />
         )}
         {!selectedContextItem && !activeChat && activeView === 'tasks' && (
           <TasksPage

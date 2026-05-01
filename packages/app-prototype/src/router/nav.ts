@@ -1,7 +1,7 @@
-export type RouteView = "pinned" | "desk" | "tasks" | "context";
+export type RouteView = "pinned" | "tasks" | "context";
 
 export function isRouteView(v: string | undefined): v is RouteView {
-  return v === "pinned" || v === "desk" || v === "tasks" || v === "context";
+  return v === "pinned" || v === "tasks" || v === "context";
 }
 
 export interface NavQuery {
