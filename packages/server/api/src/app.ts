@@ -19,6 +19,7 @@ import {
 import { errorToStatus } from "./errors.js";
 import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
+import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -120,11 +121,36 @@ export function createApp(opts: AppOptions): Server {
   // Pre-generate the OpenAPI spec
   const openApiSpec = generateOpenApiSpec();
 
+  // SPA static-serve is opt-in via DESK_SERVE_APP=1 — the CLI flips this
+  // for published installs, dev never does (Vite serves the SPA on :5173
+  // and proxies /api/* here). When off, the request handler skips the
+  // static branch entirely and behaves identically to the pre-§3 server.
+  const serveApp = process.env.DESK_SERVE_APP === "1";
+  const appDist = serveApp ? resolveAppDist() : null;
+
   const server = httpCreateServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const path = url.pathname;
+      const rawPath = url.pathname;
       const method = req.method ?? "GET";
+
+      // SPA static-serve: GETs that aren't API/WS/internal/sandbox routes
+      // get the SPA. No auth — these are the unauthenticated assets the
+      // browser fetches before login (index.html, JS bundles, fonts).
+      if (serveApp && appDist && method === "GET" && isStaticPath(rawPath)) {
+        await serveStaticOrIndex(rawPath, res, appDist);
+        return;
+      }
+
+      // Strip the /api/ prefix the SPA's RTK Query baseUrl carries. In
+      // dev, Vite rewrites this away before the request reaches us; in
+      // prod the server itself does it so internal route handlers see
+      // the same path shape in both modes.
+      const path = rawPath.startsWith("/api/")
+        ? rawPath.slice(4)
+        : rawPath === "/api"
+          ? "/"
+          : rawPath;
 
       // Auth
       let userId: string;
