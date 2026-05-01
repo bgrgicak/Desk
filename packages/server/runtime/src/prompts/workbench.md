@@ -29,7 +29,7 @@ don't guess. All three are real directories on disk.
 
 Don't recite the workbench paths or chat structure unprompted. They're for
 your reference, not boilerplate to repeat in every reply.
-
+{{chatPaths}}
 ## Resolving file references
 
 When the user refers to "this", "the document", "that file", or similar without

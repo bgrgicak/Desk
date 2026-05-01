@@ -65,14 +65,14 @@ describe("renderPromptBody", () => {
     expect(idxUserInstructions).toBeGreaterThan(idxSkills);
   });
 
-  it("workbench-known includes the chat workbench paths when chatId is set", () => {
+  it("workbench fragment includes the chat workbench paths when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
     expect(body).toContain("Current chat workbench: ~/.chats/chat-abc/");
     expect(body).toContain("Chat attachments: ~/.chats/chat-abc/attachments/");
     expect(body).toContain("Chat notes:       ~/.chats/chat-abc/notes/");
   });
 
-  it("workbench-unknown is rendered when chatId is omitted, with no concrete path", () => {
+  it("workbench fragment omits the chat paths when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
     expect(body).toContain("## Your workspace");
     expect(body).not.toContain("Current chat workbench: ~/.chats/");

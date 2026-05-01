@@ -29,8 +29,12 @@ function copyTree(src, dest) {
   }
 }
 
+// Mirror src/prompts/ → dist/prompts/ exactly. Removing the destination first
+// keeps dist in sync with renames/deletes — without this, a renamed fragment
+// would leave its stale predecessor in dist forever.
 const promptsSrc = path.join(runtimeRoot, "src", "prompts");
 const promptsDest = path.join(runtimeRoot, "dist", "prompts");
+fs.rmSync(promptsDest, { recursive: true, force: true });
 copyTree(promptsSrc, promptsDest);
 
 const skillSrc = path.resolve(runtimeRoot, "..", "sandbox-cli", "skill.md");

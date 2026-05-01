@@ -67,10 +67,14 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       agentName: input.agentName,
       userName: input.userName,
     }),
-  (input) =>
-    input.chatId
-      ? loadAndSub("workbench-known.md", { chatId: input.chatId })
-      : loadAndSub("workbench-unknown.md", {}),
+  (input) => {
+    const chatPaths = input.chatId
+      ? `\nCurrent chat workbench: ~/.chats/${input.chatId}/\n` +
+        `Chat attachments: ~/.chats/${input.chatId}/attachments/\n` +
+        `Chat notes:       ~/.chats/${input.chatId}/notes/\n`
+      : "";
+    return loadAndSub("workbench.md", { chatPaths });
+  },
   (input) =>
     input.userTimezone
       ? loadAndSub("scheduling-tz-known.md", {
