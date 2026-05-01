@@ -53,7 +53,7 @@ npm run dev
 
 | Tool | macOS | Linux |
 | --- | --- | --- |
-| Node.js 22 LTS + npm (pinned by `.nvmrc` + `engines`) | `brew install node@22` | use [nvm](https://github.com/nvm-sh/nvm)/fnm/mise/asdf |
+| Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
 | Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
 | `python3` | preinstalled | preinstalled |
 
