@@ -392,7 +392,6 @@ function FilesPanel({
   stagedFiles,
   chatFiles,
   libraryItems,
-  hasRealChatId,
   uploading,
   onUpload,
   onAddFromLibrary,
@@ -1003,7 +1002,7 @@ export function ChatView({
                         kind: options?.kind,
                         title: options?.title,
                         executeAt: options?.executeAt,
-                        goal: options?.goal,
+                        goal: options?.goal ?? undefined,
                       })
                         .unwrap()
                         .catch(err => {

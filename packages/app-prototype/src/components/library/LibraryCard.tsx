@@ -79,9 +79,10 @@ export function LibraryCard({
   const showAgent = item.uploadedBy === 'ai'
   const agentLabel = item.agentName ?? 'AI'
 
-  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, item.id)
+  const handleDragStart = (e: unknown) => {
+    const dragEvent = e as React.DragEvent<HTMLDivElement>
+    dragEvent.dataTransfer.effectAllowed = 'move'
+    dragEvent.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, item.id)
   }
 
   const menu = (

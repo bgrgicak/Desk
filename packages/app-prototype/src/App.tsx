@@ -13,7 +13,6 @@ import { Toaster } from '@/components/ui/sonner'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ContextList } from '@/components/context/ContextList'
-import { PinnedView } from '@/components/library/PinnedView'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
@@ -51,6 +50,7 @@ import {
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
+import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
 import { toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
@@ -118,7 +118,7 @@ function AppBoot() {
       </TooltipProvider>
     )
   }
-  return <Navigate to={buildPath(serverWorkspaces[0].id, defaultView)} replace />
+  return <Navigate to={buildPath(serverWorkspaces[0].id, defaultView as RouteView)} replace />
 }
 
 function AppInner() {
@@ -292,7 +292,7 @@ function AppInner() {
   // the pref here.
   const handleSelectWorkspace = useCallback((id: string) => {
     dispatch(setTodaySheetOpen(false))
-    goTo({ wsId: id, view: defaultView })
+    goTo({ wsId: id, view: defaultView as RouteView })
   }, [goTo, dispatch, defaultView])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
@@ -356,7 +356,7 @@ function AppInner() {
     message: string,
     agentId?: string,
     attachments?: AttachmentRef[],
-    options?: { kind?: 'task'; title?: string; executeAt?: string; goal?: string },
+    options?: SendOptions,
     files?: File[],
   ) => {
     if (!activeWorkspaceId) return
@@ -393,7 +393,7 @@ function AppInner() {
         kind: options?.kind,
         taskTitle: options?.title,
         executeAt: options?.executeAt,
-        goal: options?.goal,
+        goal: options?.goal ?? undefined,
         pinPaths: itemsToPin.map(i => i.id),
       })
       goTo({ chat: chatId })
@@ -502,7 +502,7 @@ function AppInner() {
         onNavigateSettings={(t) => {
           dispatch(setPendingSettingsSection(t.section))
         }}
-        onNavigateWorkspace={(id) => goTo({ wsId: id, view: defaultView })}
+        onNavigateWorkspace={(id) => goTo({ wsId: id, view: defaultView as RouteView })}
         onSelectChat={({ id, workspaceId }) => {
           goTo({ wsId: workspaceId || activeWorkspaceId, chat: id })
         }}

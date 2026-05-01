@@ -220,54 +220,6 @@ function Field({
   )
 }
 
-interface SelectDropdownProps {
-  value: string
-  placeholder: string
-  onChange: (next: string) => void
-  options: { value: string; label: string }[]
-  disabled?: boolean
-  testIdPrefix?: string
-}
-
-function SelectDropdown({ value, placeholder, onChange, options, disabled, testIdPrefix }: SelectDropdownProps) {
-  const selected = options.find(o => o.value === value)
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <button
-          type="button"
-          disabled={disabled}
-          className={cn(
-            'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs text-left flex items-center justify-between gap-2 transition-colors',
-            'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none',
-            disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
-          )}
-        >
-          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-            {selected?.label ?? placeholder}
-          </span>
-          <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[var(--radix-dropdown-menu-trigger-width)]">
-        {options.length === 0 ? (
-          <div className="px-2.5 py-1.5 text-sm text-muted-foreground">No options</div>
-        ) : (
-          options.map(o => (
-            <DropdownMenuItem
-              key={o.value}
-              onSelect={() => onChange(o.value)}
-              data-testid={testIdPrefix ? `${testIdPrefix}-${o.value}` : undefined}
-            >
-              {o.label}
-            </DropdownMenuItem>
-          ))
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 function EmptyState({
   title, body, action,
 }: { title: string; body: string; action?: React.ReactNode }) {

@@ -6,6 +6,7 @@ export interface ArtifactPromptInput {
   instructions?: string
   name?: string
   attachments?: Pick<AttachmentRef, 'path' | 'name' | 'kind'>[]
+  agentId?: string
 }
 
 const TYPE_VERB: Record<ArtifactType, string> = {

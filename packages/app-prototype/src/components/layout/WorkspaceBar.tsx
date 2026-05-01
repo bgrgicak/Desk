@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Reorder } from 'framer-motion'
 import {
   Inbox, Sun, Moon, Search,
-  HelpCircle, LogOut, User, Monitor, Check, Settings2,
+  HelpCircle, LogOut, Monitor, Check, Settings2,
   Plus, Columns2, Pencil, Trash2,
 } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
