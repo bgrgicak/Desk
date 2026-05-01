@@ -6,6 +6,7 @@ import { type Pool } from "@agent-desk/db";
 import {
   generateId,
   AgentEventSchema,
+  GOAL_KEYS,
   type AgentLogEntry,
   type GoalKey,
   type Message,
@@ -284,7 +285,15 @@ export function createRunManager(opts: RunManagerOptions) {
     const userId = ctxRow?.user_id ?? null;
     const userName = ctxRow?.username ?? "User";
     const userTimezone = ctxRow?.timezone ?? undefined;
-    const chatGoal = (ctxRow?.chat_goal as GoalKey | null) ?? null;
+    // Validate against the known goal keys before treating the column as a
+    // GoalKey: if a row holds a value outside GOAL_KEYS (legacy data, manual
+    // SQL edit), `goal/<key>.md` would not exist and the run would crash on
+    // ENOENT mid-render. Fall back to no goal in that case.
+    const rawGoal = ctxRow?.chat_goal ?? null;
+    const chatGoal: GoalKey | null =
+      rawGoal !== null && (GOAL_KEYS as readonly string[]).includes(rawGoal)
+        ? (rawGoal as GoalKey)
+        : null;
 
     const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${runId}.log`);
