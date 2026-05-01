@@ -18,20 +18,7 @@ import {
   BookmarkPlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button } from '@agent-desk/ui'
-import { PageHeader } from '@/components/layout/PageHeader'
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -40,7 +27,20 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@agent-desk/ui'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { ArtifactPreview } from './ArtifactPreview'
 import { ConversationPanel } from './ConversationPanel'
 import type { Artifact, ArtifactUpdate } from '@/data/ui-types'

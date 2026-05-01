@@ -9,6 +9,7 @@ import {
 import { toast } from 'sonner'
 import {
   Button,
+  cn,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -18,7 +19,6 @@ import {
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useServerChat } from '@/hooks/use-server-chat'
-import { cn } from '@agent-desk/ui'
 import type { TodayItem, TodayBand, Chat } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 

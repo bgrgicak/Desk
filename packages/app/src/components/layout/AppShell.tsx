@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { cn } from '@agent-desk/ui'
 import { AnimatePresence } from 'framer-motion'
 import {
   PinOff, Zap, FolderOpen, Plus,
@@ -11,12 +10,9 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
+  cn,
   Sheet,
   SheetContent,
-} from '@agent-desk/ui'
-import { TodayPanel } from '@/components/today/TodayPanel'
-import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -44,6 +40,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@agent-desk/ui'
+import { TodayPanel } from '@/components/today/TodayPanel'
+import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
