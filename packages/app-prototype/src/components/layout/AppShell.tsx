@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
-  Pin, PinOff, Zap, FolderOpen, Plus,
+  PinOff, Zap, FolderOpen, Plus,
   ListFilter, SlidersHorizontal,
   ChevronDown, MessageSquare, MoreHorizontal, Trash2,
   FileText,
@@ -32,7 +32,6 @@ import {
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,

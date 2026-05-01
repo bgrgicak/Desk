@@ -54,7 +54,7 @@ export function TodayDetailPanel({
   // so users see what the agent said before they reply.
   const seedMessage = {
     id: `${item.id}-ctx`,
-    role: 'assistant',
+    role: 'assistant' as const,
     content: item.message,
     timestamp: item.timestamp,
   }

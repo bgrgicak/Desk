@@ -372,7 +372,7 @@ function TodayItemDetail({
   // Seed the conversation with the item's context as the first AI message
   const seedMessage = item.context ? {
     id: `${item.id}-ctx`,
-    role: 'assistant',
+    role: 'assistant' as const,
     content: item.context,
     timestamp: item.timestamp,
   } : undefined

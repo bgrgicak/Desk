@@ -100,7 +100,7 @@ function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentNa
   const [postMessage] = usePostChatMessageMutation()
   const [isSending, setIsSending] = useState(false)
 
-  const chatUrl = wsId ? buildPath(wsId, 'desk', { chat: chatId, message: messageId ?? null }) : null
+  const chatUrl = wsId ? buildPath(wsId, 'pinned', { chat: chatId, message: messageId ?? null }) : null
 
   async function handleSend(text: string) {
     if (!text.trim() || isSending) return

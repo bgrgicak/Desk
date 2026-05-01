@@ -95,7 +95,7 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
     let cancelled = false
     let createdUrl: string | null = null
     void fetchLibraryContent({ workspaceId: activeWorkspaceId, path: artifact.id })
-      .then(async (blob) => {
+      .then(async ({ blob }) => {
         if (cancelled) return
         if (artifact.type === 'image') {
           createdUrl = URL.createObjectURL(blob)

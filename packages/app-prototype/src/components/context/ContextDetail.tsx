@@ -69,6 +69,7 @@ import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
 
+const AUTO_SAVE_DEBOUNCE_MS = 600
 
 interface ContextDetailProps {
   item: ContextItem
@@ -88,7 +89,7 @@ function canPreview(item: ContextItem): boolean {
   return fileKindForItem(item) !== 'unknown'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
@@ -414,7 +415,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const folders = activeWorkspaceId
     ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
     : []
-  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(f => toArtifactFromFile(f, []))
+  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(f => toArtifactFromFile(f))
   const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
   const FileIcon = iconForItem(item)
 
