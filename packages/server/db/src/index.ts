@@ -11,5 +11,4 @@ export {
   encryptJson,
   decryptJson,
 } from "./encryption.js";
-export { seedProviderKeysFromEnv } from "./seed.js";
 export * as queries from "./queries/index.js";

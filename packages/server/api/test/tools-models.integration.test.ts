@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import { createApp } from "../src/app.js";
@@ -70,11 +70,18 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  // Provider keys are user-scoped now (M2). Enable the dev-only env seed
-  // so opencode inside the sandbox can see ANTHROPIC_API_KEY / OPENAI_API_KEY.
-  process.env.DESK_DEV = "1";
   process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-  await seedProviderKeysFromEnv(pool);
+
+  // Paid-provider tests require keys in user_settings. Pull whatever's set
+  // in the host env into the seeded user's row so opencode in the sandbox
+  // can see them.
+  const envKeys: Record<string, string> = {};
+  if (process.env.ANTHROPIC_API_KEY) envKeys.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (process.env.OPENAI_API_KEY) envKeys.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (Object.keys(envKeys).length > 0) {
+    const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
+    await queries.userSettings.setProviderKeys(pool, rows[0].id as string, envKeys);
+  }
 
   const runManager = createRunManager({
     pool,
