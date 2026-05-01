@@ -11,6 +11,8 @@ import {
   Pencil,
   PanelRight,
   ChevronRight,
+  Eye,
+  Code,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -67,7 +69,6 @@ import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
 
-const SAVED_BADGE_TTL_MS = 2_000
 
 interface ContextDetailProps {
   item: ContextItem
@@ -288,7 +289,6 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
   const isDirty = isTextEditable && editorValue != null && editorValue !== previewText
 
   const [isSaving, setIsSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(null)
 
   const [htmlPreviewBlobUrl, setHtmlPreviewBlobUrl] = useState<string | null>(null)
   useEffect(() => {
@@ -319,8 +319,8 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
       } else {
         setPreviewText(editorValue)
         if (result.etag) setPreviewEtag(result.etag)
-        setSavedAt(Date.now())
         headingLinkedRef.current = false
+        toast.success(`Saved ${item.name}`)
       }
     } catch (err) {
       toast.error(`Save failed: ${item.name}`, {
@@ -331,14 +331,7 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
     }
   }, [activeWorkspaceId, editorValue, isDirty, item.id, item.mimeType, item.name, previewEtag])
 
-  useEffect(() => {
-    if (savedAt == null) return
-    const t = window.setTimeout(() => setSavedAt(null), SAVED_BADGE_TTL_MS)
-    return () => window.clearTimeout(t)
-  }, [savedAt])
-
-  const showSavedBadge = !isDirty && !isSaving && savedAt != null
-  const saveLabel = isSaving ? 'Saving…' : showSavedBadge ? 'Saved' : 'Save'
+  const saveLabel = isSaving ? 'Saving…' : 'Save'
 
   // Document editor state for notes: a separate heading textarea and body
   // textarea. Content is stored as `heading\n\nbody` in the file; on first
@@ -490,32 +483,36 @@ export function ContextDetail({ item, onBack, onCompose, onArtifactClick, onNavi
           })()}
           actions={
             <>
-              {isTextEditable && (isMarkdown || isHtml) && (
+              {isTextEditable && (isDirty || isSaving) && (
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="text-xs"
-                  onClick={() => setShowPreview(p => !p)}
-                  data-testid="library-preview-toggle"
-                >
-                  {showPreview ? 'Edit' : 'Preview'}
-                </Button>
-              )}
-
-              {isTextEditable && (
-                <Button
-                  size="sm"
-                  variant="outline"
                   className="text-xs"
                   onClick={handleSave}
-                  disabled={!isDirty || isSaving}
+                  disabled={isSaving}
                   data-testid="library-save"
-                  data-save-state={
-                    isSaving ? 'saving' : showSavedBadge ? 'saved' : isDirty ? 'dirty' : 'idle'
-                  }
+                  data-save-state={isSaving ? 'saving' : 'dirty'}
                 >
                   {saveLabel}
                 </Button>
+              )}
+
+              {isTextEditable && (isMarkdown || isHtml) && (
+                <div className="flex items-center rounded-lg border p-0.5" data-testid="library-preview-toggle">
+                  <button
+                    onClick={() => setShowPreview(true)}
+                    className={`rounded-md p-1.5 transition-colors ${showPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    aria-label="Preview"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setShowPreview(false)}
+                    className={`rounded-md p-1.5 transition-colors ${!showPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    aria-label="Code"
+                  >
+                    <Code className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               )}
 
               <DropdownMenu>

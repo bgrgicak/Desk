@@ -32,6 +32,16 @@ function languageFor(name: string, mimeType?: string | null): Extension | null {
   return null
 }
 
+function wantsLineNumbers(name: string, mimeType?: string | null): boolean {
+  const ext = extFor(name)
+  const mime = (mimeType ?? '').toLowerCase()
+  return (
+    ext === 'html' || ext === 'htm' || mime === 'text/html' ||
+    ext === 'css' || ext === 'scss' || ext === 'sass' || ext === 'less' ||
+    isMarkdownFile(name, mimeType)
+  )
+}
+
 interface TextFileEditorProps {
   value: string
   onChange: (next: string) => void
@@ -54,6 +64,8 @@ export function TextFileEditor({
     return exts
   }, [filename, mimeType])
 
+  const lineNumbers = wantsLineNumbers(filename, mimeType)
+
   return (
     <CodeMirror
       value={value}
@@ -61,7 +73,7 @@ export function TextFileEditor({
       extensions={extensions}
       readOnly={readOnly}
       basicSetup={{
-        lineNumbers: false,
+        lineNumbers,
         highlightActiveLine: false,
         foldGutter: false,
         autocompletion: false,
