@@ -109,7 +109,21 @@ async function cmdVersion() {
   process.stdout.write(`${pkg.version}\n`);
 }
 
+function ensureNodeVersion() {
+  const major = parseInt(process.versions.node.split(".")[0], 10);
+  if (major === 23) return;
+  process.stderr.write(
+    `desk: Node 23 is required (found ${process.versions.node}).\n` +
+      "  Install via:\n" +
+      "    volta install node@23\n" +
+      "    fnm install 23 && fnm use 23\n" +
+      "    nvm install 23 && nvm use 23\n",
+  );
+  process.exit(1);
+}
+
 async function main() {
+  ensureNodeVersion();
   const sub = process.argv[2] ?? "start";
   switch (sub) {
     case "start": return cmdStart();
