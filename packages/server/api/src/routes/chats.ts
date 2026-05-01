@@ -181,7 +181,7 @@ export async function buildSendMessageBodyFromForm(
     content,
     attachments: [...refs, ...uploaded],
   };
-  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
+  for (const k of ["kind", "title", "executeAt", "cron", "goal"] as const) {
     const v = form.get(k);
     if (typeof v === "string" && v !== "") body[k] = v;
   }
@@ -242,11 +242,13 @@ export async function sendMessage(
     id: generateId("message"),
     chatId,
     role: "user",
-    content: data.goal
-      ? { type: "text", text: data.content, goal: data.goal }
-      : { type: "text", text: data.content },
+    content: { type: "text", text: data.content },
     attachments,
   });
+
+  if (data.goal) {
+    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  }
 
   emit({ type: "message.appended", payload: userMessage });
 
