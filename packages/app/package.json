@@ -1,8 +1,19 @@
 {
-  "name": "app",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@agent-desk/app",
+  "version": "0.1.0-alpha.0",
   "type": "module",
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

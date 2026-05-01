@@ -1,6 +1,6 @@
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
- * Duplicated (not imported) because app-prototype isn't in the server's
+ * Duplicated (not imported) because @agent-desk/app isn't in the server's
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 

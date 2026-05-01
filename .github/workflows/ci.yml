@@ -63,7 +63,7 @@ jobs:
         run: npx vitest run --passWithNoTests --retry=2
 
       - name: Build @agent-desk/api (+ deps via nx) for the Playwright fixture
-        # The Playwright fixture (`packages/app-prototype/e2e/fixtures/server.ts`)
+        # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
         # spawns `node packages/server/api/dist/main.js`. nx's
         # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
         # storage, tools, runtime, scheduler) in topological order, so a
@@ -73,18 +73,18 @@ jobs:
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
-        working-directory: packages/app-prototype
+        working-directory: packages/app
 
       - name: Run Playwright e2e tests
         # `--retries=2` catches timing flakes without masking deterministic
         # failures (still red after three attempts).
         run: npx playwright test --retries=2
-        working-directory: packages/app-prototype
+        working-directory: packages/app
 
       - name: Upload Playwright traces on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-traces
-          path: packages/app-prototype/test-results/
+          path: packages/app/test-results/
           retention-days: 7

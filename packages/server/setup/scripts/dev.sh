@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the full dev stack on the host:
 #   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
-#   - app-prototype Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
+#   - app Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
 #
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
 # process-group trap below.
@@ -98,11 +98,11 @@ done
 ) &
 SERVER_PID=$!
 
-# 6. Start vite (app-prototype) in the background.
+# 6. Start vite (app) in the background.
 (
   cd "$REPO_ROOT"
   export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:35138}"
-  exec npm -w app run dev
+  exec npm -w @agent-desk/app run dev
 ) &
 VITE_PID=$!
 
