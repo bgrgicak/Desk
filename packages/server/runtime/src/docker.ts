@@ -17,6 +17,20 @@ import {
 } from "./mounts.js";
 
 /**
+ * The sandbox container image used for every desk-agent run. Resolves
+ * lazily so a test can flip DESK_SANDBOX_IMAGE between cases (the value
+ * is read on every call rather than cached at import time).
+ *
+ * Default `desk/sandbox:v1` matches what `docker build -t desk/sandbox:v1
+ * packages/server/runtime/Dockerfile.sandbox` produces — the path
+ * documented in the README. The CLI overrides this in published mode to
+ * a registry-published, version-pinned tag (see §4 of npm-publish.md).
+ */
+export function sandboxImage(): string {
+  return process.env.DESK_SANDBOX_IMAGE ?? "desk/sandbox:v1";
+}
+
+/**
  * Resolves the Docker socket path. Order of preference:
  *   1. DOCKER_HOST env var (unix:// only — TCP not supported here).
  *   2. `docker context inspect` for the current context.
@@ -57,19 +71,49 @@ export interface SandboxHandle {
 }
 
 /**
- * Ensures the sandbox Docker image exists.
- * Called by the installer, not at runtime.
+ * Ensures the sandbox Docker image exists locally. If not, attempts a
+ * `docker pull` first — that's the published-install code path where the
+ * image lives on Docker Hub but hasn't been pulled yet. In monorepo dev
+ * the image is built locally from the in-tree Dockerfile, so the pull
+ * fails cleanly and we fall back to a warning that points at the build
+ * command.
  */
 export async function ensureImage(): Promise<void> {
   const Docker = (await import("dockerode")).default;
   const docker = new Docker({ socketPath: dockerSocketPath() });
+  const image = sandboxImage();
 
   try {
-    await docker.getImage("desk/sandbox:v1").inspect();
+    await docker.getImage(image).inspect();
+    return;
   } catch {
+    /* not present — fall through to pull */
+  }
+
+  // Best-effort pull. Streams progress to stderr so a long-running pull
+  // doesn't look like a hang. If the pull fails (no registry, image
+  // doesn't exist there, offline), we log and let the caller proceed —
+  // they'll get a clearer error from the create-container path.
+  try {
+    const stream = await docker.pull(image);
+    await new Promise<void>((resolve, reject) => {
+      docker.modem.followProgress(
+        stream,
+        (err) => (err ? reject(err) : resolve()),
+        (event) => {
+          if (event.status) {
+            const detail = event.progress ? ` ${event.progress}` : "";
+            process.stderr.write(`pull ${image}: ${event.status}${detail}\n`);
+          }
+        },
+      );
+    });
+    await docker.getImage(image).inspect();
+  } catch (err) {
     console.warn(
-      "desk/sandbox:v1 image not found. Build it from packages/server/runtime/Dockerfile.sandbox " +
-      "or run `desk init` (if using @agent-desk/cli) to build it.",
+      `${image} image not found locally and pull failed (${(err as Error).message}). ` +
+        "If this is a monorepo dev checkout, build the image from " +
+        "packages/server/runtime/Dockerfile.sandbox.",
     );
   }
 }
@@ -113,7 +157,7 @@ export async function createOrReuse(
     const existing = docker.getContainer(containerName);
     const info = await existing.inspect();
     const currentImageId = await docker
-      .getImage("desk/sandbox:v1")
+      .getImage(sandboxImage())
       .inspect()
       .then((i) => i.Id)
       .catch(() => null);
@@ -137,7 +181,7 @@ export async function createOrReuse(
 
   const createSpec = {
     name: containerName,
-    Image: "desk/sandbox:v1",
+    Image: sandboxImage(),
     // Run as the host user that owns the workspace bind. The image bakes
     // an `agent` user at UID 2000, but the workspace dir on disk is owned
     // by whoever runs desk-server; using their uid:gid keeps writes both

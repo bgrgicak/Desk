@@ -4,6 +4,7 @@ export {
   ensureImage,
   dockerSocketPath,
   auditSandboxMounts,
+  sandboxImage,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift } from "./docker.js";
 export {
