@@ -3,6 +3,16 @@
 @import "shadcn/tailwind.css";
 @plugin "@tailwindcss/typography";
 
+/*
+ * Tailwind v4 only auto-scans the consumer's source. Workspace deps must
+ * declare their own scan paths or every class used inside this package
+ * gets purged from the consumer's built CSS. Paths are resolved relative
+ * to this file (packages/ui/src/styles.css).
+ */
+@source "./components";
+@source "./lib";
+@source "./hooks";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
