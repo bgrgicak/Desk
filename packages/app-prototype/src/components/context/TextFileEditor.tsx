@@ -37,8 +37,7 @@ function wantsLineNumbers(name: string, mimeType?: string | null): boolean {
   const mime = (mimeType ?? '').toLowerCase()
   return (
     ext === 'html' || ext === 'htm' || mime === 'text/html' ||
-    ext === 'css' || ext === 'scss' || ext === 'sass' || ext === 'less' ||
-    isMarkdownFile(name, mimeType)
+    ext === 'css' || ext === 'scss' || ext === 'sass' || ext === 'less'
   )
 }
 

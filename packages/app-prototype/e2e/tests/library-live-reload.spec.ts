@@ -77,8 +77,9 @@ async function openLibraryFile(
   const row = page.getByText(filename).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();
-  // Wait until the editor is visible (text files show the save button)
-  await expect(page.getByTestId("library-save")).toBeVisible({ timeout: 10_000 });
+  // Wait until the detail pane is open (the more-actions menu is always
+  // rendered for open items; the save button is only shown when dirty).
+  await expect(page.getByTestId("library-detail-more")).toBeVisible({ timeout: 10_000 });
 }
 
 test("file preview updates automatically when content is changed via the API", async ({

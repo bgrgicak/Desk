@@ -56,7 +56,7 @@ async function openLibraryFile(
   const row = page.getByText(filename).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();
-  await expect(page.getByTestId("library-save")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("library-detail-more")).toBeVisible({ timeout: 10_000 });
 }
 
 test("sending a message from the library item ConversationPanel creates a real server chat", async ({
@@ -80,8 +80,9 @@ test("sending a message from the library item ConversationPanel creates a real s
   await input.fill("What is in this file?");
   await input.press("Enter");
 
-  // The user message must appear in the panel immediately.
-  await expect(loggedInPage.getByText("What is in this file?")).toBeVisible({
+  // The user message must appear in the panel immediately. Use .first()
+  // because the fake agent driver echoes the prompt in its reply text.
+  await expect(loggedInPage.getByText("What is in this file?").first()).toBeVisible({
     timeout: 5_000,
   });
 
@@ -132,8 +133,9 @@ test("agent run events are stored server-side but not shown as empty bubbles in 
   await input.fill("Summarize this file.");
   await input.press("Enter");
 
-  // User message must appear in the panel.
-  await expect(loggedInPage.getByText("Summarize this file.")).toBeVisible({
+  // User message must appear in the panel. Use .first() because the fake
+  // agent driver echoes the prompt in its reply text.
+  await expect(loggedInPage.getByText("Summarize this file.").first()).toBeVisible({
     timeout: 5_000,
   });
 
@@ -163,7 +165,7 @@ test("agent run events are stored server-side but not shown as empty bubbles in 
   expect(eventsMsg).toBeDefined();
 
   // The UI must not have crashed — the user message is still visible.
-  await expect(loggedInPage.getByText("Summarize this file.")).toBeVisible();
+  await expect(loggedInPage.getByText("Summarize this file.").first()).toBeVisible();
 });
 
 test("library file is pinned to chat Files sidebar when first message is sent from ConversationPanel", async ({
