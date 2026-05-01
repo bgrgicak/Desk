@@ -53,7 +53,7 @@ async function openLibraryFile(
   const row = page.getByText(filename).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();
-  await expect(page.getByTestId("library-save")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("library-detail-more")).toBeVisible({ timeout: 10_000 });
 }
 
 test("editor shows no line numbers for markdown files", async ({
