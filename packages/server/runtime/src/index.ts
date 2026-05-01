@@ -21,6 +21,8 @@ export { execRun, cancelRun } from "./opencode.js";
 export type { ExecRunOptions } from "./opencode.js";
 export { renderAgentFile, writeAgentFile } from "./agentFile.js";
 export type { AgentFileInput } from "./agentFile.js";
+export { renderPromptBody, loadAndSub } from "./prompt.js";
+export type { RenderPromptInput } from "./prompt.js";
 export { createDriver } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";
 export { execInSandbox } from "./sandboxExec.js";

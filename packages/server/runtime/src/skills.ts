@@ -13,24 +13,24 @@ import { fileURLToPath } from "node:url";
  * agent file is the one channel guaranteed to land in the model's context,
  * so that's where skills go.
  *
- * Adding a skill: drop a markdown file somewhere sensible (typically in the
- * package that owns the surface it documents) and reference it here. Each
- * skill file is responsible for its own headings; this module only joins
- * them with blank lines.
- *
- * Resolution: paths are relative to *this file* and walk back through the
- * monorepo layout. After tsc emits to `runtime/dist/`, the same relative
- * walk lands on the same source files because the workspace tree is
- * preserved on the host. If we ever ship as a packaged tarball that drops
- * the source tree, switch to a build-time copy step that lands the
- * markdown next to the bundled JS.
+ * Resolution: the postbuild step (`scripts/copy-assets.mjs`) copies each
+ * skill markdown next to the bundled JS — `dist/sandbox-cli-skill.md` for
+ * the `sandbox-cli` package skill. We resolve to that path first so the
+ * built artifact is self-contained. In source mode (running under tsx /
+ * vitest with the `@agent-desk/dev` export condition), the dist copy
+ * doesn't exist; fall back to the source-tree location.
  */
-const SKILL_FILES: readonly string[] = [
-  "../../sandbox-cli/skill.md",
+const SKILL_FILES: ReadonlyArray<{ built: string; source: string }> = [
+  { built: "sandbox-cli-skill.md", source: "../../sandbox-cli/skill.md" },
 ];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export const SKILLS_MARKDOWN: string = SKILL_FILES
-  .map((rel) => fs.readFileSync(path.resolve(here, rel), "utf-8").trim())
-  .join("\n\n");
+function readSkill(spec: { built: string; source: string }): string {
+  const builtPath = path.resolve(here, spec.built);
+  if (fs.existsSync(builtPath)) return fs.readFileSync(builtPath, "utf-8").trim();
+  const sourcePath = path.resolve(here, spec.source);
+  return fs.readFileSync(sourcePath, "utf-8").trim();
+}
+
+export const SKILLS_MARKDOWN: string = SKILL_FILES.map(readSkill).join("\n\n");
