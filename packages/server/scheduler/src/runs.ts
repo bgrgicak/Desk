@@ -7,6 +7,7 @@ import {
   generateId,
   AgentEventSchema,
   type AgentLogEntry,
+  type GoalKey,
   type Message,
   type WsEvent,
 } from "@agent-desk/shared";
@@ -167,12 +168,11 @@ export function createRunManager(opts: RunManagerOptions) {
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string; goal?: string } | undefined;
+      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      const prompt = inner?.goal ? `Goal: ${inner.goal}\n\n${text}` : text;
-      return { prompt, attachments };
+      return { prompt: text, attachments };
     }
     return { prompt: JSON.stringify(msg.content) };
   }
@@ -256,7 +256,9 @@ export function createRunManager(opts: RunManagerOptions) {
     const { prompt, attachments } = await derivePromptInputs(msg);
     const outputKind = outputContentTypeFor(msg);
 
-    // Single JOIN resolves workspace slug, agent, user, and timezone in one round-trip.
+    // Single JOIN resolves workspace slug, agent, user, timezone, and the
+    // chat's persistent goal in one round-trip. `chat_goal` feeds the
+    // per-chat goal fragment into the rendered system prompt.
     const { rows: ctxRows } = await pool.query<{
       workspace_id: string;
       workspace_path: string;
@@ -264,9 +266,11 @@ export function createRunManager(opts: RunManagerOptions) {
       user_id: string | null;
       username: string | null;
       timezone: string | null;
+      chat_goal: string | null;
     }>(
       `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
-              u.id AS user_id, u.username, u.timezone
+              u.id AS user_id, u.username, u.timezone,
+              c.goal AS chat_goal
        FROM chats c
        JOIN workspaces w ON w.id = c.workspace_id
        LEFT JOIN users u ON u.id = w.user_id
@@ -280,6 +284,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const userId = ctxRow?.user_id ?? null;
     const userName = ctxRow?.username ?? "User";
     const userTimezone = ctxRow?.timezone ?? undefined;
+    const chatGoal = (ctxRow?.chat_goal as GoalKey | null) ?? null;
 
     const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${runId}.log`);
@@ -318,6 +323,8 @@ export function createRunManager(opts: RunManagerOptions) {
         instructions: agent?.instructions ?? "",
         userName,
         userTimezone,
+        chatId: msg.chatId,
+        goal: chatGoal,
       };
 
       let result: { exitCode: number };

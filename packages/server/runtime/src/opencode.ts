@@ -9,7 +9,6 @@ import { writeAgentFile, type AgentFileInput } from "./agentFile.js";
 export interface ExecRunOptions {
   runId: string;
   prompt: string;
-  chatContext?: string;
   home: string;
   workspaceId: string;
   workspaceSlug: string;
@@ -56,28 +55,16 @@ export async function execRun(
 
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
-  // single-bind workspace mount.
+  // single-bind workspace mount. The per-chat workbench paths and any
+  // goal fragment are part of the rendered system prompt — no separate
+  // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
-
-  // Tell the agent which chat it's in. The per-chat workbench path is
-  // encoded in the system prompt as a template; here we anchor it and
-  // name the attachments/ + notes/ subdirs so the agent reads real
-  // paths instead of guessing.
-  const workbenchHint = opts.chatId
-    ? [
-        `Current chat workbench: ~/.chats/${opts.chatId}/`,
-        `Chat attachments: ~/.chats/${opts.chatId}/attachments/`,
-        `Chat notes:       ~/.chats/${opts.chatId}/notes/`,
-      ].join("\n")
-    : null;
-  const chatContext = [workbenchHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
 
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
-      chatContext,
       workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,

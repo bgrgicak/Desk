@@ -4,7 +4,6 @@ import { SANDBOX_HOME } from "./mounts.js";
 export interface RunOptions {
   runId: string;
   prompt: string;
-  chatContext?: string;
   agentFileId?: string;
   /**
    * Workspace-relative paths the user attached to this message. The driver
@@ -155,11 +154,11 @@ function createRealDriver(): SandboxDriver {
       const handle = await createOrReuse(workspaceId, opts.workspaceSlug, undefined, opts.providerKeys);
       const container = docker.getContainer(handle.containerId);
 
-      // Build the full prompt including chat context if provided.
-      // The system prompt is handled by the OpenCode agent file, not inlined here.
-      const fullPrompt = [opts.chatContext, opts.prompt]
-        .filter(Boolean)
-        .join("\n\n");
+      // The system prompt — including the per-chat workbench paths and the
+      // user's goal fragment — lives entirely in the OpenCode agent file
+      // written by writeAgentFile, so the per-turn prompt is just the
+      // user's text.
+      const fullPrompt = opts.prompt;
 
       const cmd = buildOpencodeCommand({
         agentFileId: opts.agentFileId,
