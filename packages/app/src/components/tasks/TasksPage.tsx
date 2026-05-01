@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Search } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'

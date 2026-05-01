@@ -24,8 +24,7 @@ import {
   EyeOff,
   type LucideIcon,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Button, Checkbox } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Dialog,
@@ -34,31 +33,23 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import {
+  Input,
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@/components/ui/context-menu'
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -67,7 +58,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+} from '@agent-desk/ui'
 import type { ContextItem } from '@/data/ui-types'
 import {
   getRelativeTime,

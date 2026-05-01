@@ -14,8 +14,7 @@ import {
   Eye,
   Code,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button, Input } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Breadcrumb,
@@ -24,22 +23,16 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -48,7 +41,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+} from '@agent-desk/ui'
 import type { ContextItem, Artifact } from '@/data/ui-types'
 import { getArtifactIcon, getFolderPath } from '@/data/ui-types'
 import { fileKindForItem, fileKindFrom, iconForItem, isMarkdownFile, isHtmlFile } from '@/data/file-kind'

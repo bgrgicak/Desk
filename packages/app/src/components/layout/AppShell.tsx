@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { cn } from '@/lib/utils'
+import { cn } from '@agent-desk/ui'
 import { AnimatePresence } from 'framer-motion'
 import {
   PinOff, Zap, FolderOpen, Plus,
@@ -13,7 +13,7 @@ import {
 import {
   Sheet,
   SheetContent,
-} from '@/components/ui/sheet'
+} from '@agent-desk/ui'
 import { TodayPanel } from '@/components/today/TodayPanel'
 import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import {
@@ -21,8 +21,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -35,8 +33,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-} from '@/components/ui/sidebar'
-import {
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -44,12 +40,10 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from '@/components/ui/command'
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover'
+} from '@agent-desk/ui'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'

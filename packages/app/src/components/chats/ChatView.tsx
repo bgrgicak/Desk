@@ -5,7 +5,7 @@ import {
   PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+import { Button } from '@agent-desk/ui'
 import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import {
@@ -13,12 +13,18 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'

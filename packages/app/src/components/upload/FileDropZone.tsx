@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Upload } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "@agent-desk/ui";
 
 /**
  * An entry produced by dropping or picking files. `relativePath` is the

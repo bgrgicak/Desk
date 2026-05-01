@@ -7,18 +7,18 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@agent-desk/ui'
 import { ChatMessage } from '@/components/compose/ChatMessage'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useServerChat } from '@/hooks/use-server-chat'
-import { cn } from '@/lib/utils'
+import { cn } from '@agent-desk/ui'
 import type { TodayItem, TodayBand, Chat } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 

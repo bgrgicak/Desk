@@ -6,18 +6,22 @@ import {
   Clock,
 } from 'lucide-react'
 import { format } from 'date-fns'
-import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
+  Sheet,
+  SheetContent,
+  Button,
+  Input,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Calendar as CalendarPicker } from '@/components/ui/calendar'
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  RadioGroup,
+  RadioGroupItem,
+  Calendar as CalendarPicker,
+} from '@agent-desk/ui'
 import type { Task } from '@/data/ui-types'
 import { StatusBadge } from './task-badges'
 import { buildCron, type Unit, type ScheduleParams } from './schedule-utils'

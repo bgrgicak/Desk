@@ -6,39 +6,35 @@ import {
   Trash2, Plus, ChevronDown, X, Search,
   Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Command,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Switch } from '@/components/ui/switch'
-import {
+  Button,
+  Input,
+  Textarea,
+  Switch,
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover'
-import {
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { cn } from '@/lib/utils'
+  cn,
+} from '@agent-desk/ui'
 import {
   useGetAgentsQuery,
   useCreateAgentMutation,
