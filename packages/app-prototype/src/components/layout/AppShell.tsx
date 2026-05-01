@@ -70,7 +70,7 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
 
-export type View = 'today' | 'pinned' | 'desk' | 'tasks' | 'chats' | 'context' | 'compose'
+export type View = 'today' | 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
 const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
@@ -400,7 +400,7 @@ export function AppShell({
 
           {/* ── Header: nav items ── */}
           <SidebarHeader style={{ paddingTop: 'calc(var(--spacing) * 2.5)' }}>
-            {/* Nav items: Desk / Runs / Library */}
+            {/* Nav items: Library / Tasks */}
             <SidebarMenu>
               {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
                 <SidebarMenuItem key={view}>

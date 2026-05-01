@@ -1,5 +1,5 @@
 import {
-  LayoutGrid, Zap, FolderOpen, Sun,
+  Zap, FolderOpen, Sun,
   User, Bot, Plug, Sliders, Briefcase,
   type LucideIcon,
 } from 'lucide-react'
@@ -35,7 +35,6 @@ export type SearchTarget = NavTarget | SettingsTarget
  * workspace agents, connections).
  */
 export const WORKSPACE_TARGETS: SearchTarget[] = [
-  { kind: 'page',     id: 'page:desk',         label: 'Desk',                icon: LayoutGrid, view: 'desk' },
   { kind: 'page',     id: 'page:tasks',        label: 'Tasks',               icon: Zap,        view: 'tasks' },
   { kind: 'page',     id: 'page:library',      label: 'Library',             icon: FolderOpen, view: 'context', keywords: ['files', 'context'] },
   { kind: 'settings', id: 'set:agents',        label: 'Agents',              icon: Bot,        section: 'agents',      keywords: ['ai', 'bot', 'assistant'] },
