@@ -8,7 +8,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from '@/components/ui/command'
+} from '@agent-desk/ui'
 import { useGetLibraryQuery, useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
 import { useAppSelector } from '@/store/hooks'
 import { useGlobalPalette } from './GlobalPaletteProvider'

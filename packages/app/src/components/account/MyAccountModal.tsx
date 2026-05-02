@@ -7,18 +7,21 @@ import {
   usePatchMeMutation,
   useChangePasswordMutation,
 } from '@/store/api'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbList,
   BreadcrumbPage,
-} from '@/components/ui/breadcrumb'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { cn } from '@/lib/utils'
+  Button,
+  Input,
+  Switch,
+  Alert,
+  AlertDescription,
+  cn,
+} from '@agent-desk/ui'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'

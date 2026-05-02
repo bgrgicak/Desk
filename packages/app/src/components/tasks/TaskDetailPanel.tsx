@@ -18,15 +18,15 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -35,15 +35,13 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import {
   Command,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command'
+} from '@agent-desk/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { buildPath } from '@/router/nav'

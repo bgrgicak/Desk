@@ -3,7 +3,7 @@ import { EditorView } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { MergeView } from '@codemirror/merge'
 import { basicSetup } from 'codemirror'
-import { Button } from '@/components/ui/button'
+import { Button } from '@agent-desk/ui'
 
 interface MergeEditorProps {
   /** The user's local (unsaved) version — left pane. */

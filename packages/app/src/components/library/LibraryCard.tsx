@@ -11,15 +11,15 @@ import {
   PinOff,
   Trash2,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
+  Button,
+  Checkbox,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@agent-desk/ui'
 import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'

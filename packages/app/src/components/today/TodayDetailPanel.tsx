@@ -11,7 +11,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@agent-desk/ui'
 import { useServerChat } from '@/hooks/use-server-chat'
 import { InboxUICard } from './InboxUICard'
 import {

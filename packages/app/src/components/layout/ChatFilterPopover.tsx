@@ -7,9 +7,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Switch } from '@/components/ui/switch'
-import { Button } from '@/components/ui/button'
+  Switch,
+  Button,
+} from '@agent-desk/ui'
 import type { ChatGoalKind } from '@/data/ui-types'
 import type { ServerAgent } from '@/store/types'
 
