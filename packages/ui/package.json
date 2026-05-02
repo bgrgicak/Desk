@@ -1,13 +1,14 @@
 {
   "name": "@agent-desk/ui",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
+    "dist",
     "src",
-    "dist"
+    "package.json",
+    "README.md"
   ],
   "exports": {
     ".": {
@@ -16,6 +17,13 @@
       "import": "./dist/index.js"
     },
     "./styles.css": "./src/styles.css"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
   },
   "scripts": {
     "build": "tsc",
