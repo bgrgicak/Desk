@@ -1,7 +1,6 @@
 {
   "name": "@agent-desk/api",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,6 +11,18 @@
       "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
+  },
   "scripts": {
     "build": "tsc",
     "openapi:dump": "npx tsx src/scripts/dump-openapi.ts",
@@ -21,11 +32,11 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/db": "*",
-    "@agent-desk/runtime": "*",
-    "@agent-desk/scheduler": "*",
-    "@agent-desk/shared": "*",
-    "@agent-desk/storage": "*",
+    "@agent-desk/db": "^0.1.0-alpha.0",
+    "@agent-desk/runtime": "^0.1.0-alpha.0",
+    "@agent-desk/scheduler": "^0.1.0-alpha.0",
+    "@agent-desk/shared": "^0.1.0-alpha.0",
+    "@agent-desk/storage": "^0.1.0-alpha.0",
     "croner": "^10.0.1"
   },
   "devDependencies": {

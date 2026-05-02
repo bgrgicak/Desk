@@ -1,23 +1,35 @@
 {
   "name": "@agent-desk/cli",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha.0",
   "description": "Host CLI for the Desk personal AI assistant. `npx @agent-desk/cli` boots the full stack on http://127.0.0.1:35138/.",
-  "private": true,
   "type": "module",
   "bin": {
     "desk": "src/desk.mjs"
+  },
+  "files": [
+    "dist",
+    "src/desk.mjs",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
   },
   "scripts": {
     "typecheck": "node -e \"console.log('cli has no ts to typecheck yet')\"",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-desk/api": "*",
-    "@agent-desk/db": "*",
-    "@agent-desk/runtime": "*",
-    "@agent-desk/scheduler": "*",
-    "@agent-desk/shared": "*",
-    "@agent-desk/storage": "*",
+    "@agent-desk/api": "^0.1.0-alpha.0",
+    "@agent-desk/db": "^0.1.0-alpha.0",
+    "@agent-desk/runtime": "^0.1.0-alpha.0",
+    "@agent-desk/scheduler": "^0.1.0-alpha.0",
+    "@agent-desk/shared": "^0.1.0-alpha.0",
+    "@agent-desk/storage": "^0.1.0-alpha.0",
     "tsx": "^4.19.2"
   }
 }

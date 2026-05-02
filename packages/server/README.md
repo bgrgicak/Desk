@@ -17,7 +17,7 @@ Docker daemon (rootful or rootless — both detected). State lives under
 - Node.js 22.x (pinned by `.nvmrc` + `engines`). Use nvm/fnm/mise/asdf.
 - Docker on the host. Linux rootful, Linux rootless, and macOS Docker
   Desktop are all auto-detected.
-- A `.env` at the repo root containing at least `ANTHROPIC_API_KEY=…`.
+- API keys are configured per-user via Settings after the first sign-in.
 
 ## First-time setup
 

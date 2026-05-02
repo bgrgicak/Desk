@@ -57,7 +57,7 @@ npm run dev
 | Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
 | `python3` | preinstalled | preinstalled |
 
-A `.env` at the repo root must contain at least `ANTHROPIC_API_KEY=…`.
+API keys are configured per-user via Settings after the first sign-in.
 `dev.sh` generates `DESK_SECRET_KEY` into `.env` on first run.
 
 ## Common commands

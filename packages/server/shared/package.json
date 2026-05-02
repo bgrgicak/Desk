@@ -1,12 +1,27 @@
 {
   "name": "@agent-desk/shared",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "@agent-desk/dev": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "@agent-desk/dev": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
   },
   "scripts": {
     "build": "tsc",

@@ -1,7 +1,6 @@
 {
   "name": "@agent-desk/db",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,6 +11,18 @@
       "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=23.4.0"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -20,7 +31,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/shared": "*",
+    "@agent-desk/shared": "^0.1.0-alpha.0",
     "hash-wasm": "^4.11.0",
     "zod": "^3.23.0"
   },

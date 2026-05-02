@@ -3,4 +3,4 @@
 set -e
 npm rebuild better-sqlite3 --silent
 npm run typecheck
-npx vitest run --exclude '**/integration/**' --exclude '**/e2e/**' --passWithNoTests
+npx vitest run --exclude '**/integration/**' --exclude '**/e2e/**' --exclude '**/e2e.test.ts' --passWithNoTests

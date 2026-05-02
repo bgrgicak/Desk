@@ -9,7 +9,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createPool, runMigrations, seedIfEmpty, seedProviderKeysFromEnv } from "@agent-desk/db";
+import { createPool, runMigrations, seedIfEmpty } from "@agent-desk/db";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
@@ -44,7 +44,6 @@ async function main(): Promise<void> {
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
   await seedIfEmpty(pool);
-  await seedProviderKeysFromEnv(pool);
   await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this
