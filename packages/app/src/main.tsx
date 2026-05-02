@@ -25,6 +25,18 @@ async function boot(): Promise<void> {
       </Provider>
     </StrictMode>,
   )
+
+  // Register the service worker only in built bundles — in `vite dev` the
+  // SW would intercept module URLs and break HMR. Wrap in try/catch
+  // because Safari throws on `serviceWorker.register` for insecure origins
+  // even when the property exists.
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('/sw.js')
+    } catch {
+      /* registration failed (insecure origin, blocked, etc.) — app works without it */
+    }
+  }
 }
 
 void boot()
