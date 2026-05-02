@@ -27,7 +27,7 @@ Those tools serve different needs. What's missing is something that meets people
 ---
 
 - **`packages/server/`** — API, DB, storage, tools, runtime, scheduler, sandbox CLI, setup scripts.
-- **`packages/app-prototype/`** — React/Vite UI (proxies `/api/*` to the server).
+- **`packages/app/`** — React/Vite UI (proxies `/api/*` to the server).
 - **`packages/agent-desk-cli/`** — host CLI (`desk` binary).
 
 The full stack runs on the host — no VM, no systemd. `desk-server` serves

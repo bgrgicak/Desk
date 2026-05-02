@@ -3,7 +3,7 @@
 Monorepo for the Desk personal AI assistant.
 
 - **`packages/server/`** — API, DB, storage, runtime, scheduler, sandbox CLI, setup scripts.
-- **`packages/app-prototype/`** — React web UI (no CSS, semantic HTML) + Playwright e2e.
+- **`packages/app/`** — React web UI (no CSS, semantic HTML) + Playwright e2e.
 - **`packages/agent-desk-cli/`** — host CLI (`desk` binary).
 
 The full stack runs on the host — no VM, no systemd. The desk-server

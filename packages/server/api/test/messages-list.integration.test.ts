@@ -443,7 +443,7 @@ describe("GET /messages — scheduled", () => {
     expect(sched.length + unsched.length).toBe(13);
   });
 
-  // The exact call the Tasks page in app-prototype issues today:
+  // The exact call the Tasks page in the app issues today:
   // useGetMessagesQuery({ workspaceId, scheduled: true }). Documents the
   // current contract — tasks are messages with execute_at/cron, scoped to
   // the active workspace.

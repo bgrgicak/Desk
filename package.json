@@ -3,19 +3,19 @@
   "private": true,
   "workspaces": [
     "packages/server/*",
-    "packages/app-prototype",
+    "packages/app",
     "packages/agent-desk-cli"
   ],
   "scripts": {
     "preinstall": "node -e \"const want='23';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
     "dev": "packages/server/setup/scripts/dev.sh",
-    "dev:app": "npm -w app run dev",
+    "dev:app": "npm -w @agent-desk/app run dev",
     "build": "nx run-many -t build",
     "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
     "typecheck": "nx run-many -t typecheck",
     "test": "vitest run --passWithNoTests",
     "test:host": "vitest run --passWithNoTests",
-    "test:e2e": "npm -w app run test:e2e",
+    "test:e2e": "npm -w @agent-desk/app run test:e2e",
     "prepare": "cp scripts/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
   },
   "devDependencies": {

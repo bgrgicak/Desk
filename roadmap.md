@@ -1,8 +1,8 @@
-# Roadmap — Desk app-prototype, private-beta cut
+# Roadmap — Desk app, private-beta cut
 
 ## Context
 
-The next milestone for `packages/app-prototype` is a **design-partner / private
+The next milestone for `packages/app` is a **design-partner / private
 beta**: real users hitting it daily. The bar shifts from "demo well" to "hold up
 under real workflows." This roadmap is built on a feature audit (below) plus
 explicit user priorities: fix the two highest-pain mocks, ship Google Drive +
@@ -14,9 +14,9 @@ Status: **REAL** = wired to `packages/server`; **MOCK** = local simulator;
 **HYBRID** = part real, part placeholder.
 
 ### Real
-- Chat (send/receive, history, WS push) — [App.tsx:30](packages/app-prototype/src/App.tsx#L30)
+- Chat (send/receive, history, WS push) — [App.tsx:30](packages/app/src/App.tsx#L30)
 - Desk artifact gallery
-- Tasks board + calendar — *modeled as `messages` with `kind=task`* — [App.tsx:187](packages/app-prototype/src/App.tsx#L187)
+- Tasks board + calendar — *modeled as `messages` with `kind=task`* — [App.tsx:187](packages/app/src/App.tsx#L187)
 - Context Library (full CRUD: upload, folder, link, move, delete)
 - Global command palette (`/api/search`, scoped)
 - Settings: profile, password, agents, workspaces, models
@@ -24,9 +24,9 @@ Status: **REAL** = wired to `packages/server`; **MOCK** = local simulator;
 - Real-time WS at `/ws` with reconnect
 
 ### Mock / hybrid
-- **Today/Inbox reply** — list is real, reply UX is `useMockChat` — [TodayInbox.tsx:380](packages/app-prototype/src/components/today/TodayInbox.tsx#L380)
-- **Artifact Conversation tab** — `useMockChat`, doesn't reach the model — [ConversationPanel.tsx](packages/app-prototype/src/components/artifact/ConversationPanel.tsx)
-- **Connections** — only Claude + ChatGPT keys are real; Drive/Notion/GitHub/Slack/Figma/Linear/Web Clipper are stub catalog entries — [connections.ts](packages/app-prototype/src/data/connections.ts)
+- **Today/Inbox reply** — list is real, reply UX is `useMockChat` — [TodayInbox.tsx:380](packages/app/src/components/today/TodayInbox.tsx#L380)
+- **Artifact Conversation tab** — `useMockChat`, doesn't reach the model — [ConversationPanel.tsx](packages/app/src/components/artifact/ConversationPanel.tsx)
+- **Connections** — only Claude + ChatGPT keys are real; Drive/Notion/GitHub/Slack/Figma/Linear/Web Clipper are stub catalog entries — [connections.ts](packages/app/src/data/connections.ts)
 
 ## Roadmap themes
 
@@ -35,8 +35,8 @@ Ordered by priority for the private-beta milestone.
 ### 1. Make real — kill the embarrassing mocks
 *Goal: every visible reply field actually answers.*
 
-- **R1.1 Inbox reply uses real chat backend.** Swap `useMockChat` in [TodayInbox.tsx](packages/app-prototype/src/components/today/TodayInbox.tsx) and [TodayDetailPanel.tsx](packages/app-prototype/src/components/today/TodayDetailPanel.tsx) for `usePostChatMessageMutation` against the inbox item's chat. Keep optimistic UI.
-- **R1.2 Artifact Conversation tab uses real chat.** Same swap in [ConversationPanel.tsx](packages/app-prototype/src/components/artifact/ConversationPanel.tsx); decide whether the conversation lives in the originating chat or its own thread (likely originating chat, scoped by artifact reference).
+- **R1.1 Inbox reply uses real chat backend.** Swap `useMockChat` in [TodayInbox.tsx](packages/app/src/components/today/TodayInbox.tsx) and [TodayDetailPanel.tsx](packages/app/src/components/today/TodayDetailPanel.tsx) for `usePostChatMessageMutation` against the inbox item's chat. Keep optimistic UI.
+- **R1.2 Artifact Conversation tab uses real chat.** Same swap in [ConversationPanel.tsx](packages/app/src/components/artifact/ConversationPanel.tsx); decide whether the conversation lives in the originating chat or its own thread (likely originating chat, scoped by artifact reference).
 - **R1.3 Delete `use-mock-chat.ts`** once unreferenced.
 
 ### 2. Connections — Drive + GitHub
@@ -88,10 +88,10 @@ Ordered by priority for the private-beta milestone.
 
 ## Critical files / surfaces to touch
 
-- [packages/app-prototype/src/hooks/use-mock-chat.ts](packages/app-prototype/src/hooks/use-mock-chat.ts) — to be deleted (Theme 1)
-- [packages/app-prototype/src/components/today/](packages/app-prototype/src/components/today/) — Inbox reply real-ification
-- [packages/app-prototype/src/components/artifact/ConversationPanel.tsx](packages/app-prototype/src/components/artifact/ConversationPanel.tsx)
-- [packages/app-prototype/src/data/connections.ts](packages/app-prototype/src/data/connections.ts) — connection catalog grows, plus per-kind config
+- [packages/app/src/hooks/use-mock-chat.ts](packages/app/src/hooks/use-mock-chat.ts) — to be deleted (Theme 1)
+- [packages/app/src/components/today/](packages/app/src/components/today/) — Inbox reply real-ification
+- [packages/app/src/components/artifact/ConversationPanel.tsx](packages/app/src/components/artifact/ConversationPanel.tsx)
+- [packages/app/src/data/connections.ts](packages/app/src/data/connections.ts) — connection catalog grows, plus per-kind config
 - [packages/server/api/src/routes/](packages/server/api/src/routes/) — new routes for Drive, GitHub, triggers, sharing
 - [packages/server/scheduler](packages/server/scheduler) — verify shape before placing scheduled-run work
 - [packages/server/api/src/ws/](packages/server/api/src/ws/) — extend for trigger events

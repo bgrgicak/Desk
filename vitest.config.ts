@@ -27,10 +27,10 @@ export default defineConfig({
   // workspace-as-node_modules deps under vitest's SSR loader.
   resolve: {
     alias: {
-      // Mirror the `@/` path alias from packages/app-prototype/vite.config.ts
-      // so that app-prototype unit tests (e.g. store/ws/middleware.test.ts) can
+      // Mirror the `@/` path alias from packages/app/vite.config.ts
+      // so that app unit tests (e.g. store/ws/middleware.test.ts) can
       // import from `@/store/…`, `@/auth/…`, etc.
-      "@": path.resolve(import.meta.dirname, "packages/app-prototype/src"),
+      "@": path.resolve(import.meta.dirname, "packages/app/src"),
     },
     conditions: ["@agent-desk/dev"],
   },
@@ -48,7 +48,7 @@ export default defineConfig({
       "**/node_modules/**",
       "**/dist/**",
       "**/test/e2e/**",
-      "packages/app-prototype/e2e/**",
+      "packages/app/e2e/**",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,

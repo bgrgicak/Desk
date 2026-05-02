@@ -32,7 +32,7 @@ One-shot tasks (no `cron`) transition to their terminal state (`succeeded`/`fail
 
 ## Overdue tasks
 
-Tasks with a past `execute_at` fire naturally on the next tick — no special handling needed. The UI labels them "Overdue since …" client-side in `packages/app-prototype/src/store/selectors/runs.ts`.
+Tasks with a past `execute_at` fire naturally on the next tick — no special handling needed. The UI labels them "Overdue since …" client-side in `packages/app/src/store/selectors/runs.ts`.
 
 ## Pause / Resume / Cancel
 
