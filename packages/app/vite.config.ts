@@ -13,6 +13,15 @@ const API_TARGET = process.env.DESK_API_URL ?? 'http://127.0.0.1:35138'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
 const APP_PORT = Number(process.env.DESK_APP_PORT ?? 5173)
 
+// Hosts the dev/preview servers will accept in the Host header. Comma-
+// separated list via DESK_ALLOWED_HOSTS, e.g. "desk.test,desk.local".
+// Defaults to "desk.test" so the bundled nginx fixture keeps working
+// without any env setup.
+const ALLOWED_HOSTS = (process.env.DESK_ALLOWED_HOSTS ?? 'desk.test')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean)
+
 // The dev and preview commands each have their own proxy section —
 // `vite preview` doesn't honour `server.proxy`, so the tests (which run
 // against the preview server) need their own copy.
@@ -45,6 +54,6 @@ export default defineConfig({
   // Bind explicitly to 127.0.0.1 (default `host: false` resolves
   // `localhost` and on stock GH runners that lands on ::1 only — the e2e
   // fixture probes 127.0.0.1 and would never see the server).
-  server: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
-  preview: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ['desk.test'] },
+  server: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ALLOWED_HOSTS },
+  preview: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ALLOWED_HOSTS },
 })
