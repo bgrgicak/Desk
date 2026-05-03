@@ -1,4 +1,3 @@
-import { PassThrough } from "node:stream";
 import { SANDBOX_HOME } from "./mounts.js";
 
 export interface RunOptions {
@@ -141,22 +140,21 @@ export function buildOpencodeCommand(opts: {
   ];
 }
 
-/** Tracks active docker exec instances by runId for cancellation. */
-const activeExecs = new Map<string, { containerId: string; execId: string }>();
+/** Tracks active execs by runId so cancelRun can find the in-container PID to kill. */
+const activeExecs = new Map<string, { containerId: string }>();
 
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, dockerSocketPath, providerKeyEnv } = await import("./docker.js");
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
+      const { createOrReuse, providerKeyEnv } = await import("./docker.js");
+      const { detectEngine } = await import("./engine.js");
+      const engine = await detectEngine();
 
-      // Use createOrReuse which includes containerBinds (project mounts)
       const handle = await createOrReuse(workspaceId, opts.workspaceSlug, undefined, opts.providerKeys);
-      const container = docker.getContainer(handle.containerId);
 
-      // Build the full prompt including chat context if provided.
-      // The system prompt is handled by the OpenCode agent file, not inlined here.
+      // Build the full prompt including chat context if provided. The
+      // system prompt itself is handled by the OpenCode agent file, not
+      // inlined here.
       const fullPrompt = [opts.chatContext, opts.prompt]
         .filter(Boolean)
         .join("\n\n");
@@ -167,9 +165,10 @@ function createRealDriver(): SandboxDriver {
         model: opts.model,
       });
 
-      const exec = await container.exec({
-        Cmd: cmd,
-        Env: [
+      const handle$ = await engine.exec({
+        containerId: handle.containerId,
+        cmd,
+        env: [
           `DESK_PROMPT=${fullPrompt}`,
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
@@ -177,135 +176,72 @@ function createRealDriver(): SandboxDriver {
           // was created takes effect immediately without recreation.
           ...providerKeyEnv(opts.providerKeys),
         ],
-        AttachStdout: true,
-        AttachStderr: true,
       });
 
-      const stream = await exec.start({ hijack: true, stdin: false });
-
-      // Track this exec for cancellation
-      const inspectInitial = await exec.inspect();
-      const containerInfo = await container.inspect();
-      activeExecs.set(opts.runId, {
-        containerId: containerInfo.Id,
-        execId: inspectInitial.ID,
-      });
+      activeExecs.set(opts.runId, { containerId: handle.containerId });
 
       let seq = 0;
+      // The engine hands us already-demuxed stdout/stderr (the CLI
+      // separates them when neither -t nor -T is in play). We track every
+      // onLog return so the final resolve waits for async event appends to
+      // commit — fast-exiting opencode runs (sub-second) would otherwise
+      // race the stream 'end' against the last DB INSERTs and leave the
+      // assistant-message write pointing at zero events.
+      const pendingLogs: Promise<unknown>[] = [];
+      const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
+        const text = chunk.toString("utf8").replace(/\r?\n$/, "");
+        if (!text) return;
+        const ret = opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
+        if (ret && typeof (ret as Promise<void>).then === "function") {
+          pendingLogs.push(
+            (ret as Promise<void>).catch(() => {
+              // Per-log failures are intentionally swallowed — one bad
+              // append shouldn't fail the whole run.
+            }),
+          );
+        }
+      };
+      handle$.stdout.on("data", emit("stdout"));
+      handle$.stderr.on("data", emit("stderr"));
 
-      return new Promise<ExecResult>((resolve) => {
-        // Docker's exec stream (no TTY) is multiplexed: every frame is prefixed
-        // with an 8-byte header [stream_id, 0, 0, 0, len_be32]. Demux so we
-        // see clean stdout/stderr text.
-        const stdout = new PassThrough();
-        const stderr = new PassThrough();
-        // dockerode's modem demuxes the frames onto the two sinks and signals
-        // end on each when the source ends. Use the modem that the driver
-        // already imported above.
-        docker.modem.demuxStream(stream, stdout, stderr);
-
-        // Accumulate lines — we emit one onLog per data chunk, but only after
-        // a full frame's payload has been reassembled by the demuxer. Track
-        // every onLog return so maybeResolve can await them: callers persist
-        // events asynchronously and a fast-exiting opencode (sub-second runs)
-        // would otherwise race — stream 'end' resolves execRun before the last
-        // INSERTs commit, the scheduler then reads back zero events and skips
-        // the assistant-message write. Surfaced in prod: ~5 successful runs
-        // with exit 0 and zero run_events for very short prompts.
-        const pendingLogs: Promise<unknown>[] = [];
-        const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
-          const text = chunk.toString("utf8").replace(/\r?\n$/, "");
-          if (text) {
-            const ret = opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
-            if (ret && typeof (ret as Promise<void>).then === "function") {
-              pendingLogs.push(
-                (ret as Promise<void>).catch(() => {
-                  // Per-log failures are intentionally swallowed — one bad
-                  // append shouldn't fail the whole run.
-                }),
-              );
-            }
-          }
-        };
-        stdout.on("data", emit("stdout"));
-        stderr.on("data", emit("stderr"));
-
-        // Wait for both demuxed streams to finish before resolving, so no
-        // frames are lost between stream.end and the promise resolution.
-        let stdoutDone = false;
-        let stderrDone = false;
-        let rawDone = false;
-
-        const maybeResolve = async () => {
-          if (!(stdoutDone && stderrDone && rawDone)) return;
-          // Wait for all async onLog calls to commit before resolving.
-          await Promise.all(pendingLogs);
-          activeExecs.delete(opts.runId);
-          const inspectData = await exec.inspect();
-          resolve({ exitCode: inspectData.ExitCode ?? 1 });
-        };
-
-        stdout.on("end", () => { stdoutDone = true; void maybeResolve(); });
-        stderr.on("end", () => { stderrDone = true; void maybeResolve(); });
-
-        stream.on("end", () => {
-          rawDone = true;
-          // End the demux sinks explicitly so their "end" fires reliably.
-          stdout.end();
-          stderr.end();
-        });
-
-        stream.on("error", () => {
-          activeExecs.delete(opts.runId);
-          resolve({ exitCode: 1 });
-        });
-      });
+      const exitCode = await handle$.wait();
+      await Promise.all(pendingLogs);
+      activeExecs.delete(opts.runId);
+      return { exitCode };
     },
 
     async cancelRun(runId) {
       const tracked = activeExecs.get(runId);
       if (!tracked) return;
 
-      const { dockerSocketPath } = await import("./docker.js");
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
-      const container = docker.getContainer(tracked.containerId);
+      const { detectEngine } = await import("./engine.js");
+      const engine = await detectEngine();
 
-      // Find the exec's PID inside the container and kill it
       try {
-        const topResult = await container.top();
-        // Look for the opencode process among running processes
-        const procs = topResult.Processes ?? [];
-        for (const proc of procs) {
-          const cmdStr = proc[proc.length - 1] ?? "";
-          if (cmdStr.includes("opencode")) {
-            const pid = proc[1]; // PID column
-            // Send SIGTERM first
-            await container.exec({
-              Cmd: ["kill", "-TERM", pid],
-            }).then((e: { start: (o: object) => Promise<unknown> }) => e.start({ Detach: true }));
-            break;
-          }
-        }
-
-        // Grace period then SIGKILL if still tracked
-        await new Promise((r) => setTimeout(r, 3000));
-        if (activeExecs.has(runId)) {
-          const topRetry = await container.top();
-          const retryProcs = topRetry.Processes ?? [];
-          for (const proc of retryProcs) {
-            const cmdStr = proc[proc.length - 1] ?? "";
-            if (cmdStr.includes("opencode")) {
-              const pid = proc[1];
-              await container.exec({
-                Cmd: ["kill", "-KILL", pid],
-              }).then((e: { start: (o: object) => Promise<unknown> }) => e.start({ Detach: true }));
-              break;
-            }
+        const procs = await engine.top(tracked.containerId);
+        const target = procs.find((p) => p.cmd.includes("opencode"));
+        if (target) {
+          // SIGTERM first, then SIGKILL after a grace period if still
+          // alive. Both signals are dispatched via a short exec so the
+          // signal lands in the container's PID namespace, not the host.
+          const sendSignal = async (sig: "TERM" | "KILL") => {
+            const h = await engine.exec({
+              containerId: tracked.containerId,
+              cmd: ["kill", `-${sig}`, target.pid],
+            });
+            await h.wait();
+          };
+          await sendSignal("TERM");
+          await new Promise((r) => setTimeout(r, 3000));
+          if (activeExecs.has(runId)) {
+            const stillRunning = (await engine.top(tracked.containerId)).find(
+              (p) => p.pid === target.pid,
+            );
+            if (stillRunning) await sendSignal("KILL");
           }
         }
       } catch {
-        // Container may have stopped or exec already finished
+        // Container may have stopped or exec already finished.
       } finally {
         activeExecs.delete(runId);
       }

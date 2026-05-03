@@ -9,8 +9,8 @@
  * sandbox-scoped read operations will flow.
  */
 
-import { PassThrough } from "node:stream";
 import { createOrReuse, providerKeyEnv } from "./docker.js";
+import { detectEngine } from "./engine.js";
 
 export interface ExecInSandboxOptions {
   /** Command + args to run inside the container. */
@@ -47,85 +47,43 @@ export async function execInSandbox(
   opts: ExecInSandboxOptions,
 ): Promise<ExecInSandboxResult> {
   const handle = await createOrReuse(workspaceId, workspaceSlug, undefined, opts.providerKeys);
-
-  const { dockerSocketPath } = await import("./docker.js");
-  const Docker = (await import("dockerode")).default;
-  const docker = new Docker({ socketPath: dockerSocketPath() });
-  const container = docker.getContainer(handle.containerId);
+  const engine = await detectEngine();
 
   const keyEnv = providerKeyEnv(opts.providerKeys);
   const extraEnv = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : [];
   const execEnv = [...keyEnv, ...extraEnv];
 
-  const exec = await container.exec({
-    Cmd: opts.argv,
-    ...(opts.user ? { User: opts.user } : {}),
-    Env: execEnv.length > 0 ? execEnv : undefined,
-    AttachStdout: true,
-    AttachStderr: true,
+  const handle$ = await engine.exec({
+    containerId: handle.containerId,
+    cmd: opts.argv,
+    user: opts.user,
+    env: execEnv.length > 0 ? execEnv : undefined,
   });
-
-  const stream = await exec.start({ hijack: true, stdin: false });
 
   const timeoutMs = opts.timeoutMs ?? 30_000;
   let timedOut = false;
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
 
-  return new Promise<ExecInSandboxResult>((resolve) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+  handle$.stdout.on("data", (c: Buffer) => stdoutChunks.push(c));
+  handle$.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
 
-    // Demux the multiplexed exec stream via dockerode's modem.
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    docker.modem.demuxStream(stream, stdout, stderr);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    void handle$.cancel();
+  }, timeoutMs);
 
-    stdout.on("data", (c: Buffer) => stdoutChunks.push(c));
-    stderr.on("data", (c: Buffer) => stderrChunks.push(c));
+  let exitCode = 1;
+  try {
+    exitCode = await handle$.wait();
+  } finally {
+    clearTimeout(timer);
+  }
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      stream.destroy();
-    }, timeoutMs);
-
-    let stdoutDone = false;
-    let stderrDone = false;
-    let rawDone = false;
-
-    const maybeFinish = async () => {
-      if (!(stdoutDone && stderrDone && rawDone)) return;
-      clearTimeout(timer);
-      let exitCode = 1;
-      try {
-        const info = await exec.inspect();
-        exitCode = info.ExitCode ?? 1;
-      } catch {
-        // Container may have gone away.
-      }
-      resolve({
-        exitCode: timedOut ? 124 : exitCode,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        timedOut,
-      });
-    };
-
-    stdout.on("end", () => { stdoutDone = true; void maybeFinish(); });
-    stderr.on("end", () => { stderrDone = true; void maybeFinish(); });
-
-    stream.on("end", () => {
-      rawDone = true;
-      stdout.end();
-      stderr.end();
-    });
-
-    stream.on("error", () => {
-      clearTimeout(timer);
-      resolve({
-        exitCode: 1,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        timedOut,
-      });
-    });
-  });
+  return {
+    exitCode: timedOut ? 124 : exitCode,
+    stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+    stderr: Buffer.concat(stderrChunks).toString("utf8"),
+    timedOut,
+  };
 }
