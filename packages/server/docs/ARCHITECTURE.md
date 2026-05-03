@@ -58,7 +58,7 @@ Source of truth for agent definitions.
 
 ### 5. Sandbox Runtime Manager
 
-Execution infrastructure around Docker sandboxes.
+Execution infrastructure around container sandboxes (Docker or nerdctl/containerd, abstracted behind `runtime/src/engine.ts`).
 
 * Container lifecycle
 * Warm sandbox reuse

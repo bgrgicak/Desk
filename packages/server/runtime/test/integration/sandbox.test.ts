@@ -1,41 +1,44 @@
 /**
- * Integration tests for the Docker sandbox lifecycle.
- * Requires a running Docker daemon. Auto-detected — skipped when Docker is unavailable.
+ * Integration tests for the sandbox lifecycle.
+ *
+ * Requires a working container engine (docker or nerdctl) and the
+ * `desk/sandbox:v1` image present locally — auto-detected and skipped
+ * otherwise.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
-import { createOrReuse, stopSandbox, ensureImage, dockerSocketPath } from "../../src/docker.js";
+import {
+  ensureLayout,
+  ensureWorkspaceLayout,
+  workspaceRootPath,
+} from "@agent-desk/storage";
+import {
+  createOrReuse,
+  stopSandbox,
+  ensureImage,
+  sandboxImage,
+} from "../../src/docker.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
+import { detectEngine, type Engine } from "../../src/engine.js";
 
-function dockerAvailable(): boolean {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+let engineForSetup: Engine | null = null;
+let SKIP = false;
+try {
+  engineForSetup = await detectEngine();
+  const haveImage = (await engineForSetup.imageId(sandboxImage())) !== null;
+  if (!haveImage) SKIP = true;
+} catch {
+  SKIP = true;
 }
-
-function sandboxImageAvailable(): boolean {
-  try {
-    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
 const testWorkspaceId = "wks_int_sandbox_test";
 const testWorkspaceSlug = "int-sandbox-test";
+const containerName = `desk-sandbox-${testWorkspaceId}`;
 
 beforeAll(async () => {
   if (SKIP) return;
@@ -47,16 +50,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (SKIP) return;
-  // Clean up container
-  try {
-    const handle = { containerId: "", workspaceId: testWorkspaceId };
-    const Docker = (await import("dockerode")).default;
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const container = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
-    await container.stop({ t: 2 }).catch(() => {});
-    await container.remove({ force: true }).catch(() => {});
-  } catch { /* ok */ }
-
+  if (engineForSetup) {
+    await engineForSetup.remove(containerName, true).catch(() => {});
+  }
   await fs.rm(home, { recursive: true, force: true });
 });
 
@@ -80,9 +76,9 @@ describeIf("sandbox integration", () => {
   it("createOrReuse rebuilds a container whose binds drifted from the current plan", async () => {
     const first = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
 
-    // Force drift by calling with an extra bind the existing container
-    // doesn't have. Without the drift check, createOrReuse would hand back
-    // the old container and the new bind would silently go missing.
+    // Force drift by passing an extra bind the existing container doesn't
+    // have. Without the drift check, createOrReuse would hand back the old
+    // container and the new bind would silently go missing.
     const extra = await fs.mkdtemp(path.join(os.tmpdir(), "desk-drift-"));
     try {
       const plan = [
@@ -104,10 +100,9 @@ describeIf("sandbox integration", () => {
       );
       expect(second.containerId).not.toBe(first.containerId);
 
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
-      const info = await docker.getContainer(second.containerId).inspect();
-      expect(info.HostConfig?.Binds ?? []).toContain(`${extra}:/mnt/extra:ro`);
+      const engine = await detectEngine();
+      const info = await engine.inspect(second.containerId);
+      expect(info?.binds ?? []).toContain(`${extra}:/mnt/extra:ro`);
     } finally {
       await fs.rm(extra, { recursive: true, force: true });
     }
@@ -124,11 +119,9 @@ describeIf("sandbox integration", () => {
 
     expect(mounts.workspace).toBe(workspaceRootPath(home, testWorkspaceSlug));
 
-    // The workspace root should exist on disk
     const stat = await fs.stat(mounts.workspace);
     expect(stat.isDirectory()).toBe(true);
 
-    // And it's what gets mounted at /home/agent inside the sandbox
     expect(SANDBOX_HOME).toBe("/home/agent");
 
     await teardownMounts(handle, "run_int_1");
@@ -136,60 +129,39 @@ describeIf("sandbox integration", () => {
 
   it("runs a no-op command inside the sandbox", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
-    const Docker = (await import("dockerode")).default;
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const container = docker.getContainer(handle.containerId);
-
-    const exec = await container.exec({
-      Cmd: ["echo", "hello from sandbox"],
-      AttachStdout: true,
+    const engine = await detectEngine();
+    const h = await engine.exec({
+      containerId: handle.containerId,
+      cmd: ["echo", "hello from sandbox"],
     });
-    const stream = await exec.start({ hijack: true, stdin: false });
-    const chunks: string[] = [];
-    await new Promise<void>((resolve) => {
-      stream.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
-      stream.on("end", resolve);
-    });
-
-    const output = chunks.join("").trim();
-    expect(output).toContain("hello from sandbox");
+    const chunks: Buffer[] = [];
+    h.stdout.on("data", (c: Buffer) => chunks.push(c));
+    await h.wait();
+    expect(Buffer.concat(chunks).toString("utf8")).toContain("hello from sandbox");
   });
 
   it("forwards provider API keys from host env to the sandbox", async () => {
     // Pick a sentinel from the forwarded set that opencode recognises
-    // (see PROVIDER_KEY_VARS in runtime/src/docker.ts).
+    // (see PROVIDER_KEY_VARS in @agent-desk/shared).
     const envKey = "OPENAI_API_KEY";
     const secret = "sk-desk-env-forwarding-test-123";
     const prev = process.env[envKey];
     process.env[envKey] = secret;
 
     // Force recreation of this test's container so it picks up the new env.
-    try {
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
-      const stale = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
-      await stale.stop({ t: 2 }).catch(() => {});
-      await stale.remove({ force: true }).catch(() => {});
-    } catch { /* ok */ }
+    const engine = await detectEngine();
+    await engine.remove(containerName, true).catch(() => {});
 
     try {
       const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
-      const container = docker.getContainer(handle.containerId);
-
-      const exec = await container.exec({
-        Cmd: ["sh", "-c", `echo "$${envKey}"`],
-        AttachStdout: true,
+      const h = await engine.exec({
+        containerId: handle.containerId,
+        cmd: ["sh", "-c", `echo "$${envKey}"`],
       });
-      const stream = await exec.start({ hijack: true, stdin: false });
       const chunks: Buffer[] = [];
-      await new Promise<void>((resolve) => {
-        stream.on("data", (c: Buffer) => chunks.push(c));
-        stream.on("end", () => resolve());
-      });
-      const out = Buffer.concat(chunks).toString("utf8");
-      expect(out).toContain(secret);
+      h.stdout.on("data", (c: Buffer) => chunks.push(c));
+      await h.wait();
+      expect(Buffer.concat(chunks).toString("utf8")).toContain(secret);
     } finally {
       if (prev === undefined) delete process.env[envKey];
       else process.env[envKey] = prev;
@@ -198,21 +170,16 @@ describeIf("sandbox integration", () => {
 
   it("execInSandbox refreshes provider keys on a reused container", async () => {
     // Regression: a sandbox first created without keys (or with stale keys)
-    // used to keep that env until tear-down, so opencode would hit Anthropic
-    // with an empty/old token even after the user saved a new one. The fix
-    // injects providerKeys at each exec; this test pins that behaviour.
+    // used to keep that env until tear-down, so opencode would hit
+    // Anthropic with an empty/old token even after the user saved a new
+    // one. The fix injects providerKeys at each exec; this test pins that
+    // behaviour.
     const envKey = "ANTHROPIC_API_KEY";
     const stale = "sk-stale-original";
     const fresh = "sk-fresh-rotated";
 
-    // Recreate the container so it starts with the "stale" value baked in.
-    try {
-      const Docker = (await import("dockerode")).default;
-      const docker = new Docker({ socketPath: dockerSocketPath() });
-      const old = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
-      await old.stop({ t: 2 }).catch(() => {});
-      await old.remove({ force: true }).catch(() => {});
-    } catch { /* ok */ }
+    const engine = await detectEngine();
+    await engine.remove(containerName, true).catch(() => {});
 
     await createOrReuse(testWorkspaceId, testWorkspaceSlug, home, { [envKey]: stale });
 
@@ -229,11 +196,8 @@ describeIf("sandbox integration", () => {
   it("stopSandbox stops the container", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     await stopSandbox(handle);
-
-    const Docker = (await import("dockerode")).default;
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const container = docker.getContainer(handle.containerId);
-    const info = await container.inspect();
-    expect(info.State.Running).toBe(false);
+    const engine = await detectEngine();
+    const info = await engine.inspect(handle.containerId);
+    expect(info?.running).toBe(false);
   });
 });

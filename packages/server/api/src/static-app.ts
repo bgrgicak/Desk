@@ -39,6 +39,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".ttf": "font/ttf",
   ".map": "application/json; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
 };
 
 function mimeFor(path: string): string {

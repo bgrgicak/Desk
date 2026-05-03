@@ -2,11 +2,21 @@ export {
   createOrReuse,
   stopSandbox,
   ensureImage,
-  dockerSocketPath,
   auditSandboxMounts,
   sandboxImage,
+  providerKeyEnv,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift } from "./docker.js";
+export { detectEngine } from "./engine.js";
+export type {
+  Engine,
+  EngineName,
+  RunSpec,
+  ContainerInfo,
+  ExecSpec,
+  ExecHandle,
+  BindMount,
+} from "./engine.js";
 export {
   projectMounts,
   teardownMounts,

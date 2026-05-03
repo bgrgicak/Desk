@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { PanelRightClose, ChevronDown, ChevronRight, Bot, User } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@agent-desk/ui'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useLibraryItemChat } from '@/hooks/use-library-item-chat'

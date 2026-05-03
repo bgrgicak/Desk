@@ -6,7 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@agent-desk/ui'
 import { InboxCard } from './InboxCard'
 import { type InboxItem } from '@/data/ui-types'
 import { useGetMessagesQuery, useGetAgentsQuery } from '@/store/api'

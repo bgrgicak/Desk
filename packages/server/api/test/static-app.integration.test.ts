@@ -109,6 +109,12 @@ beforeAll(async () => {
     path.join(distRoot, "assets", "main.js"),
     'console.log("desk-app-bundle");',
   );
+  // PWA assets — the manifest needs the application/manifest+json
+  // content-type or some browsers refuse the install prompt.
+  await fs.writeFile(
+    path.join(distRoot, "manifest.webmanifest"),
+    '{"name":"Desk","start_url":"/","display":"standalone"}',
+  );
 });
 
 afterEach(async () => {
@@ -175,6 +181,16 @@ describe("static-serve when DESK_SERVE_APP=1", () => {
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/application\/json/);
     expect(JSON.parse(res.body).id).toBe(userId);
+  });
+
+  it("GET /manifest.webmanifest returns application/manifest+json", async () => {
+    process.env.DESK_SERVE_APP = "1";
+    process.env.DESK_APP_DIST = distRoot;
+    const server = await startServer();
+    const res = await fetchRaw(getServerPort(server), "/manifest.webmanifest");
+    expect(res.status).toBe(200);
+    expect(res.contentType).toMatch(/application\/manifest\+json/);
+    expect(JSON.parse(res.body).name).toBe("Desk");
   });
 
   it("path traversal attempts (/../) cannot escape distRoot", async () => {

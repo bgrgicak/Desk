@@ -12,38 +12,25 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { Pool } from "@agent-desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
+import { detectEngine, sandboxImage, type Engine } from "@agent-desk/runtime";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-function dockerAvailable(): boolean {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Free opencode models are always present — no API key required.
-// Gate only on Docker + sandbox image availability.
-function sandboxImageAvailable(): boolean {
-  try {
-    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const HAS_ANTHROPIC_KEY = !!process.env.ANTHROPIC_API_KEY;
 const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
-const SKIP = !dockerAvailable() || !sandboxImageAvailable();
+let engineForSetup: Engine | null = null;
+let SKIP = false;
+try {
+  engineForSetup = await detectEngine();
+  if (!(await engineForSetup.imageId(sandboxImage()))) SKIP = true;
+} catch {
+  SKIP = true;
+}
 const describeIf = SKIP ? describe.skip : describe;
 
 let pool: Pool;
@@ -110,20 +97,16 @@ afterAll(async () => {
 
   // Best-effort cleanup of any sandbox container we caused the API to spawn.
   // Sandboxes are keyed per-workspace now (M3), not per-agent.
-  try {
-    const { default: Docker } = await import("dockerode");
-    const { dockerSocketPath } = await import("@agent-desk/runtime");
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const all = await docker.listContainers({ all: true });
-    for (const c of all) {
-      const name = (c.Names[0] ?? "").replace(/^\//, "");
-      if (name.startsWith("desk-sandbox-wks_")) {
-        const container = docker.getContainer(c.Id);
-        await container.stop({ t: 2 }).catch(() => {});
-        await container.remove({ force: true }).catch(() => {});
+  if (engineForSetup) {
+    try {
+      const all = await engineForSetup.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      for (const c of all) {
+        if (c.name.startsWith("desk-sandbox-wks_")) {
+          await engineForSetup.remove(c.id, true).catch(() => {});
+        }
       }
-    }
-  } catch { /* ok */ }
+    } catch { /* ok */ }
+  }
 
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });

@@ -8,8 +8,7 @@ import {
   useSearchParams,
 } from 'react-router-dom'
 import { toast } from 'sonner'
-import { TooltipProvider } from '@/components/ui/tooltip'
-import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider, Toaster } from '@agent-desk/ui'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ContextList } from '@/components/context/ContextList'

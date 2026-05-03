@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button, Input } from '@agent-desk/ui'
 import { buildCron, parseCron, describeCron, type Unit, type ScheduleParams } from './schedule-utils'
 
 type Mode = 'once' | 'recurring'

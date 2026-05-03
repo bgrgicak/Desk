@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { cn } from '@/lib/utils'
 import { AnimatePresence } from 'framer-motion'
 import {
   PinOff, Zap, FolderOpen, Plus,
@@ -11,18 +10,13 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
+  cn,
   Sheet,
   SheetContent,
-} from '@/components/ui/sheet'
-import { TodayPanel } from '@/components/today/TodayPanel'
-import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -35,8 +29,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-} from '@/components/ui/sidebar'
-import {
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -44,12 +36,12 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from '@/components/ui/command'
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover'
+} from '@agent-desk/ui'
+import { TodayPanel } from '@/components/today/TodayPanel'
+import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'

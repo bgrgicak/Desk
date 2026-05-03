@@ -929,10 +929,24 @@ describe("API e2e (real Postgres)", () => {
 });
 
 /**
- * Gap 15: Real-stack e2e — HTTP → scheduler → real Docker sandbox → real Anthropic
- * → assistant message persisted → WS event. Auto-skips without ANTHROPIC_API_KEY.
+ * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
+ * Anthropic → assistant message persisted → WS event. Auto-skips without
+ * ANTHROPIC_API_KEY or when no usable container engine + sandbox image is
+ * available locally.
  */
-describe.skipIf(!process.env.ANTHROPIC_API_KEY)("real-stack e2e (real Anthropic + Docker)", () => {
+const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
+  try {
+    const { detectEngine, sandboxImage } = await import("@agent-desk/runtime");
+    const engine = await detectEngine();
+    return (await engine.imageId(sandboxImage())) !== null;
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
+  "real-stack e2e (real Anthropic + Docker)",
+  () => {
   let realPool: Pool;
   let realServer: http.Server;
   let realPort: number;

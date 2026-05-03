@@ -7,7 +7,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@agent-desk/ui'
 import type { Artifact, InboxItem, Run } from '@/data/ui-types'
 import { getRelativeTime, getArtifactIcon } from '@/data/ui-types'
 
