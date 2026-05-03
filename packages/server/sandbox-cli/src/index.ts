@@ -15,6 +15,8 @@ interface Command {
 
 const COMMANDS: Record<string, () => Promise<Command>> = {
   "task schedule": () => import("./commands/task-schedule.js"),
+  "secret list": () => import("./commands/secret-list.js"),
+  "secret get": () => import("./commands/secret-get.js"),
 };
 
 export function output(data: unknown): void {

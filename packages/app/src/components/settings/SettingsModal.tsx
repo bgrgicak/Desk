@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import {
-  Settings2, Bot, Plug, Sliders,
+  Settings2, Bot, Plug, Sliders, KeyRound,
   Trash2, Plus, ChevronDown, X, Search,
   Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
@@ -62,6 +62,7 @@ import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
+import { SecretsSection } from '@/components/settings/SecretsSection'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -108,12 +109,13 @@ const COLOR_OPTIONS = [
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 
-type NavSection = 'workspace' | 'agents' | 'connections' | 'preferences'
+type NavSection = 'workspace' | 'agents' | 'connections' | 'secrets' | 'preferences'
 
 const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
   { id: 'agents',      label: 'Agents',      icon: Bot       },
   { id: 'connections', label: 'Connections', icon: Plug      },
+  { id: 'secrets',     label: 'Secrets',     icon: KeyRound  },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
 
@@ -1643,6 +1645,7 @@ export function SettingsModal({
                       />
                     </div>
                   )}
+                  {activeSection === 'secrets' && <SecretsSection />}
                   {activeSection === 'preferences' && <PreferencesSection />}
                 </div>
               )}

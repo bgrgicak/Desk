@@ -29,6 +29,8 @@ import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import * as vaultRoutes from "./routes/vault.js";
+import { VaultStore } from "./vault/store.js";
 import {
   requireLibraryPathInWorkspace,
   requireReadablePathInWorkspace,
@@ -111,6 +113,12 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
+
+  // Per-user secrets vault. KDBX files live under ${DESK_HOME}/vaults/.
+  // The store is created once per process and lives entirely in memory
+  // beyond the on-disk files; locks happen in-process and are dropped
+  // automatically on shutdown.
+  const vault = new VaultStore(pathJoin(storage.home, "vaults"));
 
   function emitEvent(event: WsEvent): void {
     if (opts.broadcastUserId) {
@@ -312,6 +320,31 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Sandbox secrets — agent-side reads. The sandbox token resolves to
+    // (session, agent); the agent's userId is what we read from. There's
+    // no agent-side write path: secrets come in through the user UI.
+    if (path === "/sandbox/secrets" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const result = vaultRoutes.sandboxList(vault, agent.userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "sandbox" && segments[1] === "secrets" && segments.length === 3 && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const title = decodeURIComponent(segments[2]);
+      const result = vaultRoutes.sandboxGet(vault, agent.userId, title);
+      if (!result) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "No such secret" });
+        return;
+      }
+      sendJson(res, 200, result);
+      return;
+    }
+
     // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
     // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
     // and we use the agent's userId to gate the chat ownership check.
@@ -346,7 +379,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/logout" && method === "POST") {
-      const result = await authRoutes.handleLogout(pool, req.headers.authorization);
+      const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
       sendJson(res, 200, result);
       return;
     }
@@ -393,6 +426,54 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/me/providers/meta" && method === "PUT") {
       const body = await parseBody(req) as { meta: Record<string, { name?: string } | null> };
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Vault — per-user secrets vault setup/unlock/lock/status. Secrets
+    // themselves are read/written via /secrets and /sandbox/secrets.
+    if (path === "/vault/status" && method === "GET") {
+      const result = await vaultRoutes.getStatus(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/setup" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.setup(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/unlock" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.unlock(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/lock" && method === "POST") {
+      const result = vaultRoutes.lock(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Secrets — user side. Metadata-only on list/get; create + overwrite
+    // are the only mutations. There's deliberately no reveal endpoint:
+    // even a hijacked SPA session can't exfiltrate plaintext, only
+    // sandboxed agents (via /sandbox/secrets/:title) can.
+    if (path === "/secrets" && method === "GET") {
+      const result = vaultRoutes.listSecrets(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/secrets" && method === "POST") {
+      const body = await parseBody(req);
+      const result = await vaultRoutes.createSecret(vault, userId, body);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "secrets" && segments.length === 2 && method === "PUT") {
+      const body = await parseBody(req);
+      const title = decodeURIComponent(segments[1]);
+      const result = await vaultRoutes.updateSecret(vault, userId, title, body);
       sendJson(res, 200, result);
       return;
     }

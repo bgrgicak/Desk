@@ -8,6 +8,7 @@ export function errorToStatus(err: DeskError): number {
     case "FORBIDDEN": return 403;
     case "VALIDATION": return 400;
     case "CONFLICT": return 409;
+    case "VAULT_LOCKED": return 423;
     default: return 500;
   }
 }

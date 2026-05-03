@@ -2,6 +2,57 @@ import http from "node:http";
 import { URL } from "node:url";
 import { CliError } from "./errors.js";
 
+function resolveTarget(pathname: string): URL {
+  const apiUrl = process.env.DESK_API_URL;
+  if (!apiUrl) {
+    throw new CliError("NO_ENDPOINT", "DESK_API_URL is not set");
+  }
+  return new URL(pathname, apiUrl);
+}
+
+function requireToken(): string {
+  const token = process.env.DESK_SANDBOX_TOKEN;
+  if (!token) {
+    throw new CliError("NO_TOKEN", "DESK_SANDBOX_TOKEN is not set");
+  }
+  return token;
+}
+
+function handleResponse(
+  res: http.IncomingMessage,
+  resolve: (v: unknown) => void,
+  reject: (e: Error) => void,
+): void {
+  const chunks: Buffer[] = [];
+  res.on("data", (chunk: Buffer) => chunks.push(chunk));
+  res.on("end", () => {
+    const raw = Buffer.concat(chunks).toString();
+    if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        resolve(raw.length === 0 ? {} : JSON.parse(raw));
+      } catch (err) {
+        reject(
+          new CliError(
+            "INVALID_RESPONSE",
+            err instanceof Error ? err.message : String(err),
+          ),
+        );
+      }
+    } else {
+      let code = "HTTP_ERROR";
+      let message = `HTTP ${res.statusCode}: ${raw}`;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.code) code = parsed.code;
+        if (parsed.message) message = parsed.message;
+      } catch {
+        // use defaults
+      }
+      reject(new CliError(code, message));
+    }
+  });
+}
+
 /**
  * Posts to the host-side desk-server REST API. Resolves the API URL from
  * `DESK_API_URL` and authenticates with the per-run sandbox session token
@@ -12,16 +63,8 @@ export async function postJson(
   pathname: string,
   body: unknown,
 ): Promise<unknown> {
-  const token = process.env.DESK_SANDBOX_TOKEN;
-  if (!token) {
-    throw new CliError("NO_TOKEN", "DESK_SANDBOX_TOKEN is not set");
-  }
-  const apiUrl = process.env.DESK_API_URL;
-  if (!apiUrl) {
-    throw new CliError("NO_ENDPOINT", "DESK_API_URL is not set");
-  }
-
-  const target = new URL(pathname, apiUrl);
+  const token = requireToken();
+  const target = resolveTarget(pathname);
   const json = JSON.stringify(body);
 
   return await new Promise((resolve, reject) => {
@@ -38,41 +81,38 @@ export async function postJson(
           "Content-Length": Buffer.byteLength(json),
         },
       },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString();
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolve(JSON.parse(raw));
-            } catch (err) {
-              reject(
-                new CliError(
-                  "INVALID_RESPONSE",
-                  err instanceof Error ? err.message : String(err),
-                ),
-              );
-            }
-          } else {
-            let code = "HTTP_ERROR";
-            let message = `HTTP ${res.statusCode}: ${raw}`;
-            try {
-              const parsed = JSON.parse(raw);
-              if (parsed.code) code = parsed.code;
-              if (parsed.message) message = parsed.message;
-            } catch {
-              // use defaults
-            }
-            reject(new CliError(code, message));
-          }
-        });
-      },
+      (res) => handleResponse(res, resolve, reject),
     );
     req.on("error", (err) => {
       reject(new CliError("CONNECTION_ERROR", err.message));
     });
     req.write(json);
+    req.end();
+  });
+}
+
+/** GET sibling of postJson — used by read-only commands like `secret get`. */
+export async function getJson(pathname: string): Promise<unknown> {
+  const token = requireToken();
+  const target = resolveTarget(pathname);
+
+  return await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        method: "GET",
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "https:" ? 443 : 80),
+        path: target.pathname + target.search,
+        protocol: target.protocol,
+        headers: {
+          "X-Desk-Sandbox-Token": token,
+        },
+      },
+      (res) => handleResponse(res, resolve, reject),
+    );
+    req.on("error", (err) => {
+      reject(new CliError("CONNECTION_ERROR", err.message));
+    });
     req.end();
   });
 }

@@ -118,6 +118,8 @@ export const api = createApi({
     "ProviderKeys",
     "ProvidersMeta",
     "Models",
+    "VaultStatus",
+    "Secrets",
   ],
   endpoints: (build) => ({
     // ── Me ────────────────────────────────────────────────────────────
@@ -181,6 +183,59 @@ export const api = createApi({
       transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
         r.meta,
       invalidatesTags: ["ProvidersMeta"],
+    }),
+
+    // ── Vault + secrets ───────────────────────────────────────────────
+    // Per-user encrypted secrets vault (KDBX-backed). The SPA can:
+    //   - check status (locked? exists?)
+    //   - set up a new vault with a master password
+    //   - unlock (or fail with 401)
+    //   - lock
+    //   - list secrets (metadata only — no plaintext)
+    //   - create or overwrite an entry
+    // Plaintext reveal is intentionally not exposed: agents read secrets
+    // via /sandbox/secrets, never the SPA.
+    getVaultStatus: build.query<{ exists: boolean; locked: boolean }, void>({
+      query: () => "/vault/status",
+      providesTags: ["VaultStatus"],
+    }),
+    setupVault: build.mutation<{ ok: true }, { password: string }>({
+      query: (body) => ({ url: "/vault/setup", method: "POST", body }),
+      invalidatesTags: ["VaultStatus", "Secrets"],
+    }),
+    unlockVault: build.mutation<{ ok: true }, { password: string }>({
+      query: (body) => ({ url: "/vault/unlock", method: "POST", body }),
+      invalidatesTags: ["VaultStatus", "Secrets"],
+    }),
+    lockVault: build.mutation<{ ok: true }, void>({
+      query: () => ({ url: "/vault/lock", method: "POST", body: {} }),
+      invalidatesTags: ["VaultStatus", "Secrets"],
+    }),
+    getSecrets: build.query<
+      Array<{ title: string; username?: string; url?: string; hasNotes: boolean; fieldNames: string[]; updatedAt: string }>,
+      void
+    >({
+      query: () => "/secrets",
+      transformResponse: (r: { secrets: Array<{ title: string; username?: string; url?: string; hasNotes: boolean; fieldNames: string[]; updatedAt: string }> }) => r.secrets,
+      providesTags: ["Secrets"],
+    }),
+    createSecret: build.mutation<
+      { title: string },
+      { title: string; password: string; username?: string; url?: string; notes?: string; fields?: Record<string, string> }
+    >({
+      query: (body) => ({ url: "/secrets", method: "POST", body }),
+      invalidatesTags: ["Secrets"],
+    }),
+    updateSecret: build.mutation<
+      { title: string },
+      { title: string; password: string; username?: string; url?: string; notes?: string; fields?: Record<string, string> }
+    >({
+      query: (body) => ({
+        url: `/secrets/${encodeURIComponent(body.title)}`,
+        method: "PUT",
+        body,
+      }),
+      invalidatesTags: ["Secrets"],
     }),
 
     // ── Workspaces ────────────────────────────────────────────────────
@@ -706,6 +761,13 @@ export const {
   usePutProviderKeysMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
+  useGetVaultStatusQuery,
+  useSetupVaultMutation,
+  useUnlockVaultMutation,
+  useLockVaultMutation,
+  useGetSecretsQuery,
+  useCreateSecretMutation,
+  useUpdateSecretMutation,
   useGetWorkspacesQuery,
   useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,

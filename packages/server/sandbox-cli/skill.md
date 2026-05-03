@@ -128,3 +128,39 @@ like user-visible tasks.
   Double-check the id you're using.
 - `VALIDATION` — bad `--at` or `--cron`. Read the message and fix the
   argument; don't paper over it with a different schedule.
+
+## desk-agent secret list / desk-agent secret get
+
+Read the user's stored credentials from their per-user secrets vault.
+Use this when you need to log into a service on the user's behalf —
+WordPress, GitHub, an email account, anything where they've already
+told you "I have an account here, use it."
+
+```
+desk-agent secret list
+desk-agent secret get <title>
+```
+
+`list` returns titles + metadata (no plaintext); `get` returns the
+full entry including `password`, plus any of `username`, `url`,
+`notes`, and custom `fields` the user filled in.
+
+### How to use it (action bias)
+
+Call `secret get` at the moment you actually need the value. Don't
+echo the result, don't stash it in a chat reply, don't write it into
+notes or library files. The plaintext is one of the few things the
+user genuinely doesn't want to see again.
+
+If a credential the user expects you to use isn't there, tell them
+the title you tried and ask them to add it via Settings → Secrets.
+
+### Failure modes worth knowing
+
+- `VAULT_LOCKED` — the user's secrets vault is locked. Tell them to
+  open Desk → Settings → Secrets and click "Unlock". Don't retry on
+  your own; the unlock is interactive.
+- `NOT_FOUND` — no entry with that title exists. The user has to
+  create it; agents can't write to the vault.
+- `NO_TOKEN` / `NO_ENDPOINT` — runtime didn't inject env. Surface
+  to the user.
