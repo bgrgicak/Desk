@@ -12,10 +12,16 @@ export interface DeskSkillSpec {
 export const DESK_CLI_SKILL_NAME = "desk-cli";
 export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
 export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
+export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 
 const CLI_SKILL_FILE = {
   built: "sandbox-cli-skill.md",
   source: "../../sandbox-cli/skill.md",
+} as const;
+
+const APP_SCAFFOLD_AGENTS_FILE = {
+  built: "app-scaffold-agents.md",
+  source: "../../../app-scaffold/AGENTS.md",
 } as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -56,6 +62,10 @@ function chatAttachArtifactReference(): string {
   ].join("\n");
 }
 
+function readAppScaffoldGuide(): string {
+  return readSkill(APP_SCAFFOLD_AGENTS_FILE);
+}
+
 export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
   {
     name: DESK_CLI_SKILL_NAME,
@@ -74,5 +84,11 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when the agent needs syntax or examples for surfacing generated artifacts in Desk chat.",
     body: chatAttachArtifactReference,
+  },
+  {
+    name: DESK_APP_SCAFFOLD_SKILL_NAME,
+    description:
+      "Use when authoring or modifying a Desk app: scaffold layout, fragments, build workflow, capability rules, and the static-only constraint.",
+    body: readAppScaffoldGuide,
   },
 ];

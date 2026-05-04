@@ -1,0 +1,10 @@
+{
+  "name": "__APP_NAME__",
+  "displayName": "__APP_NAME__",
+  "description": "An agent-authored Desk app.",
+  "version": "0.1.0",
+  "capabilities": [],
+  "fragments": [
+    "example"
+  ]
+}
