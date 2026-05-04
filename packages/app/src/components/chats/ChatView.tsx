@@ -806,7 +806,14 @@ export function ChatView({
     const pinnedPaths = new Set(chatAttachmentFiles.map(f => f.path.split('/').pop()))
     const pendingFiles = pendingChatItems
       .filter(item => !pinnedPaths.has(item.name))
-      .map(item => ({ path: item.id, name: item.name, mime: item.mimeType, size: item.size }))
+      .map(item => ({
+        path: item.id,
+        name: item.name,
+        mime: item.mimeType ?? 'application/octet-stream',
+        size: item.size ?? 0,
+        createdAt: item.addedAt.toISOString(),
+        kind: 'attachment' as const,
+      }))
     return [...chatAttachmentFiles, ...pendingFiles]
   }, [chatAttachmentFiles, pendingChatItems])
 
