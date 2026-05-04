@@ -518,12 +518,23 @@ async function serveAsset(
 
 interface IndexResponseOpts {
   distDir: string;
+  /**
+   * Subpath of the index.html to serve, relative to distDir. Empty
+   * string for the dist root; `fragments/<name>` for a fragment entry.
+   */
+  subpath: string;
   bridge: BridgeContext;
   res: ServerResponse;
 }
 
-async function serveIndex({ distDir, bridge, res }: IndexResponseOpts): Promise<void> {
-  const indexPath = path.join(distDir, "index.html");
+async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts): Promise<void> {
+  const indexPath = path.join(distDir, subpath, "index.html");
+  // Defense-in-depth: ensure the resolved path is still under distDir
+  // even though `subpath` is built from validated segments upstream.
+  const real = path.normalize(indexPath);
+  if (!real.startsWith(distDir + path.sep) && real !== path.join(distDir, "index.html")) {
+    throw new NotFoundError("index.html not found");
+  }
   let html: string;
   try {
     html = await readFile(indexPath, "utf-8");
@@ -540,6 +551,29 @@ async function serveIndex({ distDir, bridge, res }: IndexResponseOpts): Promise<
     "Cache-Control": "no-store",
   });
   res.end(buf);
+}
+
+/**
+ * Recognized HTML entry points inside an app's `dist/`:
+ *   - `""` / `"index.html"`            → full-app entry
+ *   - `"fragments/<name>"` / `"fragments/<name>/"` /
+ *     `"fragments/<name>/index.html"` → fragment standalone entry
+ *
+ * Returns the subpath of the entry's directory (relative to distDir),
+ * or null when the request isn't for an entry point. Fragment names
+ * follow the same kebab-case rule as app names.
+ */
+function matchEntryPoint(tail: string): { subpath: string } | null {
+  if (tail === "" || tail === "index.html") {
+    return { subpath: "" };
+  }
+  // `fragments/<name>` (with optional trailing slash) or
+  // `fragments/<name>/index.html`
+  const fragMatch = /^fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(tail);
+  if (fragMatch) {
+    return { subpath: `fragments/${fragMatch[1]}` };
+  }
+  return null;
 }
 
 /**
@@ -607,9 +641,11 @@ export async function handleStaticAppRequest(
   }
 
   // Cookie-authenticated request — serve the asset.
-  if (tail === "" || tail === "index.html") {
+  const entry = matchEntryPoint(tail);
+  if (entry) {
     await serveIndex({
       distDir,
+      subpath: entry.subpath,
       bridge: {
         chatId,
         appName,
@@ -862,9 +898,11 @@ export async function handleStaticLibraryAppRequest(
     return true;
   }
 
-  if (tail === "" || tail === "index.html") {
+  const entry = matchEntryPoint(tail);
+  if (entry) {
     await serveIndex({
       distDir,
+      subpath: entry.subpath,
       bridge: {
         chatId: "",
         appName,

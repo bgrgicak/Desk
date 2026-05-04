@@ -23,8 +23,31 @@ interface IssuedAppSession {
 }
 
 type AppPreviewProps =
-  | { scope: 'chat'; chatId: string; appName: string }
-  | { scope: 'library'; appName: string }
+  | {
+      scope: 'chat'
+      chatId: string
+      appName: string
+      /** Optional fragment name; renders `dist/fragments/<name>/` standalone. */
+      fragment?: string
+      variant?: AppPreviewVariant
+    }
+  | {
+      scope: 'library'
+      appName: string
+      /** Optional fragment name; renders `dist/fragments/<name>/` standalone. */
+      fragment?: string
+      variant?: AppPreviewVariant
+    }
+
+/**
+ * `'detail'` renders the AppPreview inside the right-side ContextDetail
+ * pane: full-height iframe with header + capability checklist below.
+ *
+ * `'inline'` renders a compact card sized for chat-message embedding:
+ * fixed-height iframe (~280px) with a slim header, no checklist (the
+ * full detail view shows it).
+ */
+export type AppPreviewVariant = 'detail' | 'inline'
 
 interface AppManifest {
   name: string
@@ -36,11 +59,11 @@ interface AppManifest {
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
-  const url =
+  const issueUrl =
     props.scope === 'chat'
       ? `/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
       : `/apps/library/${encodeURIComponent(props.appName)}/issue`
-  const res = await fetch(url, {
+  const res = await fetch(issueUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -52,12 +75,28 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
     const body = await res.text()
     throw new Error(`Issue failed (${res.status}): ${body}`)
   }
-  return (await res.json()) as IssuedAppSession
+  const issued = (await res.json()) as IssuedAppSession
+  // The server's bootstrap URL targets the dist root. When we want a
+  // fragment, rewrite the URL so the iframe loads
+  // `…/dist/fragments/<fragment>/?t=<token>` instead. The bridge runs
+  // identically — the static-app route recognizes fragment entries as
+  // bridge-injection points (PR-F).
+  if (props.fragment) {
+    const u = new URL(issued.url, window.location.origin)
+    const t = u.searchParams.get('t') ?? ''
+    const baseDist = u.pathname.replace(/\/?$/, '/')
+    u.pathname = `${baseDist}fragments/${encodeURIComponent(props.fragment)}/`
+    u.searchParams.set('t', t)
+    issued.url = `${u.pathname}${u.search}`
+  }
+  return issued
 }
 
 export function AppPreview(props: AppPreviewProps) {
   const { appName } = props
+  const variant: AppPreviewVariant = props.variant ?? 'detail'
   const chatId = props.scope === 'chat' ? props.chatId : null
+  const fragment = props.fragment ?? null
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -79,7 +118,7 @@ export function AppPreview(props: AppPreviewProps) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName, reloadKey])
+  }, [props.scope, chatId, appName, fragment, reloadKey])
 
   // Load the manifest for the capability checklist (independent of the
   // iframe — the manifest is also useful to display when the iframe
@@ -120,6 +159,54 @@ export function AppPreview(props: AppPreviewProps) {
     return manifest?.capabilities ?? session?.capabilities ?? []
   }, [manifest, session])
 
+  const iframe = session ? (
+    <iframe
+      // The token is consumed once; reload re-issues. Each reload
+      // gets a fresh url, so key on the token to force the iframe
+      // to remount instead of navigating in place (which the
+      // browser may suppress as same-document).
+      key={session.token}
+      title={appName}
+      src={session.url}
+      sandbox="allow-scripts allow-same-origin"
+      className="w-full h-full border-0"
+    />
+  ) : error ? (
+    <div className="h-full flex items-center justify-center px-4">
+      <p className="text-sm text-destructive">Failed to load app: {error}</p>
+    </div>
+  ) : (
+    <div className="h-full flex items-center justify-center text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+      <span className="text-sm">Issuing app session…</span>
+    </div>
+  )
+
+  if (variant === 'inline') {
+    return (
+      <div className="rounded-lg border overflow-hidden bg-background max-w-[480px]">
+        <div className="border-b px-3 py-2 flex items-center justify-between gap-2 text-xs">
+          <span className="font-medium truncate">
+            {manifest?.displayName ?? manifest?.name ?? appName}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setReloadKey((k) => k + 1)}
+            aria-label="Reload app"
+            className="h-6 text-xs"
+          >
+            <RotateCw className="h-3 w-3 mr-1" />
+            Reload
+          </Button>
+        </div>
+        <div className="bg-white" style={{ height: 280 }}>
+          {iframe}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="border-b px-4 py-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -138,30 +225,7 @@ export function AppPreview(props: AppPreviewProps) {
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 bg-white">
-        {session ? (
-          <iframe
-            // The token is consumed once; reload re-issues. Each reload
-            // gets a fresh url, so key on the token to force the iframe
-            // to remount instead of navigating in place (which the
-            // browser may suppress as same-document).
-            key={session.token}
-            title={appName}
-            src={session.url}
-            sandbox="allow-scripts allow-same-origin"
-            className="w-full h-full border-0"
-          />
-        ) : error ? (
-          <div className="h-full flex items-center justify-center px-4">
-            <p className="text-sm text-destructive">Failed to load app: {error}</p>
-          </div>
-        ) : (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-            <span className="text-sm">Issuing app session…</span>
-          </div>
-        )}
-      </div>
+      <div className="flex-1 min-h-0 bg-white">{iframe}</div>
 
       <div className="border-t px-4 py-3 bg-muted/30">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
@@ -225,4 +289,100 @@ export function parseLibraryAppDirPath(p: string): { appName: string } | null {
   if (!m) return null
   if (p.startsWith('.chats/')) return null
   return { appName: m[1] }
+}
+
+/**
+ * Parses a workspace-relative path that points at a chat-artifact
+ * `<name>.app/` directory: `.chats/<chatId>/artifacts/<name>.app`.
+ */
+export function parseChatAppDirPath(
+  p: string,
+): { chatId: string; appName: string } | null {
+  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app$/.exec(p)
+  if (!m) return null
+  return { chatId: m[1], appName: m[2] }
+}
+
+/**
+ * Parses a workspace-relative path that points at a chat-artifact
+ * fragment's standalone build:
+ * `.chats/<chatId>/artifacts/<name>.app/dist/fragments/<fragment>/index.html`
+ * or just `…/dist/fragments/<fragment>` (directory form). Issue #47, PR-F.
+ */
+export function parseChatAppFragmentPath(
+  p: string,
+): { chatId: string; appName: string; fragment: string } | null {
+  const m =
+    /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+      p,
+    )
+  if (!m) return null
+  return { chatId: m[1], appName: m[2], fragment: m[3] }
+}
+
+/**
+ * Parses a workspace-relative path that points at a library app
+ * fragment's standalone build:
+ * `<sub>/<name>.app/dist/fragments/<fragment>/index.html` (or directory
+ * form). Rejects chat-artifact paths. Issue #47, PR-F.
+ */
+export function parseLibraryAppFragmentPath(
+  p: string,
+): { appName: string; fragment: string } | null {
+  if (p.startsWith('.chats/')) return null
+  const m =
+    /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+      p,
+    )
+  if (!m) return null
+  return { appName: m[1], fragment: m[2] }
+}
+
+/**
+ * Resolves an attachment path to the AppPreview props that render it
+ * inline in a chat message. Returns null when the attachment isn't an
+ * app reference. Issue #47, PR-F.
+ */
+export function appAttachmentToPreview(
+  path: string,
+):
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
+  | { scope: 'library'; appName: string; fragment?: string }
+  | null {
+  // Fragment-specific paths take priority — they're more specific than
+  // the bare-app-dir form and would otherwise match the directory regex.
+  const chatFragment = parseChatAppFragmentPath(path)
+  if (chatFragment) {
+    return {
+      scope: 'chat',
+      chatId: chatFragment.chatId,
+      appName: chatFragment.appName,
+      fragment: chatFragment.fragment,
+    }
+  }
+  const libraryFragment = parseLibraryAppFragmentPath(path)
+  if (libraryFragment) {
+    return {
+      scope: 'library',
+      appName: libraryFragment.appName,
+      fragment: libraryFragment.fragment,
+    }
+  }
+  const chatDir = parseChatAppDirPath(path)
+  if (chatDir) {
+    return { scope: 'chat', chatId: chatDir.chatId, appName: chatDir.appName }
+  }
+  const chatManifest = parseChatAppManifestPath(path)
+  if (chatManifest) {
+    return { scope: 'chat', chatId: chatManifest.chatId, appName: chatManifest.appName }
+  }
+  const libraryDir = parseLibraryAppDirPath(path)
+  if (libraryDir) {
+    return { scope: 'library', appName: libraryDir.appName }
+  }
+  const libraryManifest = parseLibraryAppManifestPath(path)
+  if (libraryManifest) {
+    return { scope: 'library', appName: libraryManifest.appName }
+  }
+  return null
 }

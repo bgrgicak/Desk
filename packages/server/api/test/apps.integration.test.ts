@@ -448,6 +448,54 @@ describe("static-app route + capability bridge", () => {
     }
   });
 
+  it("injects the bridge into a fragment's `dist/fragments/<name>/index.html` entry too", async () => {
+    // Ship a fragment under the existing app's dist tree.
+    const fragApp = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${APP_NAME}.app`,
+      "dist",
+      "fragments",
+      "add-todo",
+    );
+    await fs.mkdir(fragApp, { recursive: true });
+    await fs.writeFile(
+      path.join(fragApp, "index.html"),
+      "<!doctype html><html><head><title>add-todo</title></head><body><div id=\"root\"></div></body></html>",
+      "utf8",
+    );
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    const issued = issue.bodyJson as { url: string; cookieName: string; token: string };
+
+    // Bootstrap the cookie via the dist root (issue URL targets there).
+    const bootstrap = await httpRaw("GET", issued.url);
+    const cookie = pickSetCookie(bootstrap.headers, issued.cookieName)!;
+
+    // Now fetch the fragment's standalone entry — bridge must be injected.
+    const frag = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${APP_NAME}/dist/fragments/add-todo/`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(frag.status).toBe(200);
+    expect(frag.headers["content-type"]).toContain("text/html");
+    expect(frag.body).toContain("window.desk");
+    expect(frag.body).toContain(`"name":"${APP_NAME}"`);
+
+    // And `index.html` form serves the same content.
+    const fragHtml = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${APP_NAME}/dist/fragments/add-todo/index.html`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(fragHtml.status).toBe(200);
+    expect(fragHtml.body).toContain("window.desk");
+  });
+
   it("emits production security headers (CSP, X-Frame-Options, etc.) on the served index.html and assets", async () => {
     const issue = await httpRaw(
       "POST",

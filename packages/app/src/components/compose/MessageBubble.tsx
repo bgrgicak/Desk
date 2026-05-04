@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
+import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
@@ -199,6 +200,17 @@ function AttachmentCard({
   attachment: AttachmentRef
   onClick?: () => void
 }) {
+  // PR-F: app attachments render inline as a compact iframe instead of
+  // the chip card so the user can interact with the embedded app.
+  const appPreview = appAttachmentToPreview(attachment.path)
+  if (appPreview) {
+    return (
+      <AppPreview
+        {...appPreview}
+        variant="inline"
+      />
+    )
+  }
   const className =
     'inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px] text-left'
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip

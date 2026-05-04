@@ -329,7 +329,16 @@ export async function pinLibraryFileToChat(
   const targetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
   const targetStat = await fs.stat(targetAbs).catch(() => null);
   if (!targetStat) throw new NotFoundError(`File not found: ${libraryRelPath}`);
-  if (!targetStat.isFile()) throw new ValidationError(`Not a file: ${libraryRelPath}`);
+  // PR-F: allow `<name>.app/` directories so chat-message attachments
+  // can carry library apps. Other directories still bounce — pinning a
+  // raw library folder doesn't have a clear meaning today.
+  const isAppDir =
+    targetStat.isDirectory() &&
+    path.basename(targetAbs).endsWith(".app") &&
+    path.basename(targetAbs) !== ".app";
+  if (!targetStat.isFile() && !isAppDir) {
+    throw new ValidationError(`Not a file: ${libraryRelPath}`);
+  }
 
   const root = workspaceRootPath(ctx.home, slug);
   const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
@@ -373,6 +382,17 @@ export async function pinLibraryFileToChat(
 
   const stat = await fs.stat(linkPath);
   const relPath = path.relative(root, linkPath).split(path.sep).join("/");
+  if (isAppDir) {
+    return {
+      path: relPath,
+      name: path.basename(linkPath),
+      mime: "application/vnd.desk.app+directory",
+      size: 0,
+      createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
+    };
+  }
   return {
     path: relPath,
     name: path.basename(linkPath),
