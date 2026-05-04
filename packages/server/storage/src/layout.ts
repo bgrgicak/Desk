@@ -84,8 +84,8 @@ export async function ensureWorkspaceLayout(home: string, slug: string): Promise
 
 /**
  * Returns the absolute path to the chats root directory. Contains one
- * subdirectory per chat, each with `attachments/`, `logs/`, and
- * `note-history/` inside. Hidden from user file listings via the
+ * subdirectory per chat, each with `attachments/`, `logs/`, and `notes/`
+ * inside. Hidden from user file listings via the
  * leading-dot convention.
  */
 export function chatsDir(home: string, slug: string): string {
@@ -102,6 +102,12 @@ export async function chatAttachmentsDir(
   const dir = path.join(workspaceRoot(home, slug), ".chats", chatId, "attachments");
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+/** Returns the absolute path to a chat's agent-artifacts directory. Does not create it. */
+export function chatArtifactsDir(home: string, slug: string, chatId: string): string {
+  validateId(chatId, ID_PREFIXES.chat);
+  return path.join(workspaceRoot(home, slug), ".chats", chatId, "artifacts");
 }
 
 /** Returns the temp directory for in-progress uploads. */

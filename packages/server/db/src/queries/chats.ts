@@ -1,12 +1,21 @@
 import { type Pool } from "../pool.js";
 import {
   ChatSchema,
+  GOAL_KEYS,
   ValidationError,
-  inferGoal,
   type Chat,
   type GoalKey,
   type MessageKind,
 } from "@agent-desk/shared";
+
+function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
+  if (goal === undefined) return undefined;
+  if (goal === null) return null;
+  if (!(GOAL_KEYS as readonly string[]).includes(goal)) {
+    throw new ValidationError(`Invalid chat goal: ${goal}`);
+  }
+  return goal as GoalKey;
+}
 
 function rowToChat(row: Record<string, unknown>): Chat {
   return ChatSchema.parse({
@@ -25,21 +34,14 @@ function rowToChat(row: Record<string, unknown>): Chat {
 export interface ChatWithLastMessage extends Chat {
   lastMessageContent?: unknown;
   /**
-   * Kind that drives the chat-list icon when no `goalKind` is inferred.
+   * Kind that drives the chat-list icon when no chat goal is persisted.
    * Newest message kind in the chat that represents a user action —
-   * currently `task` and `task_run`. `chat` (conversation) and `ai_note`
-   * (system-scheduled note refresh, auto-emitted on every turn) are both
+   * currently `task` and `task_run`. `chat` (conversation) and `summary`
+   * (system-scheduled summary refresh, auto-emitted on every turn) are both
    * treated as fallbacks so they don't hijack the icon. Falls back to
    * 'chat' when no user-action messages exist.
    */
   kind: MessageKind;
-  /**
-   * Inferred from the newest user-role text message — `app` / `data` /
-   * `site` / etc. When set, the sidebar prefers this over `kind` so a
-   * conversation about "create a data table" shows the data icon. Null
-   * when no user text exists or no heuristic matches.
-   */
-  goalKind: GoalKey | null;
 }
 
 export async function listWithLatestMessage(
@@ -49,15 +51,9 @@ export async function listWithLatestMessage(
   const { rows } = await db.query(
     `SELECT c.*,
             (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
-            (SELECT json_extract(m.content, '$.text') FROM messages m
-               WHERE m.chat_id = c.id
-                 AND m.role = 'user'
-                 AND m.kind IN ('chat', 'task')
-                 AND json_extract(m.content, '$.type') = 'text'
-               ORDER BY m.created_at DESC LIMIT 1) AS last_user_text,
             COALESCE(
               (SELECT m.kind FROM messages m
-                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'ai_note')
+                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'summary')
                  ORDER BY m.created_at DESC LIMIT 1),
               'chat'
             ) AS kind
@@ -66,15 +62,11 @@ export async function listWithLatestMessage(
      ORDER BY c.updated_at DESC`,
     [workspaceId],
   );
-  return rows.map((r) => {
-    const lastUserText = r.last_user_text == null ? null : String(r.last_user_text);
-    return {
-      ...rowToChat(r),
-      lastMessageContent: r.last_message_content ?? undefined,
-      kind: r.kind as MessageKind,
-      goalKind: lastUserText ? inferGoal(lastUserText) : null,
-    };
-  });
+  return rows.map((r) => ({
+    ...rowToChat(r),
+    lastMessageContent: r.last_message_content ?? undefined,
+    kind: r.kind as MessageKind,
+  }));
 }
 
 export async function findById(db: Pool, id: string): Promise<Chat | null> {
@@ -86,6 +78,8 @@ export async function insert(
   db: Pool,
   data: { id: string; workspaceId: string; agentId: string; title?: string; goal?: string },
 ): Promise<Chat> {
+  const goal = validateGoal(data.goal);
+
   // Ensure the chat's agent is enabled in the workspace. This is the M3
   // invariant — chats can only use agents the user has explicitly added to
   // the workspace (or the workspace default).
@@ -103,7 +97,7 @@ export async function insert(
     `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
      VALUES (?, ?, ?, ?, ?)
      RETURNING *`,
-    [data.id, data.workspaceId, data.agentId, data.title ?? "", data.goal ?? null],
+    [data.id, data.workspaceId, data.agentId, data.title ?? "", goal ?? null],
   );
   return rowToChat(rows[0]);
 }
@@ -111,8 +105,10 @@ export async function insert(
 export async function updateMeta(
   db: Pool,
   id: string,
-  data: { title?: string; goal?: string; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string },
 ): Promise<Chat | null> {
+  const goal = validateGoal(data.goal);
+
   if (data.agentId !== undefined) {
     // Preserve the M3 invariant enforced by insert(): a chat's agent must
     // be enabled in the chat's workspace. Look up the workspace via the
@@ -143,7 +139,7 @@ export async function updateMeta(
   }
   if (data.goal !== undefined) {
     sets.push(`goal = ?`);
-    params.push(data.goal);
+    params.push(goal);
   }
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);

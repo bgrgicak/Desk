@@ -15,6 +15,7 @@ import { createOrReuse, stopSandbox, sandboxImage } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
+import { rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
@@ -43,7 +44,7 @@ afterAll(async () => {
   if (engineForSetup) {
     await engineForSetup.remove(`desk-sandbox-${testWorkspaceId}`, true).catch(() => {});
   }
-  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (home) await rmTempTree(home);
 });
 
 describeIf("sandbox model listing (real Docker)", () => {

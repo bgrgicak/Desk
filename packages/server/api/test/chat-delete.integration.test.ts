@@ -307,7 +307,7 @@ describe("DELETE /chats/:id", () => {
     expect(row).toBeNull();
 
     // On-disk chat dir moved to trash. The entire `.chats/{chatId}/`
-    // subtree — logs, attachments, note-history — relocates together.
+    // subtree — logs, attachments, notes — relocates together.
     const alphaWs = await queries.workspaces.findById(pool, alpha.workspaceId);
     const live = path.join(home, "Desk", "workspaces", alphaWs!.path, ".chats", chatId);
     await expect(fs.stat(live)).rejects.toThrow();

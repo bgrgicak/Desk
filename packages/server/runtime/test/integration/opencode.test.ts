@@ -13,6 +13,7 @@ import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-d
 import { createOrReuse, stopSandbox, sandboxImage } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
+import { rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
@@ -44,7 +45,7 @@ afterAll(async () => {
   if (engineForSetup) {
     await engineForSetup.remove(`desk-sandbox-${testAgentId}`, true).catch(() => {});
   }
-  await fs.rm(home, { recursive: true, force: true });
+  await rmTempTree(home);
 });
 
 describeIf("opencode end-to-end", () => {

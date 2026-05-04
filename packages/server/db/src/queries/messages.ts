@@ -385,7 +385,7 @@ export interface CrossChatListOptions {
   awaitingUser?: boolean;
   contentKinds?: string[];
   /** Filter by `messages.kind` (the message-kind discriminator — `task`,
-   * `task_run`, `ai_note`, `chat`). Distinct from `contentKinds`, which
+   * `task_run`, `summary`, `chat`). Distinct from `contentKinds`, which
    * filters on `content.type`. */
   kinds?: string[];
   /** Filter by `parent_id` — the Tasks page uses this with `kinds=task_run`

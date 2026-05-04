@@ -81,7 +81,7 @@ CREATE TABLE messages (
   -- Provenance / payload extensions.
   model         TEXT,
   attachments   TEXT,                                            -- JSON array
-  -- Discriminator: 'chat' | 'task' | 'task_run' | 'ai_note' …
+  -- Discriminator: 'chat' | 'task' | 'task_run' | 'summary' …
   kind          TEXT NOT NULL DEFAULT 'chat',
   title         TEXT
 );

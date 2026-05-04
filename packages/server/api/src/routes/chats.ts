@@ -5,22 +5,24 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
+  chatArtifactsDir,
   chatAttachmentsDir,
-  listNoteHistory,
-  materializeNote,
-  notesDir,
+  listSummaryHistory,
+  deleteMaterializedSummary,
+  materializeSummary,
   pinLibraryFileToChat,
   removeChatAttachment,
   saveChatAttachmentToLibrary,
-  snapshotNote,
+  snapshotSummary,
   trashChatDirectories,
   uploadArtifact,
+  validateLibrarySubpath,
   workspaceRootPath,
   type FileRef,
-  type NoteVersion,
+  type SummaryVersion,
   type StorageContext,
 } from "@agent-desk/storage";
 
@@ -79,7 +81,7 @@ export async function createChat(
 export async function patchChat(
   pool: Pool,
   id: string,
-  data: { title?: string; goal?: string; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string },
 ) {
   const chat = await queries.chats.updateMeta(pool, id, data);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
@@ -101,7 +103,7 @@ export async function listMessages(
  *   `agent_turn` trigger that references the user message. fireMessage
  *   resolves the trigger at fire time, reads the parent user message's
  *   text as the prompt. No duplication of payload.
- * - `kind='task'` or `'ai_note'`: a single self-firing row. The schedule
+ * - `kind='task'` or `'summary'`: a single self-firing row. The schedule
  *   (`executeAt` / `cron`) lives directly on it; fireMessage dispatches
  *   on `kind` to know what to run. No separate trigger.
  *
@@ -115,8 +117,56 @@ const SendMessageSchema = z.object({
   title: z.string().optional(),
   executeAt: z.string().optional(),
   cron: z.string().optional(),
-  goal: z.string().optional(),
+  goal: z.string().nullable().optional(),
 });
+
+const AttachArtifactRefSchema = z.object({
+  chatId: z.string(),
+  path: z.string(),
+  name: z.string().optional(),
+  mime: z.string().optional(),
+});
+
+function normalizeWorkspaceRelativePath(raw: string): string {
+  let relPath = raw.trim();
+  if (!relPath) throw new ValidationError("Missing artifact path");
+  if (relPath.includes("\0") || relPath.includes("\\")) {
+    throw new ValidationError(`Invalid artifact path: ${raw}`);
+  }
+  if (relPath.startsWith("~/")) relPath = relPath.slice(2);
+  if (relPath.startsWith("/home/agent/")) relPath = relPath.slice("/home/agent/".length);
+  while (relPath.startsWith("./")) relPath = relPath.slice(2);
+  if (path.isAbsolute(relPath)) throw new ValidationError(`Invalid artifact path: ${raw}`);
+
+  const segments = relPath.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+    }
+  }
+  return segments.join("/");
+}
+
+function validateAttachableArtifactPath(relPath: string, chatId: string): void {
+  const chatPrefix = `.chats/${chatId}/artifacts/`;
+  if (relPath.startsWith(chatPrefix)) {
+    const artifactSegments = relPath.slice(chatPrefix.length).split("/");
+    for (const segment of artifactSegments) {
+      if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+        throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+      }
+    }
+    return;
+  }
+
+  if (relPath.startsWith(".chats/")) {
+    throw new ValidationError("Artifact path must be in this chat's artifacts directory");
+  }
+
+  // Library files are also workspace-relative and may be surfaced when the
+  // agent created or promoted a finished artifact outside the chat scratchpad.
+  validateLibrarySubpath(relPath);
+}
 
 /**
  * Translates a multipart `POST /chats/{id}/messages` form into the JSON
@@ -185,6 +235,8 @@ export async function buildSendMessageBodyFromForm(
     const v = form.get(k);
     if (typeof v === "string" && v !== "") body[k] = v;
   }
+  const goal = form.get("goal");
+  if (typeof goal === "string") body.goal = goal === "" ? null : goal;
   return body;
 }
 
@@ -208,8 +260,22 @@ export async function sendMessage(
     data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
 
   const kind: MessageKind = data.kind ?? "chat";
+  const senderRole = kind === "chat" ? "user" : opts?.role ?? "user";
 
-  // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
+  if (data.goal !== undefined) {
+    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  } else {
+    // Only infer a goal from message text for plain chat messages (kind='chat').
+    // Task and summary messages are system/scheduler actions — running
+    // inferGoal on their content (e.g. "scheduled summary") would wrongly
+    // stamp a goal like "document" onto the chat and change the sidebar icon.
+    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
+    if (goalToPersist) {
+      await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
+    }
+  }
+
+  // Self-firing kinds (task, summary): one row, schedule on the row, fire
   // dispatches by kind. The "userMessage" / "triggerId" pair in the return
   // value is a chat-shape concession — both ids point at the same row so
   // app.ts can schedule the message id without branching.
@@ -224,7 +290,7 @@ export async function sendMessage(
     const message = await queries.messages.insert(pool, {
       id: messageId,
       chatId,
-      role: opts?.role ?? "user",
+      role: senderRole,
       content: { type: "text", text: data.content },
       attachments,
       kind,
@@ -242,9 +308,7 @@ export async function sendMessage(
     id: generateId("message"),
     chatId,
     role: "user",
-    content: data.goal
-      ? { type: "text", text: data.content, goal: data.goal }
-      : { type: "text", text: data.content },
+    content: { type: "text", text: data.content },
     attachments,
   });
 
@@ -264,15 +328,63 @@ export async function sendMessage(
   return { userMessage, triggerId };
 }
 
+export async function attachArtifactRef(
+  storage: StorageContext,
+  rawData: unknown,
+  emit: (event: WsEvent) => void,
+  opts?: { agentId?: string; model?: string },
+): Promise<Message> {
+  const parsed = AttachArtifactRefSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid artifact body: ${parsed.error.message}`);
+  }
+  const data = parsed.data;
+  const relPath = normalizeWorkspaceRelativePath(data.path);
+  validateAttachableArtifactPath(relPath, data.chatId);
+
+  const chat = await queries.chats.findById(storage.pool, data.chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${data.chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const root = workspaceRootPath(storage.home, ws.path);
+  const abs = path.resolve(root, relPath);
+  if (!abs.startsWith(root + path.sep) && abs !== root) {
+    throw new ValidationError(`Path traversal detected: ${data.path}`);
+  }
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
+  if (!stat.isFile()) {
+    throw new ValidationError(`Artifact path must point to a file: ${relPath}`);
+  }
+
+  const message = await queries.messages.insert(storage.pool, {
+    id: generateId("message"),
+    chatId: data.chatId,
+    role: "agent",
+    content: {
+      type: "artifactRef",
+      path: relPath,
+      name: data.name?.trim() || path.basename(relPath),
+      mime: data.mime?.trim() || undefined,
+    },
+    agentId: opts?.agentId ?? chat.agentId,
+    model: opts?.model ?? null,
+  });
+  emit({ type: "message.appended", payload: message });
+  emit({ type: "workspace.synced", payload: { workspaceId: chat.workspaceId } });
+  return message;
+}
+
 /**
- * PATCH a message. Supports editing content (e.g. user edits a note) and
+ * PATCH a message. Supports editing content (e.g. user edits a summary) and
  * lifecycle transitions: `cancelled` (stop & keep the row), `paused`
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
  * State transitions delegate to the run manager (pause/resume/cancel);
- * content-only patches (e.g. user editing a note body) snapshot the prior
- * note and take the plain DB update path.
+ * content-only patches (e.g. user editing a summary body) snapshot the prior
+ * summary and take the plain DB update path.
  */
 export async function patchMessage(
   pool: Pool,
@@ -310,16 +422,19 @@ export async function patchMessage(
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "note" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "note") {
+    if (
+      (prev?.type === "summary" && typeof prev.body === "string") ||
+      (data.content as { type?: string })?.type === "summary"
+    ) {
       const chat = await queries.chats.findById(pool, chatId);
       const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
       if (ws) {
-        if (prev?.type === "note" && typeof prev.body === "string") {
-          await snapshotNote(storage.home, ws.path, chatId, messageId, prev.body);
+        if (prev?.type === "summary" && typeof prev.body === "string") {
+          await snapshotSummary(storage.home, ws.path, chatId, messageId, prev.body);
         }
         const next = data.content as { type?: string; body?: string };
-        if (next?.type === "note" && typeof next.body === "string") {
-          await materializeNote(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+        if (next?.type === "summary" && typeof next.body === "string") {
+          await materializeSummary(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
         }
       }
     }
@@ -391,16 +506,16 @@ export async function runMessage(
 }
 
 /**
- * Returns every archived version of the supplied note-content message,
+ * Returns every archived version of the supplied summary-content message,
  * newest first. Returns an empty list if no snapshots exist yet.
  */
-export async function getNoteHistory(
+export async function getSummaryHistory(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-): Promise<{ versions: NoteVersion[] }> {
+): Promise<{ versions: SummaryVersion[] }> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
-  const versions = await listNoteHistory(storage.home, slug, chatId, messageId);
+  const versions = await listSummaryHistory(storage.home, slug, chatId, messageId);
   return { versions };
 }
 
@@ -422,6 +537,12 @@ export async function deleteMessage(
   const slug = await workspaceSlugForChat(pool, chatId);
 
   await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
+
+  if (msg.content.type === "summary") {
+    await deleteMaterializedSummary(storage.home, slug, chatId, messageId).catch(() => {
+      // Best-effort; deleting the DB row is the source of truth.
+    });
+  }
 
   // Move log file to trash if present.
   const logPath = path.join(
@@ -463,16 +584,15 @@ export async function getMessageLogs(
 
 /**
  * `attachment`: a user-uploaded file under `.chats/{id}/attachments/`.
- * `note`: a materialized mirror of a `note`-content message, written by
- * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
- * read-only from the client's perspective — they're owned by the DB row.
+ * `artifact`: an agent-written file under `.chats/{id}/artifacts/`.
  *
- * `label` is an optional human-friendly name the UI shows alongside the
- * raw file name (e.g. notes always carry "Chat notes" so the listing
- * doesn't expose the messageId-based filename as the primary label).
+ * `label` is an optional human-friendly name the UI shows alongside the raw
+ * file name.
  */
 export type ChatFileRef = FileRef & {
-  kind: "attachment" | "note";
+  kind: "attachment" | "artifact";
+  /** True when the entry is a directory rather than a regular file. */
+  isDir?: boolean;
   label?: string;
 };
 
@@ -481,15 +601,16 @@ export type ChatFileRef = FileRef & {
  * visible (non-dot) entries — the user-uploaded chat files plus any
  * agent-finalized output. Passing `showHidden: true` includes agent
  * artifacts (dot-prefixed drafts / scratch) for the chat Artifacts panel
- * or a diagnostic view. Passing `includeNotes: true` also walks
- * `.chats/{id}/notes/` so the chat Files panel can show note mirrors
- * alongside uploads — each item is tagged with `kind` so the UI can
- * render them differently.
+ * or a diagnostic view. Passing `includeArtifacts: true` also walks
+ * `.chats/{id}/artifacts/` so the chat Files panel can show agent-written
+ * files alongside uploads — each item is tagged with `kind` so the UI can
+ * render them differently. Directories in `artifacts/` are included and
+ * marked with `isDir: true`.
  */
 export async function listAttachments(
   storage: StorageContext,
   chatId: string,
-  opts?: { showHidden?: boolean; includeNotes?: boolean },
+  opts?: { showHidden?: boolean; includeArtifacts?: boolean },
 ): Promise<ChatFileRef[]> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
   const root = workspaceRootPath(storage.home, slug);
@@ -514,25 +635,24 @@ export async function listAttachments(
     });
   }
 
-  if (opts?.includeNotes) {
-    const nDir = notesDir(storage.home, slug, chatId);
-    const noteNames = await fs.readdir(nDir).catch(() => [] as string[]);
-    for (const name of noteNames) {
-      // Notes are always materialized as `{messageId}.md`; skip anything
-      // that doesn't match so a stray dotfile doesn't show up.
-      if (!name.endsWith(".md")) continue;
-      const abs = path.join(nDir, name);
+  if (opts?.includeArtifacts) {
+    const artDir = chatArtifactsDir(storage.home, slug, chatId);
+    const artNames = await fs.readdir(artDir).catch(() => [] as string[]);
+    for (const name of artNames) {
+      if (!showHidden && name.startsWith(".")) continue;
+      const abs = path.join(artDir, name);
       const stat = await fs.stat(abs).catch(() => null);
-      if (!stat || !stat.isFile()) continue;
+      if (!stat) continue;
+      const isDir = stat.isDirectory();
       out.push({
         path: path.relative(root, abs).split(path.sep).join("/"),
         name,
-        mime: "text/markdown",
+        mime: isDir ? "inode/directory" : "application/octet-stream",
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
         updatedAtMs: String(stat.mtimeMs),
-        kind: "note",
-        label: "Chat notes",
+        kind: "artifact",
+        isDir,
       });
     }
   }

@@ -19,7 +19,7 @@ import {
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
-import { auditSandboxMounts } from "@agent-desk/runtime";
+import { auditSandboxMounts, writeGoalSkillFiles } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -72,6 +72,7 @@ async function main(): Promise<void> {
 
   await fs.mkdir(DESK_HOME, { recursive: true });
   await ensureLayout(DESK_HOME);
+  await writeGoalSkillFiles(DESK_HOME);
   // Ensure every existing workspace has its on-disk tree, so a server
   // started after migration 0010 backfill still has folders for rows
   // that were created before per-workspace dirs existed.

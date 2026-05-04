@@ -28,7 +28,7 @@ Optional:
                            "0 0 1 * *"     midnight on the 1st of each month
                          Mutually exclusive with --at.
   --kind <kind>          Override the message kind. Defaults to "task".
-                         Other valid kinds (task, ai_note, chat) exist for
+                         Other valid kinds (task, summary, chat) exist for
                          specialized flows; you almost certainly want the
                          default.
 

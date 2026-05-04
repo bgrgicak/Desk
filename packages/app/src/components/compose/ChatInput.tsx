@@ -69,6 +69,8 @@ interface ChatInputProps {
   autoFocus?: boolean
   compact?: boolean
   showGoalPicker?: boolean
+  /** Persisted chat goal used as the composer's default selection. */
+  goal?: GoalKey
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
   /**
@@ -118,6 +120,7 @@ export function ChatInput({
   autoFocus = false,
   compact = false,
   showGoalPicker = true,
+  goal = null,
   prefillValue,
   focusRef,
   chatAgentId,
@@ -163,10 +166,15 @@ export function ChatInput({
 
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
-  const effectiveGoalKey: GoalKey = goalOverride ?? null
+  const persistedGoalKey = goal ?? null
+  const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
+
+  useEffect(() => {
+    setGoalOverride(undefined)
+  }, [goal])
 
   // Auto-focus
   useEffect(() => {
@@ -288,13 +296,17 @@ export function ChatInput({
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
     const taskOptions = optionsForGoal(effectiveGoalKey, trimmed)
-    const options: SendOptions | undefined = effectiveGoalKey !== null
-      ? { ...taskOptions, goal: effectiveGoalKey }
-      : taskOptions
+    const explicitGoal = goalOverride !== undefined
+      ? goalOverride
+      : effectiveGoalKey !== null
+        ? effectiveGoalKey
+        : undefined
+    const options: SendOptions | undefined = explicitGoal !== undefined || taskOptions
+      ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
+      : undefined
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
-    setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

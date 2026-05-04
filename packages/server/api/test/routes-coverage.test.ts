@@ -481,7 +481,7 @@ describe("Routes coverage (real Postgres)", () => {
       workspaceId,
       agentId,
       title: "Chat5",
-      goal: "Test goal 5",
+      goal: "document",
     });
     expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
@@ -491,7 +491,7 @@ describe("Routes coverage (real Postgres)", () => {
     const body = getRes.body as { id: string; title: string; goal: string; updatedAt: string };
     expect(body.id).toBe(chat.id);
     expect(body.title).toBe("Chat5");
-    expect(body.goal).toBe("Test goal 5");
+    expect(body.goal).toBe("document");
     expect(body.updatedAt).toBeTruthy();
 
     // 404 for unknown
@@ -505,23 +505,24 @@ describe("Routes coverage (real Postgres)", () => {
       workspaceId,
       agentId,
       title: "OrigTitle",
-      goal: "OrigGoal",
+      goal: "task",
     });
+    expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
 
     const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
       title: "PatchedTitle",
-      goal: "PatchedGoal",
+      goal: "site",
     });
     expect(patchRes.status).toBe(200);
     const patched = patchRes.body as { title: string; goal: string };
     expect(patched.title).toBe("PatchedTitle");
-    expect(patched.goal).toBe("PatchedGoal");
+    expect(patched.goal).toBe("site");
 
     const getRes = await request("GET", `/chats/${chat.id}`, token);
     const body = getRes.body as { title: string; goal: string };
     expect(body.title).toBe("PatchedTitle");
-    expect(body.goal).toBe("PatchedGoal");
+    expect(body.goal).toBe("site");
   });
 
   it("PATCH /chats/:id — agentId re-binds the chat when the new agent is enrolled", async () => {

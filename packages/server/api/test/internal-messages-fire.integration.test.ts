@@ -1,9 +1,9 @@
 /**
- * Integration tests for message firing, PATCH/DELETE/logs, and note versioning.
+ * Integration tests for message firing, PATCH/DELETE/logs, and summary versioning.
  *
  * Covers:
  *   - PATCH / DELETE / GET logs on /chats/{id}/messages/{id}
- *   - Note versioning via note-history
+ *   - Summary versioning via summary-history
  *   - POST /chats/{id}/messages deduplication
  *   - POST /chats/{id}/messages/{id}/run (force-fire)
  */
@@ -138,15 +138,15 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     });
   }
 
-  it("PATCH updates a note message's body", async () => {
-    const requestId = await insertPendingMessage({ type: "ai_note_request" });
+  it("PATCH updates a summary message's body", async () => {
+    const requestId = await insertPendingMessage({ type: "summary_request" });
     const { childIds } = await runManager.fireMessage(requestId);
-    const noteId = childIds[0];
+    const summaryId = childIds[0];
 
     const patched = await userRequest(
       "PATCH",
-      `/chats/${chatId}/messages/${noteId}`,
-      { content: { type: "note", body: "User-edited summary." } },
+      `/chats/${chatId}/messages/${summaryId}`,
+      { content: { type: "summary", body: "User-edited summary." } },
     );
     expect(patched.status).toBe(200);
     const updated = patched.body as { content: { type: string; body: string } };
@@ -329,7 +329,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
   });
 });
 
-describe("Note versioning via note-history (G6)", () => {
+describe("Summary versioning via summary-history", () => {
   async function userRequest(
     method: string,
     urlPath: string,
@@ -357,54 +357,88 @@ describe("Note versioning via note-history (G6)", () => {
     });
   }
 
-  it("PATCH on a note snapshots the previous body and surfaces it via GET /note-history", async () => {
-    const requestId = await insertPendingMessage({ type: "ai_note_request" });
+  it("PATCH on a summary snapshots the previous body and surfaces it via GET /summary-history", async () => {
+    const requestId = await insertPendingMessage({ type: "summary_request" });
     const { childIds } = await runManager.fireMessage(requestId);
-    const noteId = childIds[0];
+    const summaryId = childIds[0];
 
-    const beforeHistory = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    const beforeHistory = await userRequest("GET", `/chats/${chatId}/messages/${summaryId}/summary-history`);
     expect((beforeHistory.body as { versions: unknown[] }).versions.length).toBe(0);
 
     const patched = await userRequest(
       "PATCH",
-      `/chats/${chatId}/messages/${noteId}`,
-      { content: { type: "note", body: "User rewrite 1." } },
+      `/chats/${chatId}/messages/${summaryId}`,
+      { content: { type: "summary", body: "User rewrite 1." } },
     );
     expect(patched.status).toBe(200);
 
-    const afterFirst = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    const afterFirst = await userRequest("GET", `/chats/${chatId}/messages/${summaryId}/summary-history`);
     const versionsA = (afterFirst.body as { versions: Array<{ body: string }> }).versions;
     expect(versionsA.length).toBe(1);
     expect(versionsA[0].body).toContain("vacation plans");
+    const historyDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", ".history");
+    const historyFiles = await fs.readdir(historyDir);
+    expect(historyFiles.some((name) => name.endsWith(`-${summaryId}.md`))).toBe(true);
+    await expect(
+      fs.stat(path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "summary-history")),
+    ).rejects.toThrow();
 
     await userRequest(
       "PATCH",
-      `/chats/${chatId}/messages/${noteId}`,
-      { content: { type: "note", body: "User rewrite 2." } },
+      `/chats/${chatId}/messages/${summaryId}`,
+      { content: { type: "summary", body: "User rewrite 2." } },
     );
 
-    const afterSecond = await userRequest("GET", `/chats/${chatId}/messages/${noteId}/note-history`);
+    const afterSecond = await userRequest("GET", `/chats/${chatId}/messages/${summaryId}/summary-history`);
     const versionsB = (afterSecond.body as { versions: Array<{ body: string }> }).versions;
     expect(versionsB.length).toBe(2);
     expect(versionsB[0].body).toBe("User rewrite 1.");
     expect(versionsB[1].body).toContain("vacation plans");
   });
 
-  it("firing an ai_note_request snapshots the prior note before the new child lands", async () => {
-    const firstRequest = await insertPendingMessage({ type: "ai_note_request" });
+  it("firing a summary_request snapshots the prior summary before the new child lands", async () => {
+    const firstRequest = await insertPendingMessage({ type: "summary_request" });
     const { childIds: firstChildIds } = await runManager.fireMessage(firstRequest);
-    const firstNoteId = firstChildIds[0];
+    const firstSummaryId = firstChildIds[0];
 
-    const secondRequest = await insertPendingMessage({ type: "ai_note_request" });
+    const secondRequest = await insertPendingMessage({ type: "summary_request" });
     await runManager.fireMessage(secondRequest);
 
     const history = await userRequest(
       "GET",
-      `/chats/${chatId}/messages/${firstNoteId}/note-history`,
+      `/chats/${chatId}/messages/${firstSummaryId}/summary-history`,
     );
     const versions = (history.body as { versions: Array<{ body: string }> }).versions;
     expect(versions.length).toBeGreaterThanOrEqual(1);
     expect(versions[0].body).toContain("vacation plans");
+  });
+
+  it("surfaces legacy note-history snapshots after the summary rename", async () => {
+    const requestId = await insertPendingMessage({ type: "summary_request" });
+    const { childIds } = await runManager.fireMessage(requestId);
+    const summaryId = childIds[0];
+    const legacyNoteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "note-history");
+    const legacySummaryDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "summary-history");
+    await fs.mkdir(legacyNoteDir, { recursive: true });
+    await fs.mkdir(legacySummaryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(legacyNoteDir, `2026-05-04T10-00-00.000Z-${summaryId}.md`),
+      "Legacy note-history body.",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(legacySummaryDir, `2026-05-04T10-01-00.000Z-${summaryId}.md`),
+      "Legacy summary-history body.",
+      "utf-8",
+    );
+
+    const history = await userRequest(
+      "GET",
+      `/chats/${chatId}/messages/${summaryId}/summary-history`,
+    );
+    const versions = (history.body as { versions: Array<{ body: string }> }).versions;
+    expect(versions.some((version) => version.body === "Legacy note-history body.")).toBe(true);
+    expect(versions.some((version) => version.body === "Legacy summary-history body.")).toBe(true);
   });
 });
 

@@ -2,51 +2,15 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
+import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
-import type { AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
-
-// ── Message visibility (canonical source) ─────────────────────────────────────
-
-const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
-  'agent_turn',
-  'ai_note_request',
-  'note',
-])
-
-const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
-  'toolCall',
-  'toolResult',
-])
-
-function eventsHasUserText(log: AgentLogEntry[]): boolean {
-  let sawEvent = false
-  for (const entry of log) {
-    if (entry.kind === 'event') {
-      sawEvent = true
-      if (entry.event.type === 'text') {
-        const t = entry.event.part?.text
-        if (typeof t === 'string' && t.trim().length > 0) return true
-      }
-    } else if (entry.kind === 'unparsed' && !sawEvent) {
-      if (entry.line.trim().length > 0) return true
-    }
-  }
-  return false
-}
-
-export function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
-  if (m.kind === 'task_run' && !developerMode) return false
-  if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
-  if (developerMode) return true
-  if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
-  if (m.content.type === 'events') return eventsHasUserText(m.content.log)
-  return true
-}
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 // ── ChatThread ────────────────────────────────────────────────────────────────
 
 export interface ChatThreadProps {
   chatId: string
+  workspaceId?: string
   /** When true the messages query is skipped (used for the "new chat" stub). */
   skipQuery?: boolean
   agentName?: string
@@ -75,6 +39,7 @@ export interface ChatThreadProps {
 
 export function ChatThread({
   chatId,
+  workspaceId,
   skipQuery = false,
   agentName,
   developerMode = false,
@@ -152,6 +117,7 @@ export function ChatThread({
             >
               <MessageBubble
                 message={msg}
+                workspaceId={workspaceId}
                 agentName={agentName}
                 isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
                 isNew={showNewBadge && msg.id === lastAssistantId}

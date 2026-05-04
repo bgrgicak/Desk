@@ -6,7 +6,9 @@ import { type Pool } from "@agent-desk/db";
 import {
   generateId,
   AgentEventSchema,
+  GOAL_KEYS,
   type AgentLogEntry,
+  type GoalKey,
   type Message,
   type WsEvent,
 } from "@agent-desk/shared";
@@ -139,6 +141,37 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
+   * Summaries should be a clean final markdown body. If the model used tools, keep
+   * the last text event instead of concatenating planning chatter with the
+   * final answer.
+   */
+  function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
+    let sawEvent = false;
+    let lastText = "";
+    for (const e of entries) {
+      if (e.kind !== "event") continue;
+      sawEvent = true;
+      if (e.event.type === "text") {
+        const t = e.event.part?.text;
+        if (typeof t === "string" && t.trim()) lastText = t;
+      }
+    }
+    if (lastText) return lastText.trim();
+    if (sawEvent) return "";
+    return entries
+      .filter((e) => e.kind === "unparsed")
+      .map((e) => (e as { line: string }).line)
+      .join("\n")
+      .trim();
+  }
+
+  const CHAT_SUMMARY_PROMPT = [
+    "Refresh this chat's running summary.",
+    "Return only the final markdown body; do not create files, write artifacts, or attach artifacts.",
+    "Use the chat-summary format described in the agent instructions.",
+  ].join("\n");
+
+  /**
    * Returns the prompt the agent will receive plus any workspace-relative
    * attachment paths to forward to opencode via `--file`. We don't inline
    * paths into the prompt: opencode surfaces the file content directly,
@@ -148,10 +181,10 @@ export function createRunManager(opts: RunManagerOptions) {
   async function derivePromptInputs(
     msg: Message,
   ): Promise<{ prompt: string; attachments?: string[] }> {
-    // Self-firing kinds (task / ai_note) carry the prompt directly on the
+    // Self-firing kinds (task / summary) carry the prompt directly on the
     // message — no parent lookup needed.
-    if (msg.kind === "ai_note") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+    if (msg.kind === "summary") {
+      return { prompt: CHAT_SUMMARY_PROMPT };
     }
     if (msg.kind === "task") {
       const c = msg.content as { type?: string; text?: string };
@@ -162,35 +195,34 @@ export function createRunManager(opts: RunManagerOptions) {
     }
     const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
     if (c?.type === "text" && typeof c.text === "string") return { prompt: c.text };
-    if (c?.type === "ai_note_request") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+    if (c?.type === "summary_request") {
+      return { prompt: CHAT_SUMMARY_PROMPT };
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string; goal?: string } | undefined;
+      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      const prompt = inner?.goal ? `Goal: ${inner.goal}\n\n${text}` : text;
-      return { prompt, attachments };
+      return { prompt: text, attachments };
     }
     return { prompt: JSON.stringify(msg.content) };
   }
 
-  function outputContentTypeFor(msg: Message): "note" | "text" {
-    if (msg.kind === "ai_note") return "note";
+  function outputContentTypeFor(msg: Message): "summary" | "text" {
+    if (msg.kind === "summary") return "summary";
     const c = msg.content as { type?: string };
-    return c?.type === "ai_note_request" ? "note" : "text";
+    return c?.type === "summary_request" ? "summary" : "text";
   }
 
   function buildOutputContent(
-    kind: "note" | "text",
+    kind: "summary" | "text",
     entries: AgentLogEntry[],
   ): Message["content"] | null {
-    if (kind === "note") {
-      const body = deriveTextFromLog(entries);
+    if (kind === "summary") {
+      const body = deriveSummaryTextFromLog(entries);
       if (!body) return null;
-      return { type: "note", body };
+      return { type: "summary", body };
     }
     if (entries.length === 0) return null;
     return { type: "events", log: entries };
@@ -210,10 +242,10 @@ export function createRunManager(opts: RunManagerOptions) {
    *     state and clear executeAt once the run completes — so they leave
    *     the "scheduled" column.
    *
-   *   - `chat` / `ai_note`: claims the message itself (pending → running)
+   *   - `chat` / `summary`: claims the message itself (pending → running)
    *     and finalises it in place. Idempotent on `messageId` — these
    *     kinds fire once per row (a fresh row per chat agent_turn or per
-   *     scheduleAiNote refresh).
+   *     scheduleSummary refresh).
    *
    * Returns `fired: false` if the row is missing, the kind doesn't fire,
    * or another fire is already in flight (the task lock declined us).
@@ -256,7 +288,9 @@ export function createRunManager(opts: RunManagerOptions) {
     const { prompt, attachments } = await derivePromptInputs(msg);
     const outputKind = outputContentTypeFor(msg);
 
-    // Single JOIN resolves workspace slug, agent, user, and timezone in one round-trip.
+    // Single JOIN resolves workspace slug, agent, user, timezone, and the
+    // chat's persistent goal in one round-trip. `chat_goal` feeds the
+    // per-chat goal fragment into the rendered system prompt.
     const { rows: ctxRows } = await pool.query<{
       workspace_id: string;
       workspace_path: string;
@@ -264,9 +298,11 @@ export function createRunManager(opts: RunManagerOptions) {
       user_id: string | null;
       username: string | null;
       timezone: string | null;
+      chat_goal: string | null;
     }>(
       `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
-              u.id AS user_id, u.username, u.timezone
+              u.id AS user_id, u.username, u.timezone,
+              c.goal AS chat_goal
        FROM chats c
        JOIN workspaces w ON w.id = c.workspace_id
        LEFT JOIN users u ON u.id = w.user_id
@@ -280,6 +316,15 @@ export function createRunManager(opts: RunManagerOptions) {
     const userId = ctxRow?.user_id ?? null;
     const userName = ctxRow?.username ?? "User";
     const userTimezone = ctxRow?.timezone ?? undefined;
+    // Validate against the known goal keys before treating the column as a
+    // GoalKey: if a row holds a value outside GOAL_KEYS (legacy data, manual
+    // SQL edit), `goal/<key>.md` would not exist and the run would crash on
+    // ENOENT mid-render. Fall back to no goal in that case.
+    const rawGoal = ctxRow?.chat_goal ?? null;
+    const chatGoal: GoalKey | null =
+      rawGoal !== null && (GOAL_KEYS as readonly string[]).includes(rawGoal)
+        ? (rawGoal as GoalKey)
+        : null;
 
     const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
     const logFile = path.join(logDir, `${runId}.log`);
@@ -318,6 +363,9 @@ export function createRunManager(opts: RunManagerOptions) {
         instructions: agent?.instructions ?? "",
         userName,
         userTimezone,
+        chatId: msg.chatId,
+        goal: chatGoal,
+        runMode: outputKind === "summary" ? "summary" : "chat",
       };
 
       let result: { exitCode: number };
@@ -356,13 +404,13 @@ export function createRunManager(opts: RunManagerOptions) {
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);
       if (content) {
-        // When the run produced a new note, snapshot the previous note
+        // When the run produced a new summary, snapshot the previous summary
         // (if any) so a bad rewrite doesn't silently erase user edits.
-        if (outputKind === "note") {
-          const { snapshotNote } = await import("@agent-desk/storage");
+        if (outputKind === "summary") {
+          const { snapshotSummary } = await import("@agent-desk/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
-             WHERE chat_id = ? AND json_extract(content, '$.type') = 'note'
+             WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
              ORDER BY created_at DESC LIMIT 1`,
             [msg.chatId],
           );
@@ -372,7 +420,7 @@ export function createRunManager(opts: RunManagerOptions) {
             const parsed = JSON.parse(prevRow.content) as { body?: string };
             if (typeof parsed.body === "string") {
               const home = resolveDeskHome();
-              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
+              await snapshotSummary(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }
@@ -386,14 +434,14 @@ export function createRunManager(opts: RunManagerOptions) {
           agentId,
           model: agentFileInput.model,
         });
-        // Note-kind output: also write the body to the notes/ dir so the
+        // Summary output: also write the body to the notes/ dir so the
         // agent (and any other filesystem consumer) can see the latest
-        // note alongside its own files. Best-effort — the DB row is the
+        // summary alongside its own files. Best-effort — the DB row is the
         // source of truth.
-        if (content.type === "note") {
-          const { materializeNote } = await import("@agent-desk/storage");
+        if (content.type === "summary") {
+          const { materializeSummary } = await import("@agent-desk/storage");
           const home = resolveDeskHome();
-          await materializeNote(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+          await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child });
         emit({ type: "workspace.synced", payload: { workspaceId } });
@@ -477,35 +525,35 @@ export function createRunManager(opts: RunManagerOptions) {
     return timer;
   }
 
-  /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
+  /** Permanently deletes a message row. Used for ephemeral rows (e.g. summary) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
     await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
-  /** Schedules an ai_note refresh for the chat, deleting any prior ai_note rows first. */
-  async function scheduleAiNote(chatId: string): Promise<void> {
-    await cancelAiNoteForChat(chatId);
+  /** Schedules a summary refresh for the chat, replacing any still-pending refresh. */
+  async function scheduleSummary(chatId: string): Promise<void> {
+    await cancelSummaryForChat(chatId);
     const messageId = generateId("message");
     await queries.messages.insert(pool, {
       id: messageId,
       chatId,
       role: "system",
-      content: { type: "ai_note_request" },
+      content: { type: "summary_request" },
       state: "pending",
-      kind: "ai_note",
+      kind: "summary",
       executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
     });
   }
 
-  async function cancelAiNoteForChat(chatId: string): Promise<void> {
+  async function cancelSummaryForChat(chatId: string): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND kind = 'ai_note'`,
+      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
       [chatId],
     );
   }
 
-  async function cancelAiNote(chatId: string): Promise<void> {
-    await cancelAiNoteForChat(chatId);
+  async function cancelSummary(chatId: string): Promise<void> {
+    await cancelSummaryForChat(chatId);
   }
 
   /** Cancels an in-flight exec: kills the opencode child if possible. */
@@ -585,8 +633,8 @@ export function createRunManager(opts: RunManagerOptions) {
     resumeMessage,
     rescheduleMessage,
     cancelScheduledMessage,
-    scheduleAiNote,
-    cancelAiNote,
-    cancelAiNoteForChat,
+    scheduleSummary,
+    cancelSummary,
+    cancelSummaryForChat,
   };
 }

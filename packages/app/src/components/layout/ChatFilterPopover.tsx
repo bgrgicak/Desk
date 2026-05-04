@@ -14,7 +14,7 @@ import type { ChatGoalKind } from '@/data/ui-types'
 import type { ServerAgent } from '@/store/types'
 
 export interface ChatFilterValues {
-  goalKind: ChatGoalKind | null
+  goal: ChatGoalKind | null
   agentId: string | null
   updatesOnly: boolean
   artifactsOnly: boolean
@@ -59,8 +59,8 @@ export function ChatFilterPopover({
   onApply,
   onCancel,
 }: ChatFilterPopoverProps) {
-  const selectedGoalLabel = values.goalKind ? GOAL_LABELS[values.goalKind] : 'All goals'
-  const SelectedGoalIcon = values.goalKind ? GOAL_ICONS[values.goalKind] : Shapes
+  const selectedGoalLabel = values.goal ? GOAL_LABELS[values.goal] : 'All goals'
+  const SelectedGoalIcon = values.goal ? GOAL_ICONS[values.goal] : Shapes
   const selectedAgentLabel = values.agentId
     ? (agents.find(a => a.id === values.agentId)?.name ?? 'Unknown')
     : 'All agents'
@@ -86,7 +86,7 @@ export function ChatFilterPopover({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-[260px]">
-              <DropdownMenuItem onSelect={() => onChange({ ...values, goalKind: null })}>
+              <DropdownMenuItem onSelect={() => onChange({ ...values, goal: null })}>
                 <Shapes className="h-4 w-4 text-muted-foreground" />
                 All goals
               </DropdownMenuItem>
@@ -95,7 +95,7 @@ export function ChatFilterPopover({
                 return (
                   <DropdownMenuItem
                     key={kind}
-                    onSelect={() => onChange({ ...values, goalKind: kind })}
+                    onSelect={() => onChange({ ...values, goal: kind })}
                   >
                     <Icon className="h-4 w-4 text-muted-foreground" />
                     {GOAL_LABELS[kind]}

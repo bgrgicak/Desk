@@ -333,35 +333,7 @@ class CliEngine implements Engine {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    // Re-export stdout/stderr as PassThrough so caller can attach handlers
-    // before any data arrives without racing.
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    child.stdout?.pipe(stdout);
-    child.stderr?.pipe(stderr);
-
-    let exitCode = 1;
-    const exited = new Promise<number>((resolve) => {
-      child.on("exit", (code) => {
-        exitCode = code ?? 1;
-        resolve(exitCode);
-      });
-      child.on("error", () => resolve(1));
-    });
-
-    return {
-      stdout,
-      stderr,
-      wait: () => exited,
-      cancel: async () => {
-        if (child.exitCode === null) {
-          // Killing the wrapper alone may leave the in-container process
-          // running on some runtimes; caller should also issue a
-          // top()+exec(["kill", ...]) for that.
-          child.kill("SIGTERM");
-        }
-      },
-    };
+    return wrapExecChild(child);
   }
 
   async top(nameOrId: string): Promise<Array<{ pid: string; cmd: string }>> {
@@ -395,6 +367,45 @@ class CliEngine implements Engine {
     return this._rootless;
   }
 }
+
+function wrapExecChild(child: ChildProcess): ExecHandle {
+  // Re-export stdout/stderr as PassThrough so caller can attach handlers
+  // before any data arrives without racing.
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  child.stdout?.pipe(stdout);
+  child.stderr?.pipe(stderr);
+
+  const closed = new Promise<number>((resolve) => {
+    let resolved = false;
+    const done = (code: number | null | undefined) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(code ?? 1);
+    };
+    // `close`, unlike `exit`, waits until stdio is closed. The scheduler reads
+    // the run log immediately after wait(), so returning on `exit` can drop the
+    // final stdout/stderr chunk from fast OpenCode runs.
+    child.on("close", done);
+    child.on("error", () => done(1));
+  });
+
+  return {
+    stdout,
+    stderr,
+    wait: () => closed,
+    cancel: async () => {
+      if (child.exitCode === null) {
+        // Killing the wrapper alone may leave the in-container process
+        // running on some runtimes; caller should also issue a
+        // top()+exec(["kill", ...]) for that.
+        child.kill("SIGTERM");
+      }
+    },
+  };
+}
+
+export const _wrapExecChildForTest = wrapExecChild;
 
 /** Subset of the `docker inspect` / `nerdctl inspect` JSON we care about. */
 interface ContainerInspect {

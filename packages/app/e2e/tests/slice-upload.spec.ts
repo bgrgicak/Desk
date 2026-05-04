@@ -452,7 +452,7 @@ test("attach picker mentions a library folder and the next message attaches the 
   );
 });
 
-test("library detail's 'Use in chat' starts a new chat with the file attached and pins it", async ({
+test("library detail's 'Use in chat' pins the file to chat attachments without adding it as a message attachment", async ({
   loggedInPage: page,
   serverUrl,
   token,
@@ -460,8 +460,6 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
 }) => {
   const workspaceId = await getFirstWorkspaceId(serverUrl, token);
 
-  // Seed a uniquely-named library file so we can assert against it
-  // regardless of what the seed user's library already holds.
   const fileName = `use-in-chat-${Date.now()}.md`;
   const upload = await request.post(
     `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
@@ -480,11 +478,11 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
   await page.reload();
   await page.waitForLoadState("networkidle");
 
-  // Navigate into the Library and open the seeded file's detail view.
   await page.getByRole("button", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
   await page.getByText(fileName, { exact: true }).first().click();
   await page.waitForLoadState("networkidle");
+
   const chatCreatePromise = page.waitForResponse(
     (res) =>
       res.request().method() === "POST" &&
@@ -505,46 +503,46 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
   await page.locator('[data-testid="library-detail-more"]').first().click();
   await page.getByRole("menuitem", { name: /Use in chat/ }).first().click();
 
-  // The new-chat input tray should already show the file as a chip —
-  // it was seeded from `initialStagedItems` on mount. The tray renders
-  // a "Remove <name>" button per chip (same as upload chips).
+  // Wait for navigation to the new-chat stub and for the workspace
+  // agents query to settle before interacting.
+  await page.waitForURL(/chat=new/, { timeout: 10_000 });
+  await page.waitForLoadState("networkidle");
+
+  // The file must NOT appear as a chip in the message input tray.
+  // "Use in chat" links files to chat attachments, not message attachments.
   await expect(
     page.getByRole("button", { name: `Remove ${fileName}` }),
-  ).toBeVisible({ timeout: 10_000 });
+  ).not.toBeVisible();
 
-  // Send the first message. The new-chat path runs createChat → POST
-  // /chats/:id/messages back-to-back, then library-refs to pin.
-  await page
+  const chatInput = page
     .getByPlaceholder(/ask anything|continue the conversation/i)
-    .first()
-    .fill("look at the summary I just opened");
-  await page.keyboard.press("Enter");
+    .first();
+  await chatInput.fill("look at the summary I just opened");
+  // Use locator.press rather than page.keyboard.press so the Enter event
+  // is always dispatched to the textarea even if focus shifted during the
+  // preceding animation or re-render.
+  await chatInput.press("Enter");
 
   const created = (await (await chatCreatePromise).json()) as { id: string };
   const sent = await messagePromise;
   expect(sent.url()).toContain(`/chats/${created.id}/messages`);
 
-  // (1) The file must ride on the first message as an attachment, with
-  //     its workspace-relative library path (NOT the .chats/.../ path —
-  //     that would mean we accidentally chat-uploaded it).
+  // The file must NOT be sent as a message attachment.
   const body = JSON.parse(sent.postData() ?? "{}") as {
     content: string;
     attachments?: Array<{ path: string; name: string }>;
   };
-  expect(body.attachments?.map((a) => a.name)).toContain(fileName);
-  expect(body.attachments?.map((a) => a.path)).toContain(fileName);
+  const attachedNames = body.attachments?.map((a) => a.name) ?? [];
+  expect(attachedNames).not.toContain(fileName);
 
-  // (2) The file must also be pinned via library-refs so it appears in
-  //     the right-sidebar "In this chat" list — same behavior as the +
-  //     picker in the Files tab. Assert both the request fired and the
-  //     symlink lands in `.chats/{chatId}/attachments/`.
+  // The file must be pinned via library-refs so it appears in the
+  // right-sidebar "In this chat" list.
   const pinReq = await pinPromise;
   expect(pinReq.url()).toContain(`/chats/${created.id}/library-refs`);
   const pinBody = JSON.parse(pinReq.postData() ?? "{}") as { path: string };
   expect(pinBody.path).toBe(fileName);
 
-  // The pin is best-effort/async; poll the chat attachments list until
-  // the symlink shows up rather than racing it.
+  // Poll until the symlink lands in `.chats/{chatId}/attachments/`.
   const expectedPinnedPath = `.chats/${created.id}/attachments/${fileName}`;
   await expect
     .poll(
@@ -559,6 +557,59 @@ test("library detail's 'Use in chat' starts a new chat with the file attached an
       { timeout: 10_000 },
     )
     .toContain(expectedPinnedPath);
+});
+
+test("clicking a pending 'Use in chat' file in the Files sidebar opens its library detail", async ({
+  loggedInPage: page,
+  serverUrl,
+  token,
+  request,
+}) => {
+  const workspaceId = await getFirstWorkspaceId(serverUrl, token);
+
+  const fileName = `sidebar-click-${Date.now()}.md`;
+  const upload = await request.post(
+    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          name: fileName,
+          mimeType: "text/markdown",
+          buffer: Buffer.from("# Click test\n\nContent here.\n"),
+        },
+      },
+    },
+  );
+  expect(upload.status()).toBe(201);
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+
+  // Open Library, find and open the file's detail view
+  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.waitForLoadState("networkidle");
+  await page.getByText(fileName, { exact: true }).first().click();
+  await page.waitForLoadState("networkidle");
+
+  // Use "Use in chat" to add as a chat attachment (not message attachment)
+  await page.locator('[data-testid="library-detail-more"]').first().click();
+  await page.getByRole("menuitem", { name: /Use in chat/ }).first().click();
+
+  await page.waitForURL(/chat=new/, { timeout: 10_000 });
+  await page.waitForLoadState("networkidle");
+
+  // Switch to the "Files" tab in the right panel and click the pending file
+  await page.getByRole("button", { name: /^Files$/ }).first().click();
+  await page.getByText(fileName, { exact: true }).first().click();
+
+  // Must navigate to the library context view showing the file's detail,
+  // not to the parent folder.
+  await page.waitForURL((url) => url.searchParams.has("item"), {
+    timeout: 10_000,
+  });
+  const url = new URL(page.url());
+  expect(url.pathname).toContain("/context");
+  expect(url.searchParams.get("item")).toBe(fileName);
 });
 
 test("drop-zone overlay appears while files are being dragged", async ({

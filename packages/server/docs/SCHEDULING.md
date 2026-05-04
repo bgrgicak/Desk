@@ -40,6 +40,6 @@ Tasks with a past `execute_at` fire naturally on the next tick — no special ha
 - **Resume**: sets `state = 'pending'`. For cron tasks with no `execute_at`, the next occurrence is computed and set.
 - **Cancel**: sets `state = 'cancelled'`. The row is kept for history; the poll query never picks it up.
 
-## ai_note scheduling
+## Summary scheduling
 
-`scheduleAiNote(chatId)` deletes all existing `ai_note` rows for the chat (including completed ones) and inserts a new `pending` row with `execute_at = now() + 30 minutes`. This refreshes the context note for the chat.
+`scheduleSummary(chatId)` deletes any existing pending `summary` request row for the chat and inserts a new one with `execute_at = now() + 30 minutes`. This refreshes the running summary for the chat without deleting completed summary messages.

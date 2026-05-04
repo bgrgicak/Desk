@@ -93,7 +93,7 @@ agent by default and lets the user change it from the compose bar.
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
 | DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
 | GET    | /chats/{id}/messages/{messageId}/logs   | Stream execution log file |
-| GET    | /chats/{id}/messages/{messageId}/note-history | List archived versions of a note-content message |
+| GET    | /chats/{id}/messages/{messageId}/summary-history | List archived versions of a summary-content message |
 | GET    | /chats/{id}/artifacts                   | List chat artifacts       |
 | POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
 
@@ -101,9 +101,19 @@ agent by default and lets the user change it from the compose bar.
 
 Lists chats in one of the caller's workspaces.
 
+Each chat may include a persisted `goal` (`app`, `document`, `image`, `data`,
+`site`, `run`, `task`, or `scheduled`). Explicit composer selections and clear
+message-text inference both write to `chats.goal`; clients should use that one
+field for goal icons and goal filters.
+
 **Query parameters:**
 
 - `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
+
+### PATCH /chats/{id}
+
+Updates chat metadata. Body can include `{ title?: string, agentId?: string,
+goal?: string | null }`; pass `goal: null` to clear the persisted chat goal.
 
 ### DELETE /chats/{id}
 
@@ -141,8 +151,8 @@ Messages carry one of:
 - `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
 - `{ type: "events", events: [...] }` — captured opencode event stream
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
-- `{ type: "note", body }` — a running AI-generated summary of the chat; rendered specially in the UI, editable via PATCH
-- `{ type: "ai_note_request" }` — a scheduled system message that triggers a note refresh when fired
+- `{ type: "summary", body }` — a running AI-generated summary of the chat; hidden unless developer mode is enabled, editable via PATCH
+- `{ type: "summary_request" }` — a scheduled system message that triggers a summary refresh when fired
 - `{ type: "agent_turn", userMessageId }` — pending execution slot attached to a user message. Carries no textual copy of the prompt; `fireMessage` resolves `userMessageId` to build the prompt at fire time. Hidden from the visible chat timeline.
 
 ### Message execution metadata
@@ -163,7 +173,7 @@ Messages grow optional execution fields (added M6a):
 
 ### POST /chats/{id}/messages
 
-Body: `{ content: string, attachments?: AttachmentRef[] }`. Each
+Body: `{ content: string, attachments?: AttachmentRef[], goal?: string | null }`. Each
 `AttachmentRef` is a workspace-relative `path` that resolves to either a
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
@@ -172,11 +182,16 @@ forwards each path to opencode via a `--file` flag (opencode accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
 
+When `goal` is a string, it is persisted to `chats.goal`. When `goal` is `null`,
+the chat goal is cleared for that send. When omitted and the chat does not
+already have a goal, the server infers a goal from clear message text and
+persists that instead.
+
 ### PATCH /chats/{id}/messages/{messageId}
 
 Partial update. Body can include:
 
-- `content` — replace the message content (e.g. user edits a note)
+- `content` — replace the message content (e.g. user edits a summary)
 - `state` — only `cancelled` or `pending` allowed; arbitrary transitions are rejected
 - `executeAt` / `cron` — reschedule; pass `null` to clear
 
@@ -194,20 +209,33 @@ message. Served directly from
 `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
 
-### GET /chats/{id}/messages/{messageId}/note-history
+### GET /chats/{id}/messages/{messageId}/summary-history
 
-Returns every archived version of a `note`-content message, newest first.
+Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
-written automatically when a note is PATCH-edited or when `fireMessage`
+written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/note-history/`. Empty array when
-nothing has been snapshotted yet.
+`~/Desk/workspaces/desk/.chats/{chatId}/notes/.history/`. The endpoint also
+reads legacy `.chats/{chatId}/note-history/` and
+`.chats/{chatId}/summary-history/` snapshots for compatibility. Empty array
+when nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire
 
 Loopback-only (127.0.0.1) + shared-secret. Fires a pending scheduled
 message by id. Called by `at`/`cron` via curl; not intended for user
 clients.
+
+### Sandbox: POST /sandbox/artifacts
+
+Sandbox-token only (`X-Desk-Sandbox-Token`). Called by
+`desk-agent chat attach-artifact` from inside an agent run after the agent
+writes a file. Body is `{ chatId, path, name?, mime? }`, where `path` is a
+workspace-relative path to an existing file, usually
+`.chats/{chatId}/artifacts/{file}`. Inserts an agent message with
+`content: { type: "artifactRef", path, name?, mime? }` and emits
+`message.appended`. Tokens minted for internal summary refresh runs are
+rejected so summaries cannot surface files as artifacts.
 
 ### POST /me/password
 
@@ -292,7 +320,7 @@ Lists messages across all of the caller's chats with AND-combined filters. Read-
 | `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
 | `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
 | `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
-| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|note\|ai_note_request\|agent_turn` |
+| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|summary\|summary_request\|agent_turn` |
 | `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
 | `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
 | `limit` | integer, default 50, max 200 | Page size. |

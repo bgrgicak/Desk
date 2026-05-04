@@ -5,15 +5,22 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have one command — `desk-agent task schedule` — and three reasons to reach
-for it:
+You have two commands:
+- `desk-agent chat attach-artifact` — surface a generated file as an
+  `artifactRef` card in the current chat.
+- `desk-agent task schedule` — create or schedule Tasks board work.
 
-1. **The user asked for a reminder, recurring report, or follow-up.**
+Reach for them when:
+
+1. **You wrote an artifact the user should see or open.**
+   Call `desk-agent chat attach-artifact` after saving the file so the chat
+   receives an `artifactRef` message instead of only inline text.
+2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
-2. **A piece of work needs to live on the user's Tasks board.** Manual
+3. **A piece of work needs to live on the user's Tasks board.** Manual
    tasks (no `--at`/`--cron`) sit there until the user runs them.
-3. **You need to fire your own future turn.** A scheduled task with
+4. **You need to fire your own future turn.** A scheduled task with
    `--at` or `--cron` re-enters the chat at fire time with your `<content>`
    as the prompt.
 
@@ -45,6 +52,32 @@ The runtime sets these for you. Don't echo, log, or alter them.
 
 - Success: JSON message row on stdout, exit 0.
 - Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit.
+
+## desk-agent chat attach-artifact
+
+Create an `artifactRef` message in the chat for an existing file. Use this after
+writing a new artifact or making a significant visible update.
+
+```
+desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
+```
+
+`<workspace-relative-path>` is usually a file under `.chats/<chatId>/artifacts/`.
+Strip the leading `~/`: `~/.chats/cht_abc/artifacts/report.md` becomes
+`.chats/cht_abc/artifacts/report.md`.
+
+### Examples
+
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    .chats/cht_abc/artifacts/report.md
+```
+
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    --name "Weekly report" \
+    .chats/cht_abc/artifacts/report.md
+```
 
 ## desk-agent task schedule
 
@@ -115,7 +148,7 @@ strings — the parser will reject them.
 ### --kind
 
 Defaults to `task`. Override only if you have a reason — the other kinds
-(`ai_note`, `chat`) drive specialized internal flows that don't behave
+(`summary`, `chat`) drive specialized internal flows that don't behave
 like user-visible tasks.
 
 ### Failure modes worth knowing

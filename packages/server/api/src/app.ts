@@ -1,10 +1,11 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
-import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
-import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
-import type { StorageContext } from "@agent-desk/storage";
+import { queries } from "@agent-desk/db";
+import { DeskError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { chatArtifactsDir, resolveHostPath, workspaceRootPath, type StorageContext } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
@@ -31,6 +32,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import {
   requireLibraryPathInWorkspace,
+  parseReadableChatArtifactPath,
   requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
@@ -50,6 +52,55 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
   res.end(json);
+}
+
+async function requireReadablePathForRoute(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  relPath: string,
+  workspaceId: string,
+): Promise<void> {
+  await requireReadablePathInWorkspace(pool, userId, relPath, workspaceId);
+  const artifact = parseReadableChatArtifactPath(relPath);
+  if (!artifact) return;
+
+  const { rows: chatRows } = await pool.query<{ workspace_id: string }>(
+    "SELECT workspace_id FROM chats WHERE id = ?",
+    [artifact.chatId],
+  );
+  if (chatRows[0]?.workspace_id !== workspaceId) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+
+  const { rows } = await pool.query<{ path: string }>(
+    "SELECT path FROM workspaces WHERE id = ?",
+    [workspaceId],
+  );
+  const workspaceSlug = rows[0]?.path;
+  if (!workspaceSlug) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+
+  const artifactRoot = chatArtifactsDir(storage.home, workspaceSlug, artifact.chatId);
+  const workspaceRoot = workspaceRootPath(storage.home, workspaceSlug);
+  const target = resolveHostPath(storage.home, workspaceSlug, relPath);
+  let realWorkspaceRoot: string;
+  let realRoot: string;
+  let realTarget: string;
+  try {
+    [realWorkspaceRoot, realRoot, realTarget] = await Promise.all([
+      fsRealpath(workspaceRoot),
+      fsRealpath(artifactRoot),
+      fsRealpath(target),
+    ]);
+  } catch {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realRoot !== realWorkspaceRoot && !realRoot.startsWith(realWorkspaceRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -328,13 +379,43 @@ export function createApp(opts: AppOptions): Server {
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
       // this from `desk-agent task schedule`, so a chat reply isn't the intent.
-      // Caller can still override (e.g. kind="ai_note") if they have a
+      // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
       const sendBody = { kind: "task", ...body };
       delete (sendBody as { chatId?: string }).chatId;
 
       const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, userMessage);
+      return;
+    }
+
+    if (path === "/sandbox/artifacts" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
+      if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
+        throw new NotFoundError(`Chat not found: ${body.chatId}`);
+      }
+      if (session.runId) {
+        const runMessage = await queries.messages.findById(pool, session.runId);
+        if (!runMessage) {
+          throw new ValidationError("Sandbox run is no longer active");
+        }
+        if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+          throw new ValidationError("Summary runs cannot attach artifacts");
+        }
+      }
+
+      const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
+        agentId: agent.id,
+        model: agent.model,
+      });
+      sendJson(res, 201, message);
       return;
     }
 
@@ -525,7 +606,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string; agentId?: string };
+      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string };
       if (body.agentId !== undefined) {
         await requireOwnedAgent(pool, body.agentId, userId);
       }
@@ -559,7 +640,7 @@ export function createApp(opts: AppOptions): Server {
         : await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Self-firing kinds (task / ai_note): execute_at is computed at insert
+      // Self-firing kinds (task / summary): execute_at is computed at insert
       // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
       if (userMessage.kind && userMessage.kind !== "chat") {
         sendJson(res, 201, userMessage);
@@ -567,12 +648,12 @@ export function createApp(opts: AppOptions): Server {
       }
 
       // Default chat path: fire the pending trigger message and schedule
-      // an ai-note refresh for this chat.
+      // a summary refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`fireMessage for trigger ${triggerId} failed:`, err);
       });
-      runManager.scheduleAiNote(segments[1]).catch(() => {});
+      runManager.scheduleSummary(segments[1]).catch(() => {});
 
       sendJson(res, 201, userMessage);
       return;
@@ -590,9 +671,9 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
+      const result = await chatRoutes.getSummaryHistory(storage, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }
@@ -612,10 +693,10 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const showHidden = query.get("showHidden") === "true";
-      const includeNotes = query.get("includeNotes") === "true";
+      const includeArtifacts = query.get("includeArtifacts") === "true";
       const result = await chatRoutes.listAttachments(storage, segments[1], {
         showHidden,
-        includeNotes,
+        includeArtifacts,
       });
       sendJson(res, 200, result);
       return;
@@ -738,13 +819,13 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
-      // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
-      // user-friendly "Chat notes" label so the detail view doesn't title
+      // Summary mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
+      // user-friendly "Chat summary" label so the detail view doesn't title
       // the page with the messageId-based filename.
       const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
-        ? { ...result, label: "Chat notes" }
+        ? { ...result, label: "Chat summary" }
         : result;
       sendJson(res, 200, decorated);
       return;
@@ -753,7 +834,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -766,7 +847,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,

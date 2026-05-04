@@ -84,16 +84,16 @@ const LOADING_WORKSPACE: WorkspaceInfo = {
 const CHATS_PER_PAGE = 10
 const PINNED_PER_PAGE = 5
 
-const EMPTY_FILTER: ChatFilterValues = { goalKind: null, agentId: null, updatesOnly: false, artifactsOnly: false }
+const EMPTY_FILTER: ChatFilterValues = { goal: null, agentId: null, updatesOnly: false, artifactsOnly: false }
 
 function sortedChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
 }
 
-// Picker-aligned icons for the inferred goal of the chat.
+// Picker-aligned icons for the persisted goal of the chat.
 // Source of truth: ChatInput's GOALS list — keep these in sync so the
 // sidebar mirrors what the user picked / typed about.
-const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
+const GOAL_ICONS: Record<NonNullable<Chat['goal']>, LucideIcon> = {
   app:       Zap,
   document:  FileText,
   image:     ImageIcon,
@@ -104,8 +104,14 @@ const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
   scheduled: CalendarClock,
 }
 
+function getGoalIcon(goal: Chat['goal']): LucideIcon | null {
+  if (!goal) return null
+  return Object.prototype.hasOwnProperty.call(GOAL_ICONS, goal) ? GOAL_ICONS[goal] : null
+}
+
 function getChatIcon(chat: Chat): LucideIcon {
-  if (chat.goalKind) return GOAL_ICONS[chat.goalKind]
+  const GoalIcon = getGoalIcon(chat.goal)
+  if (GoalIcon) return GoalIcon
   switch (chat.kind) {
     case 'task':
     case 'task_run':
@@ -195,7 +201,7 @@ export function AppShell({
   const [pendingFilter, setPendingFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
   const [filterOpen, setFilterOpen] = useState(false)
   const hasActiveFilter =
-    appliedFilter.goalKind !== null ||
+    appliedFilter.goal !== null ||
     appliedFilter.agentId !== null ||
     appliedFilter.updatesOnly ||
     appliedFilter.artifactsOnly
@@ -301,7 +307,7 @@ export function AppShell({
 
   const allChats = sortedChats(chats)
   const filteredChats = allChats.filter(chat => {
-    if (appliedFilter.goalKind && chat.goalKind !== appliedFilter.goalKind) return false
+    if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
     if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
     if (appliedFilter.updatesOnly && !(chat.unread && !readChatIds.has(chat.id))) return false
     if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
@@ -813,4 +819,3 @@ export function AppShell({
     </div>
   )
 }
-

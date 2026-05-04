@@ -509,7 +509,7 @@ export async function removeChatAttachment(
 
 /**
  * Soft-deletes a chat's on-disk footprint by moving `.chats/{chatId}/`
- * (which holds attachments, logs, and note-history) into
+ * (which holds attachments, logs, and notes/) into
  * `~/Desk/.trash/.chats/`. Idempotent — missing dirs are silently skipped.
  */
 export async function trashChatDirectories(

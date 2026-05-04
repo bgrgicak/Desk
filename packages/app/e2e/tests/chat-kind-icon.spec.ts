@@ -1,14 +1,14 @@
 /**
- * Chat-list `kind` + `goalKind` fields + sidebar icon.
+ * Chat-list `goal` + `kind` fields + sidebar icon.
  *
- * Two signals drive the sidebar icon:
- *   1. `goalKind` — picker-aligned tag inferred from the newest user-role
- *      text message (`app`/`document`/`image`/`data`/`site`/`run`/`task`/
- *      `scheduled`). When set, it wins.
+ * One goal source drives goal-aware UI:
+ *   1. `goal` — the persisted picker-aligned chat goal
+ *      (`app`/`document`/`image`/`data`/`site`/`run`/`task`/`scheduled`).
+ *      Explicit picker selections and clear text inference both write here.
  *   2. `kind` — newest user-action message kind (`task`/`task_run`), with
- *      `chat` as fallback. Used when `goalKind` is null.
+ *      `chat` as fallback. Used only when `goal` is absent.
  *
- * `chat` and `ai_note` are NOT user actions; they fall back to the
+ * `chat` and `summary` are NOT user actions; they fall back to the
  * default icon. The icons mirror the compose picker so the chat keeps the
  * type the user typed about.
  */
@@ -59,12 +59,13 @@ async function postMessage(
   chatId: string,
   kind: MessageKind,
   content: string,
+  opts: { goal?: string | null } = {},
 ): Promise<void> {
-  const body: Record<string, unknown> = { content, kind };
+  const body: Record<string, unknown> = { content, kind, ...opts };
   // Self-firing kinds need either an executeAt or cron, otherwise the
   // scheduler treats them as fire-immediately. Pin a far-future timestamp
   // so they sit pending and the icon assertion is stable.
-  if (kind === "task" || kind === "ai_note") {
+  if (kind === "task" || kind === "summary") {
     body.executeAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   }
   const res = await fetch(`${serverUrl}/chats/${chatId}/messages`, {
@@ -89,23 +90,57 @@ async function fetchListedKind(
   return list.find((c) => c.id === chatId)?.kind;
 }
 
-async function fetchListedGoalKind(
+async function fetchListedGoal(
   serverUrl: string,
   ctx: Ctx,
   chatId: string,
-): Promise<string | null | undefined> {
+): Promise<string | undefined> {
   const res = await fetch(`${serverUrl}/chats?workspaceId=${ctx.workspaceId}`, {
     headers: ctx.authHeaders,
   });
   expect(res.status).toBe(200);
-  const list = (await res.json()) as Array<{ id: string; goalKind?: string | null }>;
-  return list.find((c) => c.id === chatId)?.goalKind;
+  const list = (await res.json()) as Array<{ id: string; goal?: string }>;
+  return list.find((c) => c.id === chatId)?.goal;
 }
+
+test("composer goal picker restores the chat's persisted goal", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const ctx = await bootstrap(serverUrl, token);
+  const chatId = await createChat(serverUrl, ctx, "composer-goal-doc");
+  await postMessage(serverUrl, ctx, chatId, "chat", "write the launch brief", {
+    goal: "document",
+  });
+  expect(await fetchListedGoal(serverUrl, ctx, chatId)).toBe("document");
+
+  await loggedInPage.reload();
+  const row = loggedInPage
+    .getByRole("button", { name: /composer-goal-doc/ })
+    .first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.click();
+
+  await expect(
+    loggedInPage.getByRole("button", { name: /New doc/ }).first(),
+  ).toBeVisible();
+
+  await loggedInPage.getByRole("button", { name: /New doc/ }).first().click();
+  await loggedInPage.getByRole("button", { name: /^No goal$/ }).click();
+  await expect(
+    loggedInPage.getByRole("button", { name: /^No goal$/ }).first(),
+  ).toBeVisible();
+
+  await loggedInPage.locator("textarea").fill("hello");
+  await loggedInPage.keyboard.press("Enter");
+  await expect.poll(() => fetchListedGoal(serverUrl, ctx, chatId)).toBeUndefined();
+});
 
 // UI test runs first so the browser context is launched before the
 // API-only tests pile up server-side load (chromium spawn under load
 // has flaked with newPage timeouts on this lane).
-test("sidebar icon prefers goalKind, falls back to kind", async ({
+test("sidebar icon uses persisted goal, falls back to kind", async ({
   loggedInPage,
   serverUrl,
   token,
@@ -120,17 +155,17 @@ test("sidebar icon prefers goalKind, falls back to kind", async ({
   const taskOnlyId = await createChat(serverUrl, ctx, "icon-task-only");
   await postMessage(serverUrl, ctx, taskOnlyId, "task", "do the thing");
 
-  // Task chat plus a system ai_note — the auto note must not bump the
+  // Task chat plus a system summary — the auto summary must not bump the
   // icon. This is the exact regression the bug report described.
-  const taskWithNoteId = await createChat(serverUrl, ctx, "icon-task-ai-note");
-  await postMessage(serverUrl, ctx, taskWithNoteId, "task", "do the thing");
-  await postMessage(serverUrl, ctx, taskWithNoteId, "ai_note", "scheduled note");
+  const taskWithSummaryId = await createChat(serverUrl, ctx, "icon-task-summary");
+  await postMessage(serverUrl, ctx, taskWithSummaryId, "task", "do the thing");
+  await postMessage(serverUrl, ctx, taskWithSummaryId, "summary", "scheduled summary");
 
-  // Goal-driven: text "create a data table" → data → Table icon.
+  // Goal-driven: text "create a data table" → persisted data goal → Table icon.
   const dataId = await createChat(serverUrl, ctx, "icon-data");
   await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table");
 
-  // Goal-driven: text "show me a portfolio" → site → Globe icon.
+  // Goal-driven: text "show me a portfolio" → persisted site goal → Globe icon.
   const siteId = await createChat(serverUrl, ctx, "icon-site");
   await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio");
 
@@ -139,7 +174,7 @@ test("sidebar icon prefers goalKind, falls back to kind", async ({
   for (const title of [
     "icon-plain",
     "icon-task-only",
-    "icon-task-ai-note",
+    "icon-task-summary",
     "icon-data",
     "icon-site",
   ]) {
@@ -165,7 +200,7 @@ test("sidebar icon prefers goalKind, falls back to kind", async ({
   const cases: Array<{ title: string; expected: string }> = [
     { title: "icon-plain",         expected: "lucide-message-square" },
     { title: "icon-task-only",     expected: "lucide-list-todo" },
-    { title: "icon-task-ai-note",  expected: "lucide-list-todo" },
+    { title: "icon-task-summary",  expected: "lucide-list-todo" },
     { title: "icon-data",          expected: "lucide-table" },
     { title: "icon-site",          expected: "lucide-globe" },
   ];
@@ -188,7 +223,7 @@ test("sidebar icon prefers goalKind, falls back to kind", async ({
   }
 });
 
-test("/chats `kind` reflects the newest user-action kind, with chat/ai_note as fallback", async ({
+test("/chats `kind` reflects the newest user-action kind, with chat/summary as fallback", async ({
   serverUrl,
   token,
 }) => {
@@ -210,40 +245,40 @@ test("/chats `kind` reflects the newest user-action kind, with chat/ai_note as f
   await postMessage(serverUrl, ctx, taskThenChatId, "chat", "follow-up");
   expect(await fetchListedKind(serverUrl, ctx, taskThenChatId)).toBe("task");
 
-  // task → ai_note (the system-scheduled note refresh that lands on every
+  // task → summary (the system-scheduled summary refresh that lands on every
   // chat turn) — must NOT hijack the icon. kind stays 'task'. This is the
   // exact regression the bug report uncovered.
-  const taskThenAiNoteId = await createChat(serverUrl, ctx, "kind-task-then-ai-note");
-  await postMessage(serverUrl, ctx, taskThenAiNoteId, "task", "do the thing");
-  await postMessage(serverUrl, ctx, taskThenAiNoteId, "ai_note", "scheduled note");
-  expect(await fetchListedKind(serverUrl, ctx, taskThenAiNoteId)).toBe("task");
+  const taskThenSummaryId = await createChat(serverUrl, ctx, "kind-task-then-summary");
+  await postMessage(serverUrl, ctx, taskThenSummaryId, "task", "do the thing");
+  await postMessage(serverUrl, ctx, taskThenSummaryId, "summary", "scheduled summary");
+  expect(await fetchListedKind(serverUrl, ctx, taskThenSummaryId)).toBe("task");
 
-  // chat + ai_note alone (no user actions) → fallback 'chat'.
-  const aiNoteOnlyId = await createChat(serverUrl, ctx, "kind-chat-and-ai-note");
-  await postMessage(serverUrl, ctx, aiNoteOnlyId, "chat", "hi");
-  await postMessage(serverUrl, ctx, aiNoteOnlyId, "ai_note", "scheduled note");
-  expect(await fetchListedKind(serverUrl, ctx, aiNoteOnlyId)).toBe("chat");
+  // chat + summary alone (no user actions) → fallback 'chat'.
+  const summaryOnlyId = await createChat(serverUrl, ctx, "kind-chat-and-summary");
+  await postMessage(serverUrl, ctx, summaryOnlyId, "chat", "hi");
+  await postMessage(serverUrl, ctx, summaryOnlyId, "summary", "scheduled summary");
+  expect(await fetchListedKind(serverUrl, ctx, summaryOnlyId)).toBe("chat");
 });
 
-test("/chats `goalKind` is inferred from the newest user-role text", async ({
+test("/chats `goal` is inferred and persisted from clear user text", async ({
   serverUrl,
   token,
 }) => {
   const ctx = await bootstrap(serverUrl, token);
 
   // The exact regression: a chat where the user typed about a data table
-  // should infer `data` (not be hijacked by the system ai_note refresh).
+  // should infer `data` (not be hijacked by the system summary refresh).
   const dataId = await createChat(serverUrl, ctx, "goal-data");
   await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table");
-  expect(await fetchListedGoalKind(serverUrl, ctx, dataId)).toBe("data");
+  expect(await fetchListedGoal(serverUrl, ctx, dataId)).toBe("data");
 
   // Site goal — avoid 'build/make/app' so the app heuristic doesn't fire.
   const siteId = await createChat(serverUrl, ctx, "goal-site");
   await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio");
-  expect(await fetchListedGoalKind(serverUrl, ctx, siteId)).toBe("site");
+  expect(await fetchListedGoal(serverUrl, ctx, siteId)).toBe("site");
 
-  // Plain "hi" — too short for any heuristic match. goalKind stays null.
+  // Plain "hi" — too short for any heuristic match. goal stays unset.
   const plainId = await createChat(serverUrl, ctx, "goal-plain");
   await postMessage(serverUrl, ctx, plainId, "chat", "hi");
-  expect(await fetchListedGoalKind(serverUrl, ctx, plainId)).toBeNull();
+  expect(await fetchListedGoal(serverUrl, ctx, plainId)).toBeUndefined();
 });

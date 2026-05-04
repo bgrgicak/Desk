@@ -199,7 +199,7 @@ function AppInner() {
     kind?: 'task'
     taskTitle?: string
     executeAt?: string
-    goal?: string
+    goal?: string | null
     pinPaths?: string[]
   }): Promise<{ chatId: string; messageId: string }> => {
     if (!activeWorkspaceId) throw new Error('No active workspace')
@@ -320,15 +320,10 @@ function AppInner() {
     }
   }, [dispatch, saveChatAttachmentToLibraryMutation])
 
-  // Library items the user picked via "Use in chat" — seeded into the
-  // new-chat input tray so they ride the first message as attachments,
-  // then pinned via library-refs once the chat exists so they show up in
-  // the right-sidebar "In this chat" list (mirrors the `+` picker).
-  //
-  // Held in a ref, not state, because two `goTo` calls in the same handler
-  // can produce an intermediate render that mounts ChatView with
-  // half-committed state. Refs are stable across renders, so ChatView's
-  // mount-time `useState` initializer always reads the current value.
+  // Library items picked via "Use in chat" — passed to ChatView as
+  // `initialStagedItems` to seed the Files sidebar on the new-chat stub.
+  // Held in a ref so two `goTo` calls in the same handler don't cause
+  // a stale read on the intermediate render before ChatView mounts.
   const composeStagedItemsRef = useRef<ContextItem[]>([])
 
   const handleComposeWithContext = useCallback((items?: ContextItem[]) => {
@@ -336,10 +331,8 @@ function AppInner() {
     enterCompose()
   }, [enterCompose])
 
-  // Drop staged items once the user is no longer on the new-chat stub.
-  // After the first message is sent, `handleNewChatFirstMessage` clears
-  // the ref directly; this effect just covers the navigate-away-without-
-  // sending case so a later re-mount doesn't replay stale picks.
+  // Clear the ref when leaving the new-chat stub so a later re-mount
+  // of the stub doesn't replay stale picks.
   useEffect(() => {
     if (selectedChatId !== NEW_CHAT_ID) {
       composeStagedItemsRef.current = []
@@ -357,6 +350,7 @@ function AppInner() {
     attachments?: AttachmentRef[],
     options?: SendOptions,
     files?: File[],
+    pinPaths?: string[],
   ) => {
     if (!activeWorkspaceId) return
     // The workspace-agents query may not have resolved yet on first paint
@@ -378,10 +372,6 @@ function AppInner() {
       return
     }
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
-    // Capture the staged library items now and clear the ref immediately so
-    // a same-tick re-render of the new-chat stub can't re-seed stale picks.
-    const itemsToPin = composeStagedItemsRef.current
-    composeStagedItemsRef.current = []
     try {
       const { chatId } = await doCreateAndPost({
         agentId: pickedAgentId,
@@ -392,8 +382,8 @@ function AppInner() {
         kind: options?.kind,
         taskTitle: options?.title,
         executeAt: options?.executeAt,
-        goal: options?.goal ?? undefined,
-        pinPaths: itemsToPin.map(i => i.id),
+        goal: options && 'goal' in options ? options.goal : undefined,
+        pinPaths: pinPaths ?? [],
       })
       goTo({ chat: chatId })
     } catch (err) {
@@ -575,7 +565,7 @@ function AppInner() {
             onAttachmentClick={(att) =>
               att.kind === 'directory'
                 ? goTo({ view: 'context', item: null, folder: att.path })
-                : goTo({ item: att.path })
+                : goTo({ view: 'context', item: att.path })
             }
             initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />

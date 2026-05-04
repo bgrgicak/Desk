@@ -6,7 +6,7 @@ The Desk app keeps **all** durable state under `~/Desk/` on the host:
   chats, messages, tasks, auth sessions, encrypted provider keys). Mode
   0600 — readable only by the host user.
 - `~/Desk/workspaces/{slug}/` — workspace files (notes, attachments, chat
-  logs, note-history snapshots).
+  logs, summary snapshots under `.chats/*/notes/`).
 - `~/Desk/.trash/` — soft-deleted workspaces and rotated logs.
 
 The DB lives under a dotfile parent (`.database/`) so it doesn't show up

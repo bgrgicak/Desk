@@ -608,7 +608,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Chat array with last-message snippet"
+            "description": "Chat array with last-message snippet, persisted `goal` (`app`/`data`/`site`/etc.; explicit picker selections and clear text inference both write here), and `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `summary` fall back when no goal is set)."
           }
         }
       },
@@ -691,7 +691,22 @@
                     "type": "string"
                   },
                   "goal": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "app",
+                      "document",
+                      "image",
+                      "data",
+                      "site",
+                      "run",
+                      "task",
+                      "scheduled",
+                      null
+                    ],
+                    "description": "Persisted chat goal. Pass null to clear it."
                   },
                   "agentId": {
                     "type": "string",
@@ -785,6 +800,24 @@
                   "content": {
                     "type": "string"
                   },
+                  "goal": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "app",
+                      "document",
+                      "image",
+                      "data",
+                      "site",
+                      "run",
+                      "task",
+                      "scheduled",
+                      null
+                    ],
+                    "description": "Persisted chat goal for this send. Omit to keep/infer; pass null to clear the chat goal."
+                  },
                   "attachments": {
                     "type": "array",
                     "description": "Files the user attached to this message. Each item references a file already uploaded via POST /chats/{id}/attachments — the path is workspace-relative, forward-slash separated.",
@@ -829,7 +862,7 @@
     "/chats/{id}/messages/{messageId}": {
       "patch": {
         "summary": "Edit a message (content, cancel, reschedule)",
-        "description": "Update content (e.g. user edits a note), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+        "description": "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
         "parameters": [
           {
             "name": "id",
@@ -955,10 +988,10 @@
         }
       }
     },
-    "/chats/{id}/messages/{messageId}/note-history": {
+    "/chats/{id}/messages/{messageId}/summary-history": {
       "get": {
-        "summary": "List archived versions of a note-content message",
-        "description": "Each PATCH of a `note`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/note-history/. This endpoint returns every snapshot, newest first.",
+        "summary": "List archived versions of a summary-content message",
+        "description": "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/notes/.history/. This endpoint returns every snapshot, newest first, and also reads legacy .chats/{chatId}/note-history/ and .chats/{chatId}/summary-history/ directories for compatibility.",
         "parameters": [
           {
             "name": "id",
@@ -979,7 +1012,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Note version array",
+            "description": "Summary version array",
             "content": {
               "application/json": {
                 "schema": {
@@ -1021,7 +1054,7 @@
     "/chats/{id}/attachments": {
       "get": {
         "summary": "List chat attachments",
-        "description": "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeNotes=true to also include the chat's materialized note mirrors from `.chats/{id}/notes/`. Each item carries a `kind` field: \"attachment\" or \"note\".",
+        "description": "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeArtifacts=true to also include agent-written files/dirs from `.chats/{id}/artifacts/`. Each item carries a `kind` field: \"attachment\" or \"artifact\".",
         "parameters": [
           {
             "name": "id",
@@ -1039,7 +1072,7 @@
             }
           },
           {
-            "name": "includeNotes",
+            "name": "includeArtifacts",
             "in": "query",
             "schema": {
               "type": "boolean"
@@ -1505,6 +1538,23 @@
               "type": "string"
             },
             "description": "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)."
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated list of `Message.kind` values (`chat|task|task_run|summary`). Distinct from `contentKind`."
+          },
+          {
+            "name": "parentId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^msg_[A-Za-z0-9_-]+$"
+            },
+            "description": "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history."
           },
           {
             "name": "since",

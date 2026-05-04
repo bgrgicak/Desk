@@ -1,3 +1,5 @@
+import type { GoalKey } from "@agent-desk/shared";
+
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
  * Duplicated (not imported) because @agent-desk/app isn't in the server's
@@ -32,8 +34,8 @@ export type MessageContent =
   | { type: "toolResult"; toolName: string; result: unknown }
   | { type: "artifactRef"; path: string; name?: string; mime?: string }
   | { type: "events"; log: AgentLogEntry[] }
-  | { type: "note"; body: string }
-  | { type: "ai_note_request" }
+  | { type: "summary"; body: string }
+  | { type: "summary_request" }
   | { type: "agent_turn"; userMessageId: string };
 
 export interface ServerUser {
@@ -72,32 +74,17 @@ export interface ServerChat {
   workspaceId: string;
   agentId: string;
   title: string;
-  goal?: string;
+  goal?: GoalKey;
   updatedAt: string;
   awaitingUser: boolean;
   unread: boolean;
   /**
    * Drives the chat-list icon (fallback signal). Newest user-action
    * message kind (`task` / `task_run`), with `'chat'` as the fallback.
-   * `ai_note` is auto-emitted on every chat turn and is treated as a
+   * `summary` is auto-emitted on every chat turn and is treated as a
    * fallback. Only populated by /chats list responses.
    */
   kind?: "chat" | "task" | "task_run";
-  /**
-   * Drives the chat-list icon (primary signal when set). Inferred from
-   * the newest user-role text message — `app` / `data` / `site` / etc.
-   * Null when no user text exists or no heuristic matches.
-   */
-  goalKind?:
-    | "app"
-    | "document"
-    | "image"
-    | "data"
-    | "site"
-    | "run"
-    | "task"
-    | "scheduled"
-    | null;
 }
 
 export interface AttachmentRef {
@@ -129,8 +116,8 @@ export interface ServerMessage {
   endedAt?: string;
   updatedAt?: string;
   /** Discriminates the message's surface — `chat` (default), `task`,
-   * `task_run` (execution record child of a task), or `ai_note`. */
-  kind?: "chat" | "task" | "task_run" | "ai_note";
+   * `task_run` (execution record child of a task), or `summary`. */
+  kind?: "chat" | "task" | "task_run" | "summary";
   /** Display name for tasks; null/missing for ordinary chat messages. */
   title?: string | null;
 }
@@ -143,15 +130,14 @@ export interface ServerFile {
   createdAt: string;
   /**
    * Set on `GET /chats/{id}/attachments` items only — `attachment` is a
-   * user upload from `.chats/{id}/attachments/`, `note` is a materialized
-   * note from `.chats/{id}/notes/`. Library responses omit it.
+   * user upload from `.chats/{id}/attachments/`, `artifact` is an
+   * agent-written file or directory from `.chats/{id}/artifacts/`. Library
+   * responses omit it.
    */
-  kind?: "attachment" | "note";
-  /**
-   * Optional human-friendly label rendered alongside the raw file name.
-   * Notes carry "Chat notes" so the UI doesn't surface the messageId-based
-   * filename as the primary label.
-   */
+  kind?: "attachment" | "artifact";
+  /** True when the entry is a directory rather than a regular file. */
+  isDir?: boolean;
+  /** Optional human-friendly label rendered alongside the raw file name. */
   label?: string;
   /** ID of the agent that last created or edited this file, if known. */
   agentId?: string;
@@ -195,10 +181,10 @@ export interface MessagesFilter {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKind?: string[];
-  /** Message-kind discriminator (`task`, `ai_note`, `chat`). The Tasks
+  /** Message-kind discriminator (`task`, `summary`, `chat`). The Tasks
    * page filters on `task`. Distinct from `contentKind` which targets
    * `content.type`. */
-  kind?: ("chat" | "task" | "ai_note")[];
+  kind?: ("chat" | "task" | "summary")[];
   since?: string;
   limit?: number;
   cursor?: string;

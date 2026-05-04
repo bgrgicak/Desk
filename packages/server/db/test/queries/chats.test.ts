@@ -58,7 +58,7 @@ describe("chats queries", () => {
     expect(list.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("kind picks the newest user-action kind; chat and ai_note are fallbacks", async () => {
+  it("kind picks the newest user-action kind; chat and summary are fallbacks", async () => {
     // Chat A: starts as chat, later gets a task. kind should be 'task'.
     const chatA = generateId("chat");
     await chats.insert(pool, { id: chatA, workspaceId: wsId, agentId, title: "Chat → task" });
@@ -107,11 +107,11 @@ describe("chats queries", () => {
       kind: "chat",
     });
 
-    // Chat D: task plus a later ai_note — ai_note is auto-emitted by the
+    // Chat D: task plus a later summary — summary is auto-emitted by the
     // scheduler on every turn, so it must NOT hijack the icon. kind stays
     // 'task'.
     const chatD = generateId("chat");
-    await chats.insert(pool, { id: chatD, workspaceId: wsId, agentId, title: "Task + ai_note" });
+    await chats.insert(pool, { id: chatD, workspaceId: wsId, agentId, title: "Task + summary" });
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: chatD,
@@ -123,13 +123,13 @@ describe("chats queries", () => {
       id: generateId("message"),
       chatId: chatD,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
-    // Chat E: only chat + ai_note → both are fallbacks → 'chat'.
+    // Chat E: only chat + summary → both are fallbacks → 'chat'.
     const chatE = generateId("chat");
-    await chats.insert(pool, { id: chatE, workspaceId: wsId, agentId, title: "Chat + ai_note" });
+    await chats.insert(pool, { id: chatE, workspaceId: wsId, agentId, title: "Chat + summary" });
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: chatE,
@@ -141,8 +141,8 @@ describe("chats queries", () => {
       id: generateId("message"),
       chatId: chatE,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
     const list = await chats.listWithLatestMessage(pool, wsId);
@@ -153,8 +153,9 @@ describe("chats queries", () => {
     expect(list.find((c) => c.id === chatE)?.kind).toBe("chat");
   });
 
-  it("goalKind is inferred from the newest user-role text", async () => {
-    // 'craete a randon data table' — matches the data heuristic.
+  it("list exposes only the persisted chat goal", async () => {
+    // Message text would match the data heuristic, but list reads the single
+    // persisted goal source from chats.goal instead of computing a second tag.
     const dataChatId = generateId("chat");
     await chats.insert(pool, {
       id: dataChatId,
@@ -169,53 +170,60 @@ describe("chats queries", () => {
       content: { type: "text", text: "craete a randon data table" },
       kind: "chat",
     });
-    // Plus a system ai_note (the auto-emitted refresh) so we prove the
-    // user-role filter actually picks the user message, not the note.
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: dataChatId,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
-    // Site chat — 'show me a portfolio'. (Avoid 'build/make/app' so the
-    // app heuristic doesn't fire first.)
-    const siteChatId = generateId("chat");
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const dataChat = list.find((c) => c.id === dataChatId);
+    expect(dataChat?.goal).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(dataChat, "goalKind")).toBe(false);
+  });
+
+  it("list returns explicit chats.goal", async () => {
+    // Chat is tagged 'document' on the column, but the message text would
+    // infer 'app'. The column is the only list-time source of truth.
+    const explicitChatId = generateId("chat");
     await chats.insert(pool, {
-      id: siteChatId,
+      id: explicitChatId,
       workspaceId: wsId,
       agentId,
-      title: "Portfolio site",
+      title: "Explicit goal",
+      goal: "document",
     });
     await messages.insert(pool, {
       id: generateId("message"),
-      chatId: siteChatId,
+      chatId: explicitChatId,
       role: "user",
-      content: { type: "text", text: "show me a portfolio" },
-      kind: "chat",
-    });
-
-    // Plain "hi" — no heuristic match, goalKind stays null.
-    const plainChatId = generateId("chat");
-    await chats.insert(pool, {
-      id: plainChatId,
-      workspaceId: wsId,
-      agentId,
-      title: "Plain",
-    });
-    await messages.insert(pool, {
-      id: generateId("message"),
-      chatId: plainChatId,
-      role: "user",
-      content: { type: "text", text: "hi" },
+      content: { type: "text", text: "build me an app" },
       kind: "chat",
     });
 
     const list = await chats.listWithLatestMessage(pool, wsId);
-    expect(list.find((c) => c.id === dataChatId)?.goalKind).toBe("data");
-    expect(list.find((c) => c.id === siteChatId)?.goalKind).toBe("site");
-    expect(list.find((c) => c.id === plainChatId)?.goalKind).toBeNull();
+    expect(list.find((c) => c.id === explicitChatId)?.goal).toBe("document");
+  });
+
+  it("rejects invalid chat goals", async () => {
+    await expect(chats.insert(pool, {
+      id: generateId("chat"),
+      workspaceId: wsId,
+      agentId,
+      title: "Invalid goal",
+      goal: "not-a-goal",
+    })).rejects.toThrow(/Invalid chat goal/);
+
+    await expect(chats.updateMeta(pool, chatId, { goal: "not-a-goal" }))
+      .rejects.toThrow(/Invalid chat goal/);
+  });
+
+  it("clears a persisted chat goal when goal is null", async () => {
+    await chats.updateMeta(pool, chatId, { goal: "document" });
+    const cleared = await chats.updateMeta(pool, chatId, { goal: null });
+    expect(cleared?.goal).toBeUndefined();
   });
 
   it("updates meta", async () => {

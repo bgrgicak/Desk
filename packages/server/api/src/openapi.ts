@@ -3,6 +3,8 @@
  * Covers all v1 routes with request/response shapes.
  */
 
+import { GOAL_KEYS } from "@agent-desk/shared";
+
 interface OpenApiSpec {
   openapi: string;
   info: { title: string; version: string; description: string };
@@ -230,7 +232,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet, `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `ai_note` fall back), and `goalKind` (`app`/`data`/`site`/etc. inferred from the newest user-role text — drives the sidebar icon when set, with `kind` as the fallback signal)." } },
+          responses: { "200": { description: "Chat array with last-message snippet, persisted `goal` (`app`/`data`/`site`/etc.; explicit picker selections and clear text inference both write here), and `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `summary` fall back when no goal is set)." } },
         },
         post: {
           summary: "Create chat",
@@ -251,7 +253,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     title: { type: "string" },
-                    goal: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal. Pass null to clear it.",
+                    },
                     agentId: { type: "string", description: "Must be an agent enabled in this chat's workspace." },
                   },
                 },
@@ -282,6 +288,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal for this send. Omit to keep/infer; pass null to clear the chat goal.",
+                    },
                     attachments: {
                       type: "array",
                       description: "Files the user attached to this message. Each item references a file already uploaded via POST /chats/{id}/attachments — the path is workspace-relative, forward-slash separated.",
@@ -308,7 +319,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}": {
         patch: {
           summary: "Edit a message (content, cancel, reschedule)",
-          description: "Update content (e.g. user edits a note), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          description: "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -360,17 +371,17 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
-      "/chats/{id}/messages/{messageId}/note-history": {
+      "/chats/{id}/messages/{messageId}/summary-history": {
         get: {
-          summary: "List archived versions of a note-content message",
-          description: "Each PATCH of a `note`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/note-history/. This endpoint returns every snapshot, newest first.",
+          summary: "List archived versions of a summary-content message",
+          description: "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/notes/.history/. This endpoint returns every snapshot, newest first, and also reads legacy .chats/{chatId}/note-history/ and .chats/{chatId}/summary-history/ directories for compatibility.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
           ],
           responses: {
             "200": {
-              description: "Note version array",
+              description: "Summary version array",
               content: {
                 "application/json": {
                   schema: {
@@ -400,11 +411,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/attachments": {
         get: {
           summary: "List chat attachments",
-          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeNotes=true to also include the chat's materialized note mirrors from `.chats/{id}/notes/`. Each item carries a `kind` field: \"attachment\" or \"note\".",
+          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeArtifacts=true to also include agent-written files/dirs from `.chats/{id}/artifacts/`. Each item carries a `kind` field: \"attachment\" or \"artifact\".",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "showHidden", in: "query", schema: { type: "boolean" } },
-            { name: "includeNotes", in: "query", schema: { type: "boolean" } },
+            { name: "includeArtifacts", in: "query", schema: { type: "boolean" } },
           ],
           responses: { "200": { description: "File array" } },
         },
@@ -580,7 +591,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
             { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
-            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|ai_note`). Distinct from `contentKind`." },
+            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|summary`). Distinct from `contentKind`." },
             { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },
             { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
             { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },

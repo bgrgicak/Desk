@@ -4,7 +4,7 @@
  * Seeds a `kind='task'` self-firing message scheduled 24h in the future
  * via the memory schedule adapter — the row stays pending forever and is
  * the stable scheduled task we drive the panel against. (The previous
- * ai_note_request fixture moved to `kind='ai_note'` and no longer
+ * summary_request fixture moved to `kind='summary'` and no longer
  * surfaces on the Tasks page; tasks must be `kind='task'`.)
  */
 import { test, expect } from "../fixtures";

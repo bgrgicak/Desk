@@ -30,7 +30,7 @@ export const MessageAppendedEventSchema = z.object({
 
 /**
  * Message mutation event — covers state transitions (pending→running→terminal)
- * and content edits (user editing a note, etc). Consumers can diff the
+ * and content edits (user editing a summary, etc). Consumers can diff the
  * payload against their cached copy.
  */
 export const MessageUpdatedEventSchema = z.object({
