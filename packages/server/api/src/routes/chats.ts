@@ -81,7 +81,7 @@ export async function createChat(
 export async function patchChat(
   pool: Pool,
   id: string,
-  data: { title?: string; goal?: string; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string },
 ) {
   const chat = await queries.chats.updateMeta(pool, id, data);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
@@ -117,7 +117,7 @@ const SendMessageSchema = z.object({
   title: z.string().optional(),
   executeAt: z.string().optional(),
   cron: z.string().optional(),
-  goal: z.string().optional(),
+  goal: z.string().nullable().optional(),
 });
 
 const AttachArtifactRefSchema = z.object({
@@ -231,10 +231,12 @@ export async function buildSendMessageBodyFromForm(
     content,
     attachments: [...refs, ...uploaded],
   };
-  for (const k of ["kind", "title", "executeAt", "cron", "goal"] as const) {
+  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
     const v = form.get(k);
     if (typeof v === "string" && v !== "") body[k] = v;
   }
+  const goal = form.get("goal");
+  if (typeof goal === "string") body.goal = goal === "" ? null : goal;
   return body;
 }
 
@@ -260,9 +262,13 @@ export async function sendMessage(
   const kind: MessageKind = data.kind ?? "chat";
   const senderRole = kind === "chat" ? "user" : opts?.role ?? "user";
 
-  const goalToPersist = data.goal ?? (senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined);
-  if (goalToPersist) {
-    await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
+  if (data.goal !== undefined) {
+    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  } else {
+    const goalToPersist = senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
+    if (goalToPersist) {
+      await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
+    }
   }
 
   // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
@@ -565,13 +571,10 @@ export async function getMessageLogs(
 
 /**
  * `attachment`: a user-uploaded file under `.chats/{id}/attachments/`.
- * `note`: a materialized mirror of a `note`-content message, written by
- * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
- * read-only from the client's perspective — they're owned by the DB row.
+ * `artifact`: an agent-written file under `.chats/{id}/artifacts/`.
  *
- * `label` is an optional human-friendly name the UI shows alongside the
- * raw file name (e.g. notes always carry "Chat notes" so the listing
- * doesn't expose the messageId-based filename as the primary label).
+ * `label` is an optional human-friendly name the UI shows alongside the raw
+ * file name.
  */
 export type ChatFileRef = FileRef & {
   kind: "attachment" | "artifact";

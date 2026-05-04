@@ -385,7 +385,7 @@ export const api = createApi({
         title?: string;
         executeAt?: string;
         cron?: string;
-        goal?: string;
+        goal?: string | null;
       }
     >({
       query: ({ chatId, content, attachments, files, kind, title, executeAt, cron, goal }) => {
@@ -401,7 +401,7 @@ export const api = createApi({
           if (title) fd.append("title", title);
           if (executeAt) fd.append("executeAt", executeAt);
           if (cron) fd.append("cron", cron);
-          if (goal) fd.append("goal", goal);
+          if (goal !== undefined) fd.append("goal", goal ?? "");
           return { url, method: "POST", body: fd };
         }
         const body: Record<string, unknown> = { content };
@@ -410,7 +410,7 @@ export const api = createApi({
         if (title) body.title = title;
         if (executeAt) body.executeAt = executeAt;
         if (cron) body.cron = cron;
-        if (goal) body.goal = goal;
+        if (goal !== undefined) body.goal = goal;
         return { url, method: "POST", body };
       },
       invalidatesTags: (_r, _e, { chatId }) => [

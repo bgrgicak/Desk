@@ -1,10 +1,10 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
-import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
-import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
-import type { StorageContext } from "@agent-desk/storage";
+import { DeskError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { chatArtifactsDir, resolveHostPath, workspaceRootPath, type StorageContext } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
@@ -31,6 +31,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import {
   requireLibraryPathInWorkspace,
+  parseReadableChatArtifactPath,
   requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
@@ -50,6 +51,55 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
   res.end(json);
+}
+
+async function requireReadablePathForRoute(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  relPath: string,
+  workspaceId: string,
+): Promise<void> {
+  await requireReadablePathInWorkspace(pool, userId, relPath, workspaceId);
+  const artifact = parseReadableChatArtifactPath(relPath);
+  if (!artifact) return;
+
+  const { rows: chatRows } = await pool.query<{ workspace_id: string }>(
+    "SELECT workspace_id FROM chats WHERE id = ?",
+    [artifact.chatId],
+  );
+  if (chatRows[0]?.workspace_id !== workspaceId) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+
+  const { rows } = await pool.query<{ path: string }>(
+    "SELECT path FROM workspaces WHERE id = ?",
+    [workspaceId],
+  );
+  const workspaceSlug = rows[0]?.path;
+  if (!workspaceSlug) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+
+  const artifactRoot = chatArtifactsDir(storage.home, workspaceSlug, artifact.chatId);
+  const workspaceRoot = workspaceRootPath(storage.home, workspaceSlug);
+  const target = resolveHostPath(storage.home, workspaceSlug, relPath);
+  let realWorkspaceRoot: string;
+  let realRoot: string;
+  let realTarget: string;
+  try {
+    [realWorkspaceRoot, realRoot, realTarget] = await Promise.all([
+      fsRealpath(workspaceRoot),
+      fsRealpath(artifactRoot),
+      fsRealpath(target),
+    ]);
+  } catch {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realRoot !== realWorkspaceRoot && !realRoot.startsWith(realWorkspaceRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -341,12 +391,15 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/sandbox/artifacts" && method === "POST") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent } = await authenticateSandboxToken(pool, token);
       const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
       if (!body.chatId || typeof body.chatId !== "string") {
         throw new ValidationError("Missing chatId");
       }
-      await requireOwnedChat(pool, body.chatId, agent.userId);
+      const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
+      if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
+        throw new NotFoundError(`Chat not found: ${body.chatId}`);
+      }
 
       const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
         agentId: agent.id,
@@ -543,7 +596,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string; agentId?: string };
+      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string };
       if (body.agentId !== undefined) {
         await requireOwnedAgent(pool, body.agentId, userId);
       }
@@ -756,7 +809,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
       // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
       // user-friendly "Chat notes" label so the detail view doesn't title
@@ -771,7 +824,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -784,7 +837,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,

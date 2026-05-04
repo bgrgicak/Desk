@@ -56,6 +56,7 @@ export interface RenderPromptInput {
   userTimezone?: string;
   chatId?: string;
   goal?: GoalKey | null;
+  runMode?: "chat" | "summary";
 }
 
 type Fragment = (input: RenderPromptInput) => string | null;
@@ -67,6 +68,13 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       userName: input.userName,
     }),
   (input) => {
+    if (input.runMode === "summary") {
+      const chatPaths = input.chatId
+        ? `Chat notes:     ~/.chats/${input.chatId}/notes/\n` +
+          `Chat artifacts: ~/.chats/${input.chatId}/artifacts/\n`
+        : "";
+      return loadAndSub("summary-note.md", { chatPaths });
+    }
     const chatPaths = input.chatId
       ? `\nChat artifacts:   ~/.chats/${input.chatId}/artifacts/\n` +
         `Chat attachments: ~/.chats/${input.chatId}/attachments/\n` +
@@ -77,18 +85,20 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
-  () => loadAndSub("context.md", {}),
+  (input) => input.runMode === "summary" ? null : loadAndSub("context.md", {}),
   (input) =>
-    input.userTimezone
+    input.runMode === "summary"
+      ? null
+      : input.userTimezone
       ? loadAndSub("scheduling-tz-known.md", {
           userName: input.userName,
           userTimezone: input.userTimezone,
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
-  () => loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" ? null : loadAndSub("goal-autodetect.md", {}),
   (input) =>
-    input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
-  () => loadAndSub("desk-skills.md", {}),
+    input.runMode !== "summary" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
+  (input) => input.runMode === "summary" ? null : loadAndSub("desk-skills.md", {}),
   (input) =>
     loadAndSub("user-instructions.md", {
       userName: input.userName,

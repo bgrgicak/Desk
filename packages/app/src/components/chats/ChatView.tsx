@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Folder, Link2, StickyNote, Paperclip, Plus, X,
@@ -50,6 +50,13 @@ import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
+
+function activateOnEnterOrSpace(e: KeyboardEvent<HTMLElement>, action: () => void) {
+  if (e.currentTarget !== e.target) return
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  e.preventDefault()
+  action()
+}
 
 const STARTER_CHIPS = [
   'Draft a project brief',
@@ -196,6 +203,12 @@ function ArtifactsPanel({
                 <div
                   key={`artifact-file-${file.path}`}
                   onClick={() => !file.isDir && onChatArtifactClick?.(file)}
+                  onKeyDown={e => {
+                    if (!file.isDir) activateOnEnterOrSpace(e, () => onChatArtifactClick?.(file))
+                  }}
+                  role={file.isDir ? undefined : 'button'}
+                  tabIndex={file.isDir ? undefined : 0}
+                  aria-label={file.isDir ? undefined : `Open ${file.name}`}
                   title={file.isDir ? file.name : 'Click to open'}
                   className={`group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${file.isDir ? '' : 'cursor-pointer'}`}
                 >
@@ -208,7 +221,7 @@ function ArtifactsPanel({
                     <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   </div>
                   {!file.isDir && (
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                       <button
                         onClick={e => { e.stopPropagation(); onChatArtifactStage?.(file) }}
                         title="Add to message"
@@ -254,6 +267,10 @@ function ArtifactsPanel({
               <div
                 key={artifact.id}
                 onClick={() => onArtifactClick?.(artifact)}
+                onKeyDown={e => activateOnEnterOrSpace(e, () => onArtifactClick?.(artifact))}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${artifact.name}`}
                 title="Click to open"
                 className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
               >
@@ -265,7 +282,7 @@ function ArtifactsPanel({
                   <p className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type]} · {getRelativeTime(artifact.updatedAt)}</p>
                   <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                 </div>
-                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                   <button
                     onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
                     title="Add to message"
@@ -353,8 +370,8 @@ function ArtifactsPanel({
 /**
  * "In this chat" panel — user uploads sitting under
  * `.chats/{chatId}/attachments/`. Note mirrors (`.chats/{id}/notes/`) are
- * surfaced separately in the Artifacts panel as "Chat notes" and are not
- * listed here.
+ * Desk-managed memory and are not listed here; note messages are visible in
+ * the chat stream only when developer mode is enabled.
  *
  * Sidebar uploads land in `.chats/{chatId}/attachments/` (not the workspace
  * library) so the file is scoped to this chat. Files queued for the next
@@ -977,7 +994,7 @@ export function ChatView({
                         kind: options?.kind,
                         title: options?.title,
                         executeAt: options?.executeAt,
-                        goal: options?.goal ?? undefined,
+                        goal: options && 'goal' in options ? options.goal : undefined,
                       })
                         .unwrap()
                         .catch(err => {

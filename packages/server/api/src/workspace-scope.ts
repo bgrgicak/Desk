@@ -83,7 +83,21 @@ const CHAT_ATTACHMENT_PATTERN =
 const CHAT_NOTE_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/notes\/([^/]+\.md)$/;
 const CHAT_ARTIFACT_PATTERN =
-  /^\.chats\/(cht_[A-Za-z0-9_-]+)\/artifacts\/.+$/;
+  /^\.chats\/(cht_[A-Za-z0-9_-]+)\/artifacts\/(.+)$/;
+
+export function parseReadableChatArtifactPath(relPath: string): { chatId: string } | null {
+  const artifact = relPath.match(CHAT_ARTIFACT_PATTERN);
+  if (!artifact) return null;
+  if (relPath.includes("\0") || relPath.includes("\\")) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  const artifactPath = artifact[2];
+  const segments = artifactPath.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  return { chatId: artifact[1] };
+}
 
 export async function requireReadablePathInWorkspace(
   pool: Pool,
@@ -101,9 +115,9 @@ export async function requireReadablePathInWorkspace(
     await requireOwnedChat(pool, note[1], userId);
     return;
   }
-  const artifact = relPath.match(CHAT_ARTIFACT_PATTERN);
+  const artifact = parseReadableChatArtifactPath(relPath);
   if (artifact) {
-    await requireOwnedChat(pool, artifact[1], userId);
+    await requireOwnedChat(pool, artifact.chatId, userId);
     return;
   }
   requireLibraryPathInWorkspace(relPath, workspaceId);

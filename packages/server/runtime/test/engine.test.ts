@@ -7,7 +7,9 @@
  * detection ordering and the rejected-name preservation.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { detectEngine, _resetEngineCache, type EngineName } from "../src/engine.js";
+import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { detectEngine, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
 
 const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
 const PRIOR_PATH = process.env.PATH;
@@ -46,6 +48,44 @@ describe("detectEngine — DESK_CONTAINER_ENGINE override", () => {
     process.env.PATH = "/nonexistent";
     delete process.env.DESK_CONTAINER_ENGINE;
     await expect(detectEngine()).rejects.toThrow(/No container runtime/);
+  });
+});
+
+describe("exec handle stream lifecycle", () => {
+  it("does not resolve wait() on exit before stdout/stderr have closed", async () => {
+    const child = new EventEmitter() as NodeJS.EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      exitCode: number | null;
+      kill: () => void;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    child.kill = () => {};
+
+    const handle = _wrapExecChildForTest(child as never);
+    const chunks: Buffer[] = [];
+    handle.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+    let resolved = false;
+    const wait = handle.wait().then((code) => {
+      resolved = true;
+      return code;
+    });
+
+    child.emit("exit", 0);
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    child.stdout.write("late stdout");
+    child.stdout.end();
+    child.stderr.end();
+    child.exitCode = 0;
+    child.emit("close", 0);
+
+    await expect(wait).resolves.toBe(0);
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("late stdout");
   });
 });
 

@@ -59,7 +59,7 @@ async function postMessage(
   chatId: string,
   kind: MessageKind,
   content: string,
-  opts: { goal?: string } = {},
+  opts: { goal?: string | null } = {},
 ): Promise<void> {
   const body: Record<string, unknown> = { content, kind, ...opts };
   // Self-firing kinds need either an executeAt or cron, otherwise the
@@ -125,6 +125,16 @@ test("composer goal picker restores the chat's persisted goal", async ({
   await expect(
     loggedInPage.getByRole("button", { name: /New doc/ }).first(),
   ).toBeVisible();
+
+  await loggedInPage.getByRole("button", { name: /New doc/ }).first().click();
+  await loggedInPage.getByRole("button", { name: /^No goal$/ }).click();
+  await expect(
+    loggedInPage.getByRole("button", { name: /^No goal$/ }).first(),
+  ).toBeVisible();
+
+  await loggedInPage.locator("textarea").fill("hello");
+  await loggedInPage.keyboard.press("Enter");
+  await expect.poll(() => fetchListedGoal(serverUrl, ctx, chatId)).toBeUndefined();
 });
 
 // UI test runs first so the browser context is launched before the

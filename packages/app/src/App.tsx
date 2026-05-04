@@ -199,7 +199,7 @@ function AppInner() {
     kind?: 'task'
     taskTitle?: string
     executeAt?: string
-    goal?: string
+    goal?: string | null
     pinPaths?: string[]
   }): Promise<{ chatId: string; messageId: string }> => {
     if (!activeWorkspaceId) throw new Error('No active workspace')
@@ -382,7 +382,7 @@ function AppInner() {
         kind: options?.kind,
         taskTitle: options?.title,
         executeAt: options?.executeAt,
-        goal: options?.goal ?? undefined,
+        goal: options && 'goal' in options ? options.goal : undefined,
         pinPaths: pinPaths ?? [],
       })
       goTo({ chat: chatId })

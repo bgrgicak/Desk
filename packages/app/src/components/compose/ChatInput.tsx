@@ -167,10 +167,14 @@ export function ChatInput({
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
   const persistedGoalKey = goal ?? null
-  const effectiveGoalKey: GoalKey = goalOverride ?? persistedGoalKey
+  const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
+
+  useEffect(() => {
+    setGoalOverride(undefined)
+  }, [goal])
 
   // Auto-focus
   useEffect(() => {
@@ -292,13 +296,17 @@ export function ChatInput({
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
     const taskOptions = optionsForGoal(effectiveGoalKey, trimmed)
-    const options: SendOptions | undefined = effectiveGoalKey !== null
-      ? { ...taskOptions, goal: effectiveGoalKey }
-      : taskOptions
+    const explicitGoal = goalOverride !== undefined
+      ? goalOverride
+      : effectiveGoalKey !== null
+        ? effectiveGoalKey
+        : undefined
+    const options: SendOptions | undefined = explicitGoal !== undefined || taskOptions
+      ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
+      : undefined
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
-    if (effectiveGoalKey === null) setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

@@ -54,4 +54,14 @@ describe("OpenAPI spec", () => {
     const openapi = spec.paths["/openapi.json"] as Record<string, { security?: unknown[] }>;
     expect(openapi.get.security).toEqual([]);
   });
+
+  it("documents nullable chat goals where the API accepts clearing them", () => {
+    const chat = spec.paths["/chats/{id}"] as Record<string, { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } }>;
+    const patchGoal = chat.patch.requestBody?.content?.["application/json"].schema?.properties?.goal;
+    expect(patchGoal).toMatchObject({ type: ["string", "null"] });
+
+    const messages = spec.paths["/chats/{id}/messages"] as Record<string, { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } }>;
+    const messageGoal = messages.post.requestBody?.content?.["application/json"].schema?.properties?.goal;
+    expect(messageGoal).toMatchObject({ type: ["string", "null"] });
+  });
 });

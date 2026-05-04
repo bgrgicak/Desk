@@ -110,6 +110,11 @@ field for goal icons and goal filters.
 
 - `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
 
+### PATCH /chats/{id}
+
+Updates chat metadata. Body can include `{ title?: string, agentId?: string,
+goal?: string | null }`; pass `goal: null` to clear the persisted chat goal.
+
 ### DELETE /chats/{id}
 
 Soft-deletes a chat. In order:
@@ -168,7 +173,7 @@ Messages grow optional execution fields (added M6a):
 
 ### POST /chats/{id}/messages
 
-Body: `{ content: string, attachments?: AttachmentRef[], goal?: string }`. Each
+Body: `{ content: string, attachments?: AttachmentRef[], goal?: string | null }`. Each
 `AttachmentRef` is a workspace-relative `path` that resolves to either a
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
@@ -177,9 +182,10 @@ forwards each path to opencode via a `--file` flag (opencode accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
 
-When `goal` is provided, it is persisted to `chats.goal`. When omitted and the
-chat does not already have a goal, the server infers a goal from clear message
-text and persists that instead.
+When `goal` is a string, it is persisted to `chats.goal`. When `goal` is `null`,
+the chat goal is cleared for that send. When omitted and the chat does not
+already have a goal, the server infers a goal from clear message text and
+persists that instead.
 
 ### PATCH /chats/{id}/messages/{messageId}
 

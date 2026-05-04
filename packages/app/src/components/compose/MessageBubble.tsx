@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, StickyNote } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
@@ -131,13 +131,27 @@ function MessageContentView({
       if (!developerMode) return null
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'note':
+      if (!developerMode) return null
+      return <NoteView body={content.body} />
     case 'ai_note_request':
     case 'agent_turn':
-      // Filtered out of the bubble stream upstream — notes surface in the
-      // Artifacts panel; ai_note_request / agent_turn drive the typing
-      // indicator. Render nothing if a stray row reaches this layer.
+      // Filtered out of the bubble stream upstream. ai_note_request /
+      // agent_turn drive the typing indicator. Render nothing if a stray row
+      // reaches this layer.
       return null
   }
+}
+
+function NoteView({ body }: { body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed bg-muted/20 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <StickyNote className="h-3.5 w-3.5" />
+        Chat note
+      </div>
+      <MarkdownContent text={body} />
+    </div>
+  )
 }
 
 function basenamePath(path: string) {

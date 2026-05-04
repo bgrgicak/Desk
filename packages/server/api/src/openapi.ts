@@ -3,6 +3,8 @@
  * Covers all v1 routes with request/response shapes.
  */
 
+import { GOAL_KEYS } from "@agent-desk/shared";
+
 interface OpenApiSpec {
   openapi: string;
   info: { title: string; version: string; description: string };
@@ -251,7 +253,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     title: { type: "string" },
-                    goal: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal. Pass null to clear it.",
+                    },
                     agentId: { type: "string", description: "Must be an agent enabled in this chat's workspace." },
                   },
                 },
@@ -282,6 +288,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal for this send. Omit to keep/infer; pass null to clear the chat goal.",
+                    },
                     attachments: {
                       type: "array",
                       description: "Files the user attached to this message. Each item references a file already uploaded via POST /chats/{id}/attachments — the path is workspace-relative, forward-slash separated.",

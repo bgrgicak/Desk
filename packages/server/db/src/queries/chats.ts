@@ -8,8 +8,9 @@ import {
   type MessageKind,
 } from "@agent-desk/shared";
 
-function validateGoal(goal: string | undefined): GoalKey | undefined {
+function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
   if (goal === undefined) return undefined;
+  if (goal === null) return null;
   if (!(GOAL_KEYS as readonly string[]).includes(goal)) {
     throw new ValidationError(`Invalid chat goal: ${goal}`);
   }
@@ -104,7 +105,7 @@ export async function insert(
 export async function updateMeta(
   db: Pool,
   id: string,
-  data: { title?: string; goal?: string; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string },
 ): Promise<Chat | null> {
   const goal = validateGoal(data.goal);
 

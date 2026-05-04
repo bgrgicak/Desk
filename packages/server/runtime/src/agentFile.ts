@@ -39,6 +39,11 @@ export interface AgentFileInput {
    * agent has the same goal context across the whole conversation.
    */
   goal?: GoalKey | null;
+  /**
+   * Summary runs are internal note refreshes. They get a narrow prompt that
+   * returns markdown only and never writes artifacts.
+   */
+  runMode?: "chat" | "summary";
 }
 
 /**
@@ -60,6 +65,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     userTimezone: input.userTimezone,
     chatId: input.chatId,
     goal: input.goal ?? null,
+    runMode: input.runMode ?? "chat",
   });
 
   return `${frontmatter}\n\n${body}\n`;

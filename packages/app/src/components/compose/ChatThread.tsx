@@ -10,7 +10,6 @@ import type { AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from
 const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
   'agent_turn',
   'ai_note_request',
-  'note',
 ])
 
 const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
@@ -36,6 +35,7 @@ function eventsHasUserText(log: AgentLogEntry[]): boolean {
 
 export function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
   if (m.kind === 'task_run' && !developerMode) return false
+  if (m.content.type === 'note') return developerMode
   if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
   if (developerMode) return true
   if (TOOL_CONTENT_TYPES.has(m.content.type)) return false

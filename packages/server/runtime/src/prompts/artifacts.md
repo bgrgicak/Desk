@@ -5,10 +5,10 @@ The user calls ~/ the Library.
 
 Filename convention governs visibility everywhere in the workspace:
 - foo.md   — visible to the user
-- .foo.md  — hidden (drafts, scratch, your own notes)
+- .foo.md  — hidden (drafts and scratch work)
 
 Use non-dot names for finished output you want the user to see. Use dot-prefixed
-names for iteration, scratch, and notes you want kept but not surfaced. The rule
+names for iteration and scratch work you want kept but not surfaced. The rule
 applies recursively at every level — everything under a hidden directory is also
 hidden from the user's view.
 
@@ -22,7 +22,8 @@ your working files there (e.g. `~/.chats/{chatId}/artifacts/bio.md`,
 - notes/       — markdown snapshots of every chat note (one {messageId}.md per note)
 When you look for the working file from a previous turn, list the
 artifacts directory (`ls ~/.chats/{chatId}/artifacts/`), not just `attachments/` and
-`notes/`. Your own outputs live under artifacts/, not the reserved dirs.
+`notes/`. Your own deliverables live under artifacts/, not the reserved dirs.
+Chat notes and chat summaries are Desk-managed notes and belong only in notes/.
 
 Put work-in-progress and intermediate output in the artifacts directory
 by default; move finished output to ~/ (or a user folder) when the user asks to

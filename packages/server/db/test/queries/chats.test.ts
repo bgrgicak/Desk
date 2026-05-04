@@ -220,6 +220,12 @@ describe("chats queries", () => {
       .rejects.toThrow(/Invalid chat goal/);
   });
 
+  it("clears a persisted chat goal when goal is null", async () => {
+    await chats.updateMeta(pool, chatId, { goal: "document" });
+    const cleared = await chats.updateMeta(pool, chatId, { goal: null });
+    expect(cleared?.goal).toBeUndefined();
+  });
+
   it("updates meta", async () => {
     const updated = await chats.updateMeta(pool, chatId, { title: "Renamed Chat" });
     expect(updated).not.toBeNull();

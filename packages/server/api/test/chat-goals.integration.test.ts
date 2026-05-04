@@ -177,6 +177,24 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("document");
   });
 
+  it("JSON path: explicit null goal clears chats.goal and prevents inference on that send", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "first", goal: "document" },
+      () => {},
+    );
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "build me an app", goal: null },
+      () => {},
+    );
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBeUndefined();
+  });
+
   it("JSON path: message content does not embed the goal", async () => {
     const chatId = await freshChat();
     const { userMessage } = await sendMessage(
@@ -214,5 +232,25 @@ describe("goal persistence on send", () => {
     await sendMessage(pool, chatId, body, () => {});
     const chat = await queries.chats.findById(pool, chatId);
     expect(chat?.goal).toBe("site");
+  });
+
+  it("multipart path: empty goal field clears chats.goal", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "first", goal: "document" },
+      () => {},
+    );
+    const form = new FormData();
+    form.set("content", "build me an app");
+    form.set("goal", "");
+
+    const body = await buildSendMessageBodyFromForm(storage, chatId, form);
+    expect(body).toMatchObject({ content: "build me an app", goal: null });
+
+    await sendMessage(pool, chatId, body, () => {});
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBeUndefined();
   });
 });

@@ -141,6 +141,37 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
+   * Notes should be a clean final markdown body. If the model used tools, keep
+   * the last text event instead of concatenating planning chatter with the
+   * final answer.
+   */
+  function deriveNoteTextFromLog(entries: AgentLogEntry[]): string {
+    let sawEvent = false;
+    let lastText = "";
+    for (const e of entries) {
+      if (e.kind !== "event") continue;
+      sawEvent = true;
+      if (e.event.type === "text") {
+        const t = e.event.part?.text;
+        if (typeof t === "string" && t.trim()) lastText = t;
+      }
+    }
+    if (lastText) return lastText.trim();
+    if (sawEvent) return "";
+    return entries
+      .filter((e) => e.kind === "unparsed")
+      .map((e) => (e as { line: string }).line)
+      .join("\n")
+      .trim();
+  }
+
+  const CHAT_SUMMARY_PROMPT = [
+    "Refresh this chat's running summary note.",
+    "Return only the final markdown body; do not create files, write artifacts, or attach artifacts.",
+    "Use the chat-summary format described in the agent instructions.",
+  ].join("\n");
+
+  /**
    * Returns the prompt the agent will receive plus any workspace-relative
    * attachment paths to forward to opencode via `--file`. We don't inline
    * paths into the prompt: opencode surfaces the file content directly,
@@ -153,7 +184,7 @@ export function createRunManager(opts: RunManagerOptions) {
     // Self-firing kinds (task / ai_note) carry the prompt directly on the
     // message — no parent lookup needed.
     if (msg.kind === "ai_note") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+      return { prompt: CHAT_SUMMARY_PROMPT };
     }
     if (msg.kind === "task") {
       const c = msg.content as { type?: string; text?: string };
@@ -165,7 +196,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
     if (c?.type === "text" && typeof c.text === "string") return { prompt: c.text };
     if (c?.type === "ai_note_request") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+      return { prompt: CHAT_SUMMARY_PROMPT };
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
@@ -189,7 +220,7 @@ export function createRunManager(opts: RunManagerOptions) {
     entries: AgentLogEntry[],
   ): Message["content"] | null {
     if (kind === "note") {
-      const body = deriveTextFromLog(entries);
+      const body = deriveNoteTextFromLog(entries);
       if (!body) return null;
       return { type: "note", body };
     }
@@ -334,6 +365,7 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
         chatId: msg.chatId,
         goal: chatGoal,
+        runMode: outputKind === "note" ? "summary" : "chat",
       };
 
       let result: { exitCode: number };
