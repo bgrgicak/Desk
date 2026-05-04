@@ -136,15 +136,14 @@ export interface ServerFile {
   createdAt: string;
   /**
    * Set on `GET /chats/{id}/attachments` items only — `attachment` is a
-   * user upload from `.chats/{id}/attachments/`, `note` is a materialized
-   * note from `.chats/{id}/notes/`. Library responses omit it.
+   * user upload from `.chats/{id}/attachments/`, `artifact` is an
+   * agent-written file or directory from `.chats/{id}/artifacts/`. Library
+   * responses omit it.
    */
-  kind?: "attachment" | "note";
-  /**
-   * Optional human-friendly label rendered alongside the raw file name.
-   * Notes carry "Chat notes" so the UI doesn't surface the messageId-based
-   * filename as the primary label.
-   */
+  kind?: "attachment" | "artifact";
+  /** True when the entry is a directory rather than a regular file. */
+  isDir?: boolean;
+  /** Optional human-friendly label rendered alongside the raw file name. */
   label?: string;
   /** ID of the agent that last created or edited this file, if known. */
   agentId?: string;

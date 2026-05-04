@@ -104,6 +104,12 @@ export async function chatAttachmentsDir(
   return dir;
 }
 
+/** Returns the absolute path to a chat's agent-artifacts directory. Does not create it. */
+export function chatArtifactsDir(home: string, slug: string, chatId: string): string {
+  validateId(chatId, ID_PREFIXES.chat);
+  return path.join(workspaceRoot(home, slug), ".chats", chatId, "artifacts");
+}
+
 /** Returns the temp directory for in-progress uploads. */
 export function tmpDir(home: string): string {
   return path.join(home, "Desk", ".tmp");

@@ -578,16 +578,16 @@ export const api = createApi({
     // "attachments" covers both user-visible chat files (non-dot) and
     // agent-generated artifacts (dot-prefixed). Pass showHidden=true to
     // include the artifact set for the chat's Artifacts panel. Pass
-    // includeNotes=true to also include the chat's materialized note
-    // mirrors (.chats/{id}/notes/) — used by the Files panel.
+    // includeArtifacts=true to also include agent-written files/dirs from
+    // .chats/{id}/artifacts/ — used by the Files panel.
     getChatArtifacts: build.query<
       ServerFile[],
-      { chatId: string; showHidden?: boolean; includeNotes?: boolean }
+      { chatId: string; showHidden?: boolean; includeArtifacts?: boolean }
     >({
-      query: ({ chatId, showHidden, includeNotes }) => {
+      query: ({ chatId, showHidden, includeArtifacts }) => {
         const params = new URLSearchParams()
         if (showHidden) params.set("showHidden", "true")
-        if (includeNotes) params.set("includeNotes", "true")
+        if (includeArtifacts) params.set("includeArtifacts", "true")
         const qs = params.toString()
         return qs
           ? `/chats/${chatId}/attachments?${qs}`

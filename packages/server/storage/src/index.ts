@@ -4,6 +4,7 @@ export {
   renameWorkspaceDir,
   trashWorkspaceDir,
   chatAttachmentsDir,
+  chatArtifactsDir,
   chatsDir,
   resolveDeskHome,
   resolveHostPath,

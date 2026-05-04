@@ -8,6 +8,7 @@ import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
+  chatArtifactsDir,
   chatAttachmentsDir,
   listNoteHistory,
   materializeNote,
@@ -474,7 +475,9 @@ export async function getMessageLogs(
  * doesn't expose the messageId-based filename as the primary label).
  */
 export type ChatFileRef = FileRef & {
-  kind: "attachment" | "note";
+  kind: "attachment" | "artifact";
+  /** True when the entry is a directory rather than a regular file. */
+  isDir?: boolean;
   label?: string;
 };
 
@@ -483,15 +486,16 @@ export type ChatFileRef = FileRef & {
  * visible (non-dot) entries — the user-uploaded chat files plus any
  * agent-finalized output. Passing `showHidden: true` includes agent
  * artifacts (dot-prefixed drafts / scratch) for the chat Artifacts panel
- * or a diagnostic view. Passing `includeNotes: true` also walks
- * `.chats/{id}/notes/` so the chat Files panel can show note mirrors
- * alongside uploads — each item is tagged with `kind` so the UI can
- * render them differently.
+ * or a diagnostic view. Passing `includeArtifacts: true` also walks
+ * `.chats/{id}/artifacts/` so the chat Files panel can show agent-written
+ * files alongside uploads — each item is tagged with `kind` so the UI can
+ * render them differently. Directories in `artifacts/` are included and
+ * marked with `isDir: true`.
  */
 export async function listAttachments(
   storage: StorageContext,
   chatId: string,
-  opts?: { showHidden?: boolean; includeNotes?: boolean },
+  opts?: { showHidden?: boolean; includeArtifacts?: boolean },
 ): Promise<ChatFileRef[]> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
   const root = workspaceRootPath(storage.home, slug);
@@ -516,25 +520,24 @@ export async function listAttachments(
     });
   }
 
-  if (opts?.includeNotes) {
-    const nDir = notesDir(storage.home, slug, chatId);
-    const noteNames = await fs.readdir(nDir).catch(() => [] as string[]);
-    for (const name of noteNames) {
-      // Notes are always materialized as `{messageId}.md`; skip anything
-      // that doesn't match so a stray dotfile doesn't show up.
-      if (!name.endsWith(".md")) continue;
-      const abs = path.join(nDir, name);
+  if (opts?.includeArtifacts) {
+    const artDir = chatArtifactsDir(storage.home, slug, chatId);
+    const artNames = await fs.readdir(artDir).catch(() => [] as string[]);
+    for (const name of artNames) {
+      if (!showHidden && name.startsWith(".")) continue;
+      const abs = path.join(artDir, name);
       const stat = await fs.stat(abs).catch(() => null);
-      if (!stat || !stat.isFile()) continue;
+      if (!stat) continue;
+      const isDir = stat.isDirectory();
       out.push({
         path: path.relative(root, abs).split(path.sep).join("/"),
         name,
-        mime: "text/markdown",
+        mime: isDir ? "inode/directory" : "application/octet-stream",
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
         updatedAtMs: String(stat.mtimeMs),
-        kind: "note",
-        label: "Chat notes",
+        kind: "artifact",
+        isDir,
       });
     }
   }

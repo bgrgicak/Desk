@@ -400,11 +400,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/attachments": {
         get: {
           summary: "List chat attachments",
-          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeNotes=true to also include the chat's materialized note mirrors from `.chats/{id}/notes/`. Each item carries a `kind` field: \"attachment\" or \"note\".",
+          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeArtifacts=true to also include agent-written files/dirs from `.chats/{id}/artifacts/`. Each item carries a `kind` field: \"attachment\" or \"artifact\".",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "showHidden", in: "query", schema: { type: "boolean" } },
-            { name: "includeNotes", in: "query", schema: { type: "boolean" } },
+            { name: "includeArtifacts", in: "query", schema: { type: "boolean" } },
           ],
           responses: { "200": { description: "File array" } },
         },

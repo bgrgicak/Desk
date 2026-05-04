@@ -612,10 +612,10 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const showHidden = query.get("showHidden") === "true";
-      const includeNotes = query.get("includeNotes") === "true";
+      const includeArtifacts = query.get("includeArtifacts") === "true";
       const result = await chatRoutes.listAttachments(storage, segments[1], {
         showHidden,
-        includeNotes,
+        includeArtifacts,
       });
       sendJson(res, 200, result);
       return;

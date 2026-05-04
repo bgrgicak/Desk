@@ -82,6 +82,8 @@ const CHAT_ATTACHMENT_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/attachments\/([^/]+)$/;
 const CHAT_NOTE_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/notes\/([^/]+\.md)$/;
+const CHAT_ARTIFACT_PATTERN =
+  /^\.chats\/(cht_[A-Za-z0-9_-]+)\/artifacts\/.+$/;
 
 export async function requireReadablePathInWorkspace(
   pool: Pool,
@@ -97,6 +99,11 @@ export async function requireReadablePathInWorkspace(
   const note = relPath.match(CHAT_NOTE_PATTERN);
   if (note) {
     await requireOwnedChat(pool, note[1], userId);
+    return;
+  }
+  const artifact = relPath.match(CHAT_ARTIFACT_PATTERN);
+  if (artifact) {
+    await requireOwnedChat(pool, artifact[1], userId);
     return;
   }
   requireLibraryPathInWorkspace(relPath, workspaceId);

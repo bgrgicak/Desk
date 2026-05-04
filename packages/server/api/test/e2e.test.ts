@@ -716,7 +716,7 @@ describe("API e2e (real Postgres)", () => {
     expect(finalFiles).toContain("DirUpload/Renamed/root.txt");
   });
 
-  it("GET /chats/:id/attachments?includeNotes=true returns attachments + materialized notes with `kind` discriminator", async () => {
+  it("GET /chats/:id/attachments returns attachments tagged with kind='attachment' and excludes notes", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string; path: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -729,9 +729,6 @@ describe("API e2e (real Postgres)", () => {
     });
     const chat = chatRes.body as { id: string };
 
-    // Drop one user attachment in `.chats/{id}/attachments/` by sending
-    // a multipart message — the attachment endpoint was deleted; uploads
-    // now ride on POST /chats/{id}/messages.
     const upRes = await requestMultipart(
       "POST",
       `/chats/${chat.id}/messages`,
@@ -743,34 +740,16 @@ describe("API e2e (real Postgres)", () => {
     );
     expect(upRes.status).toBe(201);
 
-    // And materialize a note directly into `.chats/{id}/notes/` so we
-    // exercise the includeNotes branch without driving the scheduler.
+    // Materialize a note so we can verify it is NOT returned in the attachments list.
     const fakeMessageId = "msg_notespec000000000000000";
     await materializeNote(home, workspaces[0].path, chat.id, fakeMessageId, "note body");
 
-    // Default: notes are hidden — only the attachment is returned.
-    const defaultRes = await request("GET", `/chats/${chat.id}/attachments`, token);
-    expect(defaultRes.status).toBe(200);
-    const defaultBody = defaultRes.body as Array<{ name: string; kind: string }>;
-    expect(defaultBody.map((f) => f.name)).toContain("notes-spec.txt");
-    expect(defaultBody.map((f) => f.name)).not.toContain(`${fakeMessageId}.md`);
-    // Existing callers shouldn't break — every attachment is tagged.
-    expect(defaultBody.every((f) => f.kind === "attachment")).toBe(true);
-
-    // includeNotes=true: both kinds, both tagged.
-    const withNotesRes = await request(
-      "GET",
-      `/chats/${chat.id}/attachments?includeNotes=true`,
-      token,
-    );
-    expect(withNotesRes.status).toBe(200);
-    const withNotes = withNotesRes.body as Array<{ name: string; kind: string; mime: string; path: string }>;
-    const att = withNotes.find((f) => f.name === "notes-spec.txt");
-    const note = withNotes.find((f) => f.name === `${fakeMessageId}.md`);
-    expect(att?.kind).toBe("attachment");
-    expect(note?.kind).toBe("note");
-    expect(note?.mime).toBe("text/markdown");
-    expect(note?.path).toBe(`.chats/${chat.id}/notes/${fakeMessageId}.md`);
+    const res = await request("GET", `/chats/${chat.id}/attachments`, token);
+    expect(res.status).toBe(200);
+    const body = res.body as Array<{ name: string; kind: string }>;
+    expect(body.map((f) => f.name)).toContain("notes-spec.txt");
+    expect(body.map((f) => f.name)).not.toContain(`${fakeMessageId}.md`);
+    expect(body.every((f) => f.kind === "attachment")).toBe(true);
   });
 
   // Gap 6: Fuzzy search returns uploaded artifact and chat
