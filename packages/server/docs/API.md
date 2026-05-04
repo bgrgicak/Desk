@@ -215,8 +215,10 @@ Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
 written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/notes/.history/`. Empty array when
-nothing has been snapshotted yet.
+`~/Desk/workspaces/desk/.chats/{chatId}/notes/.history/`. The endpoint also
+reads legacy `.chats/{chatId}/note-history/` and
+`.chats/{chatId}/summary-history/` snapshots for compatibility. Empty array
+when nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire
 
@@ -232,7 +234,8 @@ writes a file. Body is `{ chatId, path, name?, mime? }`, where `path` is a
 workspace-relative path to an existing file, usually
 `.chats/{chatId}/artifacts/{file}`. Inserts an agent message with
 `content: { type: "artifactRef", path, name?, mime? }` and emits
-`message.appended`.
+`message.appended`. Tokens minted for internal summary refresh runs are
+rejected so summaries cannot surface files as artifacts.
 
 ### POST /me/password
 

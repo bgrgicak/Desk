@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
+import { queries } from "@agent-desk/db";
 import { DeskError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
 import { chatArtifactsDir, resolveHostPath, workspaceRootPath, type StorageContext } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
@@ -399,6 +400,15 @@ export function createApp(opts: AppOptions): Server {
       const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
       if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
         throw new NotFoundError(`Chat not found: ${body.chatId}`);
+      }
+      if (session.runId) {
+        const runMessage = await queries.messages.findById(pool, session.runId);
+        if (!runMessage) {
+          throw new ValidationError("Sandbox run is no longer active");
+        }
+        if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+          throw new ValidationError("Summary runs cannot attach artifacts");
+        }
       }
 
       const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {

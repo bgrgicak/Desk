@@ -412,6 +412,34 @@ describe("Summary versioning via summary-history", () => {
     expect(versions.length).toBeGreaterThanOrEqual(1);
     expect(versions[0].body).toContain("vacation plans");
   });
+
+  it("surfaces legacy note-history snapshots after the summary rename", async () => {
+    const requestId = await insertPendingMessage({ type: "summary_request" });
+    const { childIds } = await runManager.fireMessage(requestId);
+    const summaryId = childIds[0];
+    const legacyNoteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "note-history");
+    const legacySummaryDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "summary-history");
+    await fs.mkdir(legacyNoteDir, { recursive: true });
+    await fs.mkdir(legacySummaryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(legacyNoteDir, `2026-05-04T10-00-00.000Z-${summaryId}.md`),
+      "Legacy note-history body.",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(legacySummaryDir, `2026-05-04T10-01-00.000Z-${summaryId}.md`),
+      "Legacy summary-history body.",
+      "utf-8",
+    );
+
+    const history = await userRequest(
+      "GET",
+      `/chats/${chatId}/messages/${summaryId}/summary-history`,
+    );
+    const versions = (history.body as { versions: Array<{ body: string }> }).versions;
+    expect(versions.some((version) => version.body === "Legacy note-history body.")).toBe(true);
+    expect(versions.some((version) => version.body === "Legacy summary-history body.")).toBe(true);
+  });
 });
 
 describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {

@@ -530,7 +530,7 @@ export function createRunManager(opts: RunManagerOptions) {
     await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
-  /** Schedules a summary refresh for the chat, deleting any prior summary rows first. */
+  /** Schedules a summary refresh for the chat, replacing any still-pending refresh. */
   async function scheduleSummary(chatId: string): Promise<void> {
     await cancelSummaryForChat(chatId);
     const messageId = generateId("message");
@@ -547,7 +547,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function cancelSummaryForChat(chatId: string): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary'`,
+      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
       [chatId],
     );
   }

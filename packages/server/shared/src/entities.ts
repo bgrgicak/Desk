@@ -246,6 +246,8 @@ export type File = z.infer<typeof FileSchema>;
 export const SandboxSessionSchema = z.object({
   id: z.string(),
   agentId: z.string(),
+  /** Message/run id this token was minted for. Used to gate run-scoped APIs. */
+  runId: z.string().optional(),
   /** Workspace whose sandbox container this token was minted for.
    * Optional for historical sessions from before the multi-workspace split. */
   workspaceId: z.string().optional(),

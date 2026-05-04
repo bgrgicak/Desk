@@ -160,11 +160,12 @@ function httpJson(
   });
 }
 
-async function issueSandboxToken(): Promise<string> {
+async function issueSandboxToken(opts?: { runId?: string }): Promise<string> {
   const token = `tok_${crypto.randomBytes(16).toString("hex")}`;
   await queries.sandboxSessions.issue(pool, {
     id: generateId("sandboxSession"),
     agentId,
+    runId: opts?.runId,
     workspaceId,
     tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
   });
@@ -234,6 +235,88 @@ describe("POST /sandbox/artifacts", () => {
     );
 
     expect(res.status).toBe(404);
+  });
+
+  it("rejects artifact attachment from a live summary run token", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "summary-leak.md"), "# Should not attach\n", "utf8");
+
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind)
+       VALUES (?, ?, 'system', ?, 'running', 'summary')`,
+      [runId, chatId, JSON.stringify({ type: "summary_request" })],
+    );
+    const token = await issueSandboxToken({ runId });
+
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId, path: `.chats/${chatId}/artifacts/summary-leak.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("summary-leak.md")
+    ))).toBe(false);
+  });
+
+  it("rejects artifact attachment from a summary_request content token even without summary kind", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "summary-request-leak.md"), "# Should not attach\n", "utf8");
+
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state)
+       VALUES (?, ?, 'system', ?, 'running')`,
+      [runId, chatId, JSON.stringify({ type: "summary_request" })],
+    );
+    const token = await issueSandboxToken({ runId });
+
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId, path: `.chats/${chatId}/artifacts/summary-request-leak.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("summary-request-leak.md")
+    ))).toBe(false);
+  });
+
+  it("rejects artifact attachment from a deleted run token", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "deleted-run-leak.md"), "# Should not attach\n", "utf8");
+
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state)
+       VALUES (?, ?, 'system', ?, 'running')`,
+      [runId, chatId, JSON.stringify({ type: "agent_turn", userMessageId: generateId("message") })],
+    );
+    const token = await issueSandboxToken({ runId });
+    await pool.query("DELETE FROM messages WHERE id = ?", [runId]);
+
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId, path: `.chats/${chatId}/artifacts/deleted-run-leak.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("deleted-run-leak.md")
+    ))).toBe(false);
   });
 });
 

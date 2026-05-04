@@ -211,25 +211,29 @@ describe("concurrency cap", () => {
 // ── summary pruning ──────────────────────────────────────────────────────────
 
 describe("summary pruning", () => {
-  it("scheduleSummary deletes all existing summary rows for the chat, including completed ones", async () => {
+  it("scheduleSummary deletes pending summary rows without touching running or completed rows", async () => {
     const rm = makeRunManager();
 
     const oldSucceeded = generateId("message");
+    const oldRunning = generateId("message");
     const oldPending = generateId("message");
 
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, kind)
        VALUES (?, ?, 'system', ?, 'succeeded', 'summary'),
+              (?, ?, 'system', ?, 'running',   'summary'),
               (?, ?, 'system', ?, 'pending',   'summary')`,
       [
         oldSucceeded, chatId, JSON.stringify({ type: "summary_request" }),
+        oldRunning, chatId, JSON.stringify({ type: "summary_request" }),
         oldPending, chatId, JSON.stringify({ type: "summary_request" }),
       ],
     );
 
     await rm.scheduleSummary(chatId);
 
-    expect(await queries.messages.findById(pool, oldSucceeded)).toBeNull();
+    expect(await queries.messages.findById(pool, oldSucceeded)).not.toBeNull();
+    expect(await queries.messages.findById(pool, oldRunning)).not.toBeNull();
     expect(await queries.messages.findById(pool, oldPending)).toBeNull();
 
     // A new pending summary must have been created

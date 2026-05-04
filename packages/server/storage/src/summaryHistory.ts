@@ -98,24 +98,38 @@ export async function listSummaryHistory(
   messageId: string,
 ): Promise<SummaryVersion[]> {
   validateMessageId(messageId);
-  const dir = summaryHistoryDir(home, slug, chatId);
-  let entries: string[];
-  try {
-    entries = await fs.readdir(dir);
-  } catch {
-    return [];
-  }
-  const matching = entries.filter((name) => name.endsWith(`-${messageId}.md`));
-  matching.sort((a, b) => (a > b ? -1 : 1));
+  const dirs = [
+    summaryHistoryDir(home, slug, chatId),
+    ...legacySummaryHistoryDirs(home, slug, chatId),
+  ];
   const versions: SummaryVersion[] = [];
-  for (const name of matching) {
-    const body = await fs.readFile(path.join(dir, name), "utf-8");
-    const isoPart = name.slice(0, -`-${messageId}.md`.length);
-    // Restore the colons we stripped for filesystem safety.
-    const restored = restoreIsoColons(isoPart);
-    versions.push({ timestamp: restored, body });
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      continue;
+    }
+    const matching = entries.filter((name) => name.endsWith(`-${messageId}.md`));
+    for (const name of matching) {
+      const body = await fs.readFile(path.join(dir, name), "utf-8");
+      const isoPart = name.slice(0, -`-${messageId}.md`.length);
+      // Restore the colons we stripped for filesystem safety.
+      const restored = restoreIsoColons(isoPart);
+      versions.push({ timestamp: restored, body });
+    }
   }
+  versions.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
   return versions;
+}
+
+function legacySummaryHistoryDirs(home: string, slug: string, chatId: string): string[] {
+  validateChatId(chatId);
+  const chatDir = path.join(workspaceRootPath(home, slug), ".chats", chatId);
+  return [
+    path.join(chatDir, "note-history"),
+    path.join(chatDir, "summary-history"),
+  ];
 }
 
 function restoreIsoColons(stripped: string): string {

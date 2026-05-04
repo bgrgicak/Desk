@@ -374,7 +374,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}/summary-history": {
         get: {
           summary: "List archived versions of a summary-content message",
-          description: "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/notes/.history/. This endpoint returns every snapshot, newest first.",
+          description: "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/notes/.history/. This endpoint returns every snapshot, newest first, and also reads legacy .chats/{chatId}/note-history/ and .chats/{chatId}/summary-history/ directories for compatibility.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
