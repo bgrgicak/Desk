@@ -29,9 +29,8 @@ export interface AgentFileInput {
    */
   userTimezone?: string;
   /**
-   * Chat the agent is responding in. When set, the workbench fragment
-   * names the per-chat workbench paths so the agent reads real paths
-   * instead of guessing.
+   * Chat the agent is responding in. When set, the artifacts fragment
+   * names the per-chat paths so the agent reads real paths instead of guessing.
    */
   chatId?: string;
   /**

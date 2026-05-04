@@ -151,7 +151,7 @@ function createRealDriver(): SandboxDriver {
 
       const handle = await createOrReuse(workspaceId, opts.workspaceSlug, undefined, opts.providerKeys);
 
-      // The system prompt — including the per-chat workbench paths and the
+      // The system prompt — including the per-chat artifact paths and the
       // user's goal fragment — lives entirely in the OpenCode agent file
       // written by writeAgentFile, so the per-turn prompt is just the
       // user's text.

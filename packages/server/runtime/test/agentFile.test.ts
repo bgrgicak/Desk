@@ -25,7 +25,7 @@ describe("renderAgentFile", () => {
     // Dotfile visibility rule
     expect(result).toContain("foo.md");
     expect(result).toContain(".foo.md");
-    // Per-chat workbench
+    // Per-chat artifacts
     expect(result).toContain("~/.chats/");
 
     // Inlined skills — desk-cli skill must appear before the user
@@ -80,7 +80,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("RUN `desk-agent task schedule`");
   });
 
-  it("renders the per-chat workbench paths when chatId is supplied", () => {
+  it("renders the per-chat artifact paths when chatId is supplied", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
       agentName: "Helper",
@@ -90,7 +90,7 @@ describe("renderAgentFile", () => {
       chatId: "cht_abc",
     });
 
-    expect(result).toContain("Current chat workbench: ~/.chats/cht_abc/");
+    expect(result).toContain("Chat artifacts:   ~/.chats/cht_abc/artifacts/");
     expect(result).toContain("Chat attachments: ~/.chats/cht_abc/attachments/");
     expect(result).toContain("Chat notes:       ~/.chats/cht_abc/notes/");
   });
@@ -180,27 +180,27 @@ describe("renderAgentFile", () => {
       User files live at ~/ and under folders they've created. Follow their
       organization when placing new files. Don't modify user files unless asked.
 
-      Each conversation has a workbench at ~/.chats/{chatId}/. You write your
-      own working files at the workbench root (e.g.
-      \`~/.chats/{chatId}/bio.md\`, \`~/.chats/{chatId}/focus-timer.html\`). Two
-      subdirs are reserved:
+      Each conversation has an artifacts directory at ~/.chats/{chatId}/artifacts/. Write
+      your working files there (e.g. \`~/.chats/{chatId}/artifacts/bio.md\`,
+      \`~/.chats/{chatId}/artifacts/focus-timer.html\`). Two sibling directories are reserved:
       - attachments/ — files the user attached to messages in this chat
       - notes/       — markdown snapshots of every chat note (one {messageId}.md per note)
       When you look for the working file from a previous turn, list the
-      workbench ROOT (\`ls ~/.chats/{chatId}/\`), not just \`attachments/\` and
-      \`notes/\`. Your own outputs live at the root, not under the reserved
-      subdirs.
+      artifacts directory (\`ls ~/.chats/{chatId}/artifacts/\`), not just \`attachments/\` and
+      \`notes/\`. Your own outputs live under artifacts/, not the reserved dirs.
 
-      Put work-in-progress and intermediate output under the current chat's workbench
+      Put work-in-progress and intermediate output in the artifacts directory
       by default; move finished output to ~/ (or a user folder) when the user asks to
       keep it.
 
       **Save before replying.** Whenever you produce output the user might want to
-      keep, refer back to, revise, or share — write it to a file under the chat
-      workbench BEFORE you reply, and mention the path in the reply. This applies
-      even when the output is short (a thank-you note, a 2-sentence bio, a 5-item
-      packing list). Inline-only is for one-shot factual answers (definitions,
-      calculations, quick yes/nos) that the user will not want to come back to.
+      keep, refer back to, revise, or share — write it to a file in the artifacts directory
+      BEFORE you reply. This applies even when the output is short (a thank-you note,
+      a 2-sentence bio, a 5-item packing list). Inline-only is for one-shot factual
+      answers (definitions, calculations, quick yes/nos) that the user will not want
+      to come back to.
+
+
 
       **Create-don't-move.** If the user asks you to save / keep / move / promote
       something to their Library and no working file exists yet (because you only
@@ -208,11 +208,11 @@ describe("renderAgentFile", () => {
       because there's nothing to move from — produce the right artifact at the
       right path.
 
-      When the user asks what files you can see, enumerate the attachments/ and
-      notes/ directories for the current chat plus the visible files under ~/ —
+      When the user asks what files you can see, enumerate the artifacts/ and
+      attachments/ directories for the current chat plus the visible files under ~/ —
       don't guess. All three are real directories on disk.
 
-      Don't recite the workbench paths or chat structure unprompted. They're for
+      Don't recite the artifact paths or chat structure unprompted. They're for
       your reference, not boilerplate to repeat in every reply.
 
       ## Resolving file references
@@ -422,10 +422,10 @@ describe("renderAgentFile", () => {
       goal: "document",
     });
     // Spot-check the goal fragment + chat path render together.
-    expect(result).toContain("Current chat workbench: ~/.chats/chat-x/");
+    expect(result).toContain("Chat artifacts:   ~/.chats/chat-x/artifacts/");
     expect(result).toContain("## User's goal: write a document");
-    // Ordering: workbench (chatId) renders before goal, goal before skills.
-    expect(result.indexOf("Current chat workbench: ~/.chats/chat-x/"))
+    // Ordering: artifacts (chatId) renders before goal, goal before skills.
+    expect(result.indexOf("Chat artifacts:   ~/.chats/chat-x/artifacts/"))
       .toBeLessThan(result.indexOf("## User's goal: write a document"));
     expect(result.indexOf("## User's goal: write a document"))
       .toBeLessThan(result.indexOf("# Desk CLI"));

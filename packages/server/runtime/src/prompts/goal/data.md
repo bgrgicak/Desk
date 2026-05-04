@@ -6,7 +6,7 @@ on the same dataset.
 
 Default behaviors for data work:
 - Keep the working data file (CSV, JSON, or markdown table) under the chat
-  workbench. Update it in place across turns rather than restating it in
+  artifacts. Update it in place across turns rather than restating it in
   chat.
 - When asked to summarize or transform data, do the work and report the
   result file's path plus a one-sentence summary; don't paste large tables

@@ -69,11 +69,14 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
     }),
   (input) => {
     const chatPaths = input.chatId
-      ? `\nCurrent chat workbench: ~/.chats/${input.chatId}/\n` +
+      ? `\nChat artifacts:   ~/.chats/${input.chatId}/artifacts/\n` +
         `Chat attachments: ~/.chats/${input.chatId}/attachments/\n` +
         `Chat notes:       ~/.chats/${input.chatId}/notes/\n`
       : "";
-    return loadAndSub("workbench.md", { chatPaths });
+    const attachArtifactInstruction = input.chatId
+      ? `**Surface in chat.** After writing a new artifact or making a significant update, call \`chat.attach_artifact\` with \`chatId\` \`${input.chatId}\` and \`path\` set to the file's workspace-relative path (strip the leading \`~/\`, so \`~/.chats/…/foo.html\` becomes \`.chats/…/foo.html\`). Do the same when the user asks to see or open an artifact. Skip for minor edits that don't change what the user sees.`
+      : "";
+    return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
   (input) =>
     input.userTimezone

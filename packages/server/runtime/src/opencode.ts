@@ -55,7 +55,7 @@ export async function execRun(
 
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
-  // single-bind workspace mount. The per-chat workbench paths and any
+  // single-bind workspace mount. The per-chat artifact paths and any
   // goal fragment are part of the rendered system prompt — no separate
   // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);

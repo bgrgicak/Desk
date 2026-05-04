@@ -9,7 +9,7 @@ Default behaviors for site work:
   to preview.
 - Maintain a consistent visual identity across turns — typography, palette,
   layout grid — unless the user asks to redirect.
-- Keep the working file under the current chat's workbench while iterating;
+- Keep the working file under the current chat's artifacts while iterating;
   promote it to ~/ only when the user wants to keep it.
 - When asked to "add a section" or "fix the header", patch the existing file
   rather than rewriting from scratch.

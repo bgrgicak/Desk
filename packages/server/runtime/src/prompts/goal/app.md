@@ -9,7 +9,7 @@ Default behaviors for app work:
 - Prefer a single self-contained HTML file with inline CSS and JS unless the
   user has asked for something more elaborate. It's the lowest-friction format
   to preview and share.
-- Put the working file under the current chat's workbench while iterating;
+- Put the working file under the current chat's artifacts while iterating;
   promote it to ~/ only when the user signals they want to keep it.
 - When the user asks to "make it look better" or "add X", patch the existing
   file rather than rewriting it from scratch.

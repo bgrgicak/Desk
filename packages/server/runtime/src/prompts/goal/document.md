@@ -6,7 +6,7 @@ turn as continued work on that document, not a fresh prompt.
 
 Default behaviors for document work:
 - **Create the working markdown file on turn 1, even if the output is short.**
-  Use the chat workbench as the home for the working draft. Every later
+  Use the chat artifacts as the home for the working draft. Every later
   revision edits that file — do not start over. The reply mentions the path.
   Inline-only replies are wrong here; the user came to this chat to produce
   a document, not to read prose in chat.

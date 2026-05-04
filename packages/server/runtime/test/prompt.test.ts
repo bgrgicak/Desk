@@ -42,7 +42,7 @@ describe("renderPromptBody", () => {
     instructions: "",
   };
 
-  it("orders mandate → workbench → scheduling → goal → skills → user instructions", () => {
+  it("orders mandate → artifacts → scheduling → goal → skills → user instructions", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -51,31 +51,52 @@ describe("renderPromptBody", () => {
     });
 
     const idxMandate = body.indexOf("Your mandate is to help");
-    const idxWorkbench = body.indexOf("## Your workspace");
+    const idxArtifacts = body.indexOf("## Your workspace");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
     const idxGoal = body.indexOf("## User's goal: write a document");
     const idxSkills = body.indexOf("# Desk CLI");
     const idxUserInstructions = body.indexOf("## User instructions");
 
     expect(idxMandate).toBeGreaterThanOrEqual(0);
-    expect(idxWorkbench).toBeGreaterThan(idxMandate);
-    expect(idxScheduling).toBeGreaterThan(idxWorkbench);
+    expect(idxArtifacts).toBeGreaterThan(idxMandate);
+    expect(idxScheduling).toBeGreaterThan(idxArtifacts);
     expect(idxGoal).toBeGreaterThan(idxScheduling);
     expect(idxSkills).toBeGreaterThan(idxGoal);
     expect(idxUserInstructions).toBeGreaterThan(idxSkills);
   });
 
-  it("workbench fragment includes the chat workbench paths when chatId is set", () => {
+  it("artifacts fragment includes the chat paths when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
-    expect(body).toContain("Current chat workbench: ~/.chats/chat-abc/");
+    expect(body).toContain("Chat artifacts:   ~/.chats/chat-abc/artifacts/");
     expect(body).toContain("Chat attachments: ~/.chats/chat-abc/attachments/");
     expect(body).toContain("Chat notes:       ~/.chats/chat-abc/notes/");
   });
 
-  it("workbench fragment omits the chat paths when chatId is missing", () => {
+  it("artifacts fragment omits the chat paths when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
     expect(body).toContain("## Your workspace");
-    expect(body).not.toContain("Current chat workbench: ~/.chats/");
+    expect(body).not.toContain("Chat artifacts:");
+  });
+
+  it("artifacts fragment includes chat.attach_artifact instruction when chatId is set", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
+    expect(body).toContain("chat.attach_artifact");
+    expect(body).toContain("chat-xyz");
+  });
+
+  it("artifacts fragment omits chat.attach_artifact instruction when chatId is missing", () => {
+    const body = renderPromptBody({ ...baseInput });
+    expect(body).not.toContain("chat.attach_artifact");
+  });
+
+  it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+    const start = body.indexOf("what files you can see");
+    const end = body.indexOf("don't guess.", start) + "don't guess.".length;
+    const visibilitySentence = body.slice(start, end);
+    expect(visibilitySentence).toContain("artifacts/");
+    expect(visibilitySentence).toContain("attachments/");
+    expect(visibilitySentence).not.toContain("notes/");
   });
 
   it("includes timezone-known fragment when userTimezone is provided", () => {

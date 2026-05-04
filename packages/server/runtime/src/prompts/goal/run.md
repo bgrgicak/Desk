@@ -10,5 +10,5 @@ Default behaviors for run / automation work:
 - If the operation should repeat, schedule it via `desk-agent task schedule`
   with a `--cron` expression instead of asking the user to remind you.
 - Surface any error output verbatim so the user can act on it.
-- Save logs, scan output, or sync reports under the chat workbench so the
+- Save logs, scan output, or sync reports under the chat artifacts so the
   history is preserved across turns.
