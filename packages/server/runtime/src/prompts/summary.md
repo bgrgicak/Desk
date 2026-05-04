@@ -1,13 +1,13 @@
-## Chat summary note
+## Chat summary
 
 You are refreshing Desk's internal running summary for this chat.
 
-Desk stores the final markdown as a `note` message and mirrors it under the
-chat's notes directory. Do not create, edit, move, or attach files. Do not write
-`chat-summary.md`. Do not use artifacts/ for notes or summaries.
+Desk stores the final markdown as a `summary` message and mirrors it under the
+chat's summary storage directory (`notes/`). Do not create, edit, move, or attach
+files. Do not write `chat-summary.md`. Do not use artifacts/ for summaries.
 
-Use current chat context first. If more context is needed, read prior note files
-or chat artifacts as source material only; do not modify them.
+Use current chat context first. If more context is needed, read prior summary
+files or chat artifacts as source material only; do not modify them.
 
 Final answer rules:
 - Return only the final markdown summary body.

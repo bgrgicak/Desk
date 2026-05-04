@@ -150,7 +150,7 @@ describe("FileSchema (FS-backed FileRef)", () => {
 });
 
 describe("MessageSchema execution metadata", () => {
-  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "ai_note_request" }, createdAt: now, kind: "chat" as const };
+  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "summary_request" }, createdAt: now, kind: "chat" as const };
 
   it("accepts state + executeAt + schedulerRef", () => {
     const msg = {
@@ -220,22 +220,22 @@ describe("MessageSchema execution metadata", () => {
   });
 });
 
-describe("MessageContent note / ai_note_request", () => {
+describe("MessageContent summary / summary_request", () => {
   const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now, kind: "chat" as const };
 
-  it("parses note content", () => {
-    const msg = { ...base, role: "agent", content: { type: "note", body: "Running summary of the chat." } };
+  it("parses summary content", () => {
+    const msg = { ...base, role: "agent", content: { type: "summary", body: "Running summary of the chat." } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("parses ai_note_request content", () => {
-    const msg = { ...base, role: "system", content: { type: "ai_note_request" } };
+  it("parses summary_request content", () => {
+    const msg = { ...base, role: "system", content: { type: "summary_request" } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("rejects a note with non-string body", () => {
+  it("rejects a summary with non-string body", () => {
     expect(() =>
-      MessageSchema.parse({ ...base, role: "agent", content: { type: "note", body: 123 } }),
+      MessageSchema.parse({ ...base, role: "agent", content: { type: "summary", body: 123 } }),
     ).toThrow();
   });
 });

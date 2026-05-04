@@ -108,10 +108,10 @@ describe("renderAgentFile", () => {
 
     expect(result).toContain("Chat artifacts:   ~/.chats/cht_abc/artifacts/");
     expect(result).toContain("Chat attachments: ~/.chats/cht_abc/attachments/");
-    expect(result).toContain("Chat notes:       ~/.chats/cht_abc/notes/");
+    expect(result).toContain("Chat summaries:   ~/.chats/cht_abc/notes/");
   });
 
-  it("renders a narrow note-only prompt for summary runs", () => {
+  it("renders a narrow summary-only prompt for summary runs", () => {
     const result = renderAgentFile({
       agentId: "agt_summary",
       agentName: "Helper",
@@ -122,9 +122,9 @@ describe("renderAgentFile", () => {
       runMode: "summary",
     });
 
-    expect(result).toContain("## Chat summary note");
-    expect(result).toContain("Desk stores the final markdown as a `note` message");
-    expect(result).toContain("Chat notes:     ~/.chats/cht_abc/notes/");
+    expect(result).toContain("## Chat summary");
+    expect(result).toContain("Desk stores the final markdown as a `summary` message");
+    expect(result).toContain("Chat summaries: ~/.chats/cht_abc/notes/");
     expect(result).not.toContain("## Your workspace");
     expect(result).not.toContain("desk-agent chat attach-artifact");
   });

@@ -14,15 +14,15 @@ function message(content: ServerMessage['content'], overrides: Partial<ServerMes
 }
 
 describe('isMessageVisible', () => {
-  it('shows note messages only in developer mode', () => {
-    const note = message({ type: 'note', body: '# Chat Summary' })
+  it('shows summary messages only in developer mode', () => {
+    const summary = message({ type: 'summary', body: '# Chat Summary' })
 
-    expect(isMessageVisible(note, false)).toBe(false)
-    expect(isMessageVisible(note, true)).toBe(true)
+    expect(isMessageVisible(summary, false)).toBe(false)
+    expect(isMessageVisible(summary, true)).toBe(true)
   })
 
-  it('keeps ai note requests hidden even in developer mode', () => {
-    const request = message({ type: 'ai_note_request' }, { role: 'system' })
+  it('keeps summary requests hidden even in developer mode', () => {
+    const request = message({ type: 'summary_request' }, { role: 'system' })
 
     expect(isMessageVisible(request, false)).toBe(false)
     expect(isMessageVisible(request, true)).toBe(false)

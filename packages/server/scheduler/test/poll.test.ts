@@ -208,10 +208,10 @@ describe("concurrency cap", () => {
   });
 });
 
-// ── ai_note pruning ──────────────────────────────────────────────────────────
+// ── summary pruning ──────────────────────────────────────────────────────────
 
-describe("ai_note pruning", () => {
-  it("scheduleAiNote deletes all existing ai_note rows for the chat, including completed ones", async () => {
+describe("summary pruning", () => {
+  it("scheduleSummary deletes all existing summary rows for the chat, including completed ones", async () => {
     const rm = makeRunManager();
 
     const oldSucceeded = generateId("message");
@@ -219,22 +219,22 @@ describe("ai_note pruning", () => {
 
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, kind)
-       VALUES (?, ?, 'system', ?, 'succeeded', 'ai_note'),
-              (?, ?, 'system', ?, 'pending',   'ai_note')`,
+       VALUES (?, ?, 'system', ?, 'succeeded', 'summary'),
+              (?, ?, 'system', ?, 'pending',   'summary')`,
       [
-        oldSucceeded, chatId, JSON.stringify({ type: "ai_note_request" }),
-        oldPending, chatId, JSON.stringify({ type: "ai_note_request" }),
+        oldSucceeded, chatId, JSON.stringify({ type: "summary_request" }),
+        oldPending, chatId, JSON.stringify({ type: "summary_request" }),
       ],
     );
 
-    await rm.scheduleAiNote(chatId);
+    await rm.scheduleSummary(chatId);
 
     expect(await queries.messages.findById(pool, oldSucceeded)).toBeNull();
     expect(await queries.messages.findById(pool, oldPending)).toBeNull();
 
-    // A new pending ai_note must have been created
+    // A new pending summary must have been created
     const { rows } = await pool.query(
-      `SELECT id FROM messages WHERE chat_id = ? AND kind = 'ai_note' AND state = 'pending'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
       [chatId],
     );
     expect(rows.length).toBe(1);

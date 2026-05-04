@@ -19,8 +19,8 @@ describe('serverMessageToChatMessage', () => {
     expect(serverMessageToChatMessage(msg)).toBeNull()
   })
 
-  it('returns null for ai_note kind messages', () => {
-    const msg = makeMessage({ role: 'agent', kind: 'ai_note', content: { type: 'text', text: 'note' } })
+  it('returns null for summary kind messages', () => {
+    const msg = makeMessage({ role: 'agent', kind: 'summary', content: { type: 'text', text: 'summary' } })
     expect(serverMessageToChatMessage(msg)).toBeNull()
   })
 

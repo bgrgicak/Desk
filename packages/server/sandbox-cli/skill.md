@@ -148,7 +148,7 @@ strings — the parser will reject them.
 ### --kind
 
 Defaults to `task`. Override only if you have a reason — the other kinds
-(`ai_note`, `chat`) drive specialized internal flows that don't behave
+(`summary`, `chat`) drive specialized internal flows that don't behave
 like user-visible tasks.
 
 ### Failure modes worth knowing

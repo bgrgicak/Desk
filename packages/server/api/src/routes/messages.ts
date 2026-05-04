@@ -20,8 +20,8 @@ const CONTENT_KINDS = [
   "toolResult",
   "artifactRef",
   "events",
-  "note",
-  "ai_note_request",
+  "summary",
+  "summary_request",
   "agent_turn",
 ] as const;
 

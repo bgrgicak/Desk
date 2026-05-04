@@ -23,7 +23,7 @@ function nameFor(m: ServerMessage): string {
     const first = m.content.text.split("\n")[0].trim();
     return first.length > 0 ? first : "(empty)";
   }
-  if (m.content.type === "note") return m.content.body.split("\n")[0].trim();
+  if (m.content.type === "summary") return m.content.body.split("\n")[0].trim();
   return m.content.type;
 }
 

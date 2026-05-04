@@ -378,7 +378,7 @@ export function createApp(opts: AppOptions): Server {
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
       // this from `desk-agent task schedule`, so a chat reply isn't the intent.
-      // Caller can still override (e.g. kind="ai_note") if they have a
+      // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
       const sendBody = { kind: "task", ...body };
       delete (sendBody as { chatId?: string }).chatId;
@@ -630,7 +630,7 @@ export function createApp(opts: AppOptions): Server {
         : await parseBody(req);
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
 
-      // Self-firing kinds (task / ai_note): execute_at is computed at insert
+      // Self-firing kinds (task / summary): execute_at is computed at insert
       // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
       if (userMessage.kind && userMessage.kind !== "chat") {
         sendJson(res, 201, userMessage);
@@ -638,12 +638,12 @@ export function createApp(opts: AppOptions): Server {
       }
 
       // Default chat path: fire the pending trigger message and schedule
-      // an ai-note refresh for this chat.
+      // a summary refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`fireMessage for trigger ${triggerId} failed:`, err);
       });
-      runManager.scheduleAiNote(segments[1]).catch(() => {});
+      runManager.scheduleSummary(segments[1]).catch(() => {});
 
       sendJson(res, 201, userMessage);
       return;
@@ -661,9 +661,9 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
+      const result = await chatRoutes.getSummaryHistory(storage, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }
@@ -811,11 +811,11 @@ export function createApp(opts: AppOptions): Server {
       const wsId = await requireWorkspaceId(pool, userId, query);
       await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
-      // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
-      // user-friendly "Chat notes" label so the detail view doesn't title
+      // Summary mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
+      // user-friendly "Chat summary" label so the detail view doesn't title
       // the page with the messageId-based filename.
       const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
-        ? { ...result, label: "Chat notes" }
+        ? { ...result, label: "Chat summary" }
         : result;
       sendJson(res, 200, decorated);
       return;

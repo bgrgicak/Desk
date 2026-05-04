@@ -12,6 +12,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@agent-desk/db";
 import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
@@ -109,7 +110,7 @@ afterAll(async () => {
   }
 
   if (pool) await pool.end();
-  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (home) await rmTempTree(home);
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
@@ -189,4 +190,22 @@ function httpJson(
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+async function rmTempTree(path: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await fs.rm(path, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM" && code !== "EBUSY" && code !== "ENOTEMPTY") {
+        throw err;
+      }
+      lastError = err;
+      await delay(100 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }

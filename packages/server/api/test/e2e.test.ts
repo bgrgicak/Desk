@@ -11,7 +11,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Pool } from "@agent-desk/db";
 import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout, materializeNote } from "@agent-desk/storage";
+import { ensureLayout, materializeSummary } from "@agent-desk/storage";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -725,7 +725,7 @@ describe("API e2e (real Postgres)", () => {
     const chatRes = await request("POST", "/chats", token, {
       workspaceId: workspaces[0].id,
       agentId: agents[0].id,
-      title: "Notes In Files Tab Chat",
+      title: "Summaries In Files Tab Chat",
     });
     const chat = chatRes.body as { id: string };
 
@@ -734,15 +734,15 @@ describe("API e2e (real Postgres)", () => {
       `/chats/${chat.id}/messages`,
       token,
       [
-        { name: "content", body: Buffer.from("note attachment") },
+        { name: "content", body: Buffer.from("summary attachment") },
         { name: "attachment", filename: "notes-spec.txt", contentType: "text/plain", body: Buffer.from("hi") },
       ],
     );
     expect(upRes.status).toBe(201);
 
-    // Materialize a note so we can verify it is NOT returned in the attachments list.
+    // Materialize a summary so we can verify it is NOT returned in the attachments list.
     const fakeMessageId = "msg_notespec000000000000000";
-    await materializeNote(home, workspaces[0].path, chat.id, fakeMessageId, "note body");
+    await materializeSummary(home, workspaces[0].path, chat.id, fakeMessageId, "summary body");
 
     const res = await request("GET", `/chats/${chat.id}/attachments`, token);
     expect(res.status).toBe(200);
@@ -1155,4 +1155,3 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
     expect(agentText).toContain("CORSAIR_SENTINEL");
   }, 180000);
 });
-

@@ -98,7 +98,7 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
     expect(body).toContain("Chat artifacts:   ~/.chats/chat-abc/artifacts/");
     expect(body).toContain("Chat attachments: ~/.chats/chat-abc/attachments/");
-    expect(body).toContain("Chat notes:       ~/.chats/chat-abc/notes/");
+    expect(body).toContain("Chat summaries:   ~/.chats/chat-abc/notes/");
   });
 
   it("artifacts fragment omits the chat paths when chatId is missing", () => {
@@ -120,16 +120,16 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("After writing a new artifact or making a significant update, run");
   });
 
-  it("summary mode uses note-only instructions and omits artifact workflow", () => {
+  it("summary mode uses summary-only instructions and omits artifact workflow", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc", runMode: "summary", goal: "document" });
 
-    expect(body).toContain("## Chat summary note");
-    expect(body).toContain("Do not write\n`chat-summary.md`");
+    expect(body).toContain("## Chat summary");
+    expect(body).toContain("Do not write `chat-summary.md`");
     expect(body).toContain("# Chat Summary — <short descriptive title>");
     expect(body).toContain("## Conversation arc");
     expect(body).toContain("## Open threads");
-    expect(body).toContain("Chat notes:     ~/.chats/chat-abc/notes/");
-    expect(body).toContain("Chat artifacts: ~/.chats/chat-abc/artifacts/");
+    expect(body).toContain("Chat summaries: ~/.chats/chat-abc/notes/");
+    expect(body).toContain("Chat artifacts:  ~/.chats/chat-abc/artifacts/");
     expect(body).not.toContain("## Your workspace");
     expect(body).not.toContain("Save before replying");
     expect(body).not.toContain("desk-agent chat attach-artifact");

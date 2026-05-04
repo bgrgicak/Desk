@@ -58,7 +58,7 @@ describe("chats queries", () => {
     expect(list.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("kind picks the newest user-action kind; chat and ai_note are fallbacks", async () => {
+  it("kind picks the newest user-action kind; chat and summary are fallbacks", async () => {
     // Chat A: starts as chat, later gets a task. kind should be 'task'.
     const chatA = generateId("chat");
     await chats.insert(pool, { id: chatA, workspaceId: wsId, agentId, title: "Chat → task" });
@@ -107,11 +107,11 @@ describe("chats queries", () => {
       kind: "chat",
     });
 
-    // Chat D: task plus a later ai_note — ai_note is auto-emitted by the
+    // Chat D: task plus a later summary — summary is auto-emitted by the
     // scheduler on every turn, so it must NOT hijack the icon. kind stays
     // 'task'.
     const chatD = generateId("chat");
-    await chats.insert(pool, { id: chatD, workspaceId: wsId, agentId, title: "Task + ai_note" });
+    await chats.insert(pool, { id: chatD, workspaceId: wsId, agentId, title: "Task + summary" });
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: chatD,
@@ -123,13 +123,13 @@ describe("chats queries", () => {
       id: generateId("message"),
       chatId: chatD,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
-    // Chat E: only chat + ai_note → both are fallbacks → 'chat'.
+    // Chat E: only chat + summary → both are fallbacks → 'chat'.
     const chatE = generateId("chat");
-    await chats.insert(pool, { id: chatE, workspaceId: wsId, agentId, title: "Chat + ai_note" });
+    await chats.insert(pool, { id: chatE, workspaceId: wsId, agentId, title: "Chat + summary" });
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: chatE,
@@ -141,8 +141,8 @@ describe("chats queries", () => {
       id: generateId("message"),
       chatId: chatE,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
     const list = await chats.listWithLatestMessage(pool, wsId);
@@ -174,8 +174,8 @@ describe("chats queries", () => {
       id: generateId("message"),
       chatId: dataChatId,
       role: "system",
-      content: { type: "ai_note_request" },
-      kind: "ai_note",
+      content: { type: "summary_request" },
+      kind: "summary",
     });
 
     const list = await chats.listWithLatestMessage(pool, wsId);

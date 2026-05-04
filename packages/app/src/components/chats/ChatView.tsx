@@ -369,8 +369,8 @@ function ArtifactsPanel({
 
 /**
  * "In this chat" panel — user uploads sitting under
- * `.chats/{chatId}/attachments/`. Note mirrors (`.chats/{id}/notes/`) are
- * Desk-managed memory and are not listed here; note messages are visible in
+ * `.chats/{chatId}/attachments/`. Summary mirrors (`.chats/{id}/notes/`) are
+ * Desk-managed memory and are not listed here; summary messages are visible in
  * the chat stream only when developer mode is enabled.
  *
  * Sidebar uploads land in `.chats/{chatId}/attachments/` (not the workspace
@@ -759,7 +759,7 @@ export function ChatView({
   }, [])
 
   // Stages a chat-scoped server file (`.chats/{id}/attachments/...` or
-  // `.chats/{id}/notes/...`). Unlike `addStagedFromLibrary`, no pin is
+  // `.chats/{id}/artifacts/...`). Unlike `addStagedFromLibrary`, no pin is
   // attempted — the file already lives under the chat's directory so
   // there's no library path to symlink in.
   const addStagedChatFile = useCallback((file: ServerFile) => {

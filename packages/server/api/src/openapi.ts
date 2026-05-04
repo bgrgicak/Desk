@@ -232,7 +232,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet, persisted `goal` (`app`/`data`/`site`/etc.; explicit picker selections and clear text inference both write here), and `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `ai_note` fall back when no goal is set)." } },
+          responses: { "200": { description: "Chat array with last-message snippet, persisted `goal` (`app`/`data`/`site`/etc.; explicit picker selections and clear text inference both write here), and `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `summary` fall back when no goal is set)." } },
         },
         post: {
           summary: "Create chat",
@@ -319,7 +319,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}": {
         patch: {
           summary: "Edit a message (content, cancel, reschedule)",
-          description: "Update content (e.g. user edits a note), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          description: "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -371,10 +371,10 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
-      "/chats/{id}/messages/{messageId}/note-history": {
+      "/chats/{id}/messages/{messageId}/summary-history": {
         get: {
-          summary: "List archived versions of a note-content message",
-          description: "Each PATCH of a `note`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/note-history/. This endpoint returns every snapshot, newest first.",
+          summary: "List archived versions of a summary-content message",
+          description: "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/summary-history/. This endpoint returns every snapshot, newest first.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -591,7 +591,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
             { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
-            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|ai_note`). Distinct from `contentKind`." },
+            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|summary`). Distinct from `contentKind`." },
             { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },
             { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
             { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },

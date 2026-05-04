@@ -41,12 +41,12 @@ export {
 export type { LibraryContext, FolderRef, CreateLinkInput, IgnoreFrame } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
 export {
-  snapshotNote,
-  listNoteHistory,
-  noteHistoryDir,
-  notesDir,
-  materializeNote,
-  deleteMaterializedNote,
-} from "./noteHistory.js";
-export type { NoteVersion } from "./noteHistory.js";
+  snapshotSummary,
+  listSummaryHistory,
+  summaryHistoryDir,
+  summaryStorageDir,
+  materializeSummary,
+  deleteMaterializedSummary,
+} from "./summaryHistory.js";
+export type { SummaryVersion } from "./summaryHistory.js";
 export { enforceLogRetention } from "./logRetention.js";

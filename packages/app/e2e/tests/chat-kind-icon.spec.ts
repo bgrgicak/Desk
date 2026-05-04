@@ -8,7 +8,7 @@
  *   2. `kind` — newest user-action message kind (`task`/`task_run`), with
  *      `chat` as fallback. Used only when `goal` is absent.
  *
- * `chat` and `ai_note` are NOT user actions; they fall back to the
+ * `chat` and `summary` are NOT user actions; they fall back to the
  * default icon. The icons mirror the compose picker so the chat keeps the
  * type the user typed about.
  */
@@ -65,7 +65,7 @@ async function postMessage(
   // Self-firing kinds need either an executeAt or cron, otherwise the
   // scheduler treats them as fire-immediately. Pin a far-future timestamp
   // so they sit pending and the icon assertion is stable.
-  if (kind === "task" || kind === "ai_note") {
+  if (kind === "task" || kind === "summary") {
     body.executeAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   }
   const res = await fetch(`${serverUrl}/chats/${chatId}/messages`, {
@@ -155,11 +155,11 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
   const taskOnlyId = await createChat(serverUrl, ctx, "icon-task-only");
   await postMessage(serverUrl, ctx, taskOnlyId, "task", "do the thing");
 
-  // Task chat plus a system ai_note — the auto note must not bump the
+  // Task chat plus a system summary — the auto summary must not bump the
   // icon. This is the exact regression the bug report described.
-  const taskWithNoteId = await createChat(serverUrl, ctx, "icon-task-ai-note");
-  await postMessage(serverUrl, ctx, taskWithNoteId, "task", "do the thing");
-  await postMessage(serverUrl, ctx, taskWithNoteId, "ai_note", "scheduled note");
+  const taskWithSummaryId = await createChat(serverUrl, ctx, "icon-task-summary");
+  await postMessage(serverUrl, ctx, taskWithSummaryId, "task", "do the thing");
+  await postMessage(serverUrl, ctx, taskWithSummaryId, "summary", "scheduled summary");
 
   // Goal-driven: text "create a data table" → persisted data goal → Table icon.
   const dataId = await createChat(serverUrl, ctx, "icon-data");
@@ -174,7 +174,7 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
   for (const title of [
     "icon-plain",
     "icon-task-only",
-    "icon-task-ai-note",
+    "icon-task-summary",
     "icon-data",
     "icon-site",
   ]) {
@@ -200,7 +200,7 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
   const cases: Array<{ title: string; expected: string }> = [
     { title: "icon-plain",         expected: "lucide-message-square" },
     { title: "icon-task-only",     expected: "lucide-list-todo" },
-    { title: "icon-task-ai-note",  expected: "lucide-list-todo" },
+    { title: "icon-task-summary",  expected: "lucide-list-todo" },
     { title: "icon-data",          expected: "lucide-table" },
     { title: "icon-site",          expected: "lucide-globe" },
   ];
@@ -223,7 +223,7 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
   }
 });
 
-test("/chats `kind` reflects the newest user-action kind, with chat/ai_note as fallback", async ({
+test("/chats `kind` reflects the newest user-action kind, with chat/summary as fallback", async ({
   serverUrl,
   token,
 }) => {
@@ -245,19 +245,19 @@ test("/chats `kind` reflects the newest user-action kind, with chat/ai_note as f
   await postMessage(serverUrl, ctx, taskThenChatId, "chat", "follow-up");
   expect(await fetchListedKind(serverUrl, ctx, taskThenChatId)).toBe("task");
 
-  // task → ai_note (the system-scheduled note refresh that lands on every
+  // task → summary (the system-scheduled summary refresh that lands on every
   // chat turn) — must NOT hijack the icon. kind stays 'task'. This is the
   // exact regression the bug report uncovered.
-  const taskThenAiNoteId = await createChat(serverUrl, ctx, "kind-task-then-ai-note");
-  await postMessage(serverUrl, ctx, taskThenAiNoteId, "task", "do the thing");
-  await postMessage(serverUrl, ctx, taskThenAiNoteId, "ai_note", "scheduled note");
-  expect(await fetchListedKind(serverUrl, ctx, taskThenAiNoteId)).toBe("task");
+  const taskThenSummaryId = await createChat(serverUrl, ctx, "kind-task-then-summary");
+  await postMessage(serverUrl, ctx, taskThenSummaryId, "task", "do the thing");
+  await postMessage(serverUrl, ctx, taskThenSummaryId, "summary", "scheduled summary");
+  expect(await fetchListedKind(serverUrl, ctx, taskThenSummaryId)).toBe("task");
 
-  // chat + ai_note alone (no user actions) → fallback 'chat'.
-  const aiNoteOnlyId = await createChat(serverUrl, ctx, "kind-chat-and-ai-note");
-  await postMessage(serverUrl, ctx, aiNoteOnlyId, "chat", "hi");
-  await postMessage(serverUrl, ctx, aiNoteOnlyId, "ai_note", "scheduled note");
-  expect(await fetchListedKind(serverUrl, ctx, aiNoteOnlyId)).toBe("chat");
+  // chat + summary alone (no user actions) → fallback 'chat'.
+  const summaryOnlyId = await createChat(serverUrl, ctx, "kind-chat-and-summary");
+  await postMessage(serverUrl, ctx, summaryOnlyId, "chat", "hi");
+  await postMessage(serverUrl, ctx, summaryOnlyId, "summary", "scheduled summary");
+  expect(await fetchListedKind(serverUrl, ctx, summaryOnlyId)).toBe("chat");
 });
 
 test("/chats `goal` is inferred and persisted from clear user text", async ({
@@ -267,7 +267,7 @@ test("/chats `goal` is inferred and persisted from clear user text", async ({
   const ctx = await bootstrap(serverUrl, token);
 
   // The exact regression: a chat where the user typed about a data table
-  // should infer `data` (not be hijacked by the system ai_note refresh).
+  // should infer `data` (not be hijacked by the system summary refresh).
   const dataId = await createChat(serverUrl, ctx, "goal-data");
   await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table");
   expect(await fetchListedGoal(serverUrl, ctx, dataId)).toBe("data");

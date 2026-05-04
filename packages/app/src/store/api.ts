@@ -381,7 +381,7 @@ export const api = createApi({
          * `.chats/{chatId}/messages/{msgId}/` keyed by the new message
          * id (no upload-then-attach two-step). */
         files?: File[];
-        kind?: "chat" | "task" | "ai_note";
+        kind?: "chat" | "task" | "summary";
         title?: string;
         executeAt?: string;
         cron?: string;

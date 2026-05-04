@@ -40,7 +40,7 @@ export interface AgentFileInput {
    */
   goal?: GoalKey | null;
   /**
-   * Summary runs are internal note refreshes. They get a narrow prompt that
+   * Summary runs are internal summary refreshes. They get a narrow prompt that
    * returns markdown only and never writes artifacts.
    */
   runMode?: "chat" | "summary";

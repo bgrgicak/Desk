@@ -142,7 +142,7 @@ emit: (evt) => events.push(evt),
     expect(appended.length).toBe(1);
   });
 
-  it("ai_note_request content produces a note-content child", async () => {
+  it("summary_request content produces a summary-content child", async () => {
     let capturedPrompt = "";
     let capturedRunMode: string | undefined;
     const mgr = createRunManager({
@@ -150,24 +150,24 @@ emit: (evt) => events.push(evt),
 execRunFn: async (messageId, _a, prompt, onLog, runOpts) => {
         capturedPrompt = prompt;
         capturedRunMode = runOpts?.agentFileInput.runMode;
-        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "Note about the vacation chat." });
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "Summary about the vacation chat." });
         return { exitCode: 0 };
       },
     });
 
-    const messageId = await insertPendingMessage({ type: "ai_note_request" });
+    const messageId = await insertPendingMessage({ type: "summary_request" });
     const result = await mgr.fireMessage(messageId);
     expect(result.childIds).toHaveLength(1);
     const child = await queries.messages.findById(pool, result.childIds[0]);
     const content = child!.content as { type: string; body?: string };
-    expect(content.type).toBe("note");
+    expect(content.type).toBe("summary");
     expect(content.body).toContain("vacation");
-    expect(capturedPrompt).toContain("Refresh this chat's running summary note.");
+    expect(capturedPrompt).toContain("Refresh this chat's running summary.");
     expect(capturedPrompt).toContain("do not create files, write artifacts, or attach artifacts");
     expect(capturedRunMode).toBe("summary");
   });
 
-  it("note output uses the final text event instead of planning chatter", async () => {
+  it("summary output uses the final text event instead of planning chatter", async () => {
     const mgr = createRunManager({
       pool,
 execRunFn: async (messageId, _a, _p, onLog) => {
@@ -178,7 +178,7 @@ execRunFn: async (messageId, _a, _p, onLog) => {
       },
     });
 
-    const messageId = await insertPendingMessage({ type: "ai_note_request" });
+    const messageId = await insertPendingMessage({ type: "summary_request" });
     const result = await mgr.fireMessage(messageId);
     const child = await queries.messages.findById(pool, result.childIds[0]);
     const content = child!.content as { type: string; body?: string };
@@ -496,26 +496,26 @@ execRunFn: async (_id, _a, _p, onLog) => {
   });
 });
 
-describe("scheduleAiNote", () => {
-  async function clearNotes(): Promise<void> {
+describe("scheduleSummary", () => {
+  async function clearSummaries(): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
+      `DELETE FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
       [chatId],
     );
   }
 
-  it("creates a pending ai_note_request message with a future execute_at", async () => {
+  it("creates a pending summary_request message with a future execute_at", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async () => ({ exitCode: 0 }),
     });
-    await clearNotes();
+    await clearSummaries();
 
-    await mgr.scheduleAiNote(chatId);
+    await mgr.scheduleSummary(chatId);
 
     const { rows } = await pool.query(
       `SELECT id, state, execute_at FROM messages
-       WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
+       WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
       [chatId],
     );
     expect(rows).toHaveLength(1);
@@ -523,19 +523,19 @@ describe("scheduleAiNote", () => {
     expect(new Date(rows[0].execute_at as string).getTime()).toBeGreaterThan(Date.now());
   });
 
-  it("cancels the previous ai_note_request before scheduling a new one", async () => {
+  it("cancels the previous summary_request before scheduling a new one", async () => {
     const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
-    await clearNotes();
+    await clearSummaries();
 
-    await mgr.scheduleAiNote(chatId);
+    await mgr.scheduleSummary(chatId);
     const first = (await pool.query(
-      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
       [chatId],
     )).rows[0].id as string;
 
-    await mgr.scheduleAiNote(chatId);
+    await mgr.scheduleSummary(chatId);
     const after = (await pool.query(
-      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
       [chatId],
     )).rows;
     expect(after).toHaveLength(1);
@@ -566,10 +566,10 @@ describe("workspace.synced", () => {
 describe("cancelMessage", () => {
   it("removes the row", async () => {
     const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
-    await mgr.scheduleAiNote(chatId);
+    await mgr.scheduleSummary(chatId);
 
     const { rows } = await pool.query(
-      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'ai_note_request'`,
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
       [chatId],
     );
     const messageId = rows[0].id as string;

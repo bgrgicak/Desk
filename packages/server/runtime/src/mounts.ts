@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/storage";
+import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent-desk/storage";
 
 /**
  * Mount model (workspace-as-home):
@@ -62,10 +62,10 @@ export async function projectMounts(
     // The workspace is bind-mounted at /home/agent, so the chat's attachments
     // surface at this path inside the container.
     mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
-    // Pre-create notes/ so the agent stops reporting "no notes dir" before
-    // the first materializeNote() call. The system prompt advertises this
+    // Pre-create notes/ so the agent stops reporting "no summaries dir" before
+    // the first materializeSummary() call. The system prompt advertises this
     // path in opencode.ts; matching it on disk keeps the two consistent.
-    await fs.mkdir(notesDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
+    await fs.mkdir(summaryStorageDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
 
   if (!activeMounts.has(handle.workspaceId)) {

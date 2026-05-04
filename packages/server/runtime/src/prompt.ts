@@ -70,15 +70,15 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
   (input) => {
     if (input.runMode === "summary") {
       const chatPaths = input.chatId
-        ? `Chat notes:     ~/.chats/${input.chatId}/notes/\n` +
-          `Chat artifacts: ~/.chats/${input.chatId}/artifacts/\n`
+        ? `Chat summaries: ~/.chats/${input.chatId}/notes/\n` +
+          `Chat artifacts:  ~/.chats/${input.chatId}/artifacts/\n`
         : "";
-      return loadAndSub("summary-note.md", { chatPaths });
+      return loadAndSub("summary.md", { chatPaths });
     }
     const chatPaths = input.chatId
       ? `\nChat artifacts:   ~/.chats/${input.chatId}/artifacts/\n` +
         `Chat attachments: ~/.chats/${input.chatId}/attachments/\n` +
-        `Chat notes:       ~/.chats/${input.chatId}/notes/\n`
+        `Chat summaries:   ~/.chats/${input.chatId}/notes/\n`
       : "";
     const attachArtifactInstruction = input.chatId
       ? `**Surface in chat.** After writing a new artifact or making a significant update, run \`desk-agent chat attach-artifact --chat ${input.chatId} "<workspace-relative-path>"\` with the path set to the file's workspace-relative path (strip the leading \`~/\`, so \`~/.chats/…/foo.html\` becomes \`.chats/…/foo.html\`). Quote the path. Do the same when the user asks to see or open an artifact. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples. Skip for minor edits that don't change what the user sees.`

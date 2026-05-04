@@ -71,16 +71,16 @@ export function requireLibraryPathInWorkspace(relPath: string, _workspaceId: str
 
 /**
  * Path validator for read endpoints that should also serve user-uploaded
- * chat attachments and materialized chat notes. Accepts strict library
+ * chat attachments and materialized chat summaries. Accepts strict library
  * paths (delegates to `requireLibraryPathInWorkspace`),
  * `.chats/<chatId>/attachments/<filename>` (uploads), and
- * `.chats/<chatId>/notes/<messageId>.md` (note mirrors), after verifying
+ * `.chats/<chatId>/notes/<messageId>.md` (summary mirrors), after verifying
  * the caller owns the chat. Other dot-prefixed paths (e.g. `logs/`)
  * remain blocked so this can't be used to traverse agent infrastructure.
  */
 const CHAT_ATTACHMENT_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/attachments\/([^/]+)$/;
-const CHAT_NOTE_PATTERN =
+const CHAT_SUMMARY_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/notes\/([^/]+\.md)$/;
 const CHAT_ARTIFACT_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/artifacts\/(.+)$/;
@@ -110,9 +110,9 @@ export async function requireReadablePathInWorkspace(
     await requireOwnedChat(pool, att[1], userId);
     return;
   }
-  const note = relPath.match(CHAT_NOTE_PATTERN);
-  if (note) {
-    await requireOwnedChat(pool, note[1], userId);
+  const summary = relPath.match(CHAT_SUMMARY_PATTERN);
+  if (summary) {
+    await requireOwnedChat(pool, summary[1], userId);
     return;
   }
   const artifact = parseReadableChatArtifactPath(relPath);

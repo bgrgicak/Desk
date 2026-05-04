@@ -10,19 +10,18 @@ import { z } from "zod";
 import {
   chatArtifactsDir,
   chatAttachmentsDir,
-  listNoteHistory,
-  materializeNote,
-  notesDir,
+  listSummaryHistory,
+  materializeSummary,
   pinLibraryFileToChat,
   removeChatAttachment,
   saveChatAttachmentToLibrary,
-  snapshotNote,
+  snapshotSummary,
   trashChatDirectories,
   uploadArtifact,
   validateLibrarySubpath,
   workspaceRootPath,
   type FileRef,
-  type NoteVersion,
+  type SummaryVersion,
   type StorageContext,
 } from "@agent-desk/storage";
 
@@ -103,7 +102,7 @@ export async function listMessages(
  *   `agent_turn` trigger that references the user message. fireMessage
  *   resolves the trigger at fire time, reads the parent user message's
  *   text as the prompt. No duplication of payload.
- * - `kind='task'` or `'ai_note'`: a single self-firing row. The schedule
+ * - `kind='task'` or `'summary'`: a single self-firing row. The schedule
  *   (`executeAt` / `cron`) lives directly on it; fireMessage dispatches
  *   on `kind` to know what to run. No separate trigger.
  *
@@ -271,7 +270,7 @@ export async function sendMessage(
     }
   }
 
-  // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
+  // Self-firing kinds (task, summary): one row, schedule on the row, fire
   // dispatches by kind. The "userMessage" / "triggerId" pair in the return
   // value is a chat-shape concession — both ids point at the same row so
   // app.ts can schedule the message id without branching.
@@ -373,14 +372,14 @@ export async function attachArtifactRef(
 }
 
 /**
- * PATCH a message. Supports editing content (e.g. user edits a note) and
+ * PATCH a message. Supports editing content (e.g. user edits a summary) and
  * lifecycle transitions: `cancelled` (stop & keep the row), `paused`
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
  * State transitions delegate to the run manager (pause/resume/cancel);
- * content-only patches (e.g. user editing a note body) snapshot the prior
- * note and take the plain DB update path.
+ * content-only patches (e.g. user editing a summary body) snapshot the prior
+ * summary and take the plain DB update path.
  */
 export async function patchMessage(
   pool: Pool,
@@ -418,16 +417,16 @@ export async function patchMessage(
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "note" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "note") {
+    if (prev?.type === "summary" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "summary") {
       const chat = await queries.chats.findById(pool, chatId);
       const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
       if (ws) {
-        if (prev?.type === "note" && typeof prev.body === "string") {
-          await snapshotNote(storage.home, ws.path, chatId, messageId, prev.body);
+        if (prev?.type === "summary" && typeof prev.body === "string") {
+          await snapshotSummary(storage.home, ws.path, chatId, messageId, prev.body);
         }
         const next = data.content as { type?: string; body?: string };
-        if (next?.type === "note" && typeof next.body === "string") {
-          await materializeNote(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+        if (next?.type === "summary" && typeof next.body === "string") {
+          await materializeSummary(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
         }
       }
     }
@@ -499,16 +498,16 @@ export async function runMessage(
 }
 
 /**
- * Returns every archived version of the supplied note-content message,
+ * Returns every archived version of the supplied summary-content message,
  * newest first. Returns an empty list if no snapshots exist yet.
  */
-export async function getNoteHistory(
+export async function getSummaryHistory(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-): Promise<{ versions: NoteVersion[] }> {
+): Promise<{ versions: SummaryVersion[] }> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
-  const versions = await listNoteHistory(storage.home, slug, chatId, messageId);
+  const versions = await listSummaryHistory(storage.home, slug, chatId, messageId);
   return { versions };
 }
 

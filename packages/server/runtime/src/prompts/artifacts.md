@@ -19,11 +19,11 @@ Each conversation has an artifacts directory at ~/.chats/{chatId}/artifacts/. Wr
 your working files there (e.g. `~/.chats/{chatId}/artifacts/bio.md`,
 `~/.chats/{chatId}/artifacts/focus-timer.html`). Two sibling directories are reserved:
 - attachments/ — files the user attached to messages in this chat
-- notes/       — markdown snapshots of every chat note (one {messageId}.md per note)
+- notes/       — Desk-managed chat summaries (one {messageId}.md per summary)
 When you look for the working file from a previous turn, list the
 artifacts directory (`ls ~/.chats/{chatId}/artifacts/`), not just `attachments/` and
 `notes/`. Your own deliverables live under artifacts/, not the reserved dirs.
-Chat notes and chat summaries are Desk-managed notes and belong only in notes/.
+Chat summaries are Desk-managed and belong only in notes/.
 
 Put work-in-progress and intermediate output in the artifacts directory
 by default; move finished output to ~/ (or a user folder) when the user asks to
@@ -31,7 +31,7 @@ keep it.
 
 **Save before replying.** Whenever you produce output the user might want to
 keep, refer back to, revise, or share — write it to a file in the artifacts directory
-BEFORE you reply. This applies even when the output is short (a thank-you note,
+BEFORE you reply. This applies even when the output is short (a thank-you message,
 a 2-sentence bio, a 5-item packing list). Inline-only is for one-shot factual
 answers (definitions, calculations, quick yes/nos) that the user will not want
 to come back to.

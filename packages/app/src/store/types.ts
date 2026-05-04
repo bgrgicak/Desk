@@ -34,8 +34,8 @@ export type MessageContent =
   | { type: "toolResult"; toolName: string; result: unknown }
   | { type: "artifactRef"; path: string; name?: string; mime?: string }
   | { type: "events"; log: AgentLogEntry[] }
-  | { type: "note"; body: string }
-  | { type: "ai_note_request" }
+  | { type: "summary"; body: string }
+  | { type: "summary_request" }
   | { type: "agent_turn"; userMessageId: string };
 
 export interface ServerUser {
@@ -81,7 +81,7 @@ export interface ServerChat {
   /**
    * Drives the chat-list icon (fallback signal). Newest user-action
    * message kind (`task` / `task_run`), with `'chat'` as the fallback.
-   * `ai_note` is auto-emitted on every chat turn and is treated as a
+   * `summary` is auto-emitted on every chat turn and is treated as a
    * fallback. Only populated by /chats list responses.
    */
   kind?: "chat" | "task" | "task_run";
@@ -116,8 +116,8 @@ export interface ServerMessage {
   endedAt?: string;
   updatedAt?: string;
   /** Discriminates the message's surface — `chat` (default), `task`,
-   * `task_run` (execution record child of a task), or `ai_note`. */
-  kind?: "chat" | "task" | "task_run" | "ai_note";
+   * `task_run` (execution record child of a task), or `summary`. */
+  kind?: "chat" | "task" | "task_run" | "summary";
   /** Display name for tasks; null/missing for ordinary chat messages. */
   title?: string | null;
 }
@@ -181,10 +181,10 @@ export interface MessagesFilter {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKind?: string[];
-  /** Message-kind discriminator (`task`, `ai_note`, `chat`). The Tasks
+  /** Message-kind discriminator (`task`, `summary`, `chat`). The Tasks
    * page filters on `task`. Distinct from `contentKind` which targets
    * `content.type`. */
-  kind?: ("chat" | "task" | "ai_note")[];
+  kind?: ("chat" | "task" | "summary")[];
   since?: string;
   limit?: number;
   cursor?: string;

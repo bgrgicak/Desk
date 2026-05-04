@@ -41,7 +41,7 @@ export function toContextItem(
   return {
     id: f.path,
     type: inferType(f.mime),
-    // Prefer the server's display label when present (e.g. "Chat notes")
+    // Prefer the server's display label when present (e.g. "Chat summary")
     // so notes don't surface the messageId-based filename as their title.
     name: f.label ?? f.name,
     content: "",

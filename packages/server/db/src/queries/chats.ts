@@ -36,8 +36,8 @@ export interface ChatWithLastMessage extends Chat {
   /**
    * Kind that drives the chat-list icon when no chat goal is persisted.
    * Newest message kind in the chat that represents a user action —
-   * currently `task` and `task_run`. `chat` (conversation) and `ai_note`
-   * (system-scheduled note refresh, auto-emitted on every turn) are both
+   * currently `task` and `task_run`. `chat` (conversation) and `summary`
+   * (system-scheduled summary refresh, auto-emitted on every turn) are both
    * treated as fallbacks so they don't hijack the icon. Falls back to
    * 'chat' when no user-action messages exist.
    */
@@ -53,7 +53,7 @@ export async function listWithLatestMessage(
             (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
             COALESCE(
               (SELECT m.kind FROM messages m
-                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'ai_note')
+                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'summary')
                  ORDER BY m.created_at DESC LIMIT 1),
               'chat'
             ) AS kind

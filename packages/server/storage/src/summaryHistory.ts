@@ -15,27 +15,26 @@ function validateMessageId(messageId: string): void {
   }
 }
 
-/** Absolute path to a chat's note-history directory. */
-export function noteHistoryDir(home: string, slug: string, chatId: string): string {
+/** Absolute path to a chat's summary-history directory. */
+export function summaryHistoryDir(home: string, slug: string, chatId: string): string {
   validateChatId(chatId);
-  return path.join(workspaceRootPath(home, slug), ".chats", chatId, "note-history");
+  return path.join(workspaceRootPath(home, slug), ".chats", chatId, "summary-history");
 }
 
-/** Absolute path to a chat's current-notes directory. Files here mirror
- * the latest body of each `note`-content message in the chat so the agent
- * can read them with ordinary file tools. */
-export function notesDir(home: string, slug: string, chatId: string): string {
+/** Absolute path to the chat's summary mirror directory. The path segment is
+ * intentionally `notes/`: summaries are stored only there, not in artifacts/. */
+export function summaryStorageDir(home: string, slug: string, chatId: string): string {
   validateChatId(chatId);
   return path.join(workspaceRootPath(home, slug), ".chats", chatId, "notes");
 }
 
 /**
- * Writes the supplied note body to `{notesDir}/{messageId}.md`. Called
- * whenever a `note`-content message is inserted or its body is patched,
+ * Writes the supplied summary body to `{summaryStorageDir}/{messageId}.md`. Called
+ * whenever a `summary`-content message is inserted or its body is patched,
  * so the filesystem copy agents see stays in sync with the DB row.
  * Overwrites any prior file for the same message id.
  */
-export async function materializeNote(
+export async function materializeSummary(
   home: string,
   slug: string,
   chatId: string,
@@ -43,31 +42,31 @@ export async function materializeNote(
   body: string,
 ): Promise<string> {
   validateMessageId(messageId);
-  const dir = notesDir(home, slug, chatId);
+  const dir = summaryStorageDir(home, slug, chatId);
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, `${messageId}.md`);
   await fs.writeFile(file, body, "utf-8");
   return file;
 }
 
-/** Removes a materialized note file. Best-effort — missing file is OK. */
-export async function deleteMaterializedNote(
+/** Removes a materialized summary file. Best-effort — missing file is OK. */
+export async function deleteMaterializedSummary(
   home: string,
   slug: string,
   chatId: string,
   messageId: string,
 ): Promise<void> {
   validateMessageId(messageId);
-  const file = path.join(notesDir(home, slug, chatId), `${messageId}.md`);
+  const file = path.join(summaryStorageDir(home, slug, chatId), `${messageId}.md`);
   await fs.rm(file, { force: true });
 }
 
 /**
- * Writes the supplied previous note body as a history snapshot. Filename
+ * Writes the supplied previous summary body as a history snapshot. Filename
  * format: `{iso-utc}-{messageId}.md`, so sort order = reverse chronological
  * when sorted descending.
  */
-export async function snapshotNote(
+export async function snapshotSummary(
   home: string,
   slug: string,
   chatId: string,
@@ -75,7 +74,7 @@ export async function snapshotNote(
   previousBody: string,
 ): Promise<string> {
   validateMessageId(messageId);
-  const dir = noteHistoryDir(home, slug, chatId);
+  const dir = summaryHistoryDir(home, slug, chatId);
   await fs.mkdir(dir, { recursive: true });
   const iso = new Date().toISOString().replace(/:/g, "-");
   const file = path.join(dir, `${iso}-${messageId}.md`);
@@ -83,24 +82,24 @@ export async function snapshotNote(
   return file;
 }
 
-export interface NoteVersion {
+export interface SummaryVersion {
   timestamp: string;
   body: string;
 }
 
 /**
- * Returns every snapshot of the supplied note message, newest first. When
+ * Returns every snapshot of the supplied summary message, newest first. When
  * the directory doesn't exist (nothing snapshotted yet) returns an empty
  * array.
  */
-export async function listNoteHistory(
+export async function listSummaryHistory(
   home: string,
   slug: string,
   chatId: string,
   messageId: string,
-): Promise<NoteVersion[]> {
+): Promise<SummaryVersion[]> {
   validateMessageId(messageId);
-  const dir = noteHistoryDir(home, slug, chatId);
+  const dir = summaryHistoryDir(home, slug, chatId);
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
@@ -109,7 +108,7 @@ export async function listNoteHistory(
   }
   const matching = entries.filter((name) => name.endsWith(`-${messageId}.md`));
   matching.sort((a, b) => (a > b ? -1 : 1));
-  const versions: NoteVersion[] = [];
+  const versions: SummaryVersion[] = [];
   for (const name of matching) {
     const body = await fs.readFile(path.join(dir, name), "utf-8");
     const isoPart = name.slice(0, -`-${messageId}.md`.length);

@@ -93,7 +93,7 @@ agent by default and lets the user change it from the compose bar.
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
 | DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
 | GET    | /chats/{id}/messages/{messageId}/logs   | Stream execution log file |
-| GET    | /chats/{id}/messages/{messageId}/note-history | List archived versions of a note-content message |
+| GET    | /chats/{id}/messages/{messageId}/summary-history | List archived versions of a summary-content message |
 | GET    | /chats/{id}/artifacts                   | List chat artifacts       |
 | POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
 
@@ -151,8 +151,8 @@ Messages carry one of:
 - `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
 - `{ type: "events", events: [...] }` — captured opencode event stream
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
-- `{ type: "note", body }` — a running AI-generated summary of the chat; rendered specially in the UI, editable via PATCH
-- `{ type: "ai_note_request" }` — a scheduled system message that triggers a note refresh when fired
+- `{ type: "summary", body }` — a running AI-generated summary of the chat; hidden unless developer mode is enabled, editable via PATCH
+- `{ type: "summary_request" }` — a scheduled system message that triggers a summary refresh when fired
 - `{ type: "agent_turn", userMessageId }` — pending execution slot attached to a user message. Carries no textual copy of the prompt; `fireMessage` resolves `userMessageId` to build the prompt at fire time. Hidden from the visible chat timeline.
 
 ### Message execution metadata
@@ -191,7 +191,7 @@ persists that instead.
 
 Partial update. Body can include:
 
-- `content` — replace the message content (e.g. user edits a note)
+- `content` — replace the message content (e.g. user edits a summary)
 - `state` — only `cancelled` or `pending` allowed; arbitrary transitions are rejected
 - `executeAt` / `cron` — reschedule; pass `null` to clear
 
@@ -209,13 +209,13 @@ message. Served directly from
 `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
 
-### GET /chats/{id}/messages/{messageId}/note-history
+### GET /chats/{id}/messages/{messageId}/summary-history
 
-Returns every archived version of a `note`-content message, newest first.
+Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
-written automatically when a note is PATCH-edited or when `fireMessage`
+written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/note-history/`. Empty array when
+`~/Desk/workspaces/desk/.chats/{chatId}/summary-history/`. Empty array when
 nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire
@@ -317,7 +317,7 @@ Lists messages across all of the caller's chats with AND-combined filters. Read-
 | `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
 | `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
 | `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
-| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|note\|ai_note_request\|agent_turn` |
+| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|summary\|summary_request\|agent_turn` |
 | `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
 | `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
 | `limit` | integer, default 50, max 200 | Page size. |
