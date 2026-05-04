@@ -206,11 +206,31 @@ class CliEngine implements Engine {
     } catch (err) {
       throw new Error(`${this.name} inspect ${nameOrId}: invalid JSON (${(err as Error).message})`);
     }
+    // Bind-mount source-of-truth differs by engine. Docker fills both
+    // .HostConfig.Binds (string array, "src:dst:mode") and .Mounts
+    // (structured). nerdctl populates only .Mounts; HostConfig.Binds
+    // is null. Normalize both into the docker-style string format the
+    // rest of the codebase uses for parity comparisons.
+    const binds =
+      raw.HostConfig?.Binds && raw.HostConfig.Binds.length > 0
+        ? raw.HostConfig.Binds
+        : (raw.Mounts ?? [])
+            .filter((m) => m.Type === "bind" && m.Source && m.Destination)
+            .map((m) => `${m.Source}:${m.Destination}:${m.Mode || "rw"}`);
+    // Image-id source-of-truth differs too. Docker exposes
+    // .Image = "sha256:…" (the digest). nerdctl exposes the reference
+    // used at create time (e.g. "docker.io/desk/sandbox:v1"). Resolve
+    // refs to digests so callers can compare against `imageId()`.
+    let imageId = raw.Image;
+    if (imageId && !imageId.startsWith("sha256:")) {
+      const resolved = await this.imageId(imageId);
+      if (resolved) imageId = resolved;
+    }
     return {
       id: raw.Id,
-      imageId: raw.Image,
+      imageId,
       user: raw.Config?.User ?? "",
-      binds: raw.HostConfig?.Binds ?? [],
+      binds,
       running: raw.State?.Running ?? false,
     };
   }
@@ -382,6 +402,7 @@ interface ContainerInspect {
   Image: string;
   Config?: { User?: string };
   HostConfig?: { Binds?: string[] };
+  Mounts?: Array<{ Type?: string; Source?: string; Destination?: string; Mode?: string }>;
   State?: { Running?: boolean };
 }
 
