@@ -134,7 +134,9 @@ export async function createOrReuse(
       // route back to /sandbox/messages.
       extraHosts: ["host.docker.internal:host-gateway"],
       pidsLimit: 256,
-      memoryBytes: 512 * 1024 * 1024,
+      // 2 GiB — opencode + node + the LLM SDK plus a working set for tool
+      // calls. Earlier 512 MiB cap OOM-killed real runs (exit 137).
+      memoryBytes: 2 * 1024 * 1024 * 1024,
       tmpfs: { "/tmp": "" },
       binds: expectedBinds,
     });
