@@ -85,6 +85,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
           userTimezone: input.userTimezone,
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
+  () => loadAndSub("goal-autodetect.md", {}),
   (input) =>
     input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
   () => SKILLS_MARKDOWN,

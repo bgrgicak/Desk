@@ -42,7 +42,7 @@ describe("renderPromptBody", () => {
     instructions: "",
   };
 
-  it("orders mandate → artifacts → scheduling → goal → skills → user instructions", () => {
+  it("orders mandate → artifacts → scheduling → goal autodetect → goal → skills → user instructions", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -53,6 +53,7 @@ describe("renderPromptBody", () => {
     const idxMandate = body.indexOf("Your mandate is to help");
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
+    const idxGoalAutodetect = body.indexOf("## Goal autodetection");
     const idxGoal = body.indexOf("## User's goal: write a document");
     const idxSkills = body.indexOf("# Desk CLI");
     const idxUserInstructions = body.indexOf("## User instructions");
@@ -60,9 +61,24 @@ describe("renderPromptBody", () => {
     expect(idxMandate).toBeGreaterThanOrEqual(0);
     expect(idxArtifacts).toBeGreaterThan(idxMandate);
     expect(idxScheduling).toBeGreaterThan(idxArtifacts);
-    expect(idxGoal).toBeGreaterThan(idxScheduling);
+    expect(idxGoalAutodetect).toBeGreaterThan(idxScheduling);
+    expect(idxGoal).toBeGreaterThan(idxGoalAutodetect);
     expect(idxSkills).toBeGreaterThan(idxGoal);
     expect(idxUserInstructions).toBeGreaterThan(idxSkills);
+  });
+
+  it("includes goal autodetection even when no persisted goal is set", () => {
+    const body = renderPromptBody({ ...baseInput });
+    expect(body).toContain("## Goal autodetection");
+    expect(body).toContain("treat it as an internal skill call");
+    expect(body).toContain("Do not announce the detected goal");
+  });
+
+  it("makes an explicit persisted goal authoritative over autodetection", () => {
+    const body = renderPromptBody({ ...baseInput, goal: "site" });
+    expect(body).toContain("If this prompt includes a persisted user-goal section");
+    expect(body).toContain("treat that as the\n   loaded goal skill for the chat");
+    expect(body).toContain("## User's goal: build a site");
   });
 
   it("artifacts fragment includes the chat paths when chatId is set", () => {

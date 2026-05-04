@@ -80,6 +80,20 @@ describe("renderAgentFile", () => {
     expect(result).toContain("RUN `desk-agent task schedule`");
   });
 
+  it("includes prompt-level goal autodetection instructions", () => {
+    const result = renderAgentFile({
+      agentId: "agt_goal_detect",
+      agentName: "Helper",
+      model: "anthropic/claude-sonnet-4-5",
+      instructions: "",
+      userName: "Desk",
+    });
+
+    expect(result).toContain("## Goal autodetection");
+    expect(result).toContain("treat it as an internal skill call");
+    expect(result).toContain("Do not announce the detected goal");
+  });
+
   it("renders the per-chat artifact paths when chatId is supplied", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
