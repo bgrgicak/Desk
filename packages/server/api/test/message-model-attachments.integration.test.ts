@@ -405,4 +405,21 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toBe("User-edited summary of the chat.");
   });
+
+  it("deletes the materialized summary mirror when the summary message is deleted", async () => {
+    const reqId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
+      [reqId, chatId, JSON.stringify({ type: "summary_request" })],
+    );
+    const { childIds } = await runManager.fireMessage(reqId);
+    const summaryId = childIds[0];
+    const summaryPath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    await expect(fs.stat(summaryPath)).resolves.toBeTruthy();
+
+    const deleted = await request("DELETE", `/chats/${chatId}/messages/${summaryId}`, undefined, userToken);
+    expect(deleted.status).toBe(200);
+    await expect(fs.stat(summaryPath)).rejects.toThrow();
+  });
 });
