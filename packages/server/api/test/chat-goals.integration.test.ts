@@ -100,6 +100,18 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("document");
   });
 
+  it("JSON path: task send with goal sets chats.goal", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "finish this", kind: "task", goal: "task" },
+      () => {},
+    );
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBe("task");
+  });
+
   it("JSON path: subsequent send without goal does not overwrite the column", async () => {
     const chatId = await freshChat();
     await sendMessage(

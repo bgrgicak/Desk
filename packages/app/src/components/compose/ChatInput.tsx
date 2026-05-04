@@ -69,6 +69,8 @@ interface ChatInputProps {
   autoFocus?: boolean
   compact?: boolean
   showGoalPicker?: boolean
+  /** Persisted chat goal used as the composer's default selection. */
+  goal?: GoalKey
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
   /**
@@ -118,6 +120,7 @@ export function ChatInput({
   autoFocus = false,
   compact = false,
   showGoalPicker = true,
+  goal = null,
   prefillValue,
   focusRef,
   chatAgentId,
@@ -163,7 +166,8 @@ export function ChatInput({
 
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
-  const effectiveGoalKey: GoalKey = goalOverride ?? null
+  const persistedGoalKey = goal ?? null
+  const effectiveGoalKey: GoalKey = goalOverride ?? persistedGoalKey
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
@@ -294,7 +298,7 @@ export function ChatInput({
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
-    setGoalOverride(undefined)
+    if (effectiveGoalKey === null) setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

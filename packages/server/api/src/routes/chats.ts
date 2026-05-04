@@ -209,6 +209,10 @@ export async function sendMessage(
 
   const kind: MessageKind = data.kind ?? "chat";
 
+  if (data.goal) {
+    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  }
+
   // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
   // dispatches by kind. The "userMessage" / "triggerId" pair in the return
   // value is a chat-shape concession — both ids point at the same row so
@@ -245,10 +249,6 @@ export async function sendMessage(
     content: { type: "text", text: data.content },
     attachments,
   });
-
-  if (data.goal) {
-    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
-  }
 
   emit({ type: "message.appended", payload: userMessage });
 

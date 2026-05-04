@@ -1,3 +1,5 @@
+import type { GoalKey } from "@agent-desk/shared";
+
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
  * Duplicated (not imported) because @agent-desk/app isn't in the server's
@@ -72,7 +74,7 @@ export interface ServerChat {
   workspaceId: string;
   agentId: string;
   title: string;
-  goal?: string;
+  goal?: GoalKey;
   updatedAt: string;
   awaitingUser: boolean;
   unread: boolean;
@@ -88,16 +90,7 @@ export interface ServerChat {
    * the newest user-role text message — `app` / `data` / `site` / etc.
    * Null when no user text exists or no heuristic matches.
    */
-  goalKind?:
-    | "app"
-    | "document"
-    | "image"
-    | "data"
-    | "site"
-    | "run"
-    | "task"
-    | "scheduled"
-    | null;
+  goalKind?: GoalKey | null;
 }
 
 export interface AttachmentRef {

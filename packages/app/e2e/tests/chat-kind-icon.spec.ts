@@ -59,8 +59,9 @@ async function postMessage(
   chatId: string,
   kind: MessageKind,
   content: string,
+  opts: { goal?: string } = {},
 ): Promise<void> {
-  const body: Record<string, unknown> = { content, kind };
+  const body: Record<string, unknown> = { content, kind, ...opts };
   // Self-firing kinds need either an executeAt or cron, otherwise the
   // scheduler treats them as fire-immediately. Pin a far-future timestamp
   // so they sit pending and the icon assertion is stable.
@@ -101,6 +102,30 @@ async function fetchListedGoalKind(
   const list = (await res.json()) as Array<{ id: string; goalKind?: string | null }>;
   return list.find((c) => c.id === chatId)?.goalKind;
 }
+
+test("composer goal picker restores the chat's persisted goal", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const ctx = await bootstrap(serverUrl, token);
+  const chatId = await createChat(serverUrl, ctx, "composer-goal-doc");
+  await postMessage(serverUrl, ctx, chatId, "chat", "write the launch brief", {
+    goal: "document",
+  });
+  expect(await fetchListedGoalKind(serverUrl, ctx, chatId)).toBe("document");
+
+  await loggedInPage.reload();
+  const row = loggedInPage
+    .getByRole("button", { name: /composer-goal-doc/ })
+    .first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.click();
+
+  await expect(
+    loggedInPage.getByRole("button", { name: /New doc/ }).first(),
+  ).toBeVisible();
+});
 
 // UI test runs first so the browser context is launched before the
 // API-only tests pile up server-side load (chromium spawn under load
