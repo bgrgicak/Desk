@@ -26,14 +26,36 @@ Workflow for this goal:
    source of truth for app authoring; nothing in this prompt overrides
    it.
 
-3. **Edit, build, attach.** When iterating:
+3. **Compose with fragments, don't pile up routes.** For anything more
+   than a single screen — multiple views, distinct pieces the user
+   could drop into a chat individually, or surfaces with their own
+   capability profile — author each as a fragment under
+   `fragments/<name>/`. A fragment owns its `Component.tsx`,
+   `index.html`, and `skill.md`. The full app's `src/App.tsx` imports
+   each fragment's `Component.tsx` and wires it at a route, so the same
+   component renders standalone (chat-message embed) and inside the
+   full SPA (sidebar / pinned). Don't duplicate the component. Don't
+   build separate apps when one app with several fragments is the
+   right shape.
+
+   Examples:
+   - "todo tracker" → fragments: `todo-list`, `add-todo`. The full app
+     stitches them together.
+   - "trip planner" → fragments: `itinerary`, `expense-summary`,
+     `packing-list`.
+   - One-screen calculator → no fragments needed; the single root
+     component lives in `src/App.tsx`.
+
+4. **Edit, build, attach.** When iterating:
    - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
+   - Update `desk.app.json` `fragments` array whenever you add or
+     remove a fragment.
    - Run `npm run build` from the app directory — confirm zero exit
      before telling the user the app is ready.
    - Use `desk-agent chat attach-artifact` once per visible update to
      surface the `<name>.app/` directory in the chat.
 
-4. **Iterate, don't rewrite.** "Make it look better" or "add X" should
+5. **Iterate, don't rewrite.** "Make it look better" or "add X" should
    patch the existing files, not regenerate the app from scratch.
    Multiple `.app/` directories per chat are allowed if the user is
    clearly steering toward separate apps.

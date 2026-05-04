@@ -210,6 +210,18 @@ describe("renderPromptBody", () => {
     }
   });
 
+  it("the `app` goal points the agent at the scaffold + fragment composition", () => {
+    // PR-A added the desk-app-scaffold flow; PR-D pushed the goal toward
+    // multi-fragment composition. Pin the load-bearing pieces of that
+    // prompt so a future tweak doesn't quietly drop the agent into the
+    // single-HTML-file pattern PR-A replaced.
+    const body = renderPromptBody({ ...baseInput, goal: "app" });
+    expect(body).toContain("desk-agent app create");
+    expect(body).toContain("desk-app-scaffold");
+    expect(body).toMatch(/fragment/i);
+    expect(body).not.toContain("self-contained HTML file");
+  });
+
   it("renders user instructions when provided", () => {
     const body = renderPromptBody({ ...baseInput, instructions: "Be terse." });
     expect(body).toContain("## User instructions");
