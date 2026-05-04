@@ -297,7 +297,13 @@ class CliEngine implements Engine {
   }
 
   async exec(spec: ExecSpec): Promise<ExecHandle> {
-    const args = ["exec", "-i"];
+    // Intentionally NO `-i`: with `-i` the in-container process sees stdin
+    // as an open pipe, and well-behaved CLIs that auto-detect a piped
+    // stdin (opencode, jq -s, etc.) block forever waiting for EOF that
+    // never comes (host stdin is /dev/null but the daemon doesn't
+    // forward EOF on its own). Closing stdin via the absence of `-i`
+    // makes the in-container process see EOF immediately and proceed.
+    const args = ["exec"];
     if (spec.user) args.push("--user", spec.user);
     for (const e of spec.env ?? []) args.push("--env", e);
     args.push(spec.containerId, ...spec.cmd);
