@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, StickyNote } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
@@ -28,7 +28,7 @@ export function MessageBubble({
   isNew = false,
   agentName,
   onAttachmentClick,
-  developerMode = true,
+    developerMode = false,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
@@ -146,7 +146,7 @@ function SummaryView({ body }: { body: string }) {
   return (
     <div className="rounded-lg border border-dashed bg-muted/20 p-3">
       <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <StickyNote className="h-3.5 w-3.5" />
+        <FileText className="h-3.5 w-3.5" />
         Chat summary
       </div>
       <MarkdownContent text={body} />

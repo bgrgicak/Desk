@@ -376,8 +376,8 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
-    const notePath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
-    const content = await fs.readFile(notePath, "utf-8");
+    const summaryPath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
+    const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toContain("Summary");
     expect(content).toContain("attached file");
   });

@@ -84,8 +84,8 @@ export async function ensureWorkspaceLayout(home: string, slug: string): Promise
 
 /**
  * Returns the absolute path to the chats root directory. Contains one
- * subdirectory per chat, each with `attachments/`, `logs/`, and
- * `summary-history/` inside. Hidden from user file listings via the
+ * subdirectory per chat, each with `attachments/`, `logs/`, and `notes/`
+ * inside. Hidden from user file listings via the
  * leading-dot convention.
  */
 export function chatsDir(home: string, slug: string): string {

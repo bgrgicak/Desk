@@ -215,7 +215,7 @@ Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
 written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/summary-history/`. Empty array when
+`~/Desk/workspaces/desk/.chats/{chatId}/notes/.history/`. Empty array when
 nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire

@@ -15,10 +15,9 @@ function validateMessageId(messageId: string): void {
   }
 }
 
-/** Absolute path to a chat's summary-history directory. */
+/** Absolute path to a chat's summary history directory under `notes/.history/`. */
 export function summaryHistoryDir(home: string, slug: string, chatId: string): string {
-  validateChatId(chatId);
-  return path.join(workspaceRootPath(home, slug), ".chats", chatId, "summary-history");
+  return path.join(summaryStorageDir(home, slug, chatId), ".history");
 }
 
 /** Absolute path to the chat's summary mirror directory. The path segment is
@@ -62,9 +61,9 @@ export async function deleteMaterializedSummary(
 }
 
 /**
- * Writes the supplied previous summary body as a history snapshot. Filename
- * format: `{iso-utc}-{messageId}.md`, so sort order = reverse chronological
- * when sorted descending.
+ * Writes the supplied previous summary body as a history snapshot under
+ * `notes/.history/`. Filename format: `{iso-utc}-{messageId}.md`, so sort
+ * order = reverse chronological when sorted descending.
  */
 export async function snapshotSummary(
   home: string,

@@ -42,4 +42,4 @@ Tasks with a past `execute_at` fire naturally on the next tick — no special ha
 
 ## Summary scheduling
 
-`scheduleSummary(chatId)` deletes all existing `summary` rows for the chat (including completed ones) and inserts a new `pending` row with `execute_at = now() + 30 minutes`. This refreshes the running summary for the chat.
+`scheduleSummary(chatId)` deletes any existing pending `summary` request row for the chat and inserts a new one with `execute_at = now() + 30 minutes`. This refreshes the running summary for the chat without deleting completed summary messages.

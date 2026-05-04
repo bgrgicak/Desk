@@ -11,6 +11,7 @@ import {
   chatArtifactsDir,
   chatAttachmentsDir,
   listSummaryHistory,
+  deleteMaterializedSummary,
   materializeSummary,
   pinLibraryFileToChat,
   removeChatAttachment,
@@ -417,7 +418,10 @@ export async function patchMessage(
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "summary" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "summary") {
+    if (
+      (prev?.type === "summary" && typeof prev.body === "string") ||
+      (data.content as { type?: string })?.type === "summary"
+    ) {
       const chat = await queries.chats.findById(pool, chatId);
       const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
       if (ws) {
@@ -529,6 +533,12 @@ export async function deleteMessage(
   const slug = await workspaceSlugForChat(pool, chatId);
 
   await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
+
+  if (msg.content.type === "summary") {
+    await deleteMaterializedSummary(storage.home, slug, chatId, messageId).catch(() => {
+      // Best-effort; deleting the DB row is the source of truth.
+    });
+  }
 
   // Move log file to trash if present.
   const logPath = path.join(
