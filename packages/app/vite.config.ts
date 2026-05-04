@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -36,6 +37,13 @@ const proxy = {
     ws: true,
     changeOrigin: true,
   },
+  // Static-app routes (issue #47, PR-C). Same-origin serving so the iframe
+  // session cookie is path-scoped to the app and `fetch('/api/...')` calls
+  // from inside the iframe go through the same Vite proxy.
+  '/apps': {
+    target: API_TARGET,
+    changeOrigin: true,
+  },
 }
 
 export default defineConfig({
@@ -56,4 +64,17 @@ export default defineConfig({
   // fixture probes 127.0.0.1 and would never see the server).
   server: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ALLOWED_HOSTS },
   preview: { host: '127.0.0.1', port: APP_PORT, strictPort: true, proxy, allowedHosts: ALLOWED_HOSTS },
+  // Vitest config — exclude Playwright e2e specs (they live under e2e/
+  // and use Playwright's `test()`, which Vitest can't run). Without this
+  // exclude, vitest tries to import each Playwright spec, fails to
+  // resolve `test()`, and reports the whole file as a failed collection
+  // even though the actual unit tests inside src/ are green.
+  test: {
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.{idea,git,cache,output,temp}/**',
+      'e2e/**',
+    ],
+  },
 })

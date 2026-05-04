@@ -5,6 +5,7 @@ export const ID_PREFIXES = {
   chat: "cht_",
   message: "msg_",
   sandboxSession: "sbs_",
+  appSession: "aps_",
 } as const;
 
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

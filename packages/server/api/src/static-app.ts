@@ -66,6 +66,7 @@ export function isStaticPath(reqPath: string): boolean {
   if (reqPath.startsWith("/api/")) return false;
   if (reqPath.startsWith("/internal/")) return false;
   if (reqPath.startsWith("/sandbox/")) return false;
+  if (reqPath.startsWith("/apps/")) return false;
   return true;
 }
 

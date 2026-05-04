@@ -4,7 +4,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, type WsEvent } from "@agent-desk/shared";
 import { chatArtifactsDir, resolveHostPath, workspaceRootPath, type StorageContext } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
@@ -30,6 +30,7 @@ import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import * as appsRoutes from "./routes/apps.js";
 import {
   requireLibraryPathInWorkspace,
   parseReadableChatArtifactPath,
@@ -52,6 +53,24 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
   res.end(json);
+}
+
+/**
+ * The /apps/* dispatcher's `issue` endpoint runs after requireAuth has
+ * already let the path through (no global Bearer check on /apps/*). This
+ * helper re-applies the Bearer check locally so the issue endpoint
+ * cannot mint app-session tokens without a valid user session.
+ */
+async function requireBearerForApps(pool: Pool, req: IncomingMessage): Promise<string> {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Bearer ")) {
+    throw new UnauthorizedError("Missing or invalid Authorization header");
+  }
+  const userId = await verifySession(pool, auth.slice(7));
+  if (!userId) {
+    throw new UnauthorizedError("Invalid or expired session token");
+  }
+  return userId;
 }
 
 async function requireReadablePathForRoute(
@@ -231,7 +250,16 @@ export function createApp(opts: AppOptions): Server {
       // Route dispatch
       await dispatch(method, params, req, res);
     } catch (err) {
-      if (err instanceof DeskError) {
+      if (err instanceof appsRoutes.IssueRateLimitError) {
+        // Rate-limit response carries Retry-After so the parent SPA can
+        // back off cleanly instead of hammering the endpoint.
+        res.setHeader("Retry-After", String(err.retryAfterSeconds));
+        sendJson(res, 429, {
+          code: "RATE_LIMITED",
+          message: err.message,
+          retryAfterSeconds: err.retryAfterSeconds,
+        });
+      } else if (err instanceof DeskError) {
         sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
       } else {
         console.error("Unhandled error:", err);
@@ -361,6 +389,43 @@ export function createApp(opts: AppOptions): Server {
       const stat = await fsStat(targetPath);
       sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
       return;
+    }
+
+    // Static-app routes — `/apps/chat/:chatId/:appName/dist/*` and the
+    // companion `POST /apps/chat/:chatId/:appName/issue` mint-token
+    // endpoint. Auth: the static GET path validates a per-app HttpOnly
+    // cookie issued on first load; the issue endpoint re-validates the
+    // user's bearer session directly because requireAuth let it through.
+    if (segments[0] === "apps" && segments[1] === "chat" && segments.length >= 4) {
+      if (
+        method === "POST" &&
+        segments.length === 5 &&
+        segments[4] === "issue"
+      ) {
+        const issuerId = await requireBearerForApps(pool, req);
+        const chatId = decodeURIComponent(segments[2]);
+        const appName = decodeURIComponent(segments[3]);
+        const result = await appsRoutes.handleIssueAppSession(
+          pool,
+          storage,
+          issuerId,
+          chatId,
+          appName,
+        );
+        sendJson(res, 201, result);
+        return;
+      }
+      if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
+        const handled = await appsRoutes.handleStaticAppRequest(
+          pool,
+          storage,
+          segments,
+          new URL(req.url ?? "/", "http://localhost"),
+          req,
+          res,
+        );
+        if (handled) return;
+      }
     }
 
     // Sandbox routes — called by `desk` CLI from inside an OpenCode run.

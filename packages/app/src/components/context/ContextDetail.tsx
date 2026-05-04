@@ -55,6 +55,7 @@ import { toFolderList } from '@/store/selectors/library'
 import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
 import { MergeEditor } from './MergeEditor'
+import { AppPreview, parseChatAppManifestPath } from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { ConversationPanel } from '@/components/artifact/ConversationPanel'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
@@ -117,6 +118,11 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   const [conflictContent, setConflictContent] = useState<string | null>(null)
 
   const kind = fileKindForItem(item)
+  // PR-C: when the open item is an app manifest inside a chat artifact's
+  // `<name>.app/` directory, render the app live in an iframe instead of
+  // the raw JSON. The bridge + capability checklist live inside
+  // <AppPreview>.
+  const appManifestRef = parseChatAppManifestPath(item.id)
 
   // Refs that mirror the latest editorValue / previewText so the async fetch
   // callback can read current values without stale closures, and without
@@ -556,7 +562,9 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
 
         {/* Preview area */}
         <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
-          {item.type === 'note' && item.mimeType !== 'text/markdown' ? (
+          {appManifestRef ? (
+            <AppPreview chatId={appManifestRef.chatId} appName={appManifestRef.appName} />
+          ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
                 {editorValue !== null ? (
