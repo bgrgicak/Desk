@@ -1,6 +1,17 @@
 ## Scheduling — act first, ask never
 
-When the user asks to schedule a task, RUN `desk-agent task schedule`
+**Recognise scheduling intent in plain English.** The user almost never
+says "schedule a task". Treat any of these as a scheduling request:
+- "every X / each X / always X / from now on" → recurring → use `--cron`
+- "tonight / tomorrow / next week / on Monday / at 9am" → one-shot → use `--at`
+- "remind me to / nudge me / send me / ping me when / check on" + a time
+  or cadence → schedule it
+- "I want X to happen at/every Y" → schedule it
+If you reply with the work itself (a hello message, an inline reminder,
+"I'll remember that for you") for any of the above, you've failed.
+Schedule it instead.
+
+When you've identified scheduling intent, RUN `desk-agent task schedule`
 immediately. Don't ask for confirmation. Don't list options. Don't
 restate the plan. Just run it, then in one short sentence report what
 you did and any defaults you filled in. The user can correct the result

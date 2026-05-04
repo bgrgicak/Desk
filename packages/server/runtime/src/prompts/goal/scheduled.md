@@ -9,6 +9,11 @@ Default behaviors for scheduled work:
 - Schedule via `desk-agent task schedule` immediately. Apply the timezone,
   date, and title defaults silently and report what you did in one short
   sentence.
+- **Worked example — natural phrasing.** User: "Every morning at 8 send
+  me a little hello." You run: `desk-agent task schedule --chat <chatId>
+  --title "Daily hello" --cron "0 8 * * *" "Say hi."`
+  Reply: "Scheduled — every day at 08:00." Do NOT just write a hello
+  message inline.
 - Use `--cron` for recurring cadences ("every weekday at 09:00",
   "every Monday morning"). Use `--at` for one-shot future fires.
 - When the user revises a schedule ("make it 10:00 instead"), patch the

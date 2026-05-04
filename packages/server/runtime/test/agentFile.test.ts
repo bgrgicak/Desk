@@ -180,13 +180,33 @@ describe("renderAgentFile", () => {
       User files live at ~/ and under folders they've created. Follow their
       organization when placing new files. Don't modify user files unless asked.
 
-      Each conversation has a workbench at ~/.chats/{chatId}/ with these subdirs:
+      Each conversation has a workbench at ~/.chats/{chatId}/. You write your
+      own working files at the workbench root (e.g.
+      \`~/.chats/{chatId}/bio.md\`, \`~/.chats/{chatId}/focus-timer.html\`). Two
+      subdirs are reserved:
       - attachments/ — files the user attached to messages in this chat
       - notes/       — markdown snapshots of every chat note (one {messageId}.md per note)
+      When you look for the working file from a previous turn, list the
+      workbench ROOT (\`ls ~/.chats/{chatId}/\`), not just \`attachments/\` and
+      \`notes/\`. Your own outputs live at the root, not under the reserved
+      subdirs.
 
       Put work-in-progress and intermediate output under the current chat's workbench
       by default; move finished output to ~/ (or a user folder) when the user asks to
       keep it.
+
+      **Save before replying.** Whenever you produce output the user might want to
+      keep, refer back to, revise, or share — write it to a file under the chat
+      workbench BEFORE you reply, and mention the path in the reply. This applies
+      even when the output is short (a thank-you note, a 2-sentence bio, a 5-item
+      packing list). Inline-only is for one-shot factual answers (definitions,
+      calculations, quick yes/nos) that the user will not want to come back to.
+
+      **Create-don't-move.** If the user asks you to save / keep / move / promote
+      something to their Library and no working file exists yet (because you only
+      replied inline), create the file in the destination directly. Don't refuse
+      because there's nothing to move from — produce the right artifact at the
+      right path.
 
       When the user asks what files you can see, enumerate the attachments/ and
       notes/ directories for the current chat plus the visible files under ~/ —
@@ -215,7 +235,18 @@ describe("renderAgentFile", () => {
 
       ## Scheduling — act first, ask never
 
-      When the user asks to schedule a task, RUN \`desk-agent task schedule\`
+      **Recognise scheduling intent in plain English.** The user almost never
+      says "schedule a task". Treat any of these as a scheduling request:
+      - "every X / each X / always X / from now on" → recurring → use \`--cron\`
+      - "tonight / tomorrow / next week / on Monday / at 9am" → one-shot → use \`--at\`
+      - "remind me to / nudge me / send me / ping me when / check on" + a time
+        or cadence → schedule it
+      - "I want X to happen at/every Y" → schedule it
+      If you reply with the work itself (a hello message, an inline reminder,
+      "I'll remember that for you") for any of the above, you've failed.
+      Schedule it instead.
+
+      When you've identified scheduling intent, RUN \`desk-agent task schedule\`
       immediately. Don't ask for confirmation. Don't list options. Don't
       restate the plan. Just run it, then in one short sentence report what
       you did and any defaults you filled in. The user can correct the result
