@@ -2,6 +2,7 @@ import { Bot, BookmarkPlus, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Artifact } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
+import { InlineArtifactPreview } from './InlineArtifactPreview'
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
@@ -18,18 +19,36 @@ function getArtifactDescription(artifact: Artifact): string {
 
 interface ArtifactInlineCardProps {
   artifact: Artifact
+  workspaceId?: string
   isSaved: boolean
   onOpen: () => void
   /** Called when user clicks Save — parent is responsible for updating isSaved */
   onSave?: () => void
 }
 
-export function ArtifactInlineCard({ artifact, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
+export function ArtifactInlineCard({ artifact, workspaceId, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
+  const fallback = <ArtifactInlineCardFallback artifact={artifact} isSaved={isSaved} onOpen={onOpen} onSave={onSave} />
+  if (workspaceId) {
+    return (
+      <InlineArtifactPreview
+        workspaceId={workspaceId}
+        path={artifact.id}
+        name={artifact.name}
+        onOpen={onOpen}
+        actions={<ArtifactSaveButton artifact={artifact} isSaved={isSaved} onSave={onSave} />}
+        fallback={fallback}
+      />
+    )
+  }
+  return fallback
+}
+
+function ArtifactInlineCardFallback({ artifact, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
   const Icon = getArtifactIcon(artifact.type)
   const description = getArtifactDescription(artifact)
 
   return (
-    <div className="w-full rounded-xl border-2 border-border bg-background">
+    <div className="w-full rounded-xl border-2 border-border bg-background" data-testid="artifact-inline-fallback">
       {/* Clickable top section */}
       <button
         onClick={onOpen}
@@ -59,28 +78,36 @@ export function ArtifactInlineCard({ artifact, isSaved, onOpen, onSave }: Artifa
           >
             Open
           </button>
-          {isSaved ? (
-            <button
-              disabled
-              className="flex items-center gap-1.5 text-xs font-medium bg-primary/60 text-primary-foreground rounded-md px-2.5 py-1 cursor-default"
-            >
-              <Check className="h-3 w-3" />
-              In Library
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                onSave?.()
-                toast.success(`"${artifact.name}" moved to your Library`)
-              }}
-              className="flex items-center gap-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md px-2.5 py-1 hover:bg-primary/90 transition-colors"
-            >
-              <BookmarkPlus className="h-3 w-3" />
-              Save to Library
-            </button>
-          )}
+          <ArtifactSaveButton artifact={artifact} isSaved={isSaved} onSave={onSave} />
         </div>
       </div>
     </div>
+  )
+}
+
+function ArtifactSaveButton({ artifact, isSaved, onSave }: Pick<ArtifactInlineCardProps, 'artifact' | 'isSaved' | 'onSave'>) {
+  if (isSaved) {
+    return (
+      <button
+        disabled
+        className="flex items-center gap-1.5 rounded-md bg-primary/60 px-2.5 py-1 text-xs font-medium text-primary-foreground cursor-default"
+      >
+        <Check className="h-3 w-3" />
+        In Library
+      </button>
+    )
+  }
+
+  return (
+    <button
+      onClick={() => {
+        onSave?.()
+        toast.success(`"${artifact.name}" moved to your Library`)
+      }}
+      className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+    >
+      <BookmarkPlus className="h-3 w-3" />
+      Save to Library
+    </button>
   )
 }

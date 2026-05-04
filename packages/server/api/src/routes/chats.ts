@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -19,6 +19,7 @@ import {
   snapshotNote,
   trashChatDirectories,
   uploadArtifact,
+  validateLibrarySubpath,
   workspaceRootPath,
   type FileRef,
   type NoteVersion,
@@ -119,6 +120,54 @@ const SendMessageSchema = z.object({
   goal: z.string().optional(),
 });
 
+const AttachArtifactRefSchema = z.object({
+  chatId: z.string(),
+  path: z.string(),
+  name: z.string().optional(),
+  mime: z.string().optional(),
+});
+
+function normalizeWorkspaceRelativePath(raw: string): string {
+  let relPath = raw.trim();
+  if (!relPath) throw new ValidationError("Missing artifact path");
+  if (relPath.includes("\0") || relPath.includes("\\")) {
+    throw new ValidationError(`Invalid artifact path: ${raw}`);
+  }
+  if (relPath.startsWith("~/")) relPath = relPath.slice(2);
+  if (relPath.startsWith("/home/agent/")) relPath = relPath.slice("/home/agent/".length);
+  while (relPath.startsWith("./")) relPath = relPath.slice(2);
+  if (path.isAbsolute(relPath)) throw new ValidationError(`Invalid artifact path: ${raw}`);
+
+  const segments = relPath.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+    }
+  }
+  return segments.join("/");
+}
+
+function validateAttachableArtifactPath(relPath: string, chatId: string): void {
+  const chatPrefix = `.chats/${chatId}/artifacts/`;
+  if (relPath.startsWith(chatPrefix)) {
+    const artifactSegments = relPath.slice(chatPrefix.length).split("/");
+    for (const segment of artifactSegments) {
+      if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+        throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+      }
+    }
+    return;
+  }
+
+  if (relPath.startsWith(".chats/")) {
+    throw new ValidationError("Artifact path must be in this chat's artifacts directory");
+  }
+
+  // Library files are also workspace-relative and may be surfaced when the
+  // agent created or promoted a finished artifact outside the chat scratchpad.
+  validateLibrarySubpath(relPath);
+}
+
 /**
  * Translates a multipart `POST /chats/{id}/messages` form into the JSON
  * body shape `sendMessage` expects. Files land under
@@ -209,9 +258,11 @@ export async function sendMessage(
     data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
 
   const kind: MessageKind = data.kind ?? "chat";
+  const senderRole = kind === "chat" ? "user" : opts?.role ?? "user";
 
-  if (data.goal) {
-    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  const goalToPersist = data.goal ?? (senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined);
+  if (goalToPersist) {
+    await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
   }
 
   // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
@@ -229,7 +280,7 @@ export async function sendMessage(
     const message = await queries.messages.insert(pool, {
       id: messageId,
       chatId,
-      role: opts?.role ?? "user",
+      role: senderRole,
       content: { type: "text", text: data.content },
       attachments,
       kind,
@@ -265,6 +316,54 @@ export async function sendMessage(
   });
 
   return { userMessage, triggerId };
+}
+
+export async function attachArtifactRef(
+  storage: StorageContext,
+  rawData: unknown,
+  emit: (event: WsEvent) => void,
+  opts?: { agentId?: string; model?: string },
+): Promise<Message> {
+  const parsed = AttachArtifactRefSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid artifact body: ${parsed.error.message}`);
+  }
+  const data = parsed.data;
+  const relPath = normalizeWorkspaceRelativePath(data.path);
+  validateAttachableArtifactPath(relPath, data.chatId);
+
+  const chat = await queries.chats.findById(storage.pool, data.chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${data.chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const root = workspaceRootPath(storage.home, ws.path);
+  const abs = path.resolve(root, relPath);
+  if (!abs.startsWith(root + path.sep) && abs !== root) {
+    throw new ValidationError(`Path traversal detected: ${data.path}`);
+  }
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
+  if (!stat.isFile()) {
+    throw new ValidationError(`Artifact path must point to a file: ${relPath}`);
+  }
+
+  const message = await queries.messages.insert(storage.pool, {
+    id: generateId("message"),
+    chatId: data.chatId,
+    role: "agent",
+    content: {
+      type: "artifactRef",
+      path: relPath,
+      name: data.name?.trim() || path.basename(relPath),
+      mime: data.mime?.trim() || undefined,
+    },
+    agentId: opts?.agentId ?? chat.agentId,
+    model: opts?.model ?? null,
+  });
+  emit({ type: "message.appended", payload: message });
+  emit({ type: "workspace.synced", payload: { workspaceId: chat.workspaceId } });
+  return message;
 }
 
 /**

@@ -4,9 +4,11 @@ import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMe
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
+import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
 
 interface MessageBubbleProps {
   message: ServerMessage
+  workspaceId?: string
   isFirstInGroup?: boolean
   isNew?: boolean
   /** Agent name to display in the message header. */
@@ -21,6 +23,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({
   message,
+  workspaceId,
   isFirstInGroup = true,
   isNew = false,
   agentName,
@@ -82,17 +85,42 @@ export function MessageBubble({
           ))}
         </div>
       )}
-      <MessageContentView content={message.content} developerMode={developerMode} />
+      <MessageContentView
+        content={message.content}
+        workspaceId={workspaceId}
+        developerMode={developerMode}
+        onAttachmentClick={onAttachmentClick}
+      />
     </div>
   )
 }
 
-function MessageContentView({ content, developerMode }: { content: MessageContent; developerMode: boolean }) {
+function MessageContentView({
+  content,
+  workspaceId,
+  developerMode,
+  onAttachmentClick,
+}: {
+  content: MessageContent
+  workspaceId?: string
+  developerMode: boolean
+  onAttachmentClick?: (attachment: AttachmentRef) => void
+}) {
   switch (content.type) {
     case 'text':
       return <MarkdownContent text={content.text} />
     case 'artifactRef':
-      return <ArtifactRefRow path={content.path} name={content.name} />
+      return (
+        <ArtifactRefRow
+          workspaceId={workspaceId}
+          path={content.path}
+          name={content.name}
+          mime={content.mime}
+          onClick={onAttachmentClick
+            ? () => onAttachmentClick({ path: content.path, name: content.name ?? basenamePath(content.path), mime: content.mime })
+            : undefined}
+        />
+      )
     case 'events':
       return <EventsView log={content.log} developerMode={developerMode} />
     case 'toolCall':
@@ -112,13 +140,41 @@ function MessageContentView({ content, developerMode }: { content: MessageConten
   }
 }
 
-function ArtifactRefRow({ path, name }: { path: string; name?: string }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs">
+function basenamePath(path: string) {
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
+function ArtifactRefRow({ workspaceId, path, name, mime, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string; onClick?: () => void }) {
+  const label = name ?? basenamePath(path)
+  const className = 'inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs'
+  const inner = (
+    <>
       <FileText className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
-      <span className="truncate font-medium">{name ?? path}</span>
+      <span className="truncate font-medium">{label}</span>
       {name && <span className="text-muted-foreground truncate">{path}</span>}
-    </div>
+    </>
+  )
+  const fallback = !onClick ? <div className={className} data-testid="artifact-inline-fallback">{inner}</div> : (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${className} hover:bg-muted/40 transition-colors`}
+      data-testid="artifact-inline-fallback"
+    >
+      {inner}
+    </button>
+  )
+  if (!workspaceId) return fallback
+  return (
+    <InlineArtifactPreview
+      workspaceId={workspaceId}
+      path={path}
+      name={label}
+      mime={mime}
+      onOpen={onClick}
+      fallback={fallback}
+    />
   )
 }
 

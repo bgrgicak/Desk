@@ -85,12 +85,6 @@ export interface ServerChat {
    * fallback. Only populated by /chats list responses.
    */
   kind?: "chat" | "task" | "task_run";
-  /**
-   * Drives the chat-list icon (primary signal when set). Inferred from
-   * the newest user-role text message — `app` / `data` / `site` / etc.
-   * Null when no user text exists or no heuristic matches.
-   */
-  goalKind?: GoalKey | null;
 }
 
 export interface AttachmentRef {

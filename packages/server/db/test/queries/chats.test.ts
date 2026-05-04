@@ -153,8 +153,9 @@ describe("chats queries", () => {
     expect(list.find((c) => c.id === chatE)?.kind).toBe("chat");
   });
 
-  it("goalKind is inferred from the newest user-role text", async () => {
-    // 'craete a randon data table' — matches the data heuristic.
+  it("list exposes only the persisted chat goal", async () => {
+    // Message text would match the data heuristic, but list reads the single
+    // persisted goal source from chats.goal instead of computing a second tag.
     const dataChatId = generateId("chat");
     await chats.insert(pool, {
       id: dataChatId,
@@ -169,8 +170,6 @@ describe("chats queries", () => {
       content: { type: "text", text: "craete a randon data table" },
       kind: "chat",
     });
-    // Plus a system ai_note (the auto-emitted refresh) so we prove the
-    // user-role filter actually picks the user message, not the note.
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: dataChatId,
@@ -179,49 +178,15 @@ describe("chats queries", () => {
       kind: "ai_note",
     });
 
-    // Site chat — 'show me a portfolio'. (Avoid 'build/make/app' so the
-    // app heuristic doesn't fire first.)
-    const siteChatId = generateId("chat");
-    await chats.insert(pool, {
-      id: siteChatId,
-      workspaceId: wsId,
-      agentId,
-      title: "Portfolio site",
-    });
-    await messages.insert(pool, {
-      id: generateId("message"),
-      chatId: siteChatId,
-      role: "user",
-      content: { type: "text", text: "show me a portfolio" },
-      kind: "chat",
-    });
-
-    // Plain "hi" — no heuristic match, goalKind stays null.
-    const plainChatId = generateId("chat");
-    await chats.insert(pool, {
-      id: plainChatId,
-      workspaceId: wsId,
-      agentId,
-      title: "Plain",
-    });
-    await messages.insert(pool, {
-      id: generateId("message"),
-      chatId: plainChatId,
-      role: "user",
-      content: { type: "text", text: "hi" },
-      kind: "chat",
-    });
-
     const list = await chats.listWithLatestMessage(pool, wsId);
-    expect(list.find((c) => c.id === dataChatId)?.goalKind).toBe("data");
-    expect(list.find((c) => c.id === siteChatId)?.goalKind).toBe("site");
-    expect(list.find((c) => c.id === plainChatId)?.goalKind).toBeNull();
+    const dataChat = list.find((c) => c.id === dataChatId);
+    expect(dataChat?.goal).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(dataChat, "goalKind")).toBe(false);
   });
 
-  it("goalKind: explicit chats.goal beats inferGoal()", async () => {
+  it("list returns explicit chats.goal", async () => {
     // Chat is tagged 'document' on the column, but the message text would
-    // infer 'app'. The column wins — that's the source of truth from
-    // Task 3 onward.
+    // infer 'app'. The column is the only list-time source of truth.
     const explicitChatId = generateId("chat");
     await chats.insert(pool, {
       id: explicitChatId,
@@ -239,7 +204,20 @@ describe("chats queries", () => {
     });
 
     const list = await chats.listWithLatestMessage(pool, wsId);
-    expect(list.find((c) => c.id === explicitChatId)?.goalKind).toBe("document");
+    expect(list.find((c) => c.id === explicitChatId)?.goal).toBe("document");
+  });
+
+  it("rejects invalid chat goals", async () => {
+    await expect(chats.insert(pool, {
+      id: generateId("chat"),
+      workspaceId: wsId,
+      agentId,
+      title: "Invalid goal",
+      goal: "not-a-goal",
+    })).rejects.toThrow(/Invalid chat goal/);
+
+    await expect(chats.updateMeta(pool, chatId, { goal: "not-a-goal" }))
+      .rejects.toThrow(/Invalid chat goal/);
   });
 
   it("updates meta", async () => {

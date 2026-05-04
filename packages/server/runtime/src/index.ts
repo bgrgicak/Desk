@@ -33,6 +33,15 @@ export { renderAgentFile, writeAgentFile } from "./agentFile.js";
 export type { AgentFileInput } from "./agentFile.js";
 export { renderPromptBody, loadAndSub } from "./prompt.js";
 export type { RenderPromptInput } from "./prompt.js";
+export {
+  writeDeskSkillFiles,
+  writeGoalSkillFiles,
+  DESK_SKILLS_SANDBOX_DIR,
+  GOAL_SKILLS_SANDBOX_DIR,
+  DESK_SKILL_PREFIX,
+  DESK_GOAL_SKILL_PREFIX,
+  goalSkillName,
+} from "./goalSkills.js";
 export { createDriver } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";
 export { execInSandbox } from "./sandboxExec.js";

@@ -247,11 +247,6 @@ export interface Chat {
    * message kind, falling back to `'chat'`.
    */
   kind?: ChatKind
-  /**
-   * Drives the chat-list icon (primary signal when set). Inferred from
-   * the newest user-role text message — `app` / `data` / `site` / etc.
-   */
-  goalKind?: ChatGoalKind | null
 }
 
 // ── Settings / Connections (catalog of integrations the UI can render) ───────

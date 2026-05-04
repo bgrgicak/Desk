@@ -2,27 +2,21 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/**
- * Sandbox skills are markdown documents that get inlined into every agent
- * definition file before OpenCode reads it. Treat them as always-on context
- * the agent should know about — usage docs for the in-sandbox `desk` CLI
- * today, more surfaces tomorrow.
- *
- * Why inline instead of mounting into a discovery path: opencode-ai (sst.dev)
- * has no "skills" concept of its own, just agent files and AGENTS.md. The
- * agent file is the one channel guaranteed to land in the model's context,
- * so that's where skills go.
- *
- * Resolution: the postbuild step (`scripts/copy-assets.mjs`) copies each
- * skill markdown next to the bundled JS — `dist/sandbox-cli-skill.md` for
- * the `sandbox-cli` package skill. We resolve to that path first so the
- * built artifact is self-contained. In source mode (running under tsx /
- * vitest with the `@agent-desk/dev` export condition), the dist copy
- * doesn't exist; fall back to the source-tree location.
- */
-const SKILL_FILES: ReadonlyArray<{ built: string; source: string }> = [
-  { built: "sandbox-cli-skill.md", source: "../../sandbox-cli/skill.md" },
-];
+export interface DeskSkillSpec {
+  name: string;
+  description: string;
+  metadata?: Record<string, string>;
+  body: () => string;
+}
+
+export const DESK_CLI_SKILL_NAME = "desk-cli";
+export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
+export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
+
+const CLI_SKILL_FILE = {
+  built: "sandbox-cli-skill.md",
+  source: "../../sandbox-cli/skill.md",
+} as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,4 +27,52 @@ function readSkill(spec: { built: string; source: string }): string {
   return fs.readFileSync(sourcePath, "utf-8").trim();
 }
 
-export const SKILLS_MARKDOWN: string = SKILL_FILES.map(readSkill).join("\n\n");
+function readCliManual(): string {
+  return readSkill(CLI_SKILL_FILE);
+}
+
+function extractSection(markdown: string, heading: string): string {
+  const start = markdown.indexOf(heading);
+  if (start === -1) {
+    throw new Error(`Missing heading "${heading}" in Desk CLI skill source`);
+  }
+  const next = markdown.indexOf("\n## ", start + heading.length);
+  return markdown.slice(start, next === -1 ? undefined : next).trim();
+}
+
+function taskScheduleReference(): string {
+  return [
+    "# Desk task scheduling reference",
+    "",
+    extractSection(readCliManual(), "## desk-agent task schedule"),
+  ].join("\n");
+}
+
+function chatAttachArtifactReference(): string {
+  return [
+    "# Desk chat artifact attachment reference",
+    "",
+    extractSection(readCliManual(), "## desk-agent chat attach-artifact"),
+  ].join("\n");
+}
+
+export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
+  {
+    name: DESK_CLI_SKILL_NAME,
+    description:
+      "Use when the agent needs the full Desk CLI command manual, including command selection, environment, output, syntax, examples, and failure modes.",
+    body: readCliManual,
+  },
+  {
+    name: DESK_TASK_SCHEDULE_SKILL_NAME,
+    description:
+      "Use when the agent needs syntax, examples, cron reference, or failure modes for scheduling Desk tasks.",
+    body: taskScheduleReference,
+  },
+  {
+    name: DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
+    description:
+      "Use when the agent needs syntax or examples for surfacing generated artifacts in Desk chat.",
+    body: chatAttachArtifactReference,
+  },
+];

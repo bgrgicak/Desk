@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
 import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/storage";
 
@@ -20,6 +21,12 @@ import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/sto
  */
 
 export const SANDBOX_HOME = "/home/agent";
+export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.config/opencode/skills`;
+
+/** Host-side global skills directory. Mounted read-only into each sandbox. */
+export function skillsHostDir(home: string): string {
+  return path.join(home, "Desk", ".skills");
+}
 
 const activeMounts = new Map<string, Map<string, MountSet>>();
 
@@ -110,8 +117,9 @@ export type MountPlan = MountPlanEntry[];
 
 /**
  * Default mount plan — one rw bind of the workspace root onto the
- * container's $HOME. Custom plans can be built by callers that need to
- * expose additional directories (e.g. ~/Projects) alongside.
+ * container's $HOME, plus global Desk skills mounted read-only. Custom
+ * plans can be built by callers that need to expose additional directories
+ * (e.g. ~/Projects) alongside.
  */
 export function buildDefaultMountPlan(home: string, workspaceSlug: string): MountPlan {
   return [
@@ -120,6 +128,12 @@ export function buildDefaultMountPlan(home: string, workspaceSlug: string): Moun
       targetPath: SANDBOX_HOME,
       mode: "rw",
       category: "workspace",
+    },
+    {
+      sourcePath: skillsHostDir(home),
+      targetPath: SKILLS_SANDBOX_DIR,
+      mode: "ro",
+      category: "external",
     },
   ];
 }

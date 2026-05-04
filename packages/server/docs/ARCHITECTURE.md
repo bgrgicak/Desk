@@ -78,6 +78,7 @@ Software that runs inside the sandbox.
 * Streaming partial output
 * Temporary runtime state
 * Agent identity and scoped credentials accompany every host-bound tool call; the Tool API session token is injected into the sandbox as an environment variable, so the host Tool API can resolve the caller and apply the allowlist check
+* Desk-managed OpenCode skills are generated on the host under `${DESK_HOME}/Desk/.skills/<skill-name>/SKILL.md` and mounted read-only at `~/.config/opencode/skills/` inside the sandbox. The base system prompt keeps short behavior rules and tells agents to load `desk-cli*` reference skills or `desk-goal-*` goal skills only when needed.
 
 ### 7. Tool Layer
 

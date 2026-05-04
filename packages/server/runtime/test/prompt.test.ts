@@ -42,7 +42,7 @@ describe("renderPromptBody", () => {
     instructions: "",
   };
 
-  it("orders mandate → artifacts → scheduling → goal autodetect → goal → skills → user instructions", () => {
+  it("orders mandate → artifacts → context → scheduling → goal autodetect → goal → Desk skill router → user instructions", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -52,25 +52,38 @@ describe("renderPromptBody", () => {
 
     const idxMandate = body.indexOf("Your mandate is to help");
     const idxArtifacts = body.indexOf("## Your workspace");
+    const idxContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
     const idxGoalAutodetect = body.indexOf("## Goal autodetection");
     const idxGoal = body.indexOf("## User's goal: write a document");
-    const idxSkills = body.indexOf("# Desk CLI");
+    const idxSkills = body.indexOf("## Desk native skills");
     const idxUserInstructions = body.indexOf("## User instructions");
 
     expect(idxMandate).toBeGreaterThanOrEqual(0);
     expect(idxArtifacts).toBeGreaterThan(idxMandate);
-    expect(idxScheduling).toBeGreaterThan(idxArtifacts);
+    expect(idxContext).toBeGreaterThan(idxArtifacts);
+    expect(idxScheduling).toBeGreaterThan(idxContext);
     expect(idxGoalAutodetect).toBeGreaterThan(idxScheduling);
     expect(idxGoal).toBeGreaterThan(idxGoalAutodetect);
     expect(idxSkills).toBeGreaterThan(idxGoal);
     expect(idxUserInstructions).toBeGreaterThan(idxSkills);
   });
 
+  it("does not inline the long Desk CLI manual", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+    expect(body).toContain("## Desk native skills");
+    expect(body).toContain("desk-cli-task-schedule");
+    expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).not.toContain("# Desk CLI");
+    expect(body).not.toContain("### Cron quick reference");
+    expect(body).not.toContain("NO_TOKEN");
+  });
+
   it("includes goal autodetection even when no persisted goal is set", () => {
     const body = renderPromptBody({ ...baseInput });
     expect(body).toContain("## Goal autodetection");
-    expect(body).toContain("treat it as an internal skill call");
+    expect(body).toContain("desk-goal-<goal>");
+    expect(body).toContain("native `skill` tool");
     expect(body).toContain("Do not announce the detected goal");
   });
 
@@ -94,15 +107,17 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("Chat artifacts:");
   });
 
-  it("artifacts fragment includes chat.attach_artifact instruction when chatId is set", () => {
+  it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
-    expect(body).toContain("chat.attach_artifact");
+    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<workspace-relative-path>"');
+    expect(body).toContain("Quote the path.");
+    expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("chat-xyz");
   });
 
-  it("artifacts fragment omits chat.attach_artifact instruction when chatId is missing", () => {
+  it("artifacts fragment omits attach-artifact instruction when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("chat.attach_artifact");
+    expect(body).not.toContain("After writing a new artifact or making a significant update, run");
   });
 
   it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
@@ -115,9 +130,38 @@ describe("renderPromptBody", () => {
     expect(visibilitySentence).not.toContain("notes/");
   });
 
+  it("frames task context as conditional and prioritized", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Use only the context needed to do the task well.");
+    expect(body).toContain("When you need more context, prefer sources in this order:");
+    expect(body).toContain("This is a priority order, not\na requirement to load every source.");
+    expect(body).toContain("Don't scan attachments, artifacts, or ~/\neagerly");
+
+    const idxChat = body.indexOf("1. The current chat conversation");
+    const idxCurrentAttachment = body.indexOf("2. File attached to the current message");
+    const idxChatAttachments = body.indexOf("3. Other attachments in attachments/ for this chat");
+    const idxArtifacts = body.indexOf("4. Prior outputs in artifacts/ for this chat");
+    const idxHome = body.indexOf("5. Files elsewhere under ~/ only when the task still needs more local context");
+
+    expect(idxChat).toBeGreaterThanOrEqual(0);
+    expect(idxCurrentAttachment).toBeGreaterThan(idxChat);
+    expect(idxChatAttachments).toBeGreaterThan(idxCurrentAttachment);
+    expect(idxArtifacts).toBeGreaterThan(idxChatAttachments);
+    expect(idxHome).toBeGreaterThan(idxArtifacts);
+  });
+
+  it("guides ask-vs-act decisions", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Ask for feedback or clarification only when a missing choice would materially");
+    expect(body).toContain("Otherwise choose a reasonable\ndefault, act, and state the assumption briefly.");
+  });
+
   it("includes timezone-known fragment when userTimezone is provided", () => {
     const body = renderPromptBody({ ...baseInput, userTimezone: "Europe/Berlin" });
     expect(body).toContain("Europe/Berlin (Desk's app client)");
+    expect(body).toContain("desk-cli-task-schedule");
   });
 
   it("includes timezone-unknown fragment when userTimezone is missing", () => {

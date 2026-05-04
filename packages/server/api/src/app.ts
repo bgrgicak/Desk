@@ -338,6 +338,24 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    if (path === "/sandbox/artifacts" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      await requireOwnedChat(pool, body.chatId, agent.userId);
+
+      const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
+        agentId: agent.id,
+        model: agent.model,
+      });
+      sendJson(res, 201, message);
+      return;
+    }
+
     // Auth routes
     if (path === "/auth/login" && method === "POST") {
       const body = await parseBody(req) as { username: string; password: string };

@@ -10,6 +10,7 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
@@ -110,11 +111,12 @@ export async function createOrReuse(
     await engine.remove(containerName, true);
   }
 
-  // Pre-create every source dir in the plan so the runtime doesn't
-  // auto-create them as root and break subsequent non-root writes.
+  // Pre-create every source dir and nested target mount point so the runtime
+  // doesn't auto-create them as root and break subsequent non-root writes.
   for (const entry of plan) {
     await fs.mkdir(entry.sourcePath, { recursive: true });
   }
+  await ensureNestedMountTargets(plan);
 
   try {
     const containerId = await engine.create({
@@ -155,6 +157,18 @@ export async function createOrReuse(
       }
     }
     throw err;
+  }
+}
+
+async function ensureNestedMountTargets(plan: MountPlan): Promise<void> {
+  for (const entry of plan) {
+    for (const parent of plan) {
+      if (entry === parent) continue;
+      if (parent.category !== "workspace" || parent.mode !== "rw") continue;
+      const rel = path.posix.relative(parent.targetPath, entry.targetPath);
+      if (!rel || rel.startsWith("..") || path.posix.isAbsolute(rel)) continue;
+      await fs.mkdir(path.join(parent.sourcePath, rel), { recursive: true });
+    }
   }
 }
 

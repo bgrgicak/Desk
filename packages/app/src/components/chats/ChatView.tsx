@@ -882,6 +882,7 @@ export function ChatView({
         {/* Messages + Input via shared ChatThread */}
         <ChatThread
           chatId={chat.id}
+          workspaceId={chat.workspaceId}
           skipQuery={isNewChat}
           agentName={agentName}
           developerMode={developerMode}
@@ -919,6 +920,7 @@ export function ChatView({
                 <ArtifactInlineCard
                   key={artifact.id}
                   artifact={artifact}
+                  workspaceId={chat.workspaceId}
                   isSaved={savedArtifactIds.has(artifact.id)}
                   onOpen={() => onArtifactClick?.(artifact)}
                   onSave={() => onSaveArtifact?.(artifact.id)}

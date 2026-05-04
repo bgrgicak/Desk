@@ -29,8 +29,8 @@ const WS_NAME: Record<string, string> = {
   creative: 'Creative Lab',
 }
 
-// ── Chat goal icon — picker-aligned goal first, kind fallback. ───────────────
-const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
+// ── Chat goal icon — persisted goal first, kind fallback. ───────────────────
+const GOAL_ICONS: Record<NonNullable<Chat['goal']>, LucideIcon> = {
   app:       Zap,
   document:  FileText,
   image:     ImageIcon,
@@ -40,8 +40,13 @@ const GOAL_ICONS: Record<NonNullable<Chat['goalKind']>, LucideIcon> = {
   task:      ListTodo,
   scheduled: CalendarClock,
 }
+function getGoalIcon(goal: Chat['goal']): LucideIcon | null {
+  if (!goal) return null
+  return Object.prototype.hasOwnProperty.call(GOAL_ICONS, goal) ? GOAL_ICONS[goal] : null
+}
 function chatGoalIcon(chat: Chat): LucideIcon {
-  if (chat.goalKind) return GOAL_ICONS[chat.goalKind]
+  const GoalIcon = getGoalIcon(chat.goal)
+  if (GoalIcon) return GoalIcon
   switch (chat.kind) {
     case 'task':
     case 'task_run':

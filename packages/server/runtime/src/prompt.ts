@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type GoalKey } from "@agent-desk/shared";
-import { SKILLS_MARKDOWN } from "./skills.js";
 
 /**
  * System-prompt rendering pipeline.
@@ -74,10 +73,11 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         `Chat notes:       ~/.chats/${input.chatId}/notes/\n`
       : "";
     const attachArtifactInstruction = input.chatId
-      ? `**Surface in chat.** After writing a new artifact or making a significant update, call \`chat.attach_artifact\` with \`chatId\` \`${input.chatId}\` and \`path\` set to the file's workspace-relative path (strip the leading \`~/\`, so \`~/.chats/…/foo.html\` becomes \`.chats/…/foo.html\`). Do the same when the user asks to see or open an artifact. Skip for minor edits that don't change what the user sees.`
+      ? `**Surface in chat.** After writing a new artifact or making a significant update, run \`desk-agent chat attach-artifact --chat ${input.chatId} "<workspace-relative-path>"\` with the path set to the file's workspace-relative path (strip the leading \`~/\`, so \`~/.chats/…/foo.html\` becomes \`.chats/…/foo.html\`). Quote the path. Do the same when the user asks to see or open an artifact. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples. Skip for minor edits that don't change what the user sees.`
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
+  () => loadAndSub("context.md", {}),
   (input) =>
     input.userTimezone
       ? loadAndSub("scheduling-tz-known.md", {
@@ -88,7 +88,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
   () => loadAndSub("goal-autodetect.md", {}),
   (input) =>
     input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
-  () => SKILLS_MARKDOWN,
+  () => loadAndSub("desk-skills.md", {}),
   (input) =>
     loadAndSub("user-instructions.md", {
       userName: input.userName,

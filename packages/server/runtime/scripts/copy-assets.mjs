@@ -3,7 +3,7 @@
 // next to the bundled JS so the built artifact is self-contained.
 //
 // - `src/prompts/**` → `dist/prompts/**`  (read by `prompt.ts`)
-// - `../sandbox-cli/skill.md` → `dist/sandbox-cli-skill.md`  (read by `skills.ts`)
+// - `../sandbox-cli/skill.md` → `dist/sandbox-cli-skill.md`  (materialized as Desk skills)
 //
 // Source-mode (tsx / vitest with the `@agent-desk/dev` export condition)
 // reads these files from `src/` and `../sandbox-cli/` directly; the dist

@@ -112,6 +112,53 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("task");
   });
 
+  it("JSON path: invalid explicit goal is rejected", async () => {
+    const chatId = await freshChat();
+    await expect(sendMessage(
+      pool,
+      chatId,
+      { content: "hello", goal: "not-a-goal" },
+      () => {},
+    )).rejects.toThrow(/Invalid chat goal/);
+  });
+
+  it("JSON path: send without goal persists an inferred goal", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "let's build a calendar app" },
+      () => {},
+    );
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBe("app");
+  });
+
+  it("JSON path: send without a matching goal leaves chats.goal empty", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "hello" },
+      () => {},
+    );
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBeUndefined();
+  });
+
+  it("JSON path: agent-role send without goal does not persist an inferred goal", async () => {
+    const chatId = await freshChat();
+    await sendMessage(
+      pool,
+      chatId,
+      { content: "build a dashboard", kind: "task" },
+      () => {},
+      { role: "agent" },
+    );
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBeUndefined();
+  });
+
   it("JSON path: subsequent send without goal does not overwrite the column", async () => {
     const chatId = await freshChat();
     await sendMessage(
@@ -154,5 +201,18 @@ describe("goal persistence on send", () => {
     await sendMessage(pool, chatId, body, () => {});
     const chat = await queries.chats.findById(pool, chatId);
     expect(chat?.goal).toBe("data");
+  });
+
+  it("multipart path: FormData without goal persists an inferred goal", async () => {
+    const chatId = await freshChat();
+    const form = new FormData();
+    form.set("content", "show me a portfolio site");
+
+    const body = await buildSendMessageBodyFromForm(storage, chatId, form);
+    expect(body).toMatchObject({ content: "show me a portfolio site" });
+
+    await sendMessage(pool, chatId, body, () => {});
+    const chat = await queries.chats.findById(pool, chatId);
+    expect(chat?.goal).toBe("site");
   });
 });

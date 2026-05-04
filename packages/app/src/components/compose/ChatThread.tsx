@@ -47,6 +47,7 @@ export function isMessageVisible(m: ServerMessage, developerMode: boolean): bool
 
 export interface ChatThreadProps {
   chatId: string
+  workspaceId?: string
   /** When true the messages query is skipped (used for the "new chat" stub). */
   skipQuery?: boolean
   agentName?: string
@@ -75,6 +76,7 @@ export interface ChatThreadProps {
 
 export function ChatThread({
   chatId,
+  workspaceId,
   skipQuery = false,
   agentName,
   developerMode = false,
@@ -152,6 +154,7 @@ export function ChatThread({
             >
               <MessageBubble
                 message={msg}
+                workspaceId={workspaceId}
                 agentName={agentName}
                 isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
                 isNew={showNewBadge && msg.id === lastAssistantId}

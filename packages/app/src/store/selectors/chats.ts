@@ -21,6 +21,5 @@ export function toUiChat(c: ServerChat): UiChat {
     agentId: c.agentId,
     goal: c.goal ?? null,
     kind: c.kind,
-    goalKind: c.goalKind ?? null,
   };
 }

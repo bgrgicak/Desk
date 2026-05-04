@@ -101,6 +101,11 @@ agent by default and lets the user change it from the compose bar.
 
 Lists chats in one of the caller's workspaces.
 
+Each chat may include a persisted `goal` (`app`, `document`, `image`, `data`,
+`site`, `run`, `task`, or `scheduled`). Explicit composer selections and clear
+message-text inference both write to `chats.goal`; clients should use that one
+field for goal icons and goal filters.
+
 **Query parameters:**
 
 - `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
@@ -163,7 +168,7 @@ Messages grow optional execution fields (added M6a):
 
 ### POST /chats/{id}/messages
 
-Body: `{ content: string, attachments?: AttachmentRef[] }`. Each
+Body: `{ content: string, attachments?: AttachmentRef[], goal?: string }`. Each
 `AttachmentRef` is a workspace-relative `path` that resolves to either a
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
@@ -171,6 +176,10 @@ server persists them on the user message envelope and `fireMessage`
 forwards each path to opencode via a `--file` flag (opencode accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
+
+When `goal` is provided, it is persisted to `chats.goal`. When omitted and the
+chat does not already have a goal, the server infers a goal from clear message
+text and persists that instead.
 
 ### PATCH /chats/{id}/messages/{messageId}
 
@@ -208,6 +217,16 @@ nothing has been snapshotted yet.
 Loopback-only (127.0.0.1) + shared-secret. Fires a pending scheduled
 message by id. Called by `at`/`cron` via curl; not intended for user
 clients.
+
+### Sandbox: POST /sandbox/artifacts
+
+Sandbox-token only (`X-Desk-Sandbox-Token`). Called by
+`desk-agent chat attach-artifact` from inside an agent run after the agent
+writes a file. Body is `{ chatId, path, name?, mime? }`, where `path` is a
+workspace-relative path to an existing file, usually
+`.chats/{chatId}/artifacts/{file}`. Inserts an agent message with
+`content: { type: "artifactRef", path, name?, mime? }` and emits
+`message.appended`.
 
 ### POST /me/password
 
