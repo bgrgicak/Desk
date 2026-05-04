@@ -24,6 +24,9 @@ export {
   pinLibraryFileToChat,
   saveChatAttachmentToLibrary,
   saveChatArtifactToLibrary,
+  copyLibraryAppToChat,
+  replaceLibraryAppFromChat,
+  ReplaceLibraryAppConflictError,
   deleteChatApp,
   deleteLibraryApp,
   removeChatAttachment,
@@ -31,7 +34,13 @@ export {
   resolveForSandbox,
   validateLibrarySubpath,
 } from "./files.js";
-export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";
+export type {
+  StorageContext,
+  UploadArtifactInput,
+  FileRef,
+  CopyLibraryAppResult,
+  ReplaceLibraryAppOptions,
+} from "./files.js";
 export {
   listLibrary,
   createLibraryFolder,

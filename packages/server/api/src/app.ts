@@ -5,7 +5,13 @@ import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:p
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { DeskError, NotFoundError, UnauthorizedError, ValidationError, type WsEvent } from "@agent-desk/shared";
-import { chatArtifactsDir, resolveHostPath, workspaceRootPath, type StorageContext } from "@agent-desk/storage";
+import {
+  chatArtifactsDir,
+  ReplaceLibraryAppConflictError,
+  resolveHostPath,
+  workspaceRootPath,
+  type StorageContext,
+} from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
@@ -868,6 +874,69 @@ export function createApp(opts: AppOptions): Server {
         emitEvent,
       );
       sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "copy-library-app" && segments.length === 3 && method === "POST") {
+      // PR-G: clone a library `<name>.app/` into the chat's artifacts dir
+      // so the agent can iterate on it without touching the library copy.
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const libraryPath = typeof body?.path === "string" ? body.path : "";
+      if (!libraryPath) throw new ValidationError("Missing 'path' in body");
+      const result = await chatRoutes.copyAppFromLibrary(
+        storage,
+        segments[1],
+        libraryPath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "replace-library-app" && segments.length === 3 && method === "POST") {
+      // PR-G: promote the chat-artifact `<name>.app/` over the library
+      // version, moving the prior copy to .trash/.app-versions for
+      // recovery. Optional `expectedSourceVersion` (or `If-Match` header)
+      // gates against concurrent edits — see `copyLibraryAppToChat`.
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as {
+        name?: unknown;
+        targetPath?: unknown;
+        expectedSourceVersion?: unknown;
+      };
+      const artifactName = typeof body?.name === "string" ? body.name : "";
+      const targetPath = typeof body?.targetPath === "string" ? body.targetPath : "";
+      if (!artifactName) throw new ValidationError("Missing 'name' in body");
+      if (!targetPath) throw new ValidationError("Missing 'targetPath' in body");
+      const headerIfMatch = req.headers["if-match"];
+      const ifMatch = Array.isArray(headerIfMatch) ? headerIfMatch[0] : headerIfMatch;
+      const expectedSourceVersion =
+        typeof body?.expectedSourceVersion === "string"
+          ? body.expectedSourceVersion
+          : typeof ifMatch === "string" && ifMatch
+            ? ifMatch
+            : undefined;
+      try {
+        const result = await chatRoutes.replaceLibraryAppWithChatArtifact(
+          storage,
+          segments[1],
+          artifactName,
+          targetPath,
+          emitEvent,
+          { expectedSourceVersion },
+        );
+        sendJson(res, 200, result);
+      } catch (err) {
+        if (err instanceof ReplaceLibraryAppConflictError) {
+          sendJson(res, 409, {
+            code: "VERSION_CONFLICT",
+            message: err.message,
+            expected: err.expected,
+            actual: err.actual,
+          });
+          return;
+        }
+        throw err;
+      }
       return;
     }
     if (segments[0] === "chats" && segments[2] === "save-artifact-to-library" && segments.length === 3 && method === "POST") {

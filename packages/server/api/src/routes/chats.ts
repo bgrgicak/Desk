@@ -19,6 +19,8 @@ import {
   removeChatAttachment,
   saveChatAttachmentToLibrary,
   saveChatArtifactToLibrary,
+  copyLibraryAppToChat,
+  replaceLibraryAppFromChat,
   snapshotSummary,
   trashChatDirectories,
   uploadArtifact,
@@ -791,6 +793,73 @@ export async function saveArtifactToLibrary(
   });
 
   return file;
+}
+
+/**
+ * Modify-as-version: copy a library `<name>.app/` into a chat's
+ * artifacts dir so the agent can iterate on it without disturbing the
+ * library copy. Issue #47, PR-G.
+ */
+export async function copyAppFromLibrary(
+  storage: StorageContext,
+  chatId: string,
+  libraryPath: string,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const ref = await copyLibraryAppToChat(storage, ws.path, chatId, libraryPath);
+  emit({
+    type: "library.changed",
+    payload: {
+      workspaceId: chat.workspaceId,
+      path: ref.path,
+      op: "added",
+      affectedChatIds: [chatId],
+    },
+  });
+  return ref;
+}
+
+/**
+ * Modify-as-version: replace a library `<name>.app/` with the
+ * chat-artifact version of the same app. The prior library copy is
+ * moved to `~/Desk/.trash/.app-versions/` for recovery. Issue #47, PR-G.
+ *
+ * Concurrency: pass `expectedSourceVersion` (captured by the UI from
+ * `copyLibraryAppToChat`'s response) to enforce an If-Match-style
+ * version check. The caller surfaces the resulting `ConflictError` as
+ * a 409 to the client.
+ */
+export async function replaceLibraryAppWithChatArtifact(
+  storage: StorageContext,
+  chatId: string,
+  artifactName: string,
+  targetPath: string,
+  emit: (event: WsEvent) => void,
+  opts: { expectedSourceVersion?: string } = {},
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const ref = await replaceLibraryAppFromChat(
+    storage,
+    ws.path,
+    chatId,
+    artifactName,
+    targetPath,
+    { expectedSourceVersion: opts.expectedSourceVersion },
+  );
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: ref.path, op: "updated" },
+  });
+  return ref;
 }
 
 /**
