@@ -20,6 +20,15 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
+import { detectEngine, sandboxImage } from "@agent-desk/runtime";
+
+// /tools/models hits the runtime; skip those cases when there's no
+// sandbox image available locally. Other routes don't touch the engine.
+let SANDBOX_AVAILABLE = false;
+try {
+  const engine = await detectEngine();
+  SANDBOX_AVAILABLE = (await engine.imageId(sandboxImage())) !== null;
+} catch { /* no engine = no sandbox */ }
 
 let pool: Pool;
 let server: http.Server;
@@ -605,7 +614,7 @@ describe("Routes coverage (real Postgres)", () => {
   // DELETE/logs coverage added there.
 
   // ── 13. GET /tools/models ─────────────────────────────────────────
-  it("GET /tools/models — returns a bare array of { id, provider }", async () => {
+  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models — returns a bare array of { id, provider }", async () => {
     const res = await request("GET", "/tools/models", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -622,7 +631,7 @@ describe("Routes coverage (real Postgres)", () => {
     }
   });
 
-  it("GET /tools/models?provider=opencode — filters to provider", async () => {
+  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models?provider=opencode — filters to provider", async () => {
     const res = await request("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
