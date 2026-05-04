@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isMessageVisible } from './ChatThread'
+import { isMessageVisible } from './messageVisibility'
 import type { ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
