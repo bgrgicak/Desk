@@ -120,6 +120,25 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("After writing a new artifact or making a significant update, run");
   });
 
+  it("summary mode uses note-only instructions and omits artifact workflow", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc", runMode: "summary", goal: "document" });
+
+    expect(body).toContain("## Chat summary note");
+    expect(body).toContain("Do not write\n`chat-summary.md`");
+    expect(body).toContain("# Chat Summary — <short descriptive title>");
+    expect(body).toContain("## Conversation arc");
+    expect(body).toContain("## Open threads");
+    expect(body).toContain("Chat notes:     ~/.chats/chat-abc/notes/");
+    expect(body).toContain("Chat artifacts: ~/.chats/chat-abc/artifacts/");
+    expect(body).not.toContain("## Your workspace");
+    expect(body).not.toContain("Save before replying");
+    expect(body).not.toContain("desk-agent chat attach-artifact");
+    expect(body).not.toContain("## Scheduling");
+    expect(body).not.toContain("## Goal autodetection");
+    expect(body).not.toContain("## User's goal:");
+    expect(body).not.toContain("## Desk native skills");
+  });
+
   it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
     const start = body.indexOf("what files you can see");

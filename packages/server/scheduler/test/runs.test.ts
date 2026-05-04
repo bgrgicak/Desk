@@ -143,9 +143,13 @@ emit: (evt) => events.push(evt),
   });
 
   it("ai_note_request content produces a note-content child", async () => {
+    let capturedPrompt = "";
+    let capturedRunMode: string | undefined;
     const mgr = createRunManager({
       pool,
-execRunFn: async (messageId, _a, _p, onLog) => {
+execRunFn: async (messageId, _a, prompt, onLog, runOpts) => {
+        capturedPrompt = prompt;
+        capturedRunMode = runOpts?.agentFileInput.runMode;
         onLog({ runId: messageId, seq: 0, kind: "stdout", payload: "Note about the vacation chat." });
         return { exitCode: 0 };
       },
@@ -158,6 +162,27 @@ execRunFn: async (messageId, _a, _p, onLog) => {
     const content = child!.content as { type: string; body?: string };
     expect(content.type).toBe("note");
     expect(content.body).toContain("vacation");
+    expect(capturedPrompt).toContain("Refresh this chat's running summary note.");
+    expect(capturedPrompt).toContain("do not create files, write artifacts, or attach artifacts");
+    expect(capturedRunMode).toBe("summary");
+  });
+
+  it("note output uses the final text event instead of planning chatter", async () => {
+    const mgr = createRunManager({
+      pool,
+execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "I will inspect the chat first." } }) });
+        onLog({ runId: messageId, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "tool_use", part: { tool: "bash" } }) });
+        onLog({ runId: messageId, seq: 2, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "# Chat Summary — Final\n\n## What we built\n\nA clean summary." } }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "ai_note_request" });
+    const result = await mgr.fireMessage(messageId);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as { type: string; body?: string };
+    expect(content.body).toBe("# Chat Summary — Final\n\n## What we built\n\nA clean summary.");
   });
 
   it("is idempotent — second fire on same message is a no-op", async () => {

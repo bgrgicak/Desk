@@ -111,6 +111,24 @@ describe("renderAgentFile", () => {
     expect(result).toContain("Chat notes:       ~/.chats/cht_abc/notes/");
   });
 
+  it("renders a narrow note-only prompt for summary runs", () => {
+    const result = renderAgentFile({
+      agentId: "agt_summary",
+      agentName: "Helper",
+      model: "anthropic/claude-sonnet-4-5",
+      instructions: "",
+      userName: "Desk",
+      chatId: "cht_abc",
+      runMode: "summary",
+    });
+
+    expect(result).toContain("## Chat summary note");
+    expect(result).toContain("Desk stores the final markdown as a `note` message");
+    expect(result).toContain("Chat notes:     ~/.chats/cht_abc/notes/");
+    expect(result).not.toContain("## Your workspace");
+    expect(result).not.toContain("desk-agent chat attach-artifact");
+  });
+
   it("omits the goal fragment when no goal is provided", () => {
     const result = renderAgentFile({
       agentId: "agt_nogoal",
