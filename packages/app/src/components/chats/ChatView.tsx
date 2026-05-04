@@ -102,6 +102,7 @@ const CONTEXT_ICON: Record<ContextItem['type'], typeof FileText> = {
   file: FileText,
   note: StickyNote,
   link: Link2,
+  app: Zap,
 }
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {

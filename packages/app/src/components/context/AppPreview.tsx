@@ -22,10 +22,9 @@ interface IssuedAppSession {
   capabilities: string[]
 }
 
-interface AppPreviewProps {
-  chatId: string
-  appName: string
-}
+type AppPreviewProps =
+  | { scope: 'chat'; chatId: string; appName: string }
+  | { scope: 'library'; appName: string }
 
 interface AppManifest {
   name: string
@@ -34,23 +33,21 @@ interface AppManifest {
   capabilities?: string[]
 }
 
-async function issueAppSession(
-  chatId: string,
-  appName: string,
-): Promise<IssuedAppSession> {
+async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
-  const res = await fetch(
-    `/apps/chat/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}/issue`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
+  const url =
+    props.scope === 'chat'
+      ? `/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
+      : `/apps/library/${encodeURIComponent(props.appName)}/issue`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
     },
-  )
+    credentials: 'include',
+  })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`Issue failed (${res.status}): ${body}`)
@@ -58,7 +55,9 @@ async function issueAppSession(
   return (await res.json()) as IssuedAppSession
 }
 
-export function AppPreview({ chatId, appName }: AppPreviewProps) {
+export function AppPreview(props: AppPreviewProps) {
+  const { appName } = props
+  const chatId = props.scope === 'chat' ? props.chatId : null
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -69,7 +68,7 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
     let cancelled = false
     setSession(null)
     setError(null)
-    issueAppSession(chatId, appName)
+    issueAppSession(props)
       .then((s) => {
         if (!cancelled) setSession(s)
       })
@@ -79,7 +78,8 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
     return () => {
       cancelled = true
     }
-  }, [chatId, appName, reloadKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.scope, chatId, appName, reloadKey])
 
   // Load the manifest for the capability checklist (independent of the
   // iframe — the manifest is also useful to display when the iframe
@@ -88,8 +88,11 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
     let cancelled = false
     const token = getSessionToken()
     if (!token) return
-    const path = `.chats/${chatId}/artifacts/${appName}.app/desk.app.json`
-    fetch(`/api/library/content?path=${encodeURIComponent(path)}`, {
+    const manifestPath =
+      props.scope === 'chat'
+        ? `.chats/${props.chatId}/artifacts/${appName}.app/desk.app.json`
+        : `${appName}.app/desk.app.json`
+    fetch(`/api/library/content?path=${encodeURIComponent(manifestPath)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -110,7 +113,8 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
     return () => {
       cancelled = true
     }
-  }, [chatId, appName, reloadKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.scope, chatId, appName, reloadKey])
 
   const capabilities = useMemo(() => {
     return manifest?.capabilities ?? session?.capabilities ?? []
@@ -193,4 +197,32 @@ export function parseChatAppManifestPath(
   const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/desk\.app\.json$/.exec(p)
   if (!m) return null
   return { chatId: m[1], appName: m[2] }
+}
+
+/**
+ * Parses a workspace-relative path of the form `<name>.app/desk.app.json`
+ * (a library app's manifest). Returns null when the path doesn't match.
+ * `subpath/<name>.app/...` library apps under a subfolder also match —
+ * the appName is the basename of the directory chain's leaf.
+ */
+export function parseLibraryAppManifestPath(p: string): { appName: string } | null {
+  const m = /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/desk\.app\.json$/.exec(p)
+  if (!m) return null
+  // Reject the chat-artifact form so callers can pick the right scope
+  // unambiguously.
+  if (p.startsWith('.chats/')) return null
+  return { appName: m[1] }
+}
+
+/**
+ * Parses a workspace-relative path that points at a `<name>.app/`
+ * directory itself (no `desk.app.json` suffix). Used when the user
+ * clicks the directory entry in the library list — ContextDetail then
+ * resolves `<dir>/desk.app.json` for the manifest.
+ */
+export function parseLibraryAppDirPath(p: string): { appName: string } | null {
+  const m = /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app$/.exec(p)
+  if (!m) return null
+  if (p.startsWith('.chats/')) return null
+  return { appName: m[1] }
 }

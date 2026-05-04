@@ -415,8 +415,67 @@ export function createApp(opts: AppOptions): Server {
         sendJson(res, 201, result);
         return;
       }
+      if (
+        method === "DELETE" &&
+        segments.length === 4
+      ) {
+        // PR-E: delete a chat-artifact `<name>.app/`. Cascade-revokes any
+        // active app_sessions bound to (chatId, appName). The .storage/
+        // SQLite file goes with the directory.
+        const issuerId = await requireBearerForApps(pool, req);
+        const chatId = decodeURIComponent(segments[2]);
+        const appName = decodeURIComponent(segments[3]);
+        await requireOwnedChat(pool, chatId, issuerId);
+        await chatRoutes.removeChatApp(storage, chatId, appName, emitEvent);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
       if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
         const handled = await appsRoutes.handleStaticAppRequest(
+          pool,
+          storage,
+          segments,
+          new URL(req.url ?? "/", "http://localhost"),
+          req,
+          res,
+        );
+        if (handled) return;
+      }
+    }
+
+    // Library-scoped variant: /apps/library/:appName/dist/* and the
+    // companion `POST /apps/library/:appName/issue` (PR-E).
+    if (segments[0] === "apps" && segments[1] === "library" && segments.length >= 3) {
+      if (
+        method === "POST" &&
+        segments.length === 4 &&
+        segments[3] === "issue"
+      ) {
+        const issuerId = await requireBearerForApps(pool, req);
+        const appName = decodeURIComponent(segments[2]);
+        const result = await appsRoutes.handleIssueLibraryAppSession(
+          pool,
+          storage,
+          issuerId,
+          appName,
+        );
+        sendJson(res, 201, result);
+        return;
+      }
+      if (method === "DELETE" && segments.length === 3) {
+        // PR-E: delete a library `<name>.app/` (moves it to .trash for
+        // recovery) and revoke all sessions for that app. Library scope
+        // doesn't include a sub-path: the route deletes the
+        // workspace-root `<appName>.app/`. Library apps under a
+        // subfolder are deleted via the generic library-delete path.
+        const issuerId = await requireBearerForApps(pool, req);
+        const appName = decodeURIComponent(segments[2]);
+        await chatRoutes.removeLibraryApp(storage, issuerId, appName, emitEvent);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (method === "GET" && segments.length >= 4 && segments[3] === "dist") {
+        const handled = await appsRoutes.handleStaticLibraryAppRequest(
           pool,
           storage,
           segments,
@@ -805,6 +864,30 @@ export function createApp(opts: AppOptions): Server {
         storage,
         segments[1],
         attachmentName,
+        destSubpath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "save-artifact-to-library" && segments.length === 3 && method === "POST") {
+      // Promotes a `<name>.app/` chat artifact directory into the
+      // workspace library. Sibling of save-to-library which only
+      // handles single-file attachments. Issue #47, PR-E.
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
+      const artifactName = typeof body?.name === "string" ? body.name : "";
+      if (!artifactName) {
+        throw new ValidationError("Missing 'name' in body");
+      }
+      const destSubpath =
+        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
+          ? body.destSubpath
+          : undefined;
+      const result = await chatRoutes.saveArtifactToLibrary(
+        storage,
+        segments[1],
+        artifactName,
         destSubpath,
         emitEvent,
       );

@@ -115,7 +115,7 @@ export interface TodayItem {
 
 export interface ContextItem {
   id: string
-  type: 'file' | 'link' | 'note'
+  type: 'file' | 'link' | 'note' | 'app'
   name: string
   content: string
   folder?: string

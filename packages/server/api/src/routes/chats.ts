@@ -13,9 +13,12 @@ import {
   listSummaryHistory,
   deleteMaterializedSummary,
   materializeSummary,
+  deleteChatApp,
+  deleteLibraryApp,
   pinLibraryFileToChat,
   removeChatAttachment,
   saveChatAttachmentToLibrary,
+  saveChatArtifactToLibrary,
   snapshotSummary,
   trashChatDirectories,
   uploadArtifact,
@@ -757,6 +760,40 @@ export async function saveAttachmentToLibrary(
 }
 
 /**
+ * Promotes a `<name>.app/` chat artifact into the primary workspace
+ * library. Mirrors `saveAttachmentToLibrary` but operates on directories
+ * inside `.chats/{chatId}/artifacts/`. The chat artifact is removed from
+ * the chat's artifacts dir on success.
+ */
+export async function saveArtifactToLibrary(
+  storage: StorageContext,
+  chatId: string,
+  artifactName: string,
+  destSubpath: string | undefined,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const file = await saveChatArtifactToLibrary(
+    storage,
+    ws.path,
+    chatId,
+    artifactName,
+    destSubpath,
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: file.path, op: "added" },
+  });
+
+  return file;
+}
+
+/**
  * Removes a chat attachment by basename. The mutation only unlinks the
  * entry inside `.chats/{chatId}/attachments/`: pinned library files
  * stay put, direct chat uploads are permanently removed (no
@@ -773,4 +810,79 @@ export async function removeAttachment(
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
   await removeChatAttachment(storage, ws.path, chatId, attachmentName);
   return { ok: true };
+}
+
+/**
+ * Deletes a chat-artifact `<name>.app/` directory and revokes any active
+ * app_sessions bound to it. Issue #47, PR-E.
+ *
+ * The cascade is: filesystem removal → token revocation. We delete the
+ * fs first so a cookie-using iframe can't keep authoring data after the
+ * directory is gone (the storage backing file goes with the directory),
+ * then revoke the sessions so future requests get a clean 401.
+ */
+export async function removeChatApp(
+  storage: StorageContext,
+  chatId: string,
+  appName: string,
+  emit: (event: WsEvent) => void,
+): Promise<void> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  // Strip a trailing `.app` if the caller didn't include it; the storage
+  // helper requires the full directory name.
+  const dirName = appName.endsWith(".app") ? appName : `${appName}.app`;
+  await deleteChatApp(storage, ws.path, chatId, dirName);
+
+  // Revoke any active sessions for this chat+app.
+  await storage.pool.query(
+    `DELETE FROM app_sessions WHERE chat_id = ? AND app_name = ?`,
+    [chatId, dirName.slice(0, -".app".length)],
+  );
+
+  emit({
+    type: "library.changed",
+    payload: {
+      workspaceId: chat.workspaceId,
+      path: `.chats/${chatId}/artifacts/${dirName}`,
+      op: "removed",
+      affectedChatIds: [chatId],
+    },
+  });
+}
+
+/**
+ * Deletes a library `<name>.app/` (workspace root only — subfoldered
+ * apps go through the generic library-delete path). Cascade-revokes
+ * any library-scope app_sessions bound to it. Issue #47, PR-E.
+ */
+export async function removeLibraryApp(
+  storage: StorageContext,
+  userId: string,
+  appName: string,
+  emit: (event: WsEvent) => void,
+): Promise<void> {
+  // Resolve the user's workspace the same way issueLibraryAppSession does.
+  const { rows } = await storage.pool.query<{ id: string; path: string }>(
+    "SELECT id, path FROM workspaces WHERE user_id = ? ORDER BY created_at LIMIT 1",
+    [userId],
+  );
+  if (rows.length === 0) throw new NotFoundError("No workspace for user");
+  const ws = rows[0];
+
+  const dirName = appName.endsWith(".app") ? appName : `${appName}.app`;
+  await deleteLibraryApp(storage, ws.path, dirName);
+
+  await storage.pool.query(
+    `DELETE FROM app_sessions WHERE scope = 'library' AND app_name = ? AND workspace_id = ?`,
+    [dirName.slice(0, -".app".length), ws.id],
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: ws.id, path: dirName, op: "removed" },
+  });
 }

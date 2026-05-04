@@ -1,10 +1,11 @@
-import { FileText, Folder, Link2, StickyNote, type LucideIcon } from 'lucide-react'
+import { FileText, Folder, Link2, StickyNote, Zap, type LucideIcon } from 'lucide-react'
 import type { ContextItem } from '@/data/ui-types'
 
 export const ITEM_ICON: Record<ContextItem['type'], LucideIcon> = {
   file: FileText,
   note: StickyNote,
   link: Link2,
+  app: Zap,
 }
 
 export interface ComposerAttachment {

@@ -7,7 +7,12 @@ export function humanSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function inferType(mime: string): ContextItem["type"] {
+function inferType(mime: string, name: string, isDir = false): ContextItem["type"] {
+  // `<name>.app/` directory entries surface as `type: "app"` so the
+  // library renders the app icon + ContextDetail picks the AppPreview
+  // variant. Issue #47, PR-E.
+  if (isDir && name.endsWith(".app") && name !== ".app") return "app";
+  if (mime === "application/vnd.desk.app+directory") return "app";
   if (mime === "text/markdown" || mime === "text/plain") return "note";
   if (mime.startsWith("text/uri-list")) return "link";
   return "file";
@@ -40,7 +45,7 @@ export function toContextItem(
     : undefined;
   return {
     id: f.path,
-    type: inferType(f.mime),
+    type: inferType(f.mime, f.name, f.isDir ?? false),
     // Prefer the server's display label when present (e.g. "Chat summary")
     // so notes don't surface the messageId-based filename as their title.
     name: f.label ?? f.name,

@@ -110,12 +110,21 @@ export function isGitIgnored(entryAbs: string, isDir: boolean, frames: IgnoreFra
  * avoids both cycles and duplicate entries when the link target already
  * sits inside the walked tree.
  */
+function isAppDirectoryName(name: string): boolean {
+  return name.endsWith(".app") && name !== ".app";
+}
+
 async function walk(
   dir: string,
   opts: { showHidden: boolean },
-): Promise<{ files: string[]; folders: string[] }> {
+): Promise<{ files: string[]; folders: string[]; appDirs: string[] }> {
   const files: string[] = [];
   const folders: string[] = [];
+  // `<name>.app/` directories are collapsed into a single library
+  // entry rather than expanded; the walker tracks them separately so
+  // listLibrary can stat + emit them as `isDir: true` items without
+  // ever recursing into the dist/ + node_modules/ underneath.
+  const appDirs: string[] = [];
   const respectGitignore = !opts.showHidden;
 
   const rootFrame = respectGitignore ? await loadGitignoreFrame(dir) : null;
@@ -154,6 +163,12 @@ async function walk(
       if (respectGitignore && isGitIgnored(abs, kind === "dir", frames)) continue;
 
       if (kind === "dir") {
+        if (isAppDirectoryName(e.name)) {
+          // Collapse `<name>.app/` into a single library entry — don't
+          // recurse, don't add to the navigable folder list.
+          appDirs.push(abs);
+          continue;
+        }
         folders.push(abs);
         if (recurse) {
           const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
@@ -166,8 +181,10 @@ async function walk(
     }
   }
 
-  return { files, folders };
+  return { files, folders, appDirs };
 }
+
+const APP_DIR_MIME = "application/vnd.desk.app+directory";
 
 /**
  * Lists the workspace's library files and folders, recursing through
@@ -196,7 +213,7 @@ export async function listLibrary(
   await fs.mkdir(root, { recursive: true });
 
   const showHidden = opts?.showHidden ?? false;
-  const { files, folders } = await walk(root, { showHidden });
+  const { files, folders, appDirs } = await walk(root, { showHidden });
 
   const fileItems: FileRef[] = [];
   for (const abs of files) {
@@ -209,6 +226,22 @@ export async function listLibrary(
       size: stat.size,
       createdAt: stat.mtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
+    });
+  }
+  for (const abs of appDirs) {
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || !stat.isDirectory()) continue;
+    fileItems.push({
+      path: path.relative(root, abs).split(path.sep).join("/"),
+      name: path.basename(abs),
+      mime: APP_DIR_MIME,
+      // Size of a directory entry isn't meaningful — the user-facing
+      // renderer should show a count of fragments or skip the size
+      // field entirely, not the byte-size of the inode.
+      size: 0,
+      createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
     });
   }
   fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
