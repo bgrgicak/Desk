@@ -437,6 +437,46 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
 
     expect(capturedGoal).toBeNull();
   });
+
+  it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
+    let captured: { goal?: unknown; chatId?: unknown } = {};
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog, opts) => {
+        captured = {
+          goal: opts?.agentFileInput.goal,
+          chatId: opts?.agentFileInput.chatId,
+        };
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    await pool.query(`UPDATE chats SET goal = 'document' WHERE id = ?`, [chatId]);
+    const messageId = await insertPendingMessage({ type: "text", text: "with goal set" });
+    await mgr.fireMessage(messageId);
+
+    expect(captured.goal).toBe("document");
+    expect(captured.chatId).toBe(chatId);
+  });
+
+  it("agentFileInput.goal is null when chats.goal is unset", async () => {
+    let capturedGoal: unknown = "sentinel";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog, opts) => {
+        capturedGoal = opts?.agentFileInput.goal;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    await pool.query(`UPDATE chats SET goal = NULL WHERE id = ?`, [chatId]);
+    const messageId = await insertPendingMessage({ type: "text", text: "no goal" });
+    await mgr.fireMessage(messageId);
+
+    expect(capturedGoal).toBeNull();
+  });
 });
 
 describe("fireMessage on kind='task'", () => {

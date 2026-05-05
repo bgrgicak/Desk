@@ -249,6 +249,22 @@ export async function listLibrary(
       isDir: true,
     });
   }
+  for (const abs of appDirs) {
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || !stat.isDirectory()) continue;
+    fileItems.push({
+      path: path.relative(root, abs).split(path.sep).join("/"),
+      name: path.basename(abs),
+      mime: APP_DIR_MIME,
+      // Size of a directory entry isn't meaningful — the user-facing
+      // renderer should show a count of fragments or skip the size
+      // field entirely, not the byte-size of the inode.
+      size: 0,
+      createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
+    });
+  }
   fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
   const folderItems: FolderRef[] = [];

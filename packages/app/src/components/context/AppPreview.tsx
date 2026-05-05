@@ -29,8 +29,10 @@ interface IssuedAppSession {
 }
 
 type AppPreviewProps =
-  | { scope: 'chat'; chatId: string; appName: string }
-  | { scope: 'library'; appName: string }
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; variant?: AppPreviewVariant }
+  | { scope: 'library'; appName: string; fragment?: string; variant?: AppPreviewVariant }
+
+export type AppPreviewVariant = 'detail' | 'inline'
 
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
@@ -51,14 +53,26 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
     const body = await res.text()
     throw new Error(`Issue failed (${res.status}): ${body}`)
   }
-  return (await res.json()) as IssuedAppSession
+  const issued = (await res.json()) as IssuedAppSession
+  if (props.fragment) {
+    const u = new URL(issued.url, window.location.origin)
+    const tokenParam = u.searchParams.get('t') ?? ''
+    const distRoot = u.pathname.replace(/\/?$/, '/')
+    u.pathname = `${distRoot}fragments/${encodeURIComponent(props.fragment)}/`
+    u.searchParams.set('t', tokenParam)
+    issued.url = `${u.pathname}${u.search}`
+  }
+  return issued
 }
 
 export function AppPreview(props: AppPreviewProps) {
   const { appName } = props
+  const variant: AppPreviewVariant = props.variant ?? 'detail'
   const chatId = props.scope === 'chat' ? props.chatId : null
+  const fragment = props.fragment ?? null
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   useEffect(() => {
@@ -76,7 +90,7 @@ export function AppPreview(props: AppPreviewProps) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName])
+  }, [props.scope, chatId, appName, fragment, reloadKey])
 
   useEffect(() => {
     if (!session) return
@@ -101,9 +115,7 @@ export function AppPreview(props: AppPreviewProps) {
     return () => window.removeEventListener('message', onMessage)
   }, [chatId, appName, session])
 
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
-      {session ? (
+  const iframe = session ? (
         <iframe
           key={session.token}
           ref={iframeRef}
@@ -121,22 +133,41 @@ export function AppPreview(props: AppPreviewProps) {
           <Loader2 className="h-4 w-4 animate-spin mr-2" />
           <span className="text-sm">Issuing app session…</span>
         </div>
-      )}
+      )
+
+  if (variant === 'inline') {
+    return (
+      <div className="max-w-[480px] overflow-hidden rounded-lg border bg-background">
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
+          <span className="truncate font-medium">{fragment ? `${appName}/${fragment}` : appName}</span>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Reload
+          </button>
+        </div>
+        <div className="bg-white" style={{ height: 280 }}>{iframe}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      {iframe}
     </div>
   )
 }
 
 /**
  * Parses a workspace-relative path that targets a chat-artifact app and
- * extracts its `chatId` + `appName`. Accepts both the `.app/` directory
- * path (how the library identifies the artifact) and the manifest file
- * path (how the chat surfaces the JSON inside it). Returns null when
- * the path doesn't reference a chat-artifact app.
+ * extracts its `chatId` + `appName`.
  */
 export function parseChatAppManifestPath(
   p: string,
 ): { chatId: string; appName: string } | null {
-  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app(?:\/desk\.app\.json)?$/.exec(p)
+  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/desk\.app\.json$/.exec(p)
   if (!m) return null
   return { chatId: m[1], appName: m[2] }
 }
@@ -167,4 +198,63 @@ export function parseLibraryAppDirPath(p: string): { appName: string } | null {
   if (!m) return null
   if (p.startsWith('.chats/')) return null
   return { appName: m[1] }
+}
+
+export function parseChatAppDirPath(
+  p: string,
+): { chatId: string; appName: string } | null {
+  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app$/.exec(p)
+  if (!m) return null
+  return { chatId: m[1], appName: m[2] }
+}
+
+export function parseChatAppFragmentPath(
+  p: string,
+): { chatId: string; appName: string; fragment: string } | null {
+  const m =
+    /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+      p,
+    )
+  if (!m) return null
+  return { chatId: m[1], appName: m[2], fragment: m[3] }
+}
+
+export function parseLibraryAppFragmentPath(
+  p: string,
+): { appName: string; fragment: string } | null {
+  if (p.startsWith('.chats/')) return null
+  const m =
+    /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+      p,
+    )
+  if (!m) return null
+  return { appName: m[1], fragment: m[2] }
+}
+
+export function appAttachmentToPreview(
+  path: string,
+):
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
+  | { scope: 'library'; appName: string; fragment?: string }
+  | null {
+  const chatFragment = parseChatAppFragmentPath(path)
+  if (chatFragment) {
+    return {
+      scope: 'chat',
+      chatId: chatFragment.chatId,
+      appName: chatFragment.appName,
+      fragment: chatFragment.fragment,
+    }
+  }
+  const libraryFragment = parseLibraryAppFragmentPath(path)
+  if (libraryFragment) return { scope: 'library', ...libraryFragment }
+  const chatDir = parseChatAppDirPath(path)
+  if (chatDir) return { scope: 'chat', chatId: chatDir.chatId, appName: chatDir.appName }
+  const chatManifest = parseChatAppManifestPath(path)
+  if (chatManifest) return { scope: 'chat', chatId: chatManifest.chatId, appName: chatManifest.appName }
+  const libraryDir = parseLibraryAppDirPath(path)
+  if (libraryDir) return { scope: 'library', appName: libraryDir.appName }
+  const libraryManifest = parseLibraryAppManifestPath(path)
+  if (libraryManifest) return { scope: 'library', appName: libraryManifest.appName }
+  return null
 }

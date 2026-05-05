@@ -552,12 +552,17 @@ async function serveAsset(
 
 interface IndexResponseOpts {
   distDir: string;
+  subpath: string;
   bridge: BridgeContext;
   res: ServerResponse;
 }
 
-async function serveIndex({ distDir, bridge, res }: IndexResponseOpts): Promise<void> {
-  const indexPath = path.join(distDir, "index.html");
+async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts): Promise<void> {
+  const indexPath = path.join(distDir, subpath, "index.html");
+  const normalized = path.normalize(indexPath);
+  if (!normalized.startsWith(distDir + path.sep) && normalized !== path.join(distDir, "index.html")) {
+    throw new NotFoundError("index.html not found");
+  }
   let html: string;
   try {
     html = await readFile(indexPath, "utf-8");
@@ -574,6 +579,13 @@ async function serveIndex({ distDir, bridge, res }: IndexResponseOpts): Promise<
     "Cache-Control": "no-store",
   });
   res.end(buf);
+}
+
+function matchEntryPoint(tail: string): { subpath: string } | null {
+  if (tail === "" || tail === "index.html") return { subpath: "" };
+  const fragment = /^fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(tail);
+  if (!fragment) return null;
+  return { subpath: `fragments/${fragment[1]}` };
 }
 
 /**
@@ -654,9 +666,11 @@ export async function handleStaticAppRequest(
   }
 
   // Cookie-authenticated request — serve the asset.
-  if (tail === "" || tail === "index.html") {
+  const entry = matchEntryPoint(tail);
+  if (entry) {
     await serveIndex({
       distDir,
+      subpath: entry.subpath,
       bridge: {
         chatId,
         appName,
@@ -911,9 +925,11 @@ export async function handleStaticLibraryAppRequest(
     return true;
   }
 
-  if (tail === "" || tail === "index.html") {
+  const entry = matchEntryPoint(tail);
+  if (entry) {
     await serveIndex({
       distDir,
+      subpath: entry.subpath,
       bridge: {
         chatId: "",
         appName,
