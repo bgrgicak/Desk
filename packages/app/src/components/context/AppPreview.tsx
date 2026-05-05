@@ -9,16 +9,23 @@
  * `dist/` URL so subsequent asset requests carry the cookie. See
  * `packages/server/api/src/routes/apps.ts`.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Loader2, RotateCw } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { getSessionToken } from '@/auth/session'
+import {
+  bridgeError,
+  bridgeResponse,
+  handleAppBridgeRequest,
+  isAppBridgeRequest,
+} from '@/lib/app-bridge'
 
 interface IssuedAppSession {
   token: string
   url: string
   expiresAt: string
   cookieName: string
+  bridgeKey: string
   capabilities: string[]
 }
 
@@ -63,6 +70,7 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [manifest, setManifest] = useState<AppManifest | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   // Issue (or re-issue) a session whenever the iframe needs to (re)load.
   useEffect(() => {
@@ -116,6 +124,29 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
     return manifest?.capabilities ?? session?.capabilities ?? []
   }, [manifest, session])
 
+  useEffect(() => {
+    if (!session) return
+    const onMessage = (event: MessageEvent) => {
+      const iframeWindow = iframeRef.current?.contentWindow
+      if (!iframeWindow || event.source !== iframeWindow) return
+      if (!isAppBridgeRequest(event.data)) return
+      if (event.data.key !== session.bridgeKey) return
+
+      void handleAppBridgeRequest(
+        { chatId, appName, capabilities: session.capabilities },
+        event.data,
+      )
+        .then((result) => {
+          iframeWindow.postMessage(bridgeResponse(event.data.id, result), '*')
+        })
+        .catch((err) => {
+          iframeWindow.postMessage(bridgeError(event.data.id, err), '*')
+        })
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [chatId, appName, session])
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="border-b px-4 py-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -142,9 +173,10 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
             // to remount instead of navigating in place (which the
             // browser may suppress as same-document).
             key={session.token}
+            ref={iframeRef}
             title={appName}
             src={session.url}
-            sandbox="allow-scripts allow-same-origin"
+            sandbox="allow-scripts"
             className="w-full h-full border-0"
           />
         ) : error ? (

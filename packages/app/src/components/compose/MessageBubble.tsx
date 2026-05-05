@@ -15,6 +15,9 @@ interface MessageBubbleProps {
   agentName?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
+  /** Keeps agent metadata aligned when the message content uses a wider row. */
+  agentHeaderClassName?: string
+  hideAgentHeader?: boolean
   /** When false, internal tool-call/stderr entries inside `events` content
    *  are stripped — only the agent's text reply surfaces. ChatView already
    *  filters out fully-tool `events` rows at the list level. */
@@ -28,7 +31,9 @@ export function MessageBubble({
   isNew = false,
   agentName,
   onAttachmentClick,
-    developerMode = false,
+  agentHeaderClassName,
+  hideAgentHeader = false,
+  developerMode = false,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
@@ -63,8 +68,8 @@ export function MessageBubble({
 
   return (
     <div className={isFirstInGroup ? 'space-y-1.5' : '-mt-4'}>
-      {isFirstInGroup && (
-        <div className="flex items-center gap-3">
+      {isFirstInGroup && !hideAgentHeader && (
+        <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
           <div className="flex items-center gap-1">
             <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <span className="text-xs text-muted-foreground">{modelLabel}</span>

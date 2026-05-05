@@ -10,6 +10,7 @@ import {
   deleteFile,
   moveFile,
   pinLibraryFileToChat,
+  relativeSymlinkTarget,
   removeChatAttachment,
   resolveForSandbox,
   statFile,
@@ -203,6 +204,32 @@ describe("deleteFile (moves to trash)", () => {
 });
 
 describe("removeChatAttachment", () => {
+  it("pins library files with sandbox-portable relative symlinks", async () => {
+    const uploaded = await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "pin-portable.txt",
+      mime: "text/plain",
+      stream: makeStream("portable"),
+      subpath: "PinPortable",
+    });
+
+    await pinLibraryFileToChat(ctx, ctx.workspaceSlug, ctx.chatId, uploaded.path);
+
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const targetAbs = path.join(root, uploaded.path);
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "pin-portable.txt");
+    expect(await fs.readlink(linkPath)).toBe(relativeSymlinkTarget(linkPath, targetAbs));
+    expect(await fs.readFile(linkPath, "utf8")).toBe("portable");
+
+    await fs.unlink(linkPath);
+    await fs.symlink(targetAbs, linkPath);
+
+    await pinLibraryFileToChat(ctx, ctx.workspaceSlug, ctx.chatId, uploaded.path);
+    expect(await fs.readlink(linkPath)).toBe(relativeSymlinkTarget(linkPath, targetAbs));
+  });
+
   it("unlinks a pinned library symlink without disturbing the source file", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,

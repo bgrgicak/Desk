@@ -62,11 +62,10 @@ The runtime sets these for you. Don't echo, log, or alter them.
 
 ## desk-agent app create
 
-Clone the Desk app scaffold into a chat artifact directory so you can
-build an app for the current chat. The scaffold lives at
-`/opt/desk-template/app` inside the sandbox, with `node_modules/`
-already installed, so the new `<name>.app/` is ready for `npm run build`
-without any network access.
+Clone the Desk app scaffold into a chat artifact directory for the
+current chat. This section documents the command contract only; the app
+architecture, fragment model, and test/build workflow live in the
+`desk-app-scaffold` skill that is copied into the generated app.
 
 ```
 desk-agent app create --chat <id> [--template <path>] <name>
@@ -77,23 +76,13 @@ starting with a letter. The new directory lands at
 `~/.chats/<chatId>/artifacts/<name>.app/`. Refuses to clobber an
 existing directory at that path.
 
-After scaffolding, load the `desk-app-scaffold` skill for the development
-rules (static-only, capability bridge, fragment shape, etc.) and
-follow them.
+After scaffolding, load the `desk-app-scaffold` skill from the generated
+app before editing files.
 
 ### Examples
 
 ```
 desk-agent app create --chat cht_abc my-todos
-```
-
-After it returns:
-
-```
-cd ~/.chats/cht_abc/artifacts/my-todos.app
-npm run build
-desk-agent chat attach-artifact --chat cht_abc \
-    .chats/cht_abc/artifacts/my-todos.app
 ```
 
 ## desk-agent chat attach-artifact

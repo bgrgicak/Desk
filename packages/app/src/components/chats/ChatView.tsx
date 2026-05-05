@@ -201,8 +201,8 @@ function ArtifactsPanel({
             {filteredChatArtifacts.map(file => {
               const isApp = isAppArtifactFile(file)
               // App directories are openable (the click target points the
-              // detail view at the app's manifest until PR-C lands the
-              // static route + iframe). Plain directories stay
+              // detail view at the app's manifest so PR-C can render the
+              // same-origin static iframe). Plain directories stay
               // non-interactive.
               const isClickable = !file.isDir || isApp
               const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
@@ -913,7 +913,14 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="max-w-2xl mx-auto px-6 py-8 space-y-6"
+          innerClassName="px-6 py-8 space-y-6"
+          messageClassName={message => {
+            if (message.content.type !== 'artifactRef') return 'max-w-2xl mx-auto'
+            return 'w-full'
+          }}
+          statusClassName="max-w-2xl mx-auto"
+          agentHeaderClassName="max-w-2xl mx-auto"
+          lastAssistantSlotClassName="w-full"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={

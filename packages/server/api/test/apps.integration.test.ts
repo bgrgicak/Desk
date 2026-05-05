@@ -231,16 +231,18 @@ describe("static-app route + capability bridge", () => {
       `/apps/chat/${chatId}/${APP_NAME}/issue`,
       { bearer: authToken },
     );
-    expect(issue.status).toBe(201);
+    expect(issue.status, issue.body).toBe(201);
     const issued = issue.bodyJson as {
       token: string;
       url: string;
       cookieName: string;
+      bridgeKey: string;
       capabilities: string[];
       expiresAt: string;
     };
     expect(issued.token.startsWith("app_")).toBe(true);
     expect(issued.cookieName).toBe(`desk_app_${chatId}_${APP_NAME}`);
+    expect(issued.bridgeKey).toMatch(/^[a-f0-9]{64}$/);
     expect(issued.capabilities).toEqual([
       "library.read",
       "storage.read",
@@ -255,9 +257,11 @@ describe("static-app route + capability bridge", () => {
     const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
     expect(cookie, "expected Set-Cookie for the per-app session").toBeTruthy();
 
-    // Cookie path scope is the dist root, HttpOnly + SameSite=Strict
+    // Cookie path scope is the app root, HttpOnly + SameSite=Strict. The
+    // parent bridge can use the same app session for future /storage calls,
+    // while the sandboxed iframe still cannot read the HttpOnly token.
     const setCookieRaw = bootstrap.headers["set-cookie"]?.[0] ?? "";
-    expect(setCookieRaw).toContain(`Path=/apps/chat/${chatId}/${APP_NAME}/dist`);
+    expect(setCookieRaw).toContain(`Path=/apps/chat/${chatId}/${APP_NAME}`);
     expect(setCookieRaw).toContain("HttpOnly");
     expect(setCookieRaw).toContain("SameSite=Strict");
 
@@ -271,6 +275,9 @@ describe("static-app route + capability bridge", () => {
     expect(indexResp.status).toBe(200);
     expect(indexResp.headers["content-type"]).toContain("text/html");
     expect(indexResp.body).toContain("window.desk");
+    expect(indexResp.body).toContain("desk.app.request");
+    expect(indexResp.body).toContain("storage.list");
+    expect(indexResp.body).toContain(`"bridgeKey":"${issued.bridgeKey}"`);
     expect(indexResp.body).toContain(`"chatId":"${chatId}"`);
     expect(indexResp.body).toContain(`"name":"${APP_NAME}"`);
     expect(indexResp.body).toContain('"library.read"');
@@ -286,12 +293,22 @@ describe("static-app route + capability bridge", () => {
     expect(assetResp.headers["content-type"]).toContain("application/javascript");
   });
 
-  it("rejects asset requests without the cookie (401)", async () => {
+  it("rejects HTML entrypoints without the cookie (401)", async () => {
     const noCookie = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${APP_NAME}/dist/`,
+    );
+    expect(noCookie.status).toBe(401);
+  });
+
+  it("serves non-HTML built assets without cookies for opaque sandbox subresource loads", async () => {
+    const asset = await httpRaw(
       "GET",
       `/apps/chat/${chatId}/${APP_NAME}/dist/assets/index.js`,
     );
-    expect(noCookie.status).toBe(401);
+    expect(asset.status).toBe(200);
+    expect(asset.body).toContain("PR-C-ASSET-PROBE");
+    expect(asset.headers["content-type"]).toContain("application/javascript");
   });
 
   it("isolates cookies across apps — a cookie for chat A's app does not authorize chat B's app", async () => {
@@ -467,6 +484,7 @@ describe("static-app route + capability bridge", () => {
     expect(csp).toContain("default-src 'self'");
     expect(csp).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
     expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain("navigate-to 'self'");
     expect(idx.headers["x-frame-options"]).toBe("SAMEORIGIN");
     expect(idx.headers["x-content-type-options"]).toBe("nosniff");
     expect(idx.headers["referrer-policy"]).toBe("same-origin");
@@ -517,9 +535,7 @@ describe("static-app route + capability bridge", () => {
     // that already existed in the HTML before injection. The injected
     // JSON payload itself must contain zero `</script>` substrings,
     // and zero raw `<` in JSON-string-value positions.
-    const inlineMatch = indexResp.body.match(
-      /<script[^>]*>\(\(\)=>\{const c=([^]*?);window\.desk=/,
-    );
+    const inlineMatch = indexResp.body.match(/<script[^>]*>\(\(\)=>\{const c=([^]*?);const t=/);
     expect(inlineMatch, "expected to find the inline bridge payload").toBeTruthy();
     const payloadStr = inlineMatch![1];
     expect(payloadStr).not.toMatch(/<\/script/i);

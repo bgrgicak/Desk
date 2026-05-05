@@ -26,9 +26,9 @@ Workflow for this goal:
    source of truth for app authoring; nothing in this prompt overrides
    it.
 
-3. **Edit, build, attach.** When iterating:
+3. **Edit, verify, attach.** When iterating:
    - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
-   - Run `npm run build` from the app directory — confirm zero exit
+   - Run `npm run verify` from the app directory — confirm zero exit
      before telling the user the app is ready.
    - Use `desk-agent chat attach-artifact` once per visible update to
      surface the `<name>.app/` directory in the chat.

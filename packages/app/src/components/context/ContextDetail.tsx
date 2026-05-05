@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useSelector } from 'react-redux'
+import { getSessionToken } from '@/auth/session'
 import {
   Link2,
   Download,
@@ -63,6 +64,8 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
+import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
+import { previewBlobFor } from '@/lib/preview-blob'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
@@ -81,7 +84,8 @@ interface ContextDetailProps {
 
 function canPreview(item: ContextItem): boolean {
   if (item.type === 'note' || item.type === 'link') return true
-  return fileKindForItem(item) !== 'unknown'
+  const k = fileKindForItem(item)
+  return k !== 'unknown' && k !== 'app'
 }
 
 export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
@@ -191,7 +195,9 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
             editorInitFor.current = item.id
           }
         } else {
-          createdUrl = URL.createObjectURL(blob)
+          const previewBlob = await previewBlobFor(effectiveKind, blob, item.name, item.id, blob.type || item.mimeType)
+          if (cancelled) return
+          createdUrl = URL.createObjectURL(previewBlob)
           setPreviewBlobUrl(createdUrl)
         }
       })
@@ -648,6 +654,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 </div>
               )
             })()
+          ) : kind === 'app' ? (
+            <div className="flex-1 flex flex-col bg-muted/30">
+                <iframe
+                  title={item.name}
+                  src={`/api/apps/${activeWorkspaceId}/${item.id}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
+                  className="flex-1 w-full border-0 bg-white"
+                  sandbox={GENERATED_APP_IFRAME_SANDBOX}
+                />
+            </div>
           ) : kind === 'pdf' ? (
             <div className="flex-1 flex flex-col bg-muted/30">
               {previewBlobUrl ? (
@@ -680,7 +695,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                     <iframe
                       title={item.name}
                       src={htmlPreviewBlobUrl}
-                      sandbox="allow-same-origin"
+                      sandbox={GENERATED_APP_IFRAME_SANDBOX}
                       className="flex-1 w-full border-0 bg-white"
                     />
                   ) : (
@@ -722,12 +737,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'image' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-800 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <img
                   src={previewBlobUrl}
                   alt={item.name}
-                  className="max-w-full max-h-full object-contain"
+                  className="h-full w-full object-contain"
                   onError={() => setMediaLoadFailed(true)}
                 />
               ) : (
@@ -737,7 +752,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'video' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-900 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <video
                   src={previewBlobUrl}

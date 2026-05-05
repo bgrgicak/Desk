@@ -265,7 +265,11 @@ export async function sendMessage(
   if (data.goal !== undefined) {
     await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
   } else {
-    const goalToPersist = senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
+    // Only infer a goal from message text for plain chat messages (kind='chat').
+    // Task and summary messages are system/scheduler actions — running
+    // inferGoal on their content (e.g. "scheduled summary") would wrongly
+    // stamp a goal like "document" onto the chat and change the sidebar icon.
+    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
     if (goalToPersist) {
       await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
     }
