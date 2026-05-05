@@ -13,6 +13,7 @@ import {
 } from "./layout.js";
 import {
   uploadArtifact,
+  relativeSymlinkTarget,
   uniqueDestPath,
   validateLibrarySubpath,
   type FileRef,
@@ -322,8 +323,8 @@ export async function moveLibraryEntry(
 
   // Re-point chat attachment symlinks (`.chats/{chatId}/attachments/`)
   // that targeted the moved entry. Chat pins (see pinLibraryFileToChat
-  // in files.ts) write absolute targets, so a rename leaves them
-  // dangling; this walk rewrites the link to the new absolute path.
+  // in files.ts) use relative targets so they survive the sandbox mount;
+  // this walk rewrites the link to the new target after a library rename.
   // Best-effort: any failure is swallowed so the rename itself stays
   // committed. The returned chat-id set lets the caller invalidate
   // those chats' Files-panel caches.
@@ -399,7 +400,7 @@ async function retargetChatAttachmentSymlinks(
 
       try {
         await fs.unlink(linkPath);
-        await fs.symlink(newTarget, nextLinkPath);
+        await fs.symlink(relativeSymlinkTarget(nextLinkPath, newTarget), nextLinkPath);
       } catch {
         // Leave the original (now-dangling) link in place rather than
         // failing the rename. listAttachments filters dead links out.

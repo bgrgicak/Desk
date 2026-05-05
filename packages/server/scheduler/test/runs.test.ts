@@ -11,6 +11,7 @@ import type { LogEvent } from "@agent-desk/runtime";
 let pool: Pool;
 let agentId: string;
 let chatId: string;
+let workspaceId: string;
 let dbPath: string;
 
 beforeAll(async () => {
@@ -26,7 +27,7 @@ beforeAll(async () => {
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
-  const workspaceId = wsRows[0].id as string;
+  workspaceId = wsRows[0].id as string;
 
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
@@ -50,12 +51,46 @@ afterAll(async () => {
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
-async function insertPendingMessage(content: unknown): Promise<string> {
+async function createChat(title: string): Promise<string> {
+  const id = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+    [id, workspaceId, agentId, title],
+  );
+  return id;
+}
+
+async function insertPendingMessage(content: unknown, targetChatId = chatId): Promise<string> {
   const id = generateId("message");
   await pool.query(
     `INSERT INTO messages (id, chat_id, role, content, state)
      VALUES (?, ?, 'system', ?, 'pending')`,
-    [id, chatId, JSON.stringify(content)],
+    [id, targetChatId, JSON.stringify(content)],
+  );
+  return id;
+}
+
+async function insertChatRow(opts: {
+  targetChatId: string;
+  role: "user" | "agent" | "system";
+  content: unknown;
+  createdAt: string;
+  state?: string | null;
+  kind?: string;
+}): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, state, kind, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      opts.targetChatId,
+      opts.role,
+      JSON.stringify(opts.content),
+      opts.state ?? null,
+      opts.kind ?? "chat",
+      opts.createdAt,
+    ],
   );
   return id;
 }
@@ -93,6 +128,36 @@ async function listTaskRuns(taskId: string): Promise<Array<{ id: string; state: 
 }
 
 describe("fireMessage", () => {
+  it("honors the fake sandbox driver without creating a real sandbox", async () => {
+    const prevDriver = process.env.DESK_SANDBOX_DRIVER;
+    const prevImage = process.env.DESK_SANDBOX_IMAGE;
+    process.env.DESK_SANDBOX_DRIVER = "fake";
+    process.env.DESK_SANDBOX_IMAGE = "missing/desk-sandbox:e2e-fake";
+
+    try {
+      const messageId = await insertPendingMessage({ type: "text", text: "hello fake driver" });
+      const mgr = createRunManager({ pool });
+
+      const result = await mgr.fireMessage(messageId);
+
+      expect(result.fired).toBe(true);
+      expect(result.childIds).toHaveLength(1);
+      const message = await queries.messages.findById(pool, messageId);
+      expect(message?.state).toBe("succeeded");
+    } finally {
+      if (prevDriver === undefined) {
+        delete process.env.DESK_SANDBOX_DRIVER;
+      } else {
+        process.env.DESK_SANDBOX_DRIVER = prevDriver;
+      }
+      if (prevImage === undefined) {
+        delete process.env.DESK_SANDBOX_IMAGE;
+      } else {
+        process.env.DESK_SANDBOX_IMAGE = prevImage;
+      }
+    }
+  });
+
   it("claims pending → running, runs the agent, produces an events child, succeeds", async () => {
     const events: WsEvent[] = [];
     const fakeExec = async (
@@ -242,7 +307,95 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: userId });
     await mgr.fireMessage(triggerId);
 
-    expect(capturedPrompt).toBe("resolve me please");
+    expect(capturedPrompt).toContain("resolve me please");
+  });
+
+  it("prefixes the run prompt with all visible chat messages when no summary exists", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("context no summary");
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "first pasted source material" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "artifactRef", path: ".chats/abc/artifacts/walkthrough.md", name: "walkthrough.md" },
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "build the app from that" },
+      createdAt: "2026-05-05T00:02:00.000Z",
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toContain("Chat transcript context");
+    expect(capturedPrompt).toContain("first pasted source material");
+    expect(capturedPrompt).toContain("Attached artifact: walkthrough.md (.chats/abc/artifacts/walkthrough.md)");
+    expect(capturedPrompt).toContain("Current task:\nbuild the app from that");
+  });
+
+  it("uses the newest summary as the transcript boundary", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("context with summary");
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "old detail before summary" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "summary", body: "condensed old context" },
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "fresh after summary" },
+      createdAt: "2026-05-05T00:02:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "continue now" },
+      createdAt: "2026-05-05T00:03:00.000Z",
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).not.toContain("old detail before summary");
+    expect(capturedPrompt).toContain("Summary:\ncondensed old context");
+    expect(capturedPrompt).toContain("User:\nfresh after summary");
+    expect(capturedPrompt.indexOf("Summary:\ncondensed old context"))
+      .toBeLessThan(capturedPrompt.indexOf("User:\nfresh after summary"));
+    expect(capturedPrompt).toContain("Current task:\ncontinue now");
   });
 
   it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
