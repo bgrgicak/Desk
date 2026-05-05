@@ -49,12 +49,11 @@ jobs:
         run: npm run build --workspace=@agent-desk/sandbox-cli
 
       - name: Build desk/sandbox:v1 image
-        working-directory: packages/server
         # The image bakes a baseline `agent` user at UID 2000. At runtime
         # desk-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
         # arg doesn't need tuning per-runner.
-        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        run: docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 
       - name: Run unit + integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling
