@@ -10,15 +10,78 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  DESK_DEV: "1"
+
 jobs:
-  test:
-    name: Test (host suite)
+  prepare-server-dist:
+    name: Prepare server build outputs
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      DESK_DEV: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build @agent-desk/api (+ deps via nx) for tests
+        # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
+        # spawns `node packages/server/api/dist/main.js`. nx's
+        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
+        # storage, tools, runtime, scheduler) in topological order, so a
+        # single `nx build @agent-desk/api` produces every `dist/` the spawned
+        # process resolves through Node's default `import` condition.
+        run: npx nx build @agent-desk/api
+
+      - name: Archive server build outputs
+        run: tar -czf "$RUNNER_TEMP/server-dist.tar.gz" packages/server/*/dist
+
+      - name: Upload server build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-dist
+          path: ${{ runner.temp }}/server-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  prepare-sandbox-image:
+    name: Prepare sandbox image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build desk/sandbox:v1 image
+        working-directory: packages/server
+        # The image bakes a baseline `agent` user at UID 2000. At runtime
+        # desk-server overrides this with `--user $(id -u):$(id -g)` of
+        # the host process (or 0:0 under rootless docker), so the build
+        # arg doesn't need tuning per-runner.
+        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+
+      - name: Export desk/sandbox:v1 image
+        run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
+
+      - name: Upload sandbox image
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}/desk-sandbox-v1.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -45,15 +108,42 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build sandbox-cli (prereq for sandbox image)
-        run: npm run build --workspace=@agent-desk/sandbox-cli
+  vitest:
+    name: Vitest (host suite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: prepare-sandbox-image
 
-      - name: Build desk/sandbox:v1 image
-        # The image bakes a baseline `agent` user at UID 2000. At runtime
-        # desk-server overrides this with `--user $(id -u):$(id -g)` of
-        # the host process (or 0:0 under rootless docker), so the build
-        # arg doesn't need tuning per-runner.
-        run: docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+        # The DB is a SQLite file under DESK_HOME; tests that share state
+        # across pools route to a per-process temp file derived from the
+        # connection string they pass, so DESK_DB_PATH only needs to be
+        # set for tests that explicitly read it.
+        run: |
+          mkdir -p "$RUNNER_TEMP/desk-home"
+          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
+          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download sandbox image
+        uses: actions/download-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}
+
+      - name: Load desk/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
 
       - name: Run unit + integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling
@@ -61,14 +151,49 @@ jobs:
         # fail after three attempts.
         run: npx vitest run --passWithNoTests --retry=2
 
-      - name: Build @agent-desk/api (+ deps via nx) for the Playwright fixture
-        # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
-        # spawns `node packages/server/api/dist/main.js`. nx's
-        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
-        # storage, tools, runtime, scheduler) in topological order, so a
-        # single `nx build @agent-desk/api` produces every `dist/` the spawned
-        # process resolves through Node's default `import` condition.
-        run: npx nx build @agent-desk/api
+  playwright:
+    name: Playwright e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs:
+      - prepare-server-dist
+      - prepare-sandbox-image
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+        run: |
+          mkdir -p "$RUNNER_TEMP/desk-home"
+          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
+          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download server build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: server-dist
+          path: ${{ runner.temp }}
+
+      - name: Restore server build outputs
+        run: tar -xzf "$RUNNER_TEMP/server-dist.tar.gz"
+
+      - name: Download sandbox image
+        uses: actions/download-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}
+
+      - name: Load desk/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
@@ -87,3 +212,46 @@ jobs:
           name: playwright-traces
           path: packages/app/test-results/
           retention-days: 7
+
+  test:
+    name: Test (host suite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs:
+      - prepare-server-dist
+      - prepare-sandbox-image
+      - typecheck
+      - vitest
+      - playwright
+    if: ${{ always() }}
+
+    steps:
+      - name: Check required CI jobs
+        env:
+          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          PREPARE_SERVER_DIST_RESULT: ${{ needs.prepare-server-dist.result }}
+          PREPARE_SANDBOX_IMAGE_RESULT: ${{ needs.prepare-sandbox-image.result }}
+          VITEST_RESULT: ${{ needs.vitest.result }}
+          PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+        run: |
+          if [ "$PREPARE_SERVER_DIST_RESULT" != "success" ]; then
+            echo "Prepare server build outputs did not pass: $PREPARE_SERVER_DIST_RESULT"
+            exit 1
+          fi
+          if [ "$PREPARE_SANDBOX_IMAGE_RESULT" != "success" ]; then
+            echo "Prepare sandbox image did not pass: $PREPARE_SANDBOX_IMAGE_RESULT"
+            exit 1
+          fi
+          if [ "$TYPECHECK_RESULT" != "success" ]; then
+            echo "Typecheck did not pass: $TYPECHECK_RESULT"
+            exit 1
+          fi
+          if [ "$VITEST_RESULT" != "success" ]; then
+            echo "Vitest did not pass: $VITEST_RESULT"
+            exit 1
+          fi
+          if [ "$PLAYWRIGHT_RESULT" != "success" ]; then
+            echo "Playwright did not pass: $PLAYWRIGHT_RESULT"
+            exit 1
+          fi
+          echo "All required CI jobs passed."
