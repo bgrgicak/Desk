@@ -17,14 +17,18 @@ Workflow for this goal:
    That clones the Desk app scaffold into
    `~/.chats/<chatId>/artifacts/<name>.app/`. Don't `mkdir`, `touch`, or
    `npm init` your own structure — the scaffold ships a multi-entry
-   Vite project, a fragment template, an `AGENTS.md`, and pre-installed
-   `node_modules/` so build works without network access.
+   Vite project, a fragment template, a storage client, an `AGENTS.md`,
+   and pre-installed `node_modules/` so build works without network
+   access.
 
 2. **Load the `desk-app-scaffold` skill** for the directory layout,
    fragment shape, build commands, capability rules, and the
-   static-only constraint. Follow it. The scaffold's `AGENTS.md` is the
-   source of truth for app authoring; nothing in this prompt overrides
-   it.
+   static-only constraint. Follow it. For persistent app state, declare
+   `storage.read` / `storage.write` in `desk.app.json` and use
+   `getStorageClient()` from `src/storage/client.ts`; don't use
+   `localStorage` or `IndexedDB` as the source of truth. The scaffold's
+   `AGENTS.md` is the source of truth for app authoring; nothing in this
+   prompt overrides it.
 
 3. **Compose with fragments, don't pile up routes.** For anything more
    than a single screen — multiple views, distinct pieces the user
@@ -61,8 +65,7 @@ Workflow for this goal:
    Multiple `.app/` directories per chat are allowed if the user is
    clearly steering toward separate apps.
 
-Apps are static client-side bundles. They must not embed servers,
-auth, persistence-of-record, or background jobs — those land via the
-Desk capability bridge and per-app storage API in later issues. Keep
-new apps inside the static-only constraint described in the
-`desk-app-scaffold` skill.
+Apps are static client-side bundles. They must not embed servers, auth,
+or background jobs. Persistent records go through the Desk capability
+bridge and per-app storage client described in the `desk-app-scaffold`
+skill. Keep new apps inside that static-only constraint.

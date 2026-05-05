@@ -38,6 +38,7 @@ import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import * as appsRoutes from "./routes/apps.js";
+import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
   requireLibraryPathInWorkspace,
   parseReadableChatArtifactPath,
@@ -421,6 +422,21 @@ export function createApp(opts: AppOptions): Server {
       const stat = await fsStat(targetPath);
       sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
       return;
+    }
+
+    // Per-app storage routes (PR-H). Match before the static-app
+    // dispatcher so a request to `.../storage/...` doesn't get caught
+    // by the dist-serve branch.
+    if (segments[0] === "apps" && segments.includes("storage")) {
+      const handled = await handleAppStorageRequest(
+        pool,
+        storage,
+        segments,
+        method,
+        req,
+        res,
+      );
+      if (handled) return;
     }
 
     // Static-app routes — `/apps/chat/:chatId/:appName/dist/*` and the

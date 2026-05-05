@@ -62,7 +62,7 @@ pids="$pids $typecheck_pid"
 sandbox_pid=$!
 pids="$pids $sandbox_pid"
 
-npm -w @agent-desk/app exec -- playwright install chromium &
+npm -w @agent-desk/app exec -c 'playwright install chromium' &
 playwright_install_pid=$!
 pids="$pids $playwright_install_pid"
 
@@ -72,11 +72,11 @@ wait_group \
   playwright-install "$playwright_install_pid"
 
 printf '[ci:local] Running second parallel phase\n'
-npx vitest run --passWithNoTests --retry=2 &
+npm exec -c 'vitest run --passWithNoTests --retry=2' &
 vitest_pid=$!
 pids="$pids $vitest_pid"
 
-npx nx build @agent-desk/api &
+npm exec -c 'nx build @agent-desk/api' &
 api_build_pid=$!
 pids="$pids $api_build_pid"
 
