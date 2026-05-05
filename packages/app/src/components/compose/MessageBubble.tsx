@@ -16,6 +16,9 @@ interface MessageBubbleProps {
   agentName?: string
   /** Fires when the user clicks an attachment chip — caller opens it. */
   onAttachmentClick?: (attachment: AttachmentRef) => void
+  /** Keeps agent metadata aligned when the message content uses a wider row. */
+  agentHeaderClassName?: string
+  hideAgentHeader?: boolean
   /** When false, internal tool-call/stderr entries inside `events` content
    *  are stripped — only the agent's text reply surfaces. ChatView already
    *  filters out fully-tool `events` rows at the list level. */
@@ -29,7 +32,9 @@ export function MessageBubble({
   isNew = false,
   agentName,
   onAttachmentClick,
-    developerMode = false,
+  agentHeaderClassName,
+  hideAgentHeader = false,
+  developerMode = false,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
@@ -64,8 +69,8 @@ export function MessageBubble({
 
   return (
     <div className={isFirstInGroup ? 'space-y-1.5' : '-mt-4'}>
-      {isFirstInGroup && (
-        <div className="flex items-center gap-3">
+      {isFirstInGroup && !hideAgentHeader && (
+        <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
           <div className="flex items-center gap-1">
             <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <span className="text-xs text-muted-foreground">{modelLabel}</span>
@@ -200,17 +205,9 @@ function AttachmentCard({
   attachment: AttachmentRef
   onClick?: () => void
 }) {
-  // PR-F: app attachments render inline as a compact iframe instead of
-  // the chip card so the user can interact with the embedded app.
   const appPreview = appAttachmentToPreview(attachment.path)
-  if (appPreview) {
-    return (
-      <AppPreview
-        {...appPreview}
-        variant="inline"
-      />
-    )
-  }
+  if (appPreview) return <AppPreview {...appPreview} variant="inline" />
+
   const className =
     'inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px] text-left'
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip

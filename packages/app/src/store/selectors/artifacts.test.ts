@@ -50,6 +50,14 @@ describe('isAppArtifactFile', () => {
   })
 })
 
+describe('toArtifactFromFile', () => {
+  it.each(['text/plain', 'text/html'])('classifies SVG files as image artifacts when stored with %s', (mime) => {
+    const artifact = toArtifactFromFile(file({ name: 'diagram.svg', mime }))
+
+    expect(artifact.type).toBe('image')
+  })
+})
+
 describe('toArtifactFromFile — `<name>.app/` directory', () => {
   it('classifies `<name>.app/` directories as type "app"', () => {
     const a = toArtifactFromFile(

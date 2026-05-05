@@ -31,6 +31,16 @@ import {
   type StorageContext,
 } from "@agent-desk/storage";
 
+const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
+
+function normalizeAppNameForDelete(appName: string): { appName: string; dirName: string } {
+  const baseName = appName.endsWith(".app") ? appName.slice(0, -".app".length) : appName;
+  if (!APP_NAME_PATTERN.test(baseName)) {
+    throw new ValidationError(`Invalid app name: ${appName}`);
+  }
+  return { appName: baseName, dirName: `${baseName}.app` };
+}
+
 /**
  * Subset of the run manager the patch-message route needs to drive
  * scheduler-aware state transitions (pause / resume / cancel-in-place).
@@ -270,7 +280,11 @@ export async function sendMessage(
   if (data.goal !== undefined) {
     await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
   } else {
-    const goalToPersist = senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
+    // Only infer a goal from message text for plain chat messages (kind='chat').
+    // Task and summary messages are system/scheduler actions — running
+    // inferGoal on their content (e.g. "scheduled summary") would wrongly
+    // stamp a goal like "document" onto the chat and change the sidebar icon.
+    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
     if (goalToPersist) {
       await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
     }
@@ -355,9 +369,11 @@ export async function attachArtifactRef(
   }
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
-  if (!stat.isFile()) {
-    throw new ValidationError(`Artifact path must point to a file: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new ValidationError(`Artifact path must point to a file or directory: ${relPath}`);
   }
+
+  const inferredMime = stat.isDirectory() ? "inode/directory" : undefined;
 
   const message = await queries.messages.insert(storage.pool, {
     id: generateId("message"),
@@ -367,7 +383,7 @@ export async function attachArtifactRef(
       type: "artifactRef",
       path: relPath,
       name: data.name?.trim() || path.basename(relPath),
-      mime: data.mime?.trim() || undefined,
+      mime: data.mime?.trim() || inferredMime,
     },
     agentId: opts?.agentId ?? chat.agentId,
     model: opts?.model ?? null,
@@ -901,15 +917,13 @@ export async function removeChatApp(
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
-  // Strip a trailing `.app` if the caller didn't include it; the storage
-  // helper requires the full directory name.
-  const dirName = appName.endsWith(".app") ? appName : `${appName}.app`;
+  const { appName: normalizedAppName, dirName } = normalizeAppNameForDelete(appName);
   await deleteChatApp(storage, ws.path, chatId, dirName);
 
   // Revoke any active sessions for this chat+app.
   await storage.pool.query(
     `DELETE FROM app_sessions WHERE chat_id = ? AND app_name = ?`,
-    [chatId, dirName.slice(0, -".app".length)],
+    [chatId, normalizedAppName],
   );
 
   emit({
@@ -942,12 +956,12 @@ export async function removeLibraryApp(
   if (rows.length === 0) throw new NotFoundError("No workspace for user");
   const ws = rows[0];
 
-  const dirName = appName.endsWith(".app") ? appName : `${appName}.app`;
+  const { appName: normalizedAppName, dirName } = normalizeAppNameForDelete(appName);
   await deleteLibraryApp(storage, ws.path, dirName);
 
   await storage.pool.query(
     `DELETE FROM app_sessions WHERE scope = 'library' AND app_name = ? AND workspace_id = ?`,
-    [dirName.slice(0, -".app".length), ws.id],
+    [normalizedAppName, ws.id],
   );
 
   emit({

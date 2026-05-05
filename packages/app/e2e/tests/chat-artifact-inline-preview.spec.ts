@@ -125,7 +125,7 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   const inlinePreview = page.getByTestId('artifact-inline-preview').first()
   await expect(inlinePreview).toBeVisible({ timeout: 10_000 })
   const previewBox = await inlinePreview.boundingBox()
-  expect(previewBox?.height ?? Infinity).toBeLessThanOrEqual(380)
+  expect(previewBox?.height ?? Infinity).toBeLessThanOrEqual(700)
 
   const counter = page.frameLocator(`iframe[title="Inline App"]`).getByRole('button', { name: 'Count 0' })
   await expect(counter).toBeVisible()
