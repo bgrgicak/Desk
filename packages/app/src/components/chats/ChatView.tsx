@@ -905,7 +905,9 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="max-w-2xl mx-auto px-6 py-8 space-y-6"
+          innerClassName="px-6 py-8 space-y-6"
+          messageClassName="max-w-2xl mx-auto"
+          lastAssistantSlotClassName="w-full"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={

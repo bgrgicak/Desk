@@ -62,6 +62,7 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
+import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
@@ -672,7 +673,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                     <iframe
                       title={item.name}
                       src={htmlPreviewBlobUrl}
-                      sandbox="allow-same-origin"
+                      sandbox={GENERATED_APP_IFRAME_SANDBOX}
                       className="flex-1 w-full border-0 bg-white"
                     />
                   ) : (

@@ -20,6 +20,10 @@ export interface ChatThreadProps {
   highlightMessageId?: string
   /** CSS classes for the inner message list container. */
   innerClassName?: string
+  /** CSS classes for regular message rows within the list container. */
+  messageClassName?: string
+  /** CSS classes for content rendered after the final assistant message. */
+  lastAssistantSlotClassName?: string
   /** Rendered above the message list (e.g. "Open in chat" link). */
   headerSlot?: ReactNode
   /** Rendered below the scroll area (e.g. ChatInput). */
@@ -46,6 +50,8 @@ export function ChatThread({
   isSending = false,
   highlightMessageId,
   innerClassName = 'space-y-6 p-4',
+  messageClassName,
+  lastAssistantSlotClassName,
   headerSlot,
   footerSlot,
   emptySlot,
@@ -115,19 +121,29 @@ export function ChatThread({
                 else messageRefs.current.delete(msg.id)
               }}
             >
-              <MessageBubble
-                message={msg}
-                workspaceId={workspaceId}
-                agentName={agentName}
-                isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                isNew={showNewBadge && msg.id === lastAssistantId}
-                onAttachmentClick={onAttachmentClick}
-                developerMode={developerMode}
-              />
-              {lastAssistantSlot && msg.id === lastAssistantId && lastAssistantSlot(msg.id)}
+              <div className={messageClassName}>
+                <MessageBubble
+                  message={msg}
+                  workspaceId={workspaceId}
+                  agentName={agentName}
+                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
+                  isNew={showNewBadge && msg.id === lastAssistantId}
+                  onAttachmentClick={onAttachmentClick}
+                  developerMode={developerMode}
+                />
+              </div>
+              {lastAssistantSlot && msg.id === lastAssistantId && (
+                <div className={lastAssistantSlotClassName}>
+                  {lastAssistantSlot(msg.id)}
+                </div>
+              )}
             </div>
           ))}
-          <StatusIndicator text={null} isTyping={isTyping} />
+          {isTyping && (
+            <div className={messageClassName}>
+              <StatusIndicator text={null} isTyping={isTyping} />
+            </div>
+          )}
         </div>
       </div>
       {footerSlot}

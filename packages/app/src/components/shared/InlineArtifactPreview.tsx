@@ -5,6 +5,7 @@ import { fileKindFrom, isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { useGetLibraryFileQuery } from '@/store/api'
 import { fetchLibraryContent } from '@/store/library-download'
+import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 
 const MAX_INLINE_PREVIEW_BYTES = 5 * 1024 * 1024
 
@@ -98,7 +99,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
         <iframe
           title={name}
           src={state.blobUrl}
-          sandbox="allow-scripts"
+          sandbox={GENERATED_APP_IFRAME_SANDBOX}
           className="h-full w-full border-0 bg-white"
         />
       ) : state.kind === 'image' && state.blobUrl ? (
