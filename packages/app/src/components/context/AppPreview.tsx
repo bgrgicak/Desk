@@ -102,7 +102,7 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
   }, [chatId, appName, session])
 
   return (
-    <div className="flex flex-col bg-white" style={{ height: '100vh' }}>
+    <div className="flex h-full min-h-0 flex-col bg-white">
       {session ? (
         <iframe
           key={session.token}
@@ -110,8 +110,7 @@ export function AppPreview({ chatId, appName }: AppPreviewProps) {
           title={appName}
           src={session.url}
           sandbox="allow-scripts"
-          className="w-full border-0"
-          style={{ height: '100vh' }}
+          className="h-full min-h-0 w-full flex-1 border-0"
         />
       ) : error ? (
         <div className="h-full flex items-center justify-center px-4">

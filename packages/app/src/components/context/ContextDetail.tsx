@@ -567,7 +567,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
         />
 
         {/* Preview area */}
-        <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
           {appManifestRef ? (
             <AppPreview chatId={appManifestRef.chatId} appName={appManifestRef.appName} />
           ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
