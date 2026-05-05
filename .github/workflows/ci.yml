@@ -15,6 +15,61 @@ env:
   DESK_DEV: "1"
 
 jobs:
+  prepare-ci-assets:
+    name: Prepare shared CI assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build @agent-desk/api (+ deps via nx) for tests
+        # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
+        # spawns `node packages/server/api/dist/main.js`. nx's
+        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
+        # storage, tools, runtime, scheduler) in topological order, so a
+        # single `nx build @agent-desk/api` produces every `dist/` the spawned
+        # process resolves through Node's default `import` condition.
+        run: npx nx build @agent-desk/api
+
+      - name: Build desk/sandbox:v1 image
+        working-directory: packages/server
+        # The image bakes a baseline `agent` user at UID 2000. At runtime
+        # desk-server overrides this with `--user $(id -u):$(id -g)` of
+        # the host process (or 0:0 under rootless docker), so the build
+        # arg doesn't need tuning per-runner.
+        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+
+      - name: Export desk/sandbox:v1 image
+        run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
+
+      - name: Archive server build outputs
+        run: tar -czf "$RUNNER_TEMP/server-dist.tar.gz" packages/server/*/dist
+
+      - name: Upload server build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-dist
+          path: ${{ runner.temp }}/server-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload sandbox image
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}/desk-sandbox-v1.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-24.04
@@ -49,6 +104,7 @@ jobs:
     name: Vitest (host suite)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    needs: prepare-ci-assets
 
     steps:
       - uses: actions/checkout@v4
@@ -72,16 +128,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build sandbox-cli (prereq for sandbox image)
-        run: npm run build --workspace=@agent-desk/sandbox-cli
+      - name: Download sandbox image
+        uses: actions/download-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}
 
-      - name: Build desk/sandbox:v1 image
-        working-directory: packages/server
-        # The image bakes a baseline `agent` user at UID 2000. At runtime
-        # desk-server overrides this with `--user $(id -u):$(id -g)` of
-        # the host process (or 0:0 under rootless docker), so the build
-        # arg doesn't need tuning per-runner.
-        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+      - name: Load desk/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
 
       - name: Run unit + integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling
@@ -93,6 +147,7 @@ jobs:
     name: Playwright e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    needs: prepare-ci-assets
 
     steps:
       - uses: actions/checkout@v4
@@ -112,14 +167,23 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build @agent-desk/api (+ deps via nx) for the Playwright fixture
-        # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
-        # spawns `node packages/server/api/dist/main.js`. nx's
-        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
-        # storage, tools, runtime, scheduler) in topological order, so a
-        # single `nx build @agent-desk/api` produces every `dist/` the spawned
-        # process resolves through Node's default `import` condition.
-        run: npx nx build @agent-desk/api
+      - name: Download server build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: server-dist
+          path: ${{ runner.temp }}
+
+      - name: Restore server build outputs
+        run: tar -xzf "$RUNNER_TEMP/server-dist.tar.gz"
+
+      - name: Download sandbox image
+        uses: actions/download-artifact@v4
+        with:
+          name: desk-sandbox-v1
+          path: ${{ runner.temp }}
+
+      - name: Load desk/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
@@ -144,6 +208,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs:
+      - prepare-ci-assets
       - typecheck
       - vitest
       - playwright
@@ -153,9 +218,14 @@ jobs:
       - name: Check required CI jobs
         env:
           TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          PREPARE_CI_ASSETS_RESULT: ${{ needs.prepare-ci-assets.result }}
           VITEST_RESULT: ${{ needs.vitest.result }}
           PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
         run: |
+          if [ "$PREPARE_CI_ASSETS_RESULT" != "success" ]; then
+            echo "Prepare shared CI assets did not pass: $PREPARE_CI_ASSETS_RESULT"
+            exit 1
+          fi
           if [ "$TYPECHECK_RESULT" != "success" ]; then
             echo "Typecheck did not pass: $TYPECHECK_RESULT"
             exit 1
