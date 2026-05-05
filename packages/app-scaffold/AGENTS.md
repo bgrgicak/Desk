@@ -13,12 +13,13 @@ This directory is the template for an agent-authored Desk app. When
    webhooks. The only backend is the Desk API.
 
 2. **Identity comes from Desk.** Don't author your own auth. The
-   capability bridge (PR-C, issue #47) injects identity at iframe load
-   time.
+   capability bridge injects identity at iframe load time and mediates
+   privileged operations from the parent Desk app.
 
 3. **No direct persistence.** Don't write to `localStorage` or
    `IndexedDB` as a source of truth. Both are fine as caches. Real
-   persistence goes through the per-app storage API (PR-H, issue #47).
+   persistence goes through `src/storage/client.ts`, which calls
+   `window.desk.storage` over the capability bridge.
 
 4. **No backend creep.** If a feature seems to need a server, it's
    either:
@@ -26,10 +27,12 @@ This directory is the template for an agent-authored Desk app. When
    - a missing capability — flag it to the user instead of inventing
      a sidecar.
 
-5. **Same-origin.** Apps are served by `desk-server` at
+5. **Sandboxed iframe.** Apps are served by `desk-server` at
    `/apps/library/<name>/dist/*` (library apps) or
    `/apps/chat/<chatId>/<name>/dist/*` (chat artifacts). Use relative
    paths in built assets — `vite.config.ts` already sets `base: './'`.
+   Do not depend on same-origin browser APIs; the iframe runs without
+   `allow-same-origin`.
 
 6. **Components are the unit of reuse, fragments are the unit of
    embedding.** A fragment is a focused app surface that can be embedded
@@ -54,7 +57,7 @@ This directory is the template for an agent-authored Desk app. When
     main.tsx                # full-app bootstrap
     App.tsx                 # imports fragment components, wires routes
     index.css               # Tailwind entry; @import "@agent-desk/ui/styles.css"
-    storage/client.ts       # shared Desk storage API client (PR-H stub)
+    storage/client.ts       # shared Desk storage bridge client
   fragments/
     <fragment>/
       Component.tsx         # the actual UI — the only render of the component
@@ -132,11 +135,12 @@ shadcn/ui or chakra/etc.
 
 ## Capability and API story
 
-Capability bridge ships in PR-C (issue #47). Until then:
+Desk apps run in a sandboxed iframe without same-origin privileges:
 
-- Don't call any Desk API from app code.
+- Don't call Desk APIs directly from app code.
 - Declare capabilities you intend to use in `desk.app.json`
-  (`capabilities: ["library.read", ...]`) so the user knows ahead of
-  PR-C what the app expects.
-- Storage methods on `src/storage/client.ts` throw — they're a
-  placeholder so the import site is stable.
+  (`capabilities: ["storage.read", "storage.write"]`) so Desk can grant
+  only the operations the app needs.
+- Use `getStorageClient()` from `src/storage/client.ts` for persistence.
+  It calls `window.desk.storage`, which is parent-mediated and capability
+  checked.

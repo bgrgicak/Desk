@@ -33,6 +33,12 @@ External entrypoint for clients.
 * Agents have limited tool access; they cannot invoke tools outside their assigned surface
 * Each agent can have its own tool allowlist, enforced per-agent rather than globally
 
+### 2.1 Desk App Iframe Boundary
+
+Agent-authored Desk apps are treated as untrusted static frontends. The parent SPA renders them in iframes with scripts enabled but without `allow-same-origin`, giving app JavaScript an opaque browser origin instead of first-party access to Desk session storage, local storage, cookies, or parent DOM.
+
+The server authenticates app HTML entrypoints with per-app sessions and injects `window.desk` into those HTML responses. Non-HTML build assets are served as unprivileged subresources because opaque sandbox origins do not send the app-session cookie for module-script loads. Any privileged Desk operation must go through the parent-mediated `window.desk` postMessage bridge, where the parent validates the source iframe, bridge key, app scope, and declared capability before making the host API call.
+
 ### 3. Control Plane / Orchestrator
 
 Central coordinator.

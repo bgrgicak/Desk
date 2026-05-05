@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
+import { AppPreview } from '@/components/context/AppPreview'
 import { useGetLibraryFileQuery } from '@/store/api'
 import { fetchLibraryContent } from '@/store/library-download'
-import { getSessionToken } from '@/auth/session'
 import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 import { previewBlobFor, previewKindFrom } from '@/lib/preview-blob'
 
@@ -30,22 +30,29 @@ function canRenderInline(kind: FileKind): boolean {
   return kind === 'html' || kind === 'image' || kind === 'text' || kind === 'app'
 }
 
+function parseChatAppPath(path: string): { chatId: string; appName: string } | null {
+  const match = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app$/.exec(path)
+  if (!match) return null
+  return { chatId: match[1], appName: match[2] }
+}
+
 export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const guessedKind = previewKindFrom(name, path, mime)
-  const isApp = guessedKind === 'app'
-  // App directories are served via the /api/apps/ route — no file-content fetch needed.
+  const chatAppRef = useMemo(
+    () => guessedKind === 'app' ? parseChatAppPath(path) : null,
+    [guessedKind, path],
+  )
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
-  const shouldFetchFile = shouldTryPreview && !isApp
+  const shouldFetchFile = shouldTryPreview && guessedKind !== 'app'
   const { data: fileMeta, isError: metaError } = useGetLibraryFileQuery(
     { workspaceId: workspaceId ?? '', path },
     { skip: !shouldFetchFile },
   )
 
   useEffect(() => {
-    // App directories render via an iframe URL — resolve immediately.
-    if (isApp && workspaceId) {
-      setState({ status: 'ready', kind: 'app' })
+    if (guessedKind === 'app') {
+      setState(chatAppRef ? { status: 'ready', kind: 'app' } : { status: 'fallback' })
       return
     }
 
@@ -68,7 +75,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
         if (cancelled) return
         const effectiveMime = blob.type || fileMeta.mime || mime
         const kind = previewKindFrom(name, path, effectiveMime)
-        if (!canRenderInline(kind)) {
+        if (!canRenderInline(kind) || kind === 'app') {
           setState({ status: 'fallback' })
           return
         }
@@ -92,7 +99,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, isApp])
+  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, guessedKind, chatAppRef])
 
   if (state.status === 'fallback') return <>{fallback}</>
 
@@ -100,7 +107,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
     return (
       <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
         <div className="flex h-full items-center justify-center bg-muted/20 text-xs text-muted-foreground">
-          Loading preview…
+          Loading preview...
         </div>
       </InlinePreviewShell>
     )
@@ -108,13 +115,8 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
 
   return (
     <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
-      {state.kind === 'app' && workspaceId ? (
-        <iframe
-          title={name}
-          src={`/api/apps/${workspaceId}/${path}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
-          allow="same-origin"
-          className="h-full w-full border-0 bg-white"
-        />
+      {state.kind === 'app' && chatAppRef ? (
+        <AppPreview chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
       ) : state.kind === 'html' && state.blobUrl ? (
         <iframe
           title={name}
