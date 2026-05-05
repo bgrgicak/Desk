@@ -1,22 +1,24 @@
 import type { Artifact } from "@/data/ui-types";
+import { fileKindFrom } from "@/data/file-kind";
 import type { ServerFile } from "../types";
 
 function artifactType(mime: string, name: string): Artifact["type"] {
-  if (mime.startsWith("image/")) return "image";
+  const normalizedName = name.toLowerCase();
+  if (fileKindFrom(name, mime) === "image") return "image";
   if (
     mime === "text/csv" ||
-    name.endsWith(".csv") ||
+    normalizedName.endsWith(".csv") ||
     mime === "application/vnd.ms-excel" ||
     mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   )
     return "spreadsheet";
   if (
     mime === "text/html" ||
-    name.endsWith(".html") ||
-    name.endsWith(".htm")
+    normalizedName.endsWith(".html") ||
+    normalizedName.endsWith(".htm")
   )
     return "site";
-  if (mime === "application/json" && name.endsWith(".app.json")) return "app";
+  if (mime === "application/json" && normalizedName.endsWith(".app.json")) return "app";
   return "document";
 }
 

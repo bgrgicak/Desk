@@ -63,6 +63,7 @@ import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
 import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
+import { previewBlobFor } from '@/lib/preview-blob'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
@@ -186,7 +187,9 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
             editorInitFor.current = item.id
           }
         } else {
-          createdUrl = URL.createObjectURL(blob)
+          const previewBlob = await previewBlobFor(effectiveKind, blob, item.name, item.id, blob.type || item.mimeType)
+          if (cancelled) return
+          createdUrl = URL.createObjectURL(previewBlob)
           setPreviewBlobUrl(createdUrl)
         }
       })
@@ -715,12 +718,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'image' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-800 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <img
                   src={previewBlobUrl}
                   alt={item.name}
-                  className="max-w-full max-h-full object-contain"
+                  className="h-full w-full object-contain"
                   onError={() => setMediaLoadFailed(true)}
                 />
               ) : (
@@ -730,7 +733,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'video' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-900 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <video
                   src={previewBlobUrl}

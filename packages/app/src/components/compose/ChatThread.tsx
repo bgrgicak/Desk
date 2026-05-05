@@ -21,7 +21,11 @@ export interface ChatThreadProps {
   /** CSS classes for the inner message list container. */
   innerClassName?: string
   /** CSS classes for regular message rows within the list container. */
-  messageClassName?: string
+  messageClassName?: string | ((message: ServerMessage) => string | undefined)
+  /** CSS classes for the typing/status row. */
+  statusClassName?: string
+  /** CSS classes for the agent name/time row. */
+  agentHeaderClassName?: string
   /** CSS classes for content rendered after the final assistant message. */
   lastAssistantSlotClassName?: string
   /** Rendered above the message list (e.g. "Open in chat" link). */
@@ -51,6 +55,8 @@ export function ChatThread({
   highlightMessageId,
   innerClassName = 'space-y-6 p-4',
   messageClassName,
+  statusClassName,
+  agentHeaderClassName,
   lastAssistantSlotClassName,
   headerSlot,
   footerSlot,
@@ -87,6 +93,8 @@ export function ChatThread({
     return null
   }, [messages])
 
+  const resolvedStatusClassName = statusClassName ?? (typeof messageClassName === 'string' ? messageClassName : undefined)
+
   useEffect(() => {
     if (highlightMessageId) {
       const el = messageRefs.current.get(highlightMessageId)
@@ -121,14 +129,16 @@ export function ChatThread({
                 else messageRefs.current.delete(msg.id)
               }}
             >
-              <div className={messageClassName}>
+              <div className={typeof messageClassName === 'function' ? messageClassName(msg) : messageClassName}>
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}
                   agentName={agentName}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
+                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
                   isNew={showNewBadge && msg.id === lastAssistantId}
                   onAttachmentClick={onAttachmentClick}
+                  agentHeaderClassName={agentHeaderClassName}
+                  hideAgentHeader={msg.content.type === 'artifactRef'}
                   developerMode={developerMode}
                 />
               </div>
@@ -140,7 +150,7 @@ export function ChatThread({
             </div>
           ))}
           {isTyping && (
-            <div className={messageClassName}>
+            <div className={resolvedStatusClassName}>
               <StatusIndicator text={null} isTyping={isTyping} />
             </div>
           )}
