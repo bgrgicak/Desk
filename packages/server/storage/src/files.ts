@@ -65,6 +65,8 @@ export interface FileRef {
   creatorAgentId?: string;
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean;
+  /** True when this entry is a directory (e.g. a `.app/` bundle). */
+  isDir?: boolean;
 }
 
 /** Extension-to-mime guesser used when the caller didn't provide one. */
@@ -217,6 +219,23 @@ async function fileRefFromDisk(home: string, slug: string, relPath: string): Pro
   const abs = resolveHostPath(home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
+  // Allow `.app/` directories to be stat'd so the frontend can render them
+  // as app iframes. Other directories are still rejected.
+  if (stat.isDirectory()) {
+    const name = path.basename(abs);
+    if (!name.endsWith(".app") || name === ".app") {
+      throw new NotFoundError(`Not a file: ${relPath}`);
+    }
+    return {
+      path: relPath.split(path.sep).join("/"),
+      name,
+      mime: "inode/directory",
+      size: 0,
+      createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
+    };
+  }
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
   return {
     path: relPath.split(path.sep).join("/"),

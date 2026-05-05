@@ -13,7 +13,12 @@ import {
 } from 'lucide-react'
 import type { ContextItem } from './ui-types'
 
-export type FileKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'docx' | 'text' | 'unknown'
+export type FileKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'docx' | 'text' | 'app' | 'unknown'
+
+/** True when `name` is a Desk app directory (ends with `.app`). */
+export function isAppDirectory(name: string): boolean {
+  return name.endsWith('.app') && name !== '.app'
+}
 
 const DOCX_EXTS = new Set(['docx'])
 const DOCX_MIMES = new Set([
@@ -93,6 +98,7 @@ export function fileKindFrom(name: string, mimeType?: string | null): FileKind {
 
 export function fileKindForItem(item: ContextItem): FileKind {
   if (item.type === 'note' || item.type === 'link') return 'text'
+  if (isAppDirectory(item.name)) return 'app'
   return fileKindFrom(item.name, item.mimeType)
 }
 

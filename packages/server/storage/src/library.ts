@@ -155,11 +155,18 @@ async function walk(
       if (respectGitignore && isGitIgnored(abs, kind === "dir", frames)) continue;
 
       if (kind === "dir") {
-        folders.push(abs);
-        if (recurse) {
-          const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
-          const childFrames = childFrame ? [...frames, childFrame] : frames;
-          stack.push({ abs, frames: childFrames });
+        const dirName = path.basename(abs);
+        // Treat `.app` directories as opaque file-like items — do not recurse
+        // into them and do not surface them as navigatable folders.
+        if (dirName.endsWith(".app") && dirName !== ".app") {
+          files.push(abs);
+        } else {
+          folders.push(abs);
+          if (recurse) {
+            const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
+            const childFrames = childFrame ? [...frames, childFrame] : frames;
+            stack.push({ abs, frames: childFrames });
+          }
         }
       } else {
         files.push(abs);
@@ -202,14 +209,18 @@ export async function listLibrary(
   const fileItems: FileRef[] = [];
   for (const abs of files) {
     const stat = await fs.stat(abs).catch(() => null);
-    if (!stat || !stat.isFile()) continue;
+    if (!stat) continue;
+    const name = path.basename(abs);
+    const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
+    if (!stat.isFile() && !isAppDir) continue;
     fileItems.push({
       path: path.relative(root, abs).split(path.sep).join("/"),
-      name: path.basename(abs),
-      mime: guessMime(abs),
-      size: stat.size,
+      name,
+      mime: isAppDir ? "inode/directory" : guessMime(abs),
+      size: isAppDir ? 0 : stat.size,
       createdAt: stat.mtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
+      isDir: isAppDir || undefined,
     });
   }
   fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

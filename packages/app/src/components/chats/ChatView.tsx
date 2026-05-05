@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
-  ChevronDown, Folder, Link2, StickyNote, Paperclip, Plus, X,
+  ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
   PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -41,6 +41,7 @@ import {
 } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import { iconForFile } from '@/data/file-kind'
+import { isAppArtifactFile } from '@/store/selectors/artifacts'
 import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
@@ -198,26 +199,33 @@ function ArtifactsPanel({
               Chat files
             </p>
             {filteredChatArtifacts.map(file => {
-              const FileIcon = file.isDir ? Folder : iconForFile(file.name)
+              const isApp = isAppArtifactFile(file)
+              // App directories are openable (the click target points the
+              // detail view at the app's manifest until PR-C lands the
+              // static route + iframe). Plain directories stay
+              // non-interactive.
+              const isClickable = !file.isDir || isApp
+              const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
+              const subtitle = isApp ? 'App' : file.isDir ? 'Directory' : getRelativeTime(new Date(file.createdAt))
               return (
                 <div
                   key={`artifact-file-${file.path}`}
-                  onClick={() => !file.isDir && onChatArtifactClick?.(file)}
+                  onClick={() => isClickable && onChatArtifactClick?.(file)}
                   onKeyDown={e => {
-                    if (!file.isDir) activateOnEnterOrSpace(e, () => onChatArtifactClick?.(file))
+                    if (isClickable) activateOnEnterOrSpace(e, () => onChatArtifactClick?.(file))
                   }}
-                  role={file.isDir ? undefined : 'button'}
-                  tabIndex={file.isDir ? undefined : 0}
-                  aria-label={file.isDir ? undefined : `Open ${file.name}`}
-                  title={file.isDir ? file.name : 'Click to open'}
-                  className={`group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${file.isDir ? '' : 'cursor-pointer'}`}
+                  role={isClickable ? 'button' : undefined}
+                  tabIndex={isClickable ? 0 : undefined}
+                  aria-label={isClickable ? `Open ${file.name}` : undefined}
+                  title={isClickable ? 'Click to open' : file.name}
+                  className={`group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
                 >
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
                     <FileIcon className="h-4 w-4 text-muted-foreground/70" />
                   </div>
                   <div className="flex-1 min-w-0 relative overflow-hidden">
                     <p className="text-sm font-medium truncate">{file.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{file.isDir ? 'Directory' : getRelativeTime(new Date(file.createdAt))}</p>
+                    <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
                     <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   </div>
                   {!file.isDir && (
@@ -1086,9 +1094,25 @@ export function ChatView({
                   const item = libraryItems.find(c => c.id === artifact.id)
                   if (item) addStagedFromLibrary(item)
                 }}
-                onChatArtifactClick={(file) =>
-                  onAttachmentClick?.({ path: file.path, name: file.label ?? file.name, mime: file.mime, size: file.size })
-                }
+                onChatArtifactClick={(file) => {
+                  // For a `<name>.app/` chat artifact, navigate to the app
+                  // directory itself so ContextDetail renders it as an iframe.
+                  if (isAppArtifactFile(file)) {
+                    onAttachmentClick?.({
+                      path: file.path,
+                      name: file.label ?? file.name,
+                      mime: 'inode/directory',
+                      size: file.size,
+                    })
+                    return
+                  }
+                  onAttachmentClick?.({
+                    path: file.path,
+                    name: file.label ?? file.name,
+                    mime: file.mime,
+                    size: file.size,
+                  })
+                }}
                 onChatArtifactStage={addStagedChatFile}
                 onPrefillInput={(text) => setPrefillText(text)}
                 savedArtifactIds={savedArtifactIds}

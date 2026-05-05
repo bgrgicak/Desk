@@ -5,6 +5,7 @@ import { isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { useGetLibraryFileQuery } from '@/store/api'
 import { fetchLibraryContent } from '@/store/library-download'
+import { getSessionToken } from '@/auth/session'
 import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 import { previewBlobFor, previewKindFrom } from '@/lib/preview-blob'
 
@@ -26,19 +27,28 @@ type PreviewState =
   | { status: 'fallback' }
 
 function canRenderInline(kind: FileKind): boolean {
-  return kind === 'html' || kind === 'image' || kind === 'text'
+  return kind === 'html' || kind === 'image' || kind === 'text' || kind === 'app'
 }
 
 export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const guessedKind = previewKindFrom(name, path, mime)
+  const isApp = guessedKind === 'app'
+  // App directories are served via the /api/apps/ route — no file-content fetch needed.
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
+  const shouldFetchFile = shouldTryPreview && !isApp
   const { data: fileMeta, isError: metaError } = useGetLibraryFileQuery(
     { workspaceId: workspaceId ?? '', path },
-    { skip: !shouldTryPreview },
+    { skip: !shouldFetchFile },
   )
 
   useEffect(() => {
+    // App directories render via an iframe URL — resolve immediately.
+    if (isApp && workspaceId) {
+      setState({ status: 'ready', kind: 'app' })
+      return
+    }
+
     setState({ status: 'loading' })
     if (!workspaceId || !shouldTryPreview || metaError) {
       setState({ status: 'fallback' })
@@ -82,7 +92,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta])
+  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, isApp])
 
   if (state.status === 'fallback') return <>{fallback}</>
 
@@ -98,7 +108,14 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
 
   return (
     <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
-      {state.kind === 'html' && state.blobUrl ? (
+      {state.kind === 'app' && workspaceId ? (
+        <iframe
+          title={name}
+          src={`/api/apps/${workspaceId}/${path}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
+          allow="same-origin"
+          className="h-full w-full border-0 bg-white"
+        />
+      ) : state.kind === 'html' && state.blobUrl ? (
         <iframe
           title={name}
           src={state.blobUrl}
