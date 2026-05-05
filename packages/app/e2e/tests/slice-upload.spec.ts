@@ -518,6 +518,7 @@ test("library detail's 'Use in chat' pins the file to chat attachments without a
     .getByPlaceholder(/ask anything|continue the conversation/i)
     .first();
   await chatInput.fill("look at the summary I just opened");
+  await expect(chatInput).toHaveValue("look at the summary I just opened");
   // Use locator.press rather than page.keyboard.press so the Enter event
   // is always dispatched to the textarea even if focus shifted during the
   // preceding animation or re-render.
