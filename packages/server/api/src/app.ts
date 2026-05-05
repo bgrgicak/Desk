@@ -506,7 +506,12 @@ export function createApp(opts: AppOptions): Server {
         sendJson(res, 200, { ok: true });
         return;
       }
-      if (method === "GET" && segments.length >= 4 && segments[3] === "dist") {
+      if (
+        method === "GET" &&
+        ((segments.length >= 4 && segments[3] === "dist") ||
+          (segments.length >= 5 && segments[4] === "dist") ||
+          (segments.length >= 6 && segments[5] === "dist"))
+      ) {
         const handled = await appsRoutes.handleStaticLibraryAppRequest(
           pool,
           storage,

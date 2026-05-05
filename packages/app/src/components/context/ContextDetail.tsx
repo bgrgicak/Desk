@@ -58,6 +58,7 @@ import { TextFileEditor } from './TextFileEditor'
 import { MergeEditor } from './MergeEditor'
 import {
   AppPreview,
+  parseChatAppDirPath,
   parseChatAppManifestPath,
   parseLibraryAppDirPath,
   parseLibraryAppManifestPath,
@@ -73,6 +74,30 @@ import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 import { previewBlobFor } from '@/lib/preview-blob'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
+
+type ContextDetailAppPreviewRef =
+  | { scope: 'chat'; chatId: string; appName: string }
+  | { scope: 'library'; appName: string }
+
+export function appPreviewRefForContextItem(
+  item: Pick<ContextItem, 'id' | 'type'>,
+): ContextDetailAppPreviewRef | null {
+  const chatAppManifestRef = parseChatAppManifestPath(item.id)
+  const chatAppDirRef = item.type === 'app' ? parseChatAppDirPath(item.id) : null
+  const chatAppRef = chatAppManifestRef ?? chatAppDirRef
+  if (chatAppRef) return { scope: 'chat', chatId: chatAppRef.chatId, appName: chatAppRef.appName }
+
+  const libraryManifestRef = parseLibraryAppManifestPath(item.id)
+  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName }
+
+  const libraryAppDirRef =
+    item.type === 'app' && !libraryManifestRef
+      ? parseLibraryAppDirPath(item.id)
+      : null
+  if (libraryAppDirRef) return { scope: 'library', appName: libraryAppDirRef.appName }
+
+  return null
+}
 
 interface ContextDetailProps {
   item: ContextItem
@@ -134,12 +159,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   // PR-E extends this to library apps: clicking either the `<name>.app/`
   // library directory or its inner `desk.app.json` opens the same live
   // preview.
-  const chatAppRef = parseChatAppManifestPath(item.id)
-  const libraryManifestRef = parseLibraryAppManifestPath(item.id)
-  const libraryAppDirRef =
-    item.type === 'app' && !chatAppRef && !libraryManifestRef
-      ? parseLibraryAppDirPath(item.id)
-      : null
+  const appPreviewRef = appPreviewRefForContextItem(item)
 
   // Refs that mirror the latest editorValue / previewText so the async fetch
   // callback can read current values without stale closures, and without
@@ -581,12 +601,8 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
 
         {/* Preview area */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
-          {chatAppRef ? (
-            <AppPreview scope="chat" chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
-          ) : libraryManifestRef ? (
-            <AppPreview scope="library" appName={libraryManifestRef.appName} />
-          ) : libraryAppDirRef ? (
-            <AppPreview scope="library" appName={libraryAppDirRef.appName} />
+          {appPreviewRef ? (
+            <AppPreview {...appPreviewRef} />
           ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
