@@ -903,8 +903,6 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "chats" && segments[2] === "copy-library-app" && segments.length === 3 && method === "POST") {
-      // PR-G: clone a library `<name>.app/` into the chat's artifacts dir
-      // so the agent can iterate on it without touching the library copy.
       await requireOwnedChat(pool, segments[1], userId);
       const body = (await parseBody(req)) as { path?: unknown };
       const libraryPath = typeof body?.path === "string" ? body.path : "";
@@ -919,10 +917,6 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (segments[0] === "chats" && segments[2] === "replace-library-app" && segments.length === 3 && method === "POST") {
-      // PR-G: promote the chat-artifact `<name>.app/` over the library
-      // version, moving the prior copy to .trash/.app-versions for
-      // recovery. Optional `expectedSourceVersion` (or `If-Match` header)
-      // gates against concurrent edits — see `copyLibraryAppToChat`.
       await requireOwnedChat(pool, segments[1], userId);
       const body = (await parseBody(req)) as {
         name?: unknown;

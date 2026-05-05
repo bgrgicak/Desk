@@ -814,7 +814,7 @@ export async function saveArtifactToLibrary(
 /**
  * Modify-as-version: copy a library `<name>.app/` into a chat's
  * artifacts dir so the agent can iterate on it without disturbing the
- * library copy. Issue #47, PR-G.
+ * library copy.
  */
 export async function copyAppFromLibrary(
   storage: StorageContext,
@@ -843,7 +843,7 @@ export async function copyAppFromLibrary(
 /**
  * Modify-as-version: replace a library `<name>.app/` with the
  * chat-artifact version of the same app. The prior library copy is
- * moved to `~/Desk/.trash/.app-versions/` for recovery. Issue #47, PR-G.
+ * moved to `~/Desk/.trash/.app-versions/` for recovery.
  *
  * Concurrency: pass `expectedSourceVersion` (captured by the UI from
  * `copyLibraryAppToChat`'s response) to enforce an If-Match-style
