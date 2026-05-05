@@ -1,10 +1,13 @@
 import { type Pool } from "../pool.js";
 
+export type AppScope = "chat" | "library";
+
 export interface AppSession {
   id: string;
   userId: string;
-  scope: "chat";
-  chatId: string;
+  scope: AppScope;
+  /** Null for library-scope sessions. */
+  chatId: string | null;
   workspaceId: string;
   appName: string;
   capabilities: string[];
@@ -29,8 +32,8 @@ function rowToSession(row: Record<string, unknown>): AppSession {
   return {
     id: String(row.id),
     userId: String(row.user_id),
-    scope: row.scope as "chat",
-    chatId: String(row.chat_id),
+    scope: row.scope as AppScope,
+    chatId: row.chat_id ? String(row.chat_id) : null,
     workspaceId: String(row.workspace_id),
     appName: String(row.app_name),
     capabilities,
@@ -46,7 +49,8 @@ export async function issue(
   data: {
     id: string;
     userId: string;
-    chatId: string;
+    scope: AppScope;
+    chatId: string | null;
     workspaceId: string;
     appName: string;
     capabilities: string[];
@@ -57,11 +61,12 @@ export async function issue(
   const { rows } = await db.query(
     `INSERT INTO app_sessions
        (id, user_id, scope, chat_id, workspace_id, app_name, capabilities, token_hash, expires_at)
-     VALUES (?, ?, 'chat', ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING *`,
     [
       data.id,
       data.userId,
+      data.scope,
       data.chatId,
       data.workspaceId,
       data.appName,

@@ -11,6 +11,7 @@ import {
   ValidationError,
 } from "@agent-desk/shared";
 import {
+  chatArtifactsDir,
   chatAttachmentsDir,
   resolveHostPath,
   tmpDir,
@@ -65,7 +66,9 @@ export interface FileRef {
   creatorAgentId?: string;
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean;
-  /** True when this entry is a directory (e.g. a `.app/` bundle). */
+  /** True when the entry is a directory rather than a regular file. Set
+   * for entries like `<name>.app/` that the walker collapses into a
+   * single library/chat-artifact item. */
   isDir?: boolean;
 }
 
@@ -462,6 +465,137 @@ export async function saveChatAttachmentToLibrary(
 
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
+}
+
+/**
+ * Promotes a `<name>.app/` chat artifact (a directory under
+ * `.chats/{chatId}/artifacts/`) into the primary workspace library.
+ * Mirrors `saveChatAttachmentToLibrary` but operates on directories
+ * (which the attachment helper rejects).
+ *
+ * The source directory is renamed in place; the chat artifact is then
+ * gone from `.chats/{chatId}/artifacts/`. Unlike attachments, no
+ * symlink is left behind — promoted apps are intended to live in the
+ * library; PR-G covers the modify-as-version flow that copies a library
+ * app back into a chat for editing.
+ *
+ * `artifactName` must be a basename ending in `.app`. The destination
+ * defaults to the workspace root; pass `destSubpath` to land under a
+ * library subfolder. Refuses to clobber an existing entry — collisions
+ * use `uniqueDestPath` (e.g. `<name>.app/`, `<name>-1.app/`, …).
+ */
+export async function saveChatArtifactToLibrary(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  artifactName: string,
+  destSubpath?: string,
+): Promise<FileRef> {
+  if (path.basename(artifactName) !== artifactName) {
+    throw new ValidationError(`Invalid artifact name: ${artifactName}`);
+  }
+  rejectHiddenName(artifactName);
+  if (!artifactName.endsWith(".app") || artifactName === ".app") {
+    throw new ValidationError(
+      `saveChatArtifactToLibrary only supports <name>.app/ directories: ${artifactName}`,
+    );
+  }
+
+  const sub = validateLibrarySubpath(destSubpath);
+  const root = workspaceRootPath(ctx.home, slug);
+  const artDir = chatArtifactsDir(ctx.home, slug, chatId);
+  const srcAbs = path.join(artDir, artifactName);
+
+  const srcStat = await fs.lstat(srcAbs).catch(() => null);
+  if (!srcStat) throw new NotFoundError(`Artifact not found: ${artifactName}`);
+  if (srcStat.isSymbolicLink()) {
+    throw new ValidationError(
+      `Artifact is a symlink, refusing to promote: ${artifactName}`,
+    );
+  }
+  if (!srcStat.isDirectory()) {
+    throw new ValidationError(`Not a directory: ${artifactName}`);
+  }
+
+  const destDir = sub ? path.join(root, sub) : root;
+  await fs.mkdir(destDir, { recursive: true });
+  const destAbs = await uniqueDestPath(destDir, artifactName);
+
+  await fs.rename(srcAbs, destAbs);
+
+  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
+  // The directory's stat doesn't fit `fileRefFromDisk` (which insists
+  // on a regular file). Build the FileRef inline.
+  const stat = await fs.stat(destAbs);
+  return {
+    path: relPath,
+    name: path.basename(destAbs),
+    mime: "application/vnd.desk.app+directory",
+    size: 0,
+    createdAt: stat.birthtime.toISOString(),
+    updatedAtMs: String(stat.mtimeMs),
+    isDir: true,
+  };
+}
+
+/**
+ * Permanently removes a chat-artifact `<name>.app/` directory (and the
+ * `.storage/data.sqlite` SQLite file by virtue of being a child).
+ * Issue #47, PR-E.
+ */
+export async function deleteChatApp(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  appName: string,
+): Promise<void> {
+  if (path.basename(appName) !== appName) {
+    throw new ValidationError(`Invalid app directory name: ${appName}`);
+  }
+  if (!appName.endsWith(".app") || appName === ".app") {
+    throw new ValidationError(`Not an app directory: ${appName}`);
+  }
+  const target = path.join(
+    chatArtifactsDir(ctx.home, slug, chatId),
+    appName,
+  );
+  const s = await fs.stat(target).catch(() => null);
+  if (!s) throw new NotFoundError(`Chat artifact not found: ${appName}`);
+  if (!s.isDirectory()) {
+    throw new ValidationError(`Not a directory: ${appName}`);
+  }
+  await fs.rm(target, { recursive: true, force: true });
+}
+
+/**
+ * Removes a library `<name>.app/` directory by moving it to
+ * `~/Desk/.trash/.app-versions/<name>-<timestamp>/`. Recoverable from
+ * the same trash bucket modify-as-version uses (PR-G's lazy sweep
+ * clears entries older than 30 days). Issue #47, PR-E.
+ */
+export async function deleteLibraryApp(
+  ctx: StorageContext,
+  slug: string,
+  libraryRelPath: string,
+): Promise<void> {
+  const baseName = path.basename(libraryRelPath);
+  if (baseName !== libraryRelPath) {
+    throw new ValidationError(`Invalid app directory name: ${libraryRelPath}`);
+  }
+  if (!baseName.endsWith(".app") || baseName === ".app") {
+    throw new ValidationError(`Not an app directory: ${libraryRelPath}`);
+  }
+  const target = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const s = await fs.stat(target).catch(() => null);
+  if (!s) throw new NotFoundError(`Library app not found: ${libraryRelPath}`);
+  if (!s.isDirectory()) {
+    throw new ValidationError(`Not a directory: ${libraryRelPath}`);
+  }
+  const versionsRoot = path.join(trashDir(ctx.home), ".app-versions");
+  await fs.mkdir(versionsRoot, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const trashTarget = path.join(versionsRoot, `${baseName}-${stamp}`);
+  await fs.rename(target, trashTarget);
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   FileVideo,
   Link2,
   StickyNote,
+  Zap,
 } from 'lucide-react'
 import type { ContextItem } from './ui-types'
 
@@ -130,5 +131,6 @@ export function iconForFile(name: string, mimeType?: string | null): LucideIcon 
 export function iconForItem(item: ContextItem): LucideIcon {
   if (item.type === 'note') return StickyNote
   if (item.type === 'link') return Link2
+  if (item.type === 'app') return Zap
   return iconForFile(item.name, item.mimeType)
 }

@@ -116,7 +116,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
   return (
     <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
       {state.kind === 'app' && chatAppRef ? (
-        <AppPreview chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
+        <AppPreview scope="chat" chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
       ) : state.kind === 'html' && state.blobUrl ? (
         <iframe
           title={name}

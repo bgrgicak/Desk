@@ -56,7 +56,12 @@ import { toFolderList } from '@/store/selectors/library'
 import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
 import { MergeEditor } from './MergeEditor'
-import { AppPreview, parseChatAppManifestPath } from './AppPreview'
+import {
+  AppPreview,
+  parseChatAppManifestPath,
+  parseLibraryAppDirPath,
+  parseLibraryAppManifestPath,
+} from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { ConversationPanel } from '@/components/artifact/ConversationPanel'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
@@ -126,7 +131,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   // `<name>.app/` directory, render the app live in an iframe instead of
   // the raw JSON. The bridge + capability checklist live inside
   // <AppPreview>.
-  const appManifestRef = parseChatAppManifestPath(item.id)
+  // PR-E extends this to library apps: clicking either the `<name>.app/`
+  // library directory or its inner `desk.app.json` opens the same live
+  // preview.
+  const chatAppRef = parseChatAppManifestPath(item.id)
+  const libraryManifestRef = parseLibraryAppManifestPath(item.id)
+  const libraryAppDirRef =
+    item.type === 'app' && !chatAppRef && !libraryManifestRef
+      ? parseLibraryAppDirPath(item.id)
+      : null
 
   // Refs that mirror the latest editorValue / previewText so the async fetch
   // callback can read current values without stale closures, and without
@@ -568,8 +581,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
 
         {/* Preview area */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
-          {appManifestRef ? (
-            <AppPreview chatId={appManifestRef.chatId} appName={appManifestRef.appName} />
+          {chatAppRef ? (
+            <AppPreview scope="chat" chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
+          ) : libraryManifestRef ? (
+            <AppPreview scope="library" appName={libraryManifestRef.appName} />
+          ) : libraryAppDirRef ? (
+            <AppPreview scope="library" appName={libraryAppDirRef.appName} />
           ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">

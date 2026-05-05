@@ -1,20 +1,22 @@
 /**
- * Static-serve + capability bridge for chat-artifact apps (issue #47, PR-C).
+ * Static-serve + capability bridge for Desk apps (issue #47, PR-C, PR-E).
  *
  * URL scheme:
- *   GET  /apps/chat/:chatId/:appName/dist/*    → serves the app's built files
+ *   GET  /apps/chat/:chatId/:appName/dist/*    → serves a chat-artifact app
  *   POST /apps/chat/:chatId/:appName/issue     → mints a per-app session token
+ *   GET  /apps/library/:appName/dist/*         → serves a library app (PR-E)
+ *   POST /apps/library/:appName/issue          → mints a session for a library app
  *
  * Auth model:
  *   - The "issue" endpoint requires the user's bearer token and validates
- *     that the user owns the chat and the `<appName>.app/` artifact exists
- *     in that chat's artifacts directory.
- *   - It mints an `app_sessions` row scoped to (userId, chatId, appName,
- *     capabilities) and returns the raw token to the parent SPA.
- *   - The parent loads the iframe at
- *     `/apps/chat/:chatId/:appName/dist/?t=<token>`. The first response
- *     consumes the query token, sets a path-scoped HttpOnly cookie, and
- *     redirects to the bare URL.
+ *     ownership: chat-scope verifies the user owns the chat; library-scope
+ *     verifies the user owns the workspace and the `<appName>.app/`
+ *     directory exists at the workspace root.
+ *   - It mints an `app_sessions` row scoped to (userId, chatId|null,
+ *     appName, capabilities) and returns the raw token to the parent SPA.
+ *   - The parent loads the iframe at the bootstrap URL with `?t=<token>`.
+ *     The first response sets a path-scoped HttpOnly cookie and redirects
+ *     to the clean URL.
  *   - HTML entrypoints require that cookie and receive the injected bridge.
  *     Non-HTML built assets are served as unprivileged subresources because
  *     opaque sandbox origins do not send cookies for module-script loads.
@@ -154,6 +156,10 @@ function cookieNameFor(chatId: string, appName: string): string {
   // scope so a fetch from the parent SPA can't accidentally pick up the
   // wrong cookie either.
   return `desk_app_${chatId}_${appName}`;
+}
+
+function libraryCookieNameFor(workspaceId: string, appName: string): string {
+  return `desk_libapp_${workspaceId}_${appName}`;
 }
 
 function parseCookies(req: IncomingMessage): Record<string, string> {
@@ -299,6 +305,7 @@ export async function issueAppSession(
   await queries.appSessions.issue(pool, {
     id: generateId("appSession"),
     userId,
+    scope: "chat",
     chatId,
     workspaceId,
     appName,
@@ -698,6 +705,241 @@ export class IssueRateLimitError extends Error {
     this.name = "IssueRateLimitError";
     this.retryAfterSeconds = Math.ceil(ISSUE_LIMIT_WINDOW_MS / 1000);
   }
+}
+
+// ── Library scope (PR-E) ──────────────────────────────────────────────
+//
+// Library apps live at the workspace root (`~/<name>.app/`). The URL
+// scheme is `/apps/library/:appName/dist/*` — there is no workspaceId
+// segment. That assumes a single active workspace per user; we look up
+// the user's oldest workspace as the implicit target. When multi-workspace
+// support arrives, the URL gains a `:workspaceId` segment and this
+// resolver becomes a (workspaceId, userId) lookup. See plan §PR-E review.
+
+async function workspaceForUser(
+  pool: Pool,
+  userId: string,
+): Promise<{ id: string; slug: string } | null> {
+  const { rows } = await pool.query<{ id: string; path: string }>(
+    "SELECT id, path FROM workspaces WHERE user_id = ? ORDER BY created_at LIMIT 1",
+    [userId],
+  );
+  if (rows.length === 0) return null;
+  return { id: rows[0].id, slug: rows[0].path };
+}
+
+export async function resolveLibraryAppDist(
+  storage: StorageContext,
+  workspaceSlug: string,
+  appName: string,
+): Promise<{ distDir: string }> {
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new NotFoundError(`Unknown app: ${appName}`);
+  }
+  const wsRoot = await realpath(workspaceRootPath(storage.home, workspaceSlug)).catch(() => workspaceRootPath(storage.home, workspaceSlug));
+  const appRoot = path.join(wsRoot, `${appName}.app`);
+  const distDir = path.join(appRoot, "dist");
+  const fsp = await import("node:fs/promises");
+  let real: string;
+  try {
+    real = await fsp.realpath(distDir);
+  } catch {
+    throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
+  }
+  if (!real.startsWith(wsRoot + path.sep) && real !== wsRoot) {
+    throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
+  }
+  return { distDir: real };
+}
+
+export async function issueLibraryAppSession(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  appName: string,
+): Promise<IssueResult> {
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new ValidationError(`Invalid app name: ${appName}`);
+  }
+  const ws = await workspaceForUser(pool, userId);
+  if (!ws) throw new NotFoundError("No workspace for user");
+  const { distDir } = await resolveLibraryAppDist(storage, ws.slug, appName);
+
+  const manifest = await readManifest(distDir);
+  // Same sanitization as the chat scope — drop unknown capabilities and
+  // dedupe so the bridge payload is well-formed.
+  const capabilities = sanitizeCapabilities(manifest?.capabilities);
+
+  const raw = randomBytes(APP_TOKEN_BYTES).toString("hex");
+  const token = APP_TOKEN_PREFIX + raw;
+  const expiresAt = new Date(Date.now() + APP_TOKEN_TTL_MS);
+  await queries.appSessions.issue(pool, {
+    id: generateId("appSession"),
+    userId,
+    scope: "library",
+    chatId: null,
+    workspaceId: ws.id,
+    appName,
+    capabilities,
+    tokenHash: hashToken(token),
+    expiresAt,
+  });
+
+  const url = `/apps/library/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
+  return {
+    token,
+    expiresAt: expiresAt.toISOString(),
+    url,
+    cookieName: libraryCookieNameFor(ws.id, appName),
+    bridgeKey: bridgeKeyFor(token),
+    capabilities,
+  };
+}
+
+async function verifyLibraryAppToken(
+  pool: Pool,
+  token: string,
+  expectedAppName: string,
+  expectedWorkspaceId: string,
+): Promise<VerifiedSession | null> {
+  const session = await queries.appSessions.verify(pool, hashToken(token));
+  if (!session) return null;
+  if (session.scope !== "library") return null;
+  if (session.appName !== expectedAppName) return null;
+  if (session.workspaceId !== expectedWorkspaceId) return null;
+  return {
+    userId: session.userId,
+    chatId: session.chatId ?? "",
+    appName: session.appName,
+    capabilities: session.capabilities,
+  };
+}
+
+/**
+ * Handles `GET /apps/library/:appName/dist/...`. The library variant
+ * resolves the workspace from the *cookie* (or from the bootstrap query
+ * token) so the URL doesn't have to embed the workspaceId. The cookie
+ * name does encode it, which means a leaked cookie still can't be
+ * replayed across workspaces.
+ */
+export async function handleStaticLibraryAppRequest(
+  pool: Pool,
+  storage: StorageContext,
+  segments: string[],
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  // Expect: ["apps", "library", appName, "dist", ...rest]
+  if (
+    segments.length < 4 ||
+    segments[0] !== "apps" ||
+    segments[1] !== "library" ||
+    segments[3] !== "dist"
+  ) {
+    return false;
+  }
+  const appName = decodeURIComponent(segments[2]);
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new NotFoundError(`Unknown app: ${appName}`);
+  }
+  const tail = segments.slice(4).map((s) => decodeURIComponent(s)).join("/");
+
+  const queryToken = url.searchParams.get("t");
+  // Library cookie name embeds the workspaceId, so we can't compute the
+  // expected name without first knowing it. Resolve via the (single
+  // active) cookie that matches our prefix; the verify call then enforces
+  // the workspace match.
+  const cookies = parseCookies(req);
+  const cookieEntry = Object.entries(cookies).find(
+    ([k]) => k.startsWith("desk_libapp_") && k.endsWith(`_${appName}`),
+  );
+  const cookieToken = cookieEntry ? cookieEntry[1] : undefined;
+
+  let session: VerifiedSession | null = null;
+  let workspaceSlug: string | null = null;
+  let workspaceId: string | null = null;
+
+  if (queryToken) {
+    const ses = await queries.appSessions.verify(pool, hashToken(queryToken));
+    if (!ses || ses.scope !== "library" || ses.appName !== appName) {
+      throw new UnauthorizedError("Invalid app token");
+    }
+    session = {
+      userId: ses.userId,
+      chatId: "",
+      appName: ses.appName,
+      capabilities: ses.capabilities,
+    };
+    workspaceId = ses.workspaceId;
+  } else if (cookieToken) {
+    const ses = await queries.appSessions.verify(pool, hashToken(cookieToken));
+    if (!ses || ses.scope !== "library" || ses.appName !== appName) {
+      throw new UnauthorizedError("Invalid app token");
+    }
+    // The cookie name we matched on encodes the workspaceId — re-check
+    // against the session row (defense in depth).
+    const cookieWs = cookieEntry![0].slice("desk_libapp_".length, -1 - appName.length);
+    if (ses.workspaceId !== cookieWs) {
+      throw new UnauthorizedError("Invalid app token");
+    }
+    session = await verifyLibraryAppToken(pool, cookieToken, appName, ses.workspaceId);
+    if (!session) throw new UnauthorizedError("Invalid app token");
+    workspaceId = ses.workspaceId;
+  } else {
+    throw new UnauthorizedError("Missing app token");
+  }
+
+  const { rows } = await pool.query<{ path: string }>(
+    "SELECT path FROM workspaces WHERE id = ?",
+    [workspaceId],
+  );
+  workspaceSlug = rows[0]?.path ?? null;
+  if (!workspaceSlug) throw new NotFoundError("Workspace not found");
+
+  const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
+  const cookiePath = `/apps/library/${encodeURIComponent(appName)}/dist`;
+  const cookieName = libraryCookieNameFor(workspaceId!, appName);
+
+  if (queryToken) {
+    setAppCookie(res, cookieName, queryToken, cookiePath);
+    const incoming = new URL(req.url ?? "/", "http://localhost").pathname;
+    const trailingSlash = incoming.endsWith("/") ? "/" : "";
+    const cleanPath = `/${segments.join("/")}${trailingSlash}`;
+    res.writeHead(302, { Location: cleanPath });
+    res.end();
+    return true;
+  }
+
+  if (tail === "" || tail === "index.html") {
+    await serveIndex({
+      distDir,
+      bridge: {
+        chatId: "",
+        appName,
+        bridgeKey: bridgeKeyFor(cookieToken!),
+        capabilities: session.capabilities,
+      },
+      res,
+    });
+    return true;
+  }
+  await serveAsset(distDir, tail, res);
+  return true;
+}
+
+export async function handleIssueLibraryAppSession(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  appName: string,
+): Promise<IssueResult> {
+  // Same per-user rate limit as the chat scope — both endpoints share
+  // the bucket so a parent SPA can't dodge the cap by alternating.
+  if (!recordIssueAndCheck(userId)) {
+    throw new IssueRateLimitError();
+  }
+  return issueLibraryAppSession(pool, storage, userId, appName);
 }
 
 /** Exposed for tests so they can reset state between cases. */

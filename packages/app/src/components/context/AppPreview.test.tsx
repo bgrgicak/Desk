@@ -4,7 +4,7 @@ import { AppPreview } from './AppPreview'
 
 describe('AppPreview', () => {
   it('fills the containing panel instead of forcing viewport height', () => {
-    const markup = renderToStaticMarkup(<AppPreview chatId="chat-1" appName="demo-app" />)
+    const markup = renderToStaticMarkup(<AppPreview scope="chat" chatId="chat-1" appName="demo-app" />)
 
     expect(markup).toContain('h-full')
     expect(markup).toContain('min-h-0')
