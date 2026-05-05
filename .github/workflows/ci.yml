@@ -121,10 +121,6 @@ jobs:
         # process resolves through Node's default `import` condition.
         run: npx nx build @agent-desk/api
 
-      - name: Build desk/sandbox:v1 image
-        working-directory: packages/server
-        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
-
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: packages/app
