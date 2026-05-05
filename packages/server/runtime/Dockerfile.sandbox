@@ -14,7 +14,7 @@ RUN npm install --ignore-scripts --loglevel=error && \
 # pre-installed node_modules. The scaffold ships into /opt/desk-template/app
 # inside the runtime image, ready for `desk-agent app create` to clone via
 # a plain `cp -r`. Pre-installing node_modules here means the agent can run
-# `npm run build` immediately without network access. ----
+# `npm run verify` immediately without network access. ----
 FROM node:22-slim AS scaffold-builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
@@ -38,10 +38,10 @@ RUN TARBALL="$(ls /build/tarballs/agent-desk-ui-*.tgz | head -n1)" && \
     node -e "const t=process.argv[1];const j=require('./package.json');j.dependencies['@agent-desk/ui']='file:'+t;require('fs').writeFileSync('package.json', JSON.stringify(j, null, 2)+'\n')" "$TARBALL" && \
     npm install --no-audit --no-fund --loglevel=error
 
-# Sanity-check the scaffold itself builds in the bake stage so a broken
+# Sanity-check the scaffold itself verifies in the bake stage so a broken
 # template can't ship to users. The resulting dist/ is wiped before we
-# stage the template — agents always run their own build after `app create`.
-RUN npm run build && rm -rf dist
+# stage the template — agents always run their own verify after `app create`.
+RUN npm run verify && rm -rf dist
 
 # ---- Runtime stage ----
 # node:22-slim ships Node 22 + npm + ca-certificates (Debian bookworm under
@@ -71,7 +71,7 @@ RUN ln -s /usr/local/lib/desk-agent-cli/desk-agent.js /usr/local/bin/desk-agent 
 
 # Bake the Desk app scaffold into a stable path. `desk-agent app create`
 # clones from here into `~/.chats/<chatId>/artifacts/<name>.app/`. The
-# directory ships with node_modules/ so `npm run build` works offline.
+# directory ships with node_modules/ so `npm run verify` works offline.
 COPY --from=scaffold-builder /build/app-scaffold /opt/desk-template/app
 
 # Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first

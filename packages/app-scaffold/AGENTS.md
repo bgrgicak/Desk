@@ -32,11 +32,15 @@ This directory is the template for an agent-authored Desk app. When
    paths in built assets — `vite.config.ts` already sets `base: './'`.
 
 6. **Components are the unit of reuse, fragments are the unit of
-   embedding.** A fragment lives in `fragments/<name>/`, owns its
-   `Component.tsx`, and exists in two places at once: the full app
-   imports it as a route, and the fragment's own `index.html` mounts
-   it standalone for chat-message embedding. Same component source,
-   two render contexts. **Don't duplicate the component.**
+   embedding.** A fragment is a focused app surface that can be embedded
+   directly in a chat message, such as a chart, form, preview, or task
+   editor. Create one when that surface is useful outside the full app
+   shell; keep ordinary subcomponents in `src/components/`. A fragment
+   lives in `fragments/<name>/`, owns its `Component.tsx`, and exists in
+   two render contexts: the full app imports it as a route, and the
+   fragment's own `index.html` mounts it standalone for chat-message
+   embedding. Same component source, two render contexts. **Don't
+   duplicate the component.**
 
 ## Directory layout
 
@@ -63,50 +67,53 @@ This directory is the template for an agent-authored Desk app. When
 
 Every fragment must have `Component.tsx`, `main.tsx`, `index.html`,
 `desk.fragment.json`, and `skill.md`. Vite's multi-entry config
-discovers fragments by reading `fragments/*/index.html` so adding a
-fragment is "create the directory, run build."
+discovers fragments by reading `fragments/*/index.html`.
 
 ## Develop and build
 
 ```
 npm run typecheck    # tsc --noEmit
+npm run test         # vitest run
 npm run build        # vite build → dist/
+npm run verify       # typecheck + tests + build
 npm run dev          # local Vite dev (mainly for human verification)
 ```
 
 The sandbox image already has Node 22, npm, and an offline-installed
-`node_modules/`. Use `npm run build` to verify your changes; you don't
+`node_modules/`. Use `npm run verify` to verify your changes; you don't
 need to `npm install` unless you're adding a new dependency.
 
-## Build before responding
+## Test before responding
 
-Always run `npm run build` after editing the app and confirm it exits
-zero before telling the user the app is ready. A build failure is
-something the user should never see surface as "the app is broken in
-the iframe."
+Write or update tests for every user-visible behavior change before you
+implement the feature. Build success only proves the bundle compiles; it
+does not prove the app behaves correctly.
 
-## How to add a fragment
+Run `npm run verify` after editing the app and confirm it exits zero
+before telling the user the app is ready. A verification failure is
+something the user should never see surface as "the app is broken in the
+iframe."
 
-1. `mkdir fragments/<kebab-name>`
-2. Create `Component.tsx` — the React component, exported default.
-3. Create `main.tsx` — three-line bootstrap that mounts `Component`
-   at `#root` (copy from `fragments/example/main.tsx`).
-4. Create `index.html` — copy from `fragments/example/index.html`,
-   adjust `<title>`.
-5. Create `desk.fragment.json` — name, description, capabilities[].
-6. Create `skill.md` — describe what the fragment does and what
-   Desk-API actions drive equivalent behavior.
-7. Wire the route in `src/App.tsx` so the full-app view exposes it.
-8. Add the fragment name to `fragments` in `desk.app.json`.
-9. `npm run build` — confirm zero exit.
+Vitest runs in Node. Prefer tests around pure data transformations,
+capability/API adapters, and server-render smoke tests for app and
+fragment composition. If a browser-only interaction needs manual
+verification, still cover the state transition or validation logic with
+an automated test.
+
+## Fragment checklist
+
+When adding a fragment, copy the shape of `fragments/example/`: create
+`Component.tsx`, `main.tsx`, `index.html`, `desk.fragment.json`, and
+`skill.md`; import the component from `src/App.tsx`; and add the fragment
+name to `desk.app.json`.
 
 ## How to remove the example fragment
 
 When you've written the real fragments:
 
-1. Delete `fragments/example/`.
-2. Remove the import and route from `src/App.tsx`.
-3. Remove `"example"` from `fragments` in `desk.app.json`.
+Delete `fragments/example/`, remove the import and route from
+`src/App.tsx`, remove `"example"` from `fragments` in `desk.app.json`,
+and replace the scaffold smoke tests with tests for the real app.
 
 The build won't fail with the example present, but leaving placeholder
 content in shipped apps is sloppy.

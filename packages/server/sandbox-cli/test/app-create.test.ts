@@ -136,4 +136,25 @@ describe("desk-agent app create", () => {
       await fs.rm(fakeTemplate, { recursive: true, force: true });
     }
   });
+
+  it("removes the partially copied app when scaffold validation fails", async () => {
+    await makeChatDir("cht_a");
+    const fakeTemplate = await fs.mkdtemp(path.join(os.tmpdir(), "fake-tpl-"));
+    await fs.cp(SCAFFOLD_PATH, fakeTemplate, { recursive: true });
+    await fs.writeFile(
+      path.join(fakeTemplate, "untracked-file.md"),
+      "Hi, __APP_NAME__!",
+      "utf-8",
+    );
+
+    const target = path.join(homeDir, ".chats", "cht_a", "artifacts", "my-app.app");
+    try {
+      await expect(
+        run(["--chat", "cht_a", "--template", fakeTemplate, "my-app"]),
+      ).rejects.toMatchObject({ code: "SCAFFOLD_BUG" });
+      await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(fakeTemplate, { recursive: true, force: true });
+    }
+  });
 });
