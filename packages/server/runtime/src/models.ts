@@ -33,11 +33,21 @@ export class SandboxExecError extends Error {
   }
 }
 
+const FAKE_DRIVER_MODELS: ModelRef[] = [
+  { id: "opencode/big-pickle", provider: "opencode" },
+];
+
 export async function listModels(
   workspaceId: string,
   workspaceSlug: string,
   opts: ListModelsOptions = {},
 ): Promise<ModelRef[]> {
+  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
+    return opts.provider
+      ? FAKE_DRIVER_MODELS.filter((model) => model.provider === opts.provider)
+      : FAKE_DRIVER_MODELS;
+  }
+
   const argv = ["opencode", "models"];
   if (opts.provider) argv.push(opts.provider);
 

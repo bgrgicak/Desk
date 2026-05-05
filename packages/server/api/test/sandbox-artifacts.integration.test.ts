@@ -202,6 +202,38 @@ describe("POST /sandbox/artifacts", () => {
     ))).toBe(true);
   });
 
+  it("creates an agent artifactRef message for a .app/ directory artifact", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    const appDir = path.join(artifactsDir, "my-todos.app");
+    await fs.mkdir(path.join(appDir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(appDir, "dist", "index.html"), "<html></html>", "utf8");
+
+    const token = await issueSandboxToken();
+    const relPath = `.chats/${chatId}/artifacts/my-todos.app`;
+
+    const res = await sandboxPost("/sandbox/artifacts", { chatId, path: relPath }, token);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      chatId,
+      role: "agent",
+      content: {
+        type: "artifactRef",
+        path: relPath,
+        name: "my-todos.app",
+        mime: "inode/directory",
+      },
+    });
+
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.role === "agent"
+      && message.content.type === "artifactRef"
+      && message.content.path === relPath
+      && message.content.mime === "inode/directory"
+    ))).toBe(true);
+  });
+
   it("rejects artifact attachment to a chat outside the token workspace", async () => {
     const otherWorkspaceId = generateId("workspace");
     await queries.workspaces.insert(pool, {

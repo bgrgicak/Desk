@@ -1,7 +1,8 @@
+import { createReadStream } from "node:fs";
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
-import { dirname as pathDirname, join as pathJoin, sep as pathSep } from "node:path";
+import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { DeskError, NotFoundError, UnauthorizedError, ValidationError, type WsEvent } from "@agent-desk/shared";
@@ -225,7 +226,32 @@ export function createApp(opts: AppOptions): Server {
       // Auth
       let userId: string;
       try {
-        userId = await requireAuth(pool, path, req.headers.authorization);
+        // For /apps/* routes the client is an iframe that can't send custom
+        // headers. Allow the session token via the ?token= query param as a
+        // fallback, the same pattern used by the WebSocket upgrade.
+        // For /apps/* routes the client is an iframe. The initial index.html
+        // request carries ?token= but sub-resource requests (JS/CSS) do not.
+        // We accept the token from:
+        //   1. The Authorization header (normal API calls)
+        //   2. The ?token= query param (initial iframe navigation)
+        //   3. The `desk-app-token` cookie set when index.html was served
+        let appsTokenHeader = req.headers.authorization;
+        if (!appsTokenHeader && path.startsWith("/apps/")) {
+          const queryToken = url.searchParams.get("token");
+          if (queryToken) {
+            appsTokenHeader = `Bearer ${queryToken}`;
+          } else {
+            // Parse cookies manually (no dependency needed)
+            const cookieHeader = req.headers.cookie ?? "";
+            const cookieToken = cookieHeader
+              .split(";")
+              .map((c) => c.trim())
+              .find((c) => c.startsWith("desk-app-token="))
+              ?.slice("desk-app-token=".length);
+            if (cookieToken) appsTokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
+          }
+        }
+        userId = await requireAuth(pool, path, appsTokenHeader);
       } catch (err) {
         if (err instanceof DeskError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
@@ -1003,6 +1029,157 @@ export function createApp(opts: AppOptions): Server {
     // OpenAPI spec
     if (path === "/openapi.json" && method === "GET") {
       sendJson(res, 200, openApiSpec);
+      return;
+    }
+
+    // App static-file serving: /apps/<workspaceId>/<...appRelPath>/dist/<...file>
+    // Serves the built dist/ output of a `.app/` directory so the frontend
+    // can embed the app in an iframe.
+    if (segments[0] === "apps" && segments.length >= 4 && method === "GET") {
+      const wsId = segments[1];
+      if (!wsId || !/^wks_[A-Za-z0-9_-]+$/.test(wsId)) {
+        sendJson(res, 400, { code: "BAD_REQUEST", message: "Invalid workspaceId in path" });
+        return;
+      }
+      // /apps/* is skipped by the global auth middleware; resolve the user
+      // here from Bearer header, ?token= query param, or desk-app-token cookie.
+      let appsUserId: string;
+      {
+        let tokenHeader = req.headers.authorization;
+        if (!tokenHeader) {
+          const qt = query.get("token");
+          if (qt) {
+            tokenHeader = `Bearer ${qt}`;
+          } else {
+            const cookieHeader = req.headers.cookie ?? "";
+            const cookieToken = cookieHeader
+              .split(";")
+              .map((c) => c.trim())
+              .find((c) => c.startsWith("desk-app-token="))
+              ?.slice("desk-app-token=".length);
+            if (cookieToken) tokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
+          }
+        }
+        if (!tokenHeader || !tokenHeader.startsWith("Bearer ")) {
+          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Missing or invalid Authorization" });
+          return;
+        }
+        const resolvedId = await verifySession(pool, tokenHeader.slice(7));
+        if (!resolvedId) {
+          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Invalid or expired session token" });
+          return;
+        }
+        appsUserId = resolvedId;
+      }
+      await requireOwnedWorkspace(pool, wsId, appsUserId);
+
+      // segments: ['apps', wsId, ...appParts, 'dist', ...fileParts]
+      // Find the 'dist' marker — it must appear after at least one app segment.
+      const distIdx = segments.indexOf("dist", 2);
+      if (distIdx < 3) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
+        return;
+      }
+      // Reconstruct the workspace-relative app path and the in-dist file path.
+      // Segments from url.pathname are still percent-encoded; decode each one
+      // and reject any that normalise to '.' or '..' to prevent traversal.
+      const decodeSeg = (s: string) => {
+        try { return decodeURIComponent(s); } catch { return s; }
+      };
+      const appSegments = segments.slice(2, distIdx).map(decodeSeg);
+      const fileSegmentsRaw = segments.slice(distIdx + 1).map(decodeSeg);
+      // Reject traversal attempts in either the app path or the file path.
+      if ([...appSegments, ...fileSegmentsRaw].some((s) => s === ".." || s === ".")) {
+        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+        return;
+      }
+      const appRelPath = appSegments.join("/");
+      const distRelFile = fileSegmentsRaw.length > 0 ? fileSegmentsRaw.join("/") : "index.html";
+
+      // Validate: appRelPath must end with .app
+      if (!appRelPath.endsWith(".app")) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
+        return;
+      }
+
+      // Verify the user can read the app directory (re-uses existing auth logic).
+      await requireReadablePathForRoute(pool, storage, appsUserId, appRelPath, wsId);
+
+      const { rows: wsRows } = await pool.query<{ path: string }>(
+        "SELECT path FROM workspaces WHERE id = ?",
+        [wsId],
+      );
+      const slug = wsRows[0]?.path;
+      if (!slug) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Workspace not found" });
+        return;
+      }
+
+      const wsRoot = workspaceRootPath(storage.home, slug);
+      // Build the candidate dist file path. We must not allow path traversal.
+      const distRoot = pathJoin(wsRoot, appRelPath, "dist");
+      const candidate = pathNormalize(pathJoin(distRoot, distRelFile));
+      if (!candidate.startsWith(distRoot + pathSep) && candidate !== distRoot) {
+        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+        return;
+      }
+
+      const APP_MIME: Record<string, string> = {
+        ".html": "text/html; charset=utf-8",
+        ".js":   "application/javascript; charset=utf-8",
+        ".mjs":  "application/javascript; charset=utf-8",
+        ".css":  "text/css; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".svg":  "image/svg+xml",
+        ".png":  "image/png",
+        ".jpg":  "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif":  "image/gif",
+        ".webp": "image/webp",
+        ".ico":  "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2":"font/woff2",
+        ".ttf":  "font/ttf",
+        ".map":  "application/json; charset=utf-8",
+        ".txt":  "text/plain; charset=utf-8",
+      };
+      const mime = APP_MIME[pathExtname(candidate).toLowerCase()] ?? "application/octet-stream";
+
+      const appQueryToken = query.get("token");
+      const appTokenCookie = appQueryToken
+        ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
+        : null;
+
+      try {
+        const st = await fsStat(candidate);
+        if (!st.isFile()) throw new Error("not a file");
+        const headers: Record<string, string | string[]> = {
+          "Content-Type": mime,
+          "Content-Length": String(st.size),
+          "Cache-Control": "no-cache",
+        };
+        if (appTokenCookie && mime.startsWith("text/html")) {
+          headers["Set-Cookie"] = appTokenCookie;
+        }
+        res.writeHead(200, headers);
+        createReadStream(candidate).pipe(res);
+      } catch {
+        // Fallback to index.html for SPA client-side routing within the app.
+        const indexPath = pathJoin(distRoot, "index.html");
+        try {
+          const ist = await fsStat(indexPath);
+          const headers: Record<string, string | string[]> = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": String(ist.size),
+            "Cache-Control": "no-cache",
+          };
+          if (appTokenCookie) headers["Set-Cookie"] = appTokenCookie;
+          res.writeHead(200, headers);
+          createReadStream(indexPath).pipe(res);
+        } catch {
+          sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
+        }
+      }
       return;
     }
 

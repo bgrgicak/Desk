@@ -265,7 +265,11 @@ export async function sendMessage(
   if (data.goal !== undefined) {
     await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
   } else {
-    const goalToPersist = senderRole === "user" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
+    // Only infer a goal from message text for plain chat messages (kind='chat').
+    // Task and summary messages are system/scheduler actions — running
+    // inferGoal on their content (e.g. "scheduled summary") would wrongly
+    // stamp a goal like "document" onto the chat and change the sidebar icon.
+    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
     if (goalToPersist) {
       await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
     }
@@ -350,9 +354,11 @@ export async function attachArtifactRef(
   }
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
-  if (!stat.isFile()) {
-    throw new ValidationError(`Artifact path must point to a file: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new ValidationError(`Artifact path must point to a file or directory: ${relPath}`);
   }
+
+  const inferredMime = stat.isDirectory() ? "inode/directory" : undefined;
 
   const message = await queries.messages.insert(storage.pool, {
     id: generateId("message"),
@@ -362,7 +368,7 @@ export async function attachArtifactRef(
       type: "artifactRef",
       path: relPath,
       name: data.name?.trim() || path.basename(relPath),
-      mime: data.mime?.trim() || undefined,
+      mime: data.mime?.trim() || inferredMime,
     },
     agentId: opts?.agentId ?? chat.agentId,
     model: opts?.model ?? null,
