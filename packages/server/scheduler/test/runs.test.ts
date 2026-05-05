@@ -128,6 +128,36 @@ async function listTaskRuns(taskId: string): Promise<Array<{ id: string; state: 
 }
 
 describe("fireMessage", () => {
+  it("honors the fake sandbox driver without creating a real sandbox", async () => {
+    const prevDriver = process.env.DESK_SANDBOX_DRIVER;
+    const prevImage = process.env.DESK_SANDBOX_IMAGE;
+    process.env.DESK_SANDBOX_DRIVER = "fake";
+    process.env.DESK_SANDBOX_IMAGE = "missing/desk-sandbox:e2e-fake";
+
+    try {
+      const messageId = await insertPendingMessage({ type: "text", text: "hello fake driver" });
+      const mgr = createRunManager({ pool });
+
+      const result = await mgr.fireMessage(messageId);
+
+      expect(result.fired).toBe(true);
+      expect(result.childIds).toHaveLength(1);
+      const message = await queries.messages.findById(pool, messageId);
+      expect(message?.state).toBe("succeeded");
+    } finally {
+      if (prevDriver === undefined) {
+        delete process.env.DESK_SANDBOX_DRIVER;
+      } else {
+        process.env.DESK_SANDBOX_DRIVER = prevDriver;
+      }
+      if (prevImage === undefined) {
+        delete process.env.DESK_SANDBOX_IMAGE;
+      } else {
+        process.env.DESK_SANDBOX_IMAGE = prevImage;
+      }
+    }
+  });
+
   it("claims pending → running, runs the agent, produces an events child, succeeds", async () => {
     const events: WsEvent[] = [];
     const fakeExec = async (

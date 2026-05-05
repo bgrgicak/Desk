@@ -450,7 +450,9 @@ export function createRunManager(opts: RunManagerOptions) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
         const home = resolveDeskHome();
-        const handle = await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
+        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+          ? { containerId: "fake-sandbox", workspaceId }
+          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,
