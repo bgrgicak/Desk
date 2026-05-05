@@ -364,6 +364,22 @@ interface BridgeContext {
  * against `KNOWN_CAPABILITIES` at issue time, so this is defense in depth
  * rather than the primary gate.
  */
+/**
+ * Vite (and most bundlers) emit `<script type="module" src="...">` tags
+ * with no nonce. Our CSP uses `strict-dynamic`, which ignores `'self'`
+ * and only trusts scripts with the matching nonce (plus what those
+ * scripts dynamically import). Without this rewrite the entry bundle is
+ * blocked and the app never boots. Apply to every `<script>` that
+ * doesn't already carry a nonce — including the bridge tag would be a
+ * no-op since `injectBridge` already sets one.
+ */
+function applyScriptNonce(html: string, nonce: string): string {
+  return html.replace(
+    /<script\b(?![^>]*\bnonce=)([^>]*)>/g,
+    `<script nonce="${nonce}"$1>`,
+  );
+}
+
 function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   const payload = JSON.stringify({
     app: { name: ctx.appName },
@@ -517,6 +533,12 @@ async function serveAsset(
     "Content-Type": mimeFor(target),
     "Content-Length": String(s.size),
     "Cache-Control": "no-store",
+    // The iframe sandbox lacks `allow-same-origin`, so it has a null
+    // origin and module/CSS chunk fetches go out as CORS requests.
+    // These bytes are public-by-design (URL is unguessable; privileged
+    // calls go through the bridge), so `*` is safe and matches the
+    // null-origin requester without credentials.
+    "Access-Control-Allow-Origin": "*",
   });
   createReadStream(target).pipe(res);
 }
@@ -536,7 +558,7 @@ async function serveIndex({ distDir, bridge, res }: IndexResponseOpts): Promise<
     throw new NotFoundError("index.html not found");
   }
   const nonce = nonceForRequest();
-  const injected = injectBridge(html, bridge, nonce);
+  const injected = applyScriptNonce(injectBridge(html, bridge, nonce), nonce);
   const buf = Buffer.from(injected, "utf-8");
   setSecurityHeaders(res, nonce);
   res.writeHead(200, {

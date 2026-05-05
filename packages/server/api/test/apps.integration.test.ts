@@ -356,6 +356,18 @@ describe("static-app route + capability bridge", () => {
     expect(noBearer.status).toBe(401);
   });
 
+  it("accepts the SPA /api-prefixed issue endpoint path", async () => {
+    const issue = await httpRaw(
+      "POST",
+      `/api/apps/chat/${chatId}/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    expect(issue.status).toBe(201);
+    expect((issue.bodyJson as { url: string }).url).toContain(
+      `/apps/chat/${chatId}/${APP_NAME}/dist/`,
+    );
+  });
+
   it("issue endpoint refuses to mint a token for an app that doesn't exist", async () => {
     const missing = await httpRaw(
       "POST",
@@ -495,6 +507,14 @@ describe("static-app route + capability bridge", () => {
     const nonce = nonceMatch[1];
     expect(idx.body).toContain(`<script nonce="${nonce}">`);
 
+    // Vite (and most bundlers) emit `<script type="module" src="...">`
+    // without a nonce. With strict-dynamic in the CSP those are blocked
+    // unless the server rewrites the tag to carry the nonce — without
+    // this the entry chunk never executes and the iframe stays blank.
+    expect(idx.body).toMatch(
+      new RegExp(`<script\\s+nonce="${nonce}"\\s+type="module"\\s+src="\\./assets/index\\.js"`),
+    );
+
     // Asset responses set the same defense headers.
     const asset = await httpRaw(
       "GET",
@@ -504,6 +524,10 @@ describe("static-app route + capability bridge", () => {
     expect(asset.status).toBe(200);
     expect(asset.headers["x-content-type-options"]).toBe("nosniff");
     expect(asset.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    // The iframe sandbox lacks `allow-same-origin`, so the iframe has a
+    // null origin and module/CSS chunk fetches are CORS requests.
+    // Without ACAO, dynamic imports from the entry bundle fail.
+    expect(asset.headers["access-control-allow-origin"]).toBe("*");
   });
 
   it("escapes `</script>` inside the bridge payload so a hostile manifest can't break out of the script tag", async () => {
