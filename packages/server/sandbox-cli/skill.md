@@ -15,8 +15,12 @@ You have three commands:
 Reach for them when:
 
 1. **You wrote an artifact the user should see or open.**
-   Call `desk-agent chat attach-artifact` after saving the file so the chat
-   receives an `artifactRef` message instead of only inline text.
+   Always call `desk-agent chat attach-artifact --chat <chatId> "<path>"`
+   as the last step of any turn in which you create or significantly update
+   an artifact. There are no exceptions for type: file, app, directory, image,
+   or any other artifact. If the artifact is a directory, pass the directory
+   path. Do not reply until the attach command has executed; if it fails,
+   report the error inline instead of silently skipping.
 2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
@@ -88,14 +92,17 @@ desk-agent app create --chat cht_abc my-todos
 ## desk-agent chat attach-artifact
 
 Create an `artifactRef` message in the chat for an existing file or directory.
-Use this after writing a new artifact or making a significant visible update.
+Always use this as the last step of any turn in which you create or
+significantly update an artifact before replying to the user. If the command
+fails, report the error inline instead of silently skipping.
 
 ```
 desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
 ```
 
-`<workspace-relative-path>` is the workspace-relative path to a file **or
-directory** under `.chats/<chatId>/artifacts/`.
+`<workspace-relative-path>` is the workspace-relative path to any artifact type
+under `.chats/<chatId>/artifacts/`: file, app, directory, image, or another
+artifact. Directories are valid paths.
 Strip the leading `~/`: `~/.chats/cht_abc/artifacts/report.md` becomes
 `.chats/cht_abc/artifacts/report.md`.
 

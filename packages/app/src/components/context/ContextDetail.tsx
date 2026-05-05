@@ -580,7 +580,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
         />
 
         {/* Preview area */}
-        <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
           {chatAppRef ? (
             <AppPreview scope="chat" chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
           ) : libraryManifestRef ? (

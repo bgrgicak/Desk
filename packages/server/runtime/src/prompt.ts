@@ -81,7 +81,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         `Chat summaries:   ~/.chats/${input.chatId}/notes/\n`
       : "";
     const attachArtifactInstruction = input.chatId
-      ? `**Surface in chat.** After writing a new artifact or making a significant update, run \`desk-agent chat attach-artifact --chat ${input.chatId} "<workspace-relative-path>"\` with the path set to the file's workspace-relative path (strip the leading \`~/\`, so \`~/.chats/…/foo.html\` becomes \`.chats/…/foo.html\`). Quote the path. Do the same when the user asks to see or open an artifact. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples. Skip for minor edits that don't change what the user sees.`
+      ? `**Surface in chat.** Always run \`desk-agent chat attach-artifact --chat ${input.chatId} "<path>"\` as the last step of any turn in which you create or significantly update an artifact — no exceptions for type (file, app, directory, image, etc.). If the artifact is a directory (e.g. a Desk app), pass the directory path. Quote the path. Do not reply to the user until the attach command has been executed. If the command fails, report the error inline instead of silently skipping. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples.`
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },

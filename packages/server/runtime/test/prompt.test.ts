@@ -109,7 +109,12 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
-    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<workspace-relative-path>"');
+    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
+    expect(body).toContain("as the last step of any turn");
+    expect(body).toContain("no exceptions for type");
+    expect(body).toContain("pass the directory path");
+    expect(body).toContain("Do not reply to the user until the attach command has been executed");
+    expect(body).toContain("If the command fails, report the error inline instead of silently skipping");
     expect(body).toContain("Quote the path.");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("chat-xyz");
@@ -117,7 +122,7 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment omits attach-artifact instruction when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("After writing a new artifact or making a significant update, run");
+    expect(body).not.toContain("Always run `desk-agent chat attach-artifact");
   });
 
   it("summary mode uses summary-only instructions and omits artifact workflow", () => {
