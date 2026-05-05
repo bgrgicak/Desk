@@ -7,5 +7,7 @@ load a Desk skill only when you need the detailed reference:
 - `desk-cli-task-schedule` — scheduling syntax, cron examples, `--at` format,
   and failure modes.
 - `desk-cli-chat-attach-artifact` — artifact attachment syntax and examples.
+- `desk-app-scaffold` — directory layout, fragment shape, build workflow,
+  and rules for authoring a Desk app under the `app` goal.
 
 Do not mention skill loading to the user.

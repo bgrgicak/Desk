@@ -31,10 +31,10 @@ npm install
 # Build the sandbox image (one-time, ~3 min — pulls node + opencode).
 # Use whichever runtime is available:
 docker build -f packages/server/runtime/Dockerfile.sandbox \
-  -t desk/sandbox:v1 packages/server
+  -t desk/sandbox:v1 .
 # OR (nerdctl with buildkit installed):
 nerdctl build -f packages/server/runtime/Dockerfile.sandbox \
-  -t desk/sandbox:v1 packages/server
+  -t desk/sandbox:v1 .
 ```
 
 ## Daily dev loop

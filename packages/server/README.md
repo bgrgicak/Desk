@@ -29,12 +29,14 @@ container runtime — `docker` if present, otherwise `nerdctl`
 ```bash
 npm install
 
-# Build the sandbox image. Use whichever runtime you have installed:
+# Build the sandbox image. The build context is the repo root so the
+# Dockerfile can reach packages/ui and packages/app-scaffold (baked into
+# /opt/desk-template/) alongside packages/server/runtime and sandbox-cli.
 docker build -f packages/server/runtime/Dockerfile.sandbox \
-  -t desk/sandbox:v1 packages/server
+  -t desk/sandbox:v1 .
 # OR (nerdctl with buildkit available):
 nerdctl build -f packages/server/runtime/Dockerfile.sandbox \
-  -t desk/sandbox:v1 packages/server
+  -t desk/sandbox:v1 .
 ```
 
 ## Day-to-day commands

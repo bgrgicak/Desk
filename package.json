@@ -4,6 +4,7 @@
   "workspaces": [
     "packages/server/*",
     "packages/app",
+    "packages/app-scaffold",
     "packages/agent-desk-cli",
     "packages/ui"
   ],

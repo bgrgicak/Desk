@@ -20,6 +20,14 @@ export interface ChatThreadProps {
   highlightMessageId?: string
   /** CSS classes for the inner message list container. */
   innerClassName?: string
+  /** CSS classes for regular message rows within the list container. */
+  messageClassName?: string | ((message: ServerMessage) => string | undefined)
+  /** CSS classes for the typing/status row. */
+  statusClassName?: string
+  /** CSS classes for the agent name/time row. */
+  agentHeaderClassName?: string
+  /** CSS classes for content rendered after the final assistant message. */
+  lastAssistantSlotClassName?: string
   /** Rendered above the message list (e.g. "Open in chat" link). */
   headerSlot?: ReactNode
   /** Rendered below the scroll area (e.g. ChatInput). */
@@ -46,6 +54,10 @@ export function ChatThread({
   isSending = false,
   highlightMessageId,
   innerClassName = 'space-y-6 p-4',
+  messageClassName,
+  statusClassName,
+  agentHeaderClassName,
+  lastAssistantSlotClassName,
   headerSlot,
   footerSlot,
   emptySlot,
@@ -81,6 +93,8 @@ export function ChatThread({
     return null
   }, [messages])
 
+  const resolvedStatusClassName = statusClassName ?? (typeof messageClassName === 'string' ? messageClassName : undefined)
+
   useEffect(() => {
     if (highlightMessageId) {
       const el = messageRefs.current.get(highlightMessageId)
@@ -115,19 +129,31 @@ export function ChatThread({
                 else messageRefs.current.delete(msg.id)
               }}
             >
-              <MessageBubble
-                message={msg}
-                workspaceId={workspaceId}
-                agentName={agentName}
-                isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                isNew={showNewBadge && msg.id === lastAssistantId}
-                onAttachmentClick={onAttachmentClick}
-                developerMode={developerMode}
-              />
-              {lastAssistantSlot && msg.id === lastAssistantId && lastAssistantSlot(msg.id)}
+              <div className={typeof messageClassName === 'function' ? messageClassName(msg) : messageClassName}>
+                <MessageBubble
+                  message={msg}
+                  workspaceId={workspaceId}
+                  agentName={agentName}
+                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
+                  isNew={showNewBadge && msg.id === lastAssistantId}
+                  onAttachmentClick={onAttachmentClick}
+                  agentHeaderClassName={agentHeaderClassName}
+                  hideAgentHeader={msg.content.type === 'artifactRef'}
+                  developerMode={developerMode}
+                />
+              </div>
+              {lastAssistantSlot && msg.id === lastAssistantId && (
+                <div className={lastAssistantSlotClassName}>
+                  {lastAssistantSlot(msg.id)}
+                </div>
+              )}
             </div>
           ))}
-          <StatusIndicator text={null} isTyping={isTyping} />
+          {isTyping && (
+            <div className={resolvedStatusClassName}>
+              <StatusIndicator text={null} isTyping={isTyping} />
+            </div>
+          )}
         </div>
       </div>
       {footerSlot}

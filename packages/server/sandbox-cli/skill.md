@@ -5,7 +5,9 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have two commands:
+You have three commands:
+- `desk-agent app create` — clone the Desk app scaffold into a new chat
+  artifact directory so you can author a real `<name>.app/`.
 - `desk-agent chat attach-artifact` — surface a generated file as an
   `artifactRef` card in the current chat.
 - `desk-agent task schedule` — create or schedule Tasks board work.
@@ -23,6 +25,11 @@ Reach for them when:
 4. **You need to fire your own future turn.** A scheduled task with
    `--at` or `--cron` re-enters the chat at fire time with your `<content>`
    as the prompt.
+
+5. **The user wants you to build an app.** Run
+   `desk-agent app create <name> --chat <chatId>` to scaffold a new
+   `<name>.app/` chat artifact, then load the `desk-app-scaffold`
+   skill for the development workflow.
 
 If you just need to reply to the user *now*, write to stdout — that's the
 chat reply channel. Don't use `desk-agent task schedule` for plain replies.
@@ -52,6 +59,31 @@ The runtime sets these for you. Don't echo, log, or alter them.
 
 - Success: JSON message row on stdout, exit 0.
 - Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit.
+
+## desk-agent app create
+
+Clone the Desk app scaffold into a chat artifact directory for the
+current chat. This section documents the command contract only; the app
+architecture, fragment model, and test/build workflow live in the
+`desk-app-scaffold` skill that is copied into the generated app.
+
+```
+desk-agent app create --chat <id> [--template <path>] <name>
+```
+
+`<name>` must be kebab-case: lowercase letters, digits, and dashes,
+starting with a letter. The new directory lands at
+`~/.chats/<chatId>/artifacts/<name>.app/`. Refuses to clobber an
+existing directory at that path.
+
+After scaffolding, load the `desk-app-scaffold` skill from the generated
+app before editing files.
+
+### Examples
+
+```
+desk-agent app create --chat cht_abc my-todos
+```
 
 ## desk-agent chat attach-artifact
 

@@ -5,11 +5,41 @@ tool, tracker, dashboard, or calculator. Treat every turn as part of that
 project — keep prior decisions, file structure, and naming consistent across
 turns even when the user's individual messages don't mention them.
 
-Default behaviors for app work:
-- Prefer a single self-contained HTML file with inline CSS and JS unless the
-  user has asked for something more elaborate. It's the lowest-friction format
-  to preview and share.
-- Put the working file under the current chat's artifacts while iterating;
-  promote it to ~/ only when the user signals they want to keep it.
-- When the user asks to "make it look better" or "add X", patch the existing
-  file rather than rewriting it from scratch.
+Workflow for this goal:
+
+1. **Scaffold once per app.** The first time the user describes the app,
+   pick a kebab-case `<name>` and run:
+
+   ```
+   desk-agent app create --chat <chatId> <name>
+   ```
+
+   That clones the Desk app scaffold into
+   `~/.chats/<chatId>/artifacts/<name>.app/`. Don't `mkdir`, `touch`, or
+   `npm init` your own structure — the scaffold ships a multi-entry
+   Vite project, a fragment template, an `AGENTS.md`, and pre-installed
+   `node_modules/` so build works without network access.
+
+2. **Load the `desk-app-scaffold` skill** for the directory layout,
+   fragment shape, build commands, capability rules, and the
+   static-only constraint. Follow it. The scaffold's `AGENTS.md` is the
+   source of truth for app authoring; nothing in this prompt overrides
+   it.
+
+3. **Edit, verify, attach.** When iterating:
+   - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
+   - Run `npm run verify` from the app directory — confirm zero exit
+     before telling the user the app is ready.
+   - Use `desk-agent chat attach-artifact` once per visible update to
+     surface the `<name>.app/` directory in the chat.
+
+4. **Iterate, don't rewrite.** "Make it look better" or "add X" should
+   patch the existing files, not regenerate the app from scratch.
+   Multiple `.app/` directories per chat are allowed if the user is
+   clearly steering toward separate apps.
+
+Apps are static client-side bundles. They must not embed servers,
+auth, persistence-of-record, or background jobs — those land via the
+Desk capability bridge and per-app storage API in later issues. Keep
+new apps inside the static-only constraint described in the
+`desk-app-scaffold` skill.

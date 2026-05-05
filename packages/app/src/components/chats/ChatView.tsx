@@ -905,7 +905,14 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="max-w-2xl mx-auto px-6 py-8 space-y-6"
+          innerClassName="px-6 py-8 space-y-6"
+          messageClassName={message => {
+            if (message.content.type !== 'artifactRef') return 'max-w-2xl mx-auto'
+            return 'w-full'
+          }}
+          statusClassName="max-w-2xl mx-auto"
+          agentHeaderClassName="max-w-2xl mx-auto"
+          lastAssistantSlotClassName="w-full"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={

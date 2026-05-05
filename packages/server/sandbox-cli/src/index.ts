@@ -14,6 +14,7 @@ interface Command {
 }
 
 const COMMANDS: Record<string, () => Promise<Command>> = {
+  "app create": () => import("./commands/app-create.js"),
   "chat attach-artifact": () => import("./commands/chat-attach-artifact.js"),
   "task schedule": () => import("./commands/task-schedule.js"),
 };

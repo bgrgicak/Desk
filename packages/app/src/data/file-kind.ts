@@ -79,9 +79,10 @@ export function fileKindFrom(name: string, mimeType?: string | null): FileKind {
   const mime = (mimeType ?? '').toLowerCase()
   const ext = getExt(name)
   if (mime === 'application/pdf' || ext === 'pdf') return 'pdf'
+  if (IMAGE_EXTS.has(ext)) return 'image'
   if (mime === 'text/html' || ext === 'html' || ext === 'htm') return 'html'
   if (DOCX_MIMES.has(mime) || DOCX_EXTS.has(ext)) return 'docx'
-  if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image'
+  if (mime.startsWith('image/')) return 'image'
   if (mime.startsWith('video/') || VIDEO_EXTS.has(ext)) return 'video'
   if (mime.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio'
   if (mime.startsWith('text/') || TEXTUAL_APP_MIMES.has(mime)) return 'text'
