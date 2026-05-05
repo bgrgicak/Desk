@@ -514,11 +514,15 @@ test("library detail's 'Use in chat' pins the file to chat attachments without a
     page.getByRole("button", { name: `Remove ${fileName}` }),
   ).not.toBeVisible();
 
-  await page
+  const chatInput = page
     .getByPlaceholder(/ask anything|continue the conversation/i)
-    .first()
-    .fill("look at the summary I just opened");
-  await page.keyboard.press("Enter");
+    .first();
+  await chatInput.fill("look at the summary I just opened");
+  await expect(chatInput).toHaveValue("look at the summary I just opened");
+  // Use locator.press rather than page.keyboard.press so the Enter event
+  // is always dispatched to the textarea even if focus shifted during the
+  // preceding animation or re-render.
+  await chatInput.press("Enter");
 
   const created = (await (await chatCreatePromise).json()) as { id: string };
   const sent = await messagePromise;

@@ -1,4 +1,5 @@
 import { type Pool } from "@agent-desk/db";
+import { networkInterfaces } from "node:os";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -18,12 +19,33 @@ export interface ExecRunOptions {
   attachments?: string[];
   /**
    * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
-   * to `http://host.docker.internal:35138` when omitted.
+   * to the sandbox-reachable host gateway when omitted.
    */
   apiUrl?: string;
   /** Provider API keys forwarded into every exec so they're always current. */
   providerKeys?: Record<string, string>;
   onLog: (event: LogEvent) => void;
+}
+
+function firstNonInternalIpv4(): string | null {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return null;
+}
+
+function defaultSandboxApiUrl(): string {
+  const configured = process.env.DESK_SANDBOX_API_URL;
+  if (configured) return configured;
+
+  const port = process.env.PORT ?? "35138";
+  const hasLocalDockerBridge = Boolean(networkInterfaces().docker0?.some(
+    (entry) => entry.family === "IPv4" && !entry.internal,
+  ));
+  const host = hasLocalDockerBridge ? "host.docker.internal" : firstNonInternalIpv4() ?? "host.docker.internal";
+  return `http://${host}:${port}`;
 }
 
 /**
@@ -69,7 +91,7 @@ export async function execRun(
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      apiUrl: opts.apiUrl ?? "http://host.docker.internal:35138",
+      apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
       providerKeys: opts.providerKeys,
       onLog: opts.onLog,
     });

@@ -1,5 +1,5 @@
 /**
- * PR-G: modify-as-version flow for library apps.
+ * Modify-as-version flow for library apps.
  *
  * Real desk-server, real SQLite, real fs. Walks the full flow:
  *   1. Materialize a library `<name>.app/`.
@@ -159,7 +159,7 @@ function httpRaw(
   });
 }
 
-describe("modify-as-version flow (PR-G)", () => {
+describe("modify-as-version flow", () => {
   it("`POST /chats/:id/copy-library-app` clones the library `<name>.app/` into the chat artifacts dir", async () => {
     const res = await httpRaw(
       "POST",
@@ -359,6 +359,101 @@ describe("modify-as-version flow (PR-G)", () => {
 
     await fs.rm(sweepApp, { recursive: true, force: true });
     await fs.rm(versionsRoot, { recursive: true, force: true });
+  });
+
+  it("rejects hidden workspace paths as library copy/replace targets", async () => {
+    const hiddenApp = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      "hidden-source.app",
+    );
+    await fs.mkdir(hiddenApp, { recursive: true });
+    await fs.writeFile(
+      path.join(hiddenApp, "desk.app.json"),
+      JSON.stringify({ name: "hidden-source", capabilities: [] }),
+      "utf8",
+    );
+
+    const copyHidden = await httpRaw(
+      "POST",
+      `/chats/${chatId}/copy-library-app`,
+      {
+        bearer: authToken,
+        body: { path: `.chats/${chatId}/artifacts/hidden-source.app` },
+      },
+    );
+    expect(copyHidden.status).toBe(400);
+
+    const targetHiddenSource = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      "target-hidden.app",
+    );
+    await fs.mkdir(targetHiddenSource, { recursive: true });
+    await fs.writeFile(
+      path.join(targetHiddenSource, "desk.app.json"),
+      JSON.stringify({ name: "target-hidden", capabilities: [] }),
+      "utf8",
+    );
+
+    const replaceHiddenTarget = await httpRaw(
+      "POST",
+      `/chats/${chatId}/replace-library-app`,
+      {
+        bearer: authToken,
+        body: {
+          name: "target-hidden.app",
+          targetPath: `.chats/${chatId}/artifacts/target-hidden.app`,
+        },
+      },
+    );
+    expect(replaceHiddenTarget.status).toBe(400);
+
+    await fs.rm(hiddenApp, { recursive: true, force: true });
+    await fs.rm(targetHiddenSource, { recursive: true, force: true });
+  });
+
+  it("rejects path-like chat artifact names when replacing a library app", async () => {
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/replace-library-app`,
+      {
+        bearer: authToken,
+        body: { name: "../escape.app", targetPath: "escape.app" },
+      },
+    );
+    expect(res.status).toBe(400);
+
+    const backslash = await httpRaw(
+      "POST",
+      `/chats/${chatId}/replace-library-app`,
+      {
+        bearer: authToken,
+        body: { name: "..\\escape.app", targetPath: "escape.app" },
+      },
+    );
+    expect(backslash.status).toBe(400);
+  });
+
+  it("rejects symlinked library app roots when copying into chat", async () => {
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const realApp = path.join(wsRoot, "real-symlink-source.app");
+    const symlinkApp = path.join(wsRoot, "symlink-source.app");
+    await fs.mkdir(realApp, { recursive: true });
+    await fs.writeFile(
+      path.join(realApp, "desk.app.json"),
+      JSON.stringify({ name: "real-symlink-source", capabilities: [] }),
+      "utf8",
+    );
+    await fs.symlink(realApp, symlinkApp, "dir");
+
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/copy-library-app`,
+      { bearer: authToken, body: { path: "symlink-source.app" } },
+    );
+    expect(res.status).toBe(400);
+
+    await fs.rm(symlinkApp, { force: true });
+    await fs.rm(realApp, { recursive: true, force: true });
   });
 
   it("rejects copy + replace when the source chat artifact isn't a `.app/` directory", async () => {

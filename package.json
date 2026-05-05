@@ -13,6 +13,7 @@
     "dev": "packages/server/setup/scripts/dev.sh",
     "dev:app": "npm -w @agent-desk/app run dev",
     "build": "nx run-many -t build",
+    "ci:local": "scripts/ci-local.sh",
     "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
     "typecheck": "nx run-many -t typecheck",
     "test": "vitest run --passWithNoTests",

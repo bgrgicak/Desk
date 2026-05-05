@@ -99,9 +99,15 @@ test("one-shot task: poll loop fires it and transitions to succeeded", async ({
     .toBe(true);
 
   // One-shot task: definition must reach succeeded and clear executeAt.
-  const task = await findMessage(serverUrl, token, chatId, taskId);
-  expect(task?.state).toBe("succeeded");
-  expect(task?.executeAt ?? null).toBeNull();
+  await expect
+    .poll(
+      async () => {
+        const task = await findMessage(serverUrl, token, chatId, taskId);
+        return { state: task?.state, executeAt: task?.executeAt ?? null };
+      },
+      { timeout: 12_000, intervals: [200, 500, 1000, 1000, 2000] },
+    )
+    .toEqual({ state: "succeeded", executeAt: null });
 });
 
 test("recurring task: poll loop fires it and keeps it pending with advanced executeAt", async ({
