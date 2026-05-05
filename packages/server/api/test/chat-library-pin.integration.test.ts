@@ -39,6 +39,10 @@ interface SeededUser {
   agentId: string;
 }
 
+function portableSymlinkTarget(linkPath: string, targetAbs: string): string {
+  return path.relative(path.dirname(linkPath), targetAbs).split(path.sep).join("/") || ".";
+}
+
 function request(
   method: string,
   pathStr: string,
@@ -178,7 +182,7 @@ describe("POST /chats/:id/library-refs", () => {
     const lstat = await fs.lstat(linkAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
     const targetAbs = path.join(home, "Desk", "workspaces", alpha.workspacePath, "Notes/spec.md");
-    expect(await fs.readlink(linkAbs)).toBe(targetAbs);
+    expect(await fs.readlink(linkAbs)).toBe(portableSymlinkTarget(linkAbs, targetAbs));
 
     // listAttachments surfaces the pin alongside any other on-disk attachments.
     const list = await request("GET", `/chats/${chatId}/attachments`, alpha.token);

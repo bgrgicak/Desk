@@ -128,13 +128,21 @@ export async function uniqueDestPath(dir: string, name: string): Promise<string>
   let i = 1;
   while (true) {
     try {
-      await fs.access(path.join(dir, candidate));
+      await fs.lstat(path.join(dir, candidate));
       candidate = `${stem}-${i}${ext}`;
       i += 1;
     } catch {
       return path.join(dir, candidate);
     }
   }
+}
+
+/**
+ * Symlinks inside the workspace must survive the sandbox mount, where the
+ * same tree appears under /home/agent instead of the host's absolute path.
+ */
+export function relativeSymlinkTarget(linkPath: string, targetAbs: string): string {
+  return path.relative(path.dirname(linkPath), targetAbs).split(path.sep).join("/") || ".";
 }
 
 /**
@@ -348,6 +356,11 @@ export async function pinLibraryFileToChat(
       ? existingTarget
       : path.resolve(attDir, existingTarget);
     if (resolvedExisting === targetAbs) {
+      const portableTarget = relativeSymlinkTarget(sameNameAbs, targetAbs);
+      if (existingTarget !== portableTarget) {
+        await fs.unlink(sameNameAbs);
+        await fs.symlink(portableTarget, sameNameAbs);
+      }
       const stat = await fs.stat(sameNameAbs).catch(() => null);
       if (stat) {
         const relPath = path.relative(root, sameNameAbs).split(path.sep).join("/");
@@ -364,7 +377,7 @@ export async function pinLibraryFileToChat(
   }
 
   const linkPath = await uniqueDestPath(attDir, desiredName);
-  await fs.symlink(targetAbs, linkPath);
+  await fs.symlink(relativeSymlinkTarget(linkPath, targetAbs), linkPath);
 
   const stat = await fs.stat(linkPath);
   const relPath = path.relative(root, linkPath).split(path.sep).join("/");
@@ -426,7 +439,7 @@ export async function saveChatAttachmentToLibrary(
   // Best-effort: leave a symlink at the old path so the chat still shows
   // the file via `listAttachments`. If the symlink can't be created the
   // save still succeeded — the chat sidebar will just lose the row.
-  await fs.symlink(destAbs, srcAbs).catch(() => {});
+  await fs.symlink(relativeSymlinkTarget(srcAbs, destAbs), srcAbs).catch(() => {});
 
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
@@ -447,8 +460,8 @@ export async function moveFile(
   const toAbs = resolveHostPath(ctx.home, slug, toRel);
   await fs.mkdir(path.dirname(toAbs), { recursive: true });
   await fs.rename(fromAbs, toAbs);
-  // Leave a symlink at the old path pointing to the new absolute location.
-  await fs.symlink(toAbs, fromAbs).catch(() => {
+  // Leave a symlink at the old path pointing to the new location.
+  await fs.symlink(relativeSymlinkTarget(fromAbs, toAbs), fromAbs).catch(() => {
     // If the symlink can't be created (e.g. parent dir gone), swallow — the
     // move still succeeded; references to the old path will fail-fast.
   });
