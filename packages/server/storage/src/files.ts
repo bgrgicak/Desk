@@ -502,8 +502,8 @@ export async function saveChatAttachmentToLibrary(
  * The source directory is renamed in place; the chat artifact is then
  * gone from `.chats/{chatId}/artifacts/`. Unlike attachments, no
  * symlink is left behind — promoted apps are intended to live in the
- * library; PR-G covers the modify-as-version flow that copies a library
- * app back into a chat for editing.
+ * library; the modify-as-version flow copies a library app back into a
+ * chat for editing.
  *
  * `artifactName` must be a basename ending in `.app`. The destination
  * defaults to the workspace root; pass `destSubpath` to land under a
@@ -565,7 +565,253 @@ export async function saveChatArtifactToLibrary(
 }
 
 /**
- * Permanently removes a chat-artifact `<name>.app/` directory (and the
+ * The "version" of a library app — the mtime of its `desk.app.json`
+ * manifest, as a string of milliseconds. Captured at copy time so the
+ * UI can pass it back at replace time, and the server can detect whether
+ * the library copy moved while the user was editing in the chat.
+ *
+ * Returns null when the manifest doesn't exist (e.g. the library app is
+ * malformed); in that case, the replace endpoint won't enforce the
+ * If-Match check.
+ */
+async function libraryAppVersion(appAbs: string): Promise<string | null> {
+  try {
+    const s = await fs.stat(path.join(appAbs, "desk.app.json"));
+    return String(s.mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
+export interface CopyLibraryAppResult extends FileRef {
+  /**
+   * Snapshot of the LIBRARY source's manifest mtime at copy time. The UI
+   * stores this and passes it back to `replaceLibraryAppFromChat` as
+   * `expectedSourceVersion` so the server can detect concurrent edits.
+   */
+  sourceVersion: string | null;
+}
+
+function validateLibraryAppPath(raw: string, field: string): string {
+  if (raw.includes("\\")) {
+    throw new ValidationError(`Invalid ${field}: ${raw}`);
+  }
+
+  const trimmed = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!trimmed || !trimmed.endsWith(".app") || trimmed === ".app") {
+    throw new ValidationError(`${field} must be a <name>.app path`);
+  }
+
+  const segments = trimmed.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+      throw new ValidationError(`Invalid ${field} segment: ${segment}`);
+    }
+  }
+
+  return segments.join("/");
+}
+
+function validateChatAppArtifactName(raw: string): string {
+  if (raw.includes("\\")) {
+    throw new ValidationError(`Invalid artifact name: ${raw}`);
+  }
+  if (path.basename(raw) !== raw) {
+    throw new ValidationError(`Invalid artifact name: ${raw}`);
+  }
+  if (!raw.endsWith(".app") || raw === ".app" || raw.startsWith(".")) {
+    throw new ValidationError(`Invalid app artifact name: ${raw}`);
+  }
+  return raw;
+}
+
+/**
+ * Copies a library `<name>.app/` directory into a chat's artifacts dir
+ * so the agent can iterate on it without touching the library copy.
+ */
+export async function copyLibraryAppToChat(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  libraryRelPath: string,
+): Promise<CopyLibraryAppResult> {
+  const root = workspaceRootPath(ctx.home, slug);
+  const libraryPath = validateLibraryAppPath(libraryRelPath, "library app path");
+  const srcAbs = resolveHostPath(ctx.home, slug, libraryPath);
+  const linkStat = await fs.lstat(srcAbs).catch(() => null);
+  if (linkStat?.isSymbolicLink()) {
+    throw new ValidationError(`Library app must not be a symlink: ${libraryPath}`);
+  }
+  const stat = await fs.stat(srcAbs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Library app not found: ${libraryRelPath}`);
+  if (!stat.isDirectory()) {
+    throw new ValidationError(`Not a directory: ${libraryRelPath}`);
+  }
+  const baseName = path.basename(srcAbs);
+  if (!baseName.endsWith(".app") || baseName === ".app") {
+    throw new ValidationError(`Not an app directory: ${libraryRelPath}`);
+  }
+
+  const artDir = chatArtifactsDir(ctx.home, slug, chatId);
+  await fs.mkdir(artDir, { recursive: true });
+  const destAbs = path.join(artDir, baseName);
+  const existing = await fs.lstat(destAbs).catch(() => null);
+  if (existing) {
+    throw new ValidationError(
+      `Chat artifact already exists: ${baseName}. Remove it first or pick another name.`,
+    );
+  }
+
+  const sourceVersion = await libraryAppVersion(srcAbs);
+
+  await fs.cp(srcAbs, destAbs, {
+    recursive: true,
+    dereference: false,
+    force: false,
+  });
+
+  const destStat = await fs.stat(destAbs);
+  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
+  return {
+    path: relPath,
+    name: baseName,
+    mime: "application/vnd.desk.app+directory",
+    size: 0,
+    createdAt: destStat.birthtime.toISOString(),
+    updatedAtMs: String(destStat.mtimeMs),
+    isDir: true,
+    sourceVersion,
+  };
+}
+
+export interface ReplaceLibraryAppOptions {
+  /**
+   * Optional `If-Match`-style version pin. The UI captures
+   * `sourceVersion` from `copyLibraryAppToChat` and passes it back here.
+   */
+  expectedSourceVersion?: string;
+}
+
+export class ReplaceLibraryAppConflictError extends ValidationError {
+  constructor(
+    public readonly expected: string,
+    public readonly actual: string | null,
+  ) {
+    super(
+      `Library app moved since copy: expected version ${expected} but found ${actual ?? "<missing manifest>"}.`,
+    );
+  }
+}
+
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Best-effort lazy sweep of `.trash/.app-versions/` entries older than
+ * 30 days. Runs on each replace call so the trash bucket doesn't grow
+ * unbounded. Failures are swallowed.
+ */
+async function pruneAppVersionTrash(home: string): Promise<void> {
+  const versionsRoot = path.join(trashDir(home), ".app-versions");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(versionsRoot);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - TRASH_RETENTION_MS;
+  await Promise.all(
+    entries.map(async (name) => {
+      const entry = path.join(versionsRoot, name);
+      try {
+        const s = await fs.stat(entry);
+        if (s.mtimeMs < cutoff) {
+          await fs.rm(entry, { recursive: true, force: true });
+        }
+      } catch {
+        // best-effort
+      }
+    }),
+  );
+}
+
+/**
+ * Promotes a chat-artifact `<name>.app/` back into the library, replacing
+ * the prior library version of the same name. Prior copy goes to trash for
+ * recovery; lazy retention sweep clears entries older than 30 days.
+ */
+export async function replaceLibraryAppFromChat(
+  ctx: StorageContext,
+  slug: string,
+  chatId: string,
+  artifactName: string,
+  targetRelPath: string,
+  opts: ReplaceLibraryAppOptions = {},
+): Promise<FileRef> {
+  const appName = validateChatAppArtifactName(artifactName);
+  const targetPath = validateLibraryAppPath(targetRelPath, "target path");
+  const root = workspaceRootPath(ctx.home, slug);
+  const srcAbs = path.join(
+    chatArtifactsDir(ctx.home, slug, chatId),
+    appName,
+  );
+  const srcStat = await fs.lstat(srcAbs).catch(() => null);
+  if (!srcStat) {
+    throw new NotFoundError(`Chat artifact not found: ${appName}`);
+  }
+  if (srcStat.isSymbolicLink()) {
+    throw new ValidationError(`Chat artifact must not be a symlink: ${appName}`);
+  }
+  if (!srcStat.isDirectory()) {
+    throw new ValidationError(`Not a directory: ${appName}`);
+  }
+
+  const destAbs = resolveHostPath(ctx.home, slug, targetPath);
+  const destStat = await fs.lstat(destAbs).catch(() => null);
+
+  if (destStat) {
+    if (!destStat.isDirectory()) {
+      throw new ValidationError(`Library target is not a directory: ${targetPath}`);
+    }
+
+    if (opts.expectedSourceVersion !== undefined) {
+      const liveVersion = await libraryAppVersion(destAbs);
+      if (liveVersion !== opts.expectedSourceVersion) {
+        throw new ReplaceLibraryAppConflictError(
+          opts.expectedSourceVersion,
+          liveVersion,
+        );
+      }
+    }
+
+    const versionsRoot = path.join(trashDir(ctx.home), ".app-versions");
+    await fs.mkdir(versionsRoot, { recursive: true });
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-");
+    const backupAbs = path.join(versionsRoot, `${path.basename(targetPath)}-${stamp}`);
+    await fs.rename(destAbs, backupAbs);
+  } else {
+    await fs.mkdir(path.dirname(destAbs), { recursive: true });
+  }
+
+  await fs.rename(srcAbs, destAbs);
+  await pruneAppVersionTrash(ctx.home);
+
+  const newStat = await fs.stat(destAbs);
+  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
+  return {
+    path: relPath,
+    name: path.basename(destAbs),
+    mime: "application/vnd.desk.app+directory",
+    size: 0,
+    createdAt: newStat.birthtime.toISOString(),
+    updatedAtMs: String(newStat.mtimeMs),
+    isDir: true,
+  };
+}
+
+/**
+ * Permanently removes a chat-artifact `<name>.app/` directory (and its
  * `.storage/data.sqlite` SQLite file by virtue of being a child).
  * Issue #47, PR-E.
  */
@@ -595,9 +841,9 @@ export async function deleteChatApp(
 
 /**
  * Removes a library `<name>.app/` directory by moving it to
- * `~/Desk/.trash/.app-versions/<name>-<timestamp>/`. Recoverable from
- * the same trash bucket modify-as-version uses (PR-G's lazy sweep
- * clears entries older than 30 days). Issue #47, PR-E.
+ * `~/Desk/.trash/.app-versions/<name>-<timestamp>/`. Recoverable via
+ * the same trash bucket modify-as-version uses; its lazy sweep clears
+ * entries older than 30 days. Issue #47, PR-E.
  */
 export async function deleteLibraryApp(
   ctx: StorageContext,

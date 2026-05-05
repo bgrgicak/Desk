@@ -799,7 +799,8 @@ export async function issueLibraryAppSession(
     expiresAt,
   });
 
-  const url = `/apps/library/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
+  const assetToken = hashToken(token);
+  const url = `/apps/library/${encodeURIComponent(ws.id)}/${encodeURIComponent(assetToken)}/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
   return {
     token,
     expiresAt: expiresAt.toISOString(),
@@ -830,11 +831,11 @@ async function verifyLibraryAppToken(
 }
 
 /**
- * Handles `GET /apps/library/:appName/dist/...`. The library variant
- * resolves the workspace from the *cookie* (or from the bootstrap query
- * token) so the URL doesn't have to embed the workspaceId. The cookie
- * name does encode it, which means a leaked cookie still can't be
- * replayed across workspaces.
+ * Handles `GET /apps/library/:workspaceId/:assetToken/:appName/dist/...`. The
+ * asset token is in the path so sandboxed iframe subresource loads can resolve
+ * JS/CSS chunks even when Chromium omits cookies for the opaque origin.
+ * The legacy `/apps/library/:appName/dist/...` shape is still accepted for
+ * cookie/query-authenticated HTML entrypoints.
  */
 export async function handleStaticLibraryAppRequest(
   pool: Pool,
@@ -844,20 +845,49 @@ export async function handleStaticLibraryAppRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  // Expect: ["apps", "library", appName, "dist", ...rest]
-  if (
-    segments.length < 4 ||
-    segments[0] !== "apps" ||
-    segments[1] !== "library" ||
-    segments[3] !== "dist"
-  ) {
+  if (segments[0] !== "apps" || segments[1] !== "library") {
     return false;
   }
-  const appName = decodeURIComponent(segments[2]);
+
+  const hasWorkspaceAssetSegment =
+    segments.length >= 6 &&
+    /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) &&
+    /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3])) &&
+    segments[5] === "dist";
+  const hasWorkspaceSegment = segments.length >= 5 && /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) && segments[4] === "dist";
+  const legacyShape = segments.length >= 4 && segments[3] === "dist";
+  if (!hasWorkspaceAssetSegment && !hasWorkspaceSegment && !legacyShape) return false;
+
+  const routeWorkspaceId = (hasWorkspaceAssetSegment || hasWorkspaceSegment) ? decodeURIComponent(segments[2]) : null;
+  const routeAssetToken = hasWorkspaceAssetSegment ? decodeURIComponent(segments[3]) : null;
+  const appName = decodeURIComponent(segments[hasWorkspaceAssetSegment ? 4 : hasWorkspaceSegment ? 3 : 2]);
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
-  const tail = segments.slice(4).map((s) => decodeURIComponent(s)).join("/");
+  const tailStart = hasWorkspaceAssetSegment ? 6 : hasWorkspaceSegment ? 5 : 4;
+  const tail = segments.slice(tailStart).map((s) => decodeURIComponent(s)).join("/");
+
+  if (routeWorkspaceId && tail !== "" && path.extname(tail).toLowerCase() !== ".html") {
+    if (!routeAssetToken) throw new UnauthorizedError("Missing app asset token");
+    const ses = await queries.appSessions.verify(pool, routeAssetToken);
+    if (
+      !ses ||
+      ses.scope !== "library" ||
+      ses.workspaceId !== routeWorkspaceId ||
+      ses.appName !== appName
+    ) {
+      throw new UnauthorizedError("Invalid app asset token");
+    }
+    const { rows } = await pool.query<{ path: string }>(
+      "SELECT path FROM workspaces WHERE id = ?",
+      [routeWorkspaceId],
+    );
+    const workspaceSlug = rows[0]?.path;
+    if (!workspaceSlug) throw new NotFoundError("Workspace not found");
+    const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
+    await serveAsset(distDir, tail, res);
+    return true;
+  }
 
   const queryToken = url.searchParams.get("t");
   // Library cookie name embeds the workspaceId, so we can't compute the
@@ -885,7 +915,8 @@ export async function handleStaticLibraryAppRequest(
       appName: ses.appName,
       capabilities: ses.capabilities,
     };
-    workspaceId = ses.workspaceId;
+    workspaceId = routeWorkspaceId ?? ses.workspaceId;
+    if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");
   } else if (cookieToken) {
     const ses = await queries.appSessions.verify(pool, hashToken(cookieToken));
     if (!ses || ses.scope !== "library" || ses.appName !== appName) {
@@ -899,7 +930,8 @@ export async function handleStaticLibraryAppRequest(
     }
     session = await verifyLibraryAppToken(pool, cookieToken, appName, ses.workspaceId);
     if (!session) throw new UnauthorizedError("Invalid app token");
-    workspaceId = ses.workspaceId;
+    workspaceId = routeWorkspaceId ?? ses.workspaceId;
+    if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");
   } else {
     throw new UnauthorizedError("Missing app token");
   }
@@ -912,7 +944,9 @@ export async function handleStaticLibraryAppRequest(
   if (!workspaceSlug) throw new NotFoundError("Workspace not found");
 
   const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
-  const cookiePath = `/apps/library/${encodeURIComponent(appName)}/dist`;
+  const cookiePath = routeWorkspaceId
+    ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeURIComponent(appName)}`
+    : `/apps/library/${encodeURIComponent(appName)}/dist`;
   const cookieName = libraryCookieNameFor(workspaceId!, appName);
 
   if (queryToken) {
@@ -930,14 +964,14 @@ export async function handleStaticLibraryAppRequest(
     await serveIndex({
       distDir,
       subpath: entry.subpath,
-      bridge: {
-        chatId: "",
-        appName,
-        bridgeKey: bridgeKeyFor(cookieToken!),
-        capabilities: session.capabilities,
-      },
-      res,
-    });
+        bridge: {
+          chatId: "",
+          appName,
+          bridgeKey: bridgeKeyFor(cookieToken!),
+          capabilities: session.capabilities,
+        },
+        res,
+      });
     return true;
   }
   await serveAsset(distDir, tail, res);
