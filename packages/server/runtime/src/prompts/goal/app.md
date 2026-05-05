@@ -30,8 +30,9 @@ Workflow for this goal:
    - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
    - Run `npm run verify` from the app directory — confirm zero exit
      before telling the user the app is ready.
-   - Use `desk-agent chat attach-artifact` once per visible update to
-     surface the `<name>.app/` directory in the chat.
+   - Use `desk-agent chat attach-artifact --chat <chatId> .chats/<chatId>/artifacts/<name>.app`
+      once per visible update to surface the app in chat as an interactive
+      iframe. Pass the **directory** path (`<name>.app`), not a file inside it.
 
 4. **Iterate, don't rewrite.** "Make it look better" or "add X" should
    patch the existing files, not regenerate the app from scratch.

@@ -16,7 +16,9 @@ export async function previewBlobFor(kind: FileKind, blob: Blob, name: string, p
 }
 
 export function previewKindFrom(name: string, path: string, mime?: string | null): FileKind {
-  if (mime === 'inode/directory' || isAppDirectory(name) || isAppDirectory(path.split('/').pop() ?? '')) return 'app'
+  const basename = path.split('/').pop() ?? ''
+  if (isAppDirectory(name) || isAppDirectory(basename)) return 'app'
+  if (mime === 'inode/directory') return 'unknown'
   if (isSvgPreview(name, path, mime)) return 'image'
   const pathKind = fileKindFrom(path, mime)
   if (pathKind === 'image') return pathKind

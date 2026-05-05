@@ -8,8 +8,8 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 You have three commands:
 - `desk-agent app create` — clone the Desk app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
-- `desk-agent chat attach-artifact` — surface a generated file as an
-  `artifactRef` card in the current chat.
+- `desk-agent chat attach-artifact` — surface a generated file **or directory**
+  as an `artifactRef` card in the current chat.
 - `desk-agent task schedule` — create or schedule Tasks board work.
 
 Reach for them when:
@@ -87,24 +87,36 @@ desk-agent app create --chat cht_abc my-todos
 
 ## desk-agent chat attach-artifact
 
-Create an `artifactRef` message in the chat for an existing file. Use this after
-writing a new artifact or making a significant visible update.
+Create an `artifactRef` message in the chat for an existing file or directory.
+Use this after writing a new artifact or making a significant visible update.
 
 ```
 desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
 ```
 
-`<workspace-relative-path>` is usually a file under `.chats/<chatId>/artifacts/`.
+`<workspace-relative-path>` is the workspace-relative path to a file **or
+directory** under `.chats/<chatId>/artifacts/`.
 Strip the leading `~/`: `~/.chats/cht_abc/artifacts/report.md` becomes
 `.chats/cht_abc/artifacts/report.md`.
 
+For `.app/` directories, pass the **directory** path — not a file inside it.
+The chat will render the app inline as an interactive iframe.
+
 ### Examples
 
+Attach a file:
 ```
 desk-agent chat attach-artifact --chat cht_abc \
     .chats/cht_abc/artifacts/report.md
 ```
 
+Attach a `.app/` directory (renders as an interactive app in chat):
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    .chats/cht_abc/artifacts/my-todos.app
+```
+
+Attach with a custom display name:
 ```
 desk-agent chat attach-artifact --chat cht_abc \
     --name "Weekly report" \

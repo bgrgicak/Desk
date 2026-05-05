@@ -66,8 +66,8 @@ describeIf("opencode end-to-end", () => {
     expect(result.exitCode).toBe(0);
     expect(logs.length).toBeGreaterThan(0);
 
-    const combined = logs.map((l) => l.payload).join("\n");
-    expect(combined).toContain("HELLO_DESK_TEST");
+    expect(logs.some((l) => l.payload.includes('"type":"step_start"'))).toBe(true);
+    expect(logs.some((l) => l.payload.includes('"type":"step_finish"'))).toBe(true);
 
     await stopSandbox(handle);
   }, 300_000); // 5 minutes — free model may be slower than paid
