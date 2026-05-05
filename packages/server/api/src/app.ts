@@ -1052,7 +1052,7 @@ export function createApp(opts: AppOptions): Server {
 
       const appQueryToken = query.get("token");
       const appTokenCookie = appQueryToken
-        ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/; Max-Age=86400`
+        ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
         : null;
 
       try {

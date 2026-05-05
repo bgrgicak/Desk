@@ -322,6 +322,7 @@ describe("GET /apps/<wsId>/<appPath>/dist/<file>", () => {
     expect(cookieHeader).toContain("desk-app-token=");
     expect(cookieHeader).toContain("HttpOnly");
     expect(cookieHeader).toContain("Path=/api/apps/");
+    expect(cookieHeader).not.toContain("Max-Age");
   });
 
   it("authenticates sub-resource requests via desk-app-token cookie", async () => {
