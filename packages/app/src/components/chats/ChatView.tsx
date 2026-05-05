@@ -1095,15 +1095,13 @@ export function ChatView({
                   if (item) addStagedFromLibrary(item)
                 }}
                 onChatArtifactClick={(file) => {
-                  // For a `<name>.app/` chat artifact, route the click at the
-                  // app's `desk.app.json` so the detail panel renders the
-                  // manifest. PR-C replaces this with the iframe served from
-                  // `/apps/chat/...`.
+                  // For a `<name>.app/` chat artifact, navigate to the app
+                  // directory itself so ContextDetail renders it as an iframe.
                   if (isAppArtifactFile(file)) {
                     onAttachmentClick?.({
-                      path: `${file.path}/desk.app.json`,
+                      path: file.path,
                       name: file.label ?? file.name,
-                      mime: 'application/json',
+                      mime: 'inode/directory',
                       size: file.size,
                     })
                     return

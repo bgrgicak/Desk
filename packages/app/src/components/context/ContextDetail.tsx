@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useSelector } from 'react-redux'
+import { getSessionToken } from '@/auth/session'
 import {
   Link2,
   Download,
@@ -82,7 +83,8 @@ interface ContextDetailProps {
 
 function canPreview(item: ContextItem): boolean {
   if (item.type === 'note' || item.type === 'link') return true
-  return fileKindForItem(item) !== 'unknown'
+  const k = fileKindForItem(item)
+  return k !== 'unknown' && k !== 'app'
 }
 
 export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
@@ -644,6 +646,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 </div>
               )
             })()
+          ) : kind === 'app' ? (
+            <div className="flex-1 flex flex-col bg-muted/30">
+              <iframe
+                title={item.name}
+                src={`/api/apps/${activeWorkspaceId}/${item.id}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
+                className="flex-1 w-full border-0 bg-white"
+                allow="same-origin"
+              />
+            </div>
           ) : kind === 'pdf' ? (
             <div className="flex-1 flex flex-col bg-muted/30">
               {previewBlobUrl ? (
