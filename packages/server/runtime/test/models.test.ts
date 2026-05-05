@@ -1,5 +1,15 @@
-import { describe, it, expect } from "vitest";
-import { parseModelsOutput } from "../src/models.js";
+import { afterEach, describe, it, expect } from "vitest";
+import { listModels, parseModelsOutput } from "../src/models.js";
+
+const originalSandboxDriver = process.env.DESK_SANDBOX_DRIVER;
+
+afterEach(() => {
+  if (originalSandboxDriver === undefined) {
+    delete process.env.DESK_SANDBOX_DRIVER;
+  } else {
+    process.env.DESK_SANDBOX_DRIVER = originalSandboxDriver;
+  }
+});
 
 describe("parseModelsOutput", () => {
   it("parses provider/model lines", () => {
@@ -18,5 +28,19 @@ describe("parseModelsOutput", () => {
     expect(out).toEqual([
       { id: "ok/yes", provider: "ok" },
     ]);
+  });
+});
+
+describe("listModels", () => {
+  it("returns free opencode models without a sandbox when the fake driver is active", async () => {
+    process.env.DESK_SANDBOX_DRIVER = "fake";
+
+    await expect(listModels("wks_test", "desk")).resolves.toEqual([
+      { id: "opencode/big-pickle", provider: "opencode" },
+    ]);
+    await expect(listModels("wks_test", "desk", { provider: "opencode" })).resolves.toEqual([
+      { id: "opencode/big-pickle", provider: "opencode" },
+    ]);
+    await expect(listModels("wks_test", "desk", { provider: "anthropic" })).resolves.toEqual([]);
   });
 });

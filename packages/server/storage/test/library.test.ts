@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   pinLibraryFileToChat,
+  relativeSymlinkTarget,
   uploadArtifact,
   validateLibrarySubpath,
 } from "../src/files.js";
@@ -331,7 +332,7 @@ describe("moveLibraryEntry", () => {
     const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
 
     expect(await fs.readlink(oldLinkPath)).toBe(
-      path.join(root, "Symlinks/File/linked-original.txt"),
+      relativeSymlinkTarget(oldLinkPath, path.join(root, "Symlinks/File/linked-original.txt")),
     );
 
     await moveLibraryEntry(
@@ -345,7 +346,7 @@ describe("moveLibraryEntry", () => {
     // "In this chat" row reflects the new filename.
     await expect(fs.lstat(oldLinkPath)).rejects.toThrow();
     expect(await fs.readlink(newLinkPath)).toBe(
-      path.join(root, "Symlinks/File/linked-renamed.txt"),
+      relativeSymlinkTarget(newLinkPath, path.join(root, "Symlinks/File/linked-renamed.txt")),
     );
     const stat = await fs.stat(newLinkPath);
     expect(stat.isFile()).toBe(true);
@@ -386,7 +387,10 @@ describe("moveLibraryEntry", () => {
     expect(occupant).toBe("occupant");
     const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
     expect(await fs.readlink(path.join(attDir, "collide-target-1.txt"))).toBe(
-      path.join(root, "Collide/collide-target.txt"),
+      relativeSymlinkTarget(
+        path.join(attDir, "collide-target-1.txt"),
+        path.join(root, "Collide/collide-target.txt"),
+      ),
     );
   });
 
@@ -413,7 +417,7 @@ describe("moveLibraryEntry", () => {
     await moveLibraryEntry(ctx, ctx.workspaceSlug, "SymlinkDir", "RenamedDir");
 
     expect(await fs.readlink(linkPath)).toBe(
-      path.join(root, "RenamedDir/Inner/deep-pinned.txt"),
+      relativeSymlinkTarget(linkPath, path.join(root, "RenamedDir/Inner/deep-pinned.txt")),
     );
     const stat = await fs.stat(linkPath);
     expect(stat.isFile()).toBe(true);
@@ -456,7 +460,7 @@ describe("moveLibraryEntry", () => {
     );
 
     expect(await fs.readlink(linkPath)).toBe(before);
-    expect(before).toBe(path.join(root, "SymOther/Stable/untouched.txt"));
+    expect(before).toBe(relativeSymlinkTarget(linkPath, path.join(root, "SymOther/Stable/untouched.txt")));
   });
 });
 

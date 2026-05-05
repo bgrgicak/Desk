@@ -1,10 +1,7 @@
-// Storage client placeholder. The full per-app storage CRUD lands in PR-H
-// (issue #47). The shape is intentionally narrow so fragments and the full
-// app can share a single import site once the bridge is wired.
-//
-// Until then, callers should treat any method here as throwing — they
-// shouldn't be invoked yet. The agent that authors a real app should
-// replace this file once the storage capability is enabled.
+// Storage client for Desk's parent-mediated app capability bridge. The app
+// iframe is sandboxed without same-origin privileges, so persistence must go
+// through `window.desk.storage` instead of localStorage, IndexedDB, or direct
+// Desk API fetches.
 
 export interface StorageDoc<T = unknown> {
   id: string
@@ -13,11 +10,6 @@ export interface StorageDoc<T = unknown> {
   updatedAt: number
 }
 
-/**
- * @deprecated Until PR-H (issue #47). Methods throw at runtime — the
- * import site is stable so PR-H can fill it in without churning the
- * scaffold, but invoking any method today is a bug.
- */
 export interface StorageClient {
   list<T = unknown>(collection: string): Promise<StorageDoc<T>[]>
   get<T = unknown>(collection: string, id: string): Promise<StorageDoc<T> | null>
@@ -26,25 +18,20 @@ export interface StorageClient {
   delete(collection: string, id: string): Promise<void>
 }
 
-/**
- * @deprecated Until PR-H (issue #47). Returns a client whose methods
- * throw — do not invoke from a fragment yet.
- */
 export function getStorageClient(): StorageClient {
-  return new NotYetWiredClient()
+  if (!window.desk?.storage) {
+    throw new Error('Desk storage bridge is unavailable. Is this app running inside Desk?')
+  }
+  return window.desk.storage
 }
 
-class NotYetWiredClient implements StorageClient {
-  async list(): Promise<never> { throw notWired() }
-  async get(): Promise<never> { throw notWired() }
-  async create(): Promise<never> { throw notWired() }
-  async put(): Promise<never> { throw notWired() }
-  async delete(): Promise<never> { throw notWired() }
-}
-
-function notWired(): Error {
-  return new Error(
-    'Per-app storage is not yet enabled (PR-H, issue #47). ' +
-    'Until the capability bridge is in place, do not call storage from a fragment.'
-  )
+declare global {
+  interface Window {
+    desk?: {
+      app: { name: string }
+      chatId: string
+      capabilities: string[]
+      storage?: StorageClient
+    }
+  }
 }

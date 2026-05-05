@@ -1,59 +1,35 @@
-# Build context is the repo root so we can reach packages/server/sandbox-cli,
-# packages/ui, and packages/app-scaffold from a single Dockerfile. See
-# packages/server/README.md for the build invocation.
-
-# ---- Build stage 1: compile sandbox-cli ----
-FROM node:22-slim AS sandbox-cli-builder
+# ---- Build stage: compile sandbox-cli ----
+FROM node:23-slim AS builder
 WORKDIR /build
 COPY packages/server/sandbox-cli/ ./sandbox-cli/
 WORKDIR /build/sandbox-cli
 RUN npm install --ignore-scripts --loglevel=error && \
     npm run build
 
-# ---- Build stage 2: build @agent-desk/ui and bake the scaffold with
-# pre-installed node_modules. The scaffold ships into /opt/desk-template/app
-# inside the runtime image, ready for `desk-agent app create` to clone via
-# a plain `cp -r`. Pre-installing node_modules here means the agent can run
-# `npm run build` immediately without network access. ----
-FROM node:22-slim AS scaffold-builder
-WORKDIR /build
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Build @agent-desk/ui first — `tsc` produces dist/, then `npm pack` gives us
-# a tarball we can install into the scaffold without relying on workspace
-# resolution that only works inside the monorepo checkout.
+# ---- Build stage: prepare app scaffold template ----
+FROM node:23-slim AS app-template
+WORKDIR /opt/desk-template
 COPY packages/ui/ ./ui/
-WORKDIR /build/ui
-RUN npm install --ignore-scripts --loglevel=error && \
+RUN cd ui && \
+    npm install --ignore-scripts --loglevel=error && \
     npm run build && \
-    mkdir -p /build/tarballs && \
-    npm pack --pack-destination=/build/tarballs --loglevel=error
-
-# Install the scaffold's deps with @agent-desk/ui pointed at the tarball.
-WORKDIR /build
-COPY packages/app-scaffold/ ./app-scaffold/
-WORKDIR /build/app-scaffold
-RUN TARBALL="$(ls /build/tarballs/agent-desk-ui-*.tgz | head -n1)" && \
-    node -e "const t=process.argv[1];const j=require('./package.json');j.dependencies['@agent-desk/ui']='file:'+t;require('fs').writeFileSync('package.json', JSON.stringify(j, null, 2)+'\n')" "$TARBALL" && \
-    npm install --no-audit --no-fund --loglevel=error
-
-# Sanity-check the scaffold itself builds in the bake stage so a broken
-# template can't ship to users. The resulting dist/ is wiped before we
-# stage the template — agents always run their own build after `app create`.
-RUN npm run build && rm -rf dist
+    npm pack --loglevel=error
+COPY packages/app-scaffold/ ./app/
+RUN cd app && \
+    cp package.json package.json.template && \
+    node -e "const fs=require('node:fs'); const ui=JSON.parse(fs.readFileSync('../ui/package.json','utf8')); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); const tarball=ui.name.replace('@','').replace('/','-')+'-'+ui.version+'.tgz'; pkg.dependencies['@agent-desk/ui']='file:../ui/'+tarball; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)+'\n')" && \
+    npm install --ignore-scripts --loglevel=error && \
+    npm run build && \
+    rm -rf dist && \
+    mv package.json.template package.json
 
 # ---- Runtime stage ----
-# node:22-slim ships Node 22 + npm + ca-certificates (Debian bookworm under
-# the hood). We need Node ≥ 20.19 because the baked scaffold runs
-# `vite build` from inside the sandbox; Ubuntu 24.04's apt-supplied Node 18
-# can't load Vite 8's ESM CLI.
 FROM node:22-slim
 
-# `curl` is part of the historical baseline (used by tooling inside the
-# sandbox); base image already ships ca-certificates.
+# Install basics. Node.js/npm are provided by the base image; installing Ubuntu's
+# npm package pulls hundreds of Debian packages and has made CI builds stall.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install OpenCode CLI (global). `opencode` becomes available on PATH.
@@ -65,14 +41,13 @@ RUN npm install -g opencode-ai --omit=dev --loglevel=error \
 # a second shebang here would break the file as a Node entry point. The bin
 # is `desk-agent`: `desk` is reserved for the host CLI (@agent-desk/cli); the
 # in-sandbox callback tool is what `desk-agent task schedule` invokes.
-COPY --from=sandbox-cli-builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-agent-cli/desk-agent.js
+COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-agent-cli/desk-agent.js
 RUN ln -s /usr/local/lib/desk-agent-cli/desk-agent.js /usr/local/bin/desk-agent && \
     chmod +x /usr/local/lib/desk-agent-cli/desk-agent.js
 
-# Bake the Desk app scaffold into a stable path. `desk-agent app create`
-# clones from here into `~/.chats/<chatId>/artifacts/<name>.app/`. The
-# directory ships with node_modules/ so `npm run build` works offline.
-COPY --from=scaffold-builder /build/app-scaffold /opt/desk-template/app
+# Bake the app scaffold into the sandbox so `desk-agent app create` can clone it
+# without network access during agent runs.
+COPY --from=app-template /opt/desk-template/app /opt/desk-template/app
 
 # Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first
 # start (idempotent via `cp -rn`). See runtime/sandbox-entrypoint.sh.

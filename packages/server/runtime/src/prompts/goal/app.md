@@ -46,14 +46,15 @@ Workflow for this goal:
    - One-screen calculator → no fragments needed; the single root
      component lives in `src/App.tsx`.
 
-4. **Edit, build, attach.** When iterating:
+4. **Edit, verify, attach.** When iterating:
    - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
    - Update `desk.app.json` `fragments` array whenever you add or
      remove a fragment.
-   - Run `npm run build` from the app directory — confirm zero exit
+   - Run `npm run verify` from the app directory — confirm zero exit
      before telling the user the app is ready.
-   - Use `desk-agent chat attach-artifact` once per visible update to
-     surface the `<name>.app/` directory in the chat.
+   - Use `desk-agent chat attach-artifact --chat <chatId> .chats/<chatId>/artifacts/<name>.app`
+      once per visible update to surface the app in chat as an interactive
+      iframe. Pass the **directory** path (`<name>.app`), not a file inside it.
 
 5. **Iterate, don't rewrite.** "Make it look better" or "add X" should
    patch the existing files, not regenerate the app from scratch.

@@ -13,6 +13,7 @@ import {
 } from "./layout.js";
 import {
   uploadArtifact,
+  relativeSymlinkTarget,
   uniqueDestPath,
   validateLibrarySubpath,
   type FileRef,
@@ -218,14 +219,34 @@ export async function listLibrary(
   const fileItems: FileRef[] = [];
   for (const abs of files) {
     const stat = await fs.stat(abs).catch(() => null);
-    if (!stat || !stat.isFile()) continue;
+    if (!stat) continue;
+    const name = path.basename(abs);
+    const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
+    if (!stat.isFile() && !isAppDir) continue;
+    fileItems.push({
+      path: path.relative(root, abs).split(path.sep).join("/"),
+      name,
+      mime: isAppDir ? "inode/directory" : guessMime(abs),
+      size: isAppDir ? 0 : stat.size,
+      createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: isAppDir || undefined,
+    });
+  }
+  for (const abs of appDirs) {
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat || !stat.isDirectory()) continue;
     fileItems.push({
       path: path.relative(root, abs).split(path.sep).join("/"),
       name: path.basename(abs),
-      mime: guessMime(abs),
-      size: stat.size,
+      mime: APP_DIR_MIME,
+      // Size of a directory entry isn't meaningful — the user-facing
+      // renderer should show a count of fragments or skip the size
+      // field entirely, not the byte-size of the inode.
+      size: 0,
       createdAt: stat.mtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
     });
   }
   for (const abs of appDirs) {
@@ -355,8 +376,8 @@ export async function moveLibraryEntry(
 
   // Re-point chat attachment symlinks (`.chats/{chatId}/attachments/`)
   // that targeted the moved entry. Chat pins (see pinLibraryFileToChat
-  // in files.ts) write absolute targets, so a rename leaves them
-  // dangling; this walk rewrites the link to the new absolute path.
+  // in files.ts) use relative targets so they survive the sandbox mount;
+  // this walk rewrites the link to the new target after a library rename.
   // Best-effort: any failure is swallowed so the rename itself stays
   // committed. The returned chat-id set lets the caller invalidate
   // those chats' Files-panel caches.
@@ -432,7 +453,7 @@ async function retargetChatAttachmentSymlinks(
 
       try {
         await fs.unlink(linkPath);
-        await fs.symlink(newTarget, nextLinkPath);
+        await fs.symlink(relativeSymlinkTarget(nextLinkPath, newTarget), nextLinkPath);
       } catch {
         // Leave the original (now-dangling) link in place rather than
         // failing the rename. listAttachments filters dead links out.

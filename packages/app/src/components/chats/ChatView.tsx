@@ -202,8 +202,8 @@ function ArtifactsPanel({
             {filteredChatArtifacts.map(file => {
               const isApp = isAppArtifactFile(file)
               // App directories are openable (the click target points the
-              // detail view at the app's manifest until PR-C lands the
-              // static route + iframe). Plain directories stay
+              // detail view at the app's manifest so PR-C can render the
+              // session-scoped iframe). Plain directories stay
               // non-interactive.
               const isClickable = !file.isDir || isApp
               const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
@@ -914,7 +914,14 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="max-w-2xl mx-auto px-6 py-8 space-y-6"
+          innerClassName="px-6 py-8 space-y-6"
+          messageClassName={message => {
+            if (message.content.type !== 'artifactRef') return 'max-w-2xl mx-auto'
+            return 'w-full'
+          }}
+          statusClassName="max-w-2xl mx-auto"
+          agentHeaderClassName="max-w-2xl mx-auto"
+          lastAssistantSlotClassName="w-full"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={
@@ -1090,9 +1097,8 @@ export function ChatView({
                 }}
                 onChatArtifactClick={(file) => {
                   // For a `<name>.app/` chat artifact, route the click at the
-                  // app's `desk.app.json` so the detail panel renders the
-                  // manifest. PR-C replaces this with the iframe served from
-                  // `/apps/chat/...`.
+                  // app's `desk.app.json`; ContextDetail uses AppPreview to
+                  // issue a scoped app session and render `/apps/chat/...`.
                   if (isAppArtifactFile(file)) {
                     onAttachmentClick?.({
                       path: `${file.path}/desk.app.json`,
