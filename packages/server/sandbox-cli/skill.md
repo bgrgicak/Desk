@@ -8,8 +8,8 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 You have three commands:
 - `desk-agent app create` — clone the Desk app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
-- `desk-agent chat attach-artifact` — surface a generated file as an
-  `artifactRef` card in the current chat.
+- `desk-agent chat attach-artifact` — surface a generated file **or directory**
+  as an `artifactRef` card in the current chat.
 - `desk-agent task schedule` — create or schedule Tasks board work.
 
 Reach for them when:
@@ -62,11 +62,10 @@ The runtime sets these for you. Don't echo, log, or alter them.
 
 ## desk-agent app create
 
-Clone the Desk app scaffold into a chat artifact directory so you can
-build an app for the current chat. The scaffold lives at
-`/opt/desk-template/app` inside the sandbox, with `node_modules/`
-already installed, so the new `<name>.app/` is ready for `npm run build`
-without any network access.
+Clone the Desk app scaffold into a chat artifact directory for the
+current chat. This section documents the command contract only; the app
+architecture, fragment model, and test/build workflow live in the
+`desk-app-scaffold` skill that is copied into the generated app.
 
 ```
 desk-agent app create --chat <id> [--template <path>] <name>
@@ -77,9 +76,8 @@ starting with a letter. The new directory lands at
 `~/.chats/<chatId>/artifacts/<name>.app/`. Refuses to clobber an
 existing directory at that path.
 
-After scaffolding, load the `desk-app-scaffold` skill for the development
-rules (static-only, capability bridge, fragment shape, etc.) and
-follow them.
+After scaffolding, load the `desk-app-scaffold` skill from the generated
+app before editing files.
 
 ### Examples
 
@@ -87,35 +85,38 @@ follow them.
 desk-agent app create --chat cht_abc my-todos
 ```
 
-After it returns:
-
-```
-cd ~/.chats/cht_abc/artifacts/my-todos.app
-npm run build
-desk-agent chat attach-artifact --chat cht_abc \
-    .chats/cht_abc/artifacts/my-todos.app
-```
-
 ## desk-agent chat attach-artifact
 
-Create an `artifactRef` message in the chat for an existing file. Use this after
-writing a new artifact or making a significant visible update.
+Create an `artifactRef` message in the chat for an existing file or directory.
+Use this after writing a new artifact or making a significant visible update.
 
 ```
 desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
 ```
 
-`<workspace-relative-path>` is usually a file under `.chats/<chatId>/artifacts/`.
+`<workspace-relative-path>` is the workspace-relative path to a file **or
+directory** under `.chats/<chatId>/artifacts/`.
 Strip the leading `~/`: `~/.chats/cht_abc/artifacts/report.md` becomes
 `.chats/cht_abc/artifacts/report.md`.
 
+For `.app/` directories, pass the **directory** path — not a file inside it.
+The chat will render the app inline as an interactive iframe.
+
 ### Examples
 
+Attach a file:
 ```
 desk-agent chat attach-artifact --chat cht_abc \
     .chats/cht_abc/artifacts/report.md
 ```
 
+Attach a `.app/` directory (renders as an interactive app in chat):
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    .chats/cht_abc/artifacts/my-todos.app
+```
+
+Attach with a custom display name:
 ```
 desk-agent chat attach-artifact --chat cht_abc \
     --name "Weekly report" \

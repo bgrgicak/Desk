@@ -109,7 +109,7 @@ describeIf("app goal — scaffold + build", () => {
     expect(
       probe.exitCode,
       "sandbox image is missing /opt/desk-template/app — rebuild via " +
-        "`docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .`",
+        "`docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .` from the repo root",
     ).toBe(0);
 
     // Pre-create the chat directory so the cp target exists. The host-side

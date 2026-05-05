@@ -156,6 +156,8 @@ describe("renderPromptBody", () => {
     expect(body).toContain("When you need more context, prefer sources in this order:");
     expect(body).toContain("This is a priority order, not\na requirement to load every source.");
     expect(body).toContain("Don't scan attachments, artifacts, or ~/\neagerly");
+    expect(body).toContain("If the user says they pasted, shared, or provided something earlier");
+    expect(body).toContain("checked the visible transcript context you already received");
 
     const idxChat = body.indexOf("1. The current chat conversation");
     const idxCurrentAttachment = body.indexOf("2. File attached to the current message");
@@ -175,6 +177,14 @@ describe("renderPromptBody", () => {
 
     expect(body).toContain("Ask for feedback or clarification only when a missing choice would materially");
     expect(body).toContain("Otherwise choose a reasonable\ndefault, act, and state the assumption briefly.");
+  });
+
+  it("guides Library-file fallback when attachment symlinks are broken", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("When the user names a Library file, the Library is `~/`.");
+    expect(body).toContain("try the\nLibrary file with the same basename");
+    expect(body).toContain("not missing user context");
   });
 
   it("includes timezone-known fragment when userTimezone is provided", () => {
