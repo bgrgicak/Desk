@@ -511,8 +511,9 @@ describe("static-app route + capability bridge", () => {
     // without a nonce. With strict-dynamic in the CSP those are blocked
     // unless the server rewrites the tag to carry the nonce — without
     // this the entry chunk never executes and the iframe stays blank.
+    const escapedNonce = nonce.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(idx.body).toMatch(
-      new RegExp(`<script\\s+nonce="${nonce}"\\s+type="module"\\s+src="\\./assets/index\\.js"`),
+      new RegExp(`<script\\s+nonce="${escapedNonce}"\\s+type="module"\\s+src="\\./assets/index\\.js"`),
     );
 
     // Asset responses set the same defense headers.
