@@ -1,4 +1,4 @@
-import { fileKindFrom, type FileKind } from '@/data/file-kind'
+import { fileKindFrom, isAppDirectory, type FileKind } from '@/data/file-kind'
 
 function hasSvgExtension(value: string): boolean {
   return value.toLowerCase().split(/[?#]/, 1)[0].endsWith('.svg')
@@ -16,6 +16,9 @@ export async function previewBlobFor(kind: FileKind, blob: Blob, name: string, p
 }
 
 export function previewKindFrom(name: string, path: string, mime?: string | null): FileKind {
+  const basename = path.split('/').pop() ?? ''
+  if (isAppDirectory(name) || isAppDirectory(basename)) return 'app'
+  if (mime === 'inode/directory') return 'unknown'
   if (isSvgPreview(name, path, mime)) return 'image'
   const pathKind = fileKindFrom(path, mime)
   if (pathKind === 'image') return pathKind

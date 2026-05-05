@@ -57,7 +57,7 @@ pids="$pids $typecheck_pid"
 
 (
   npm run build --workspace=@agent-desk/sandbox-cli
-  docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 packages/server
+  docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 ) &
 sandbox_pid=$!
 pids="$pids $sandbox_pid"

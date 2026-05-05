@@ -354,9 +354,11 @@ export async function attachArtifactRef(
   }
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
-  if (!stat.isFile()) {
-    throw new ValidationError(`Artifact path must point to a file: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new ValidationError(`Artifact path must point to a file or directory: ${relPath}`);
   }
+
+  const inferredMime = stat.isDirectory() ? "inode/directory" : undefined;
 
   const message = await queries.messages.insert(storage.pool, {
     id: generateId("message"),
@@ -366,7 +368,7 @@ export async function attachArtifactRef(
       type: "artifactRef",
       path: relPath,
       name: data.name?.trim() || path.basename(relPath),
-      mime: data.mime?.trim() || undefined,
+      mime: data.mime?.trim() || inferredMime,
     },
     agentId: opts?.agentId ?? chat.agentId,
     model: opts?.model ?? null,

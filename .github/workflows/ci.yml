@@ -60,12 +60,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build desk/sandbox:v1 image
-        working-directory: packages/server
         # The image bakes a baseline `agent` user at UID 2000. At runtime
         # desk-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
         # arg doesn't need tuning per-runner.
-        run: docker build -f runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        run: docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 
       - name: Export desk/sandbox:v1 image
         run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"

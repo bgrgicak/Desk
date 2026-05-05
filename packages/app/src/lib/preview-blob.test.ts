@@ -5,6 +5,22 @@ describe('previewKindFrom', () => {
   it('detects SVG images from the file path when the display name has no extension', () => {
     expect(previewKindFrom('Unicorn Riding a Plane', '.chats/1/artifacts/unicorn-plane.svg', 'text/plain')).toBe('image')
   })
+
+  it('classifies .app directory mime as app', () => {
+    expect(previewKindFrom('my-todos.app', '.chats/cht_abc/artifacts/my-todos.app', 'inode/directory')).toBe('app')
+  })
+
+  it('does not classify arbitrary directories as app previews', () => {
+    expect(previewKindFrom('assets', '.chats/cht_abc/artifacts/assets', 'inode/directory')).toBe('unknown')
+  })
+
+  it('classifies .app directory by name even without mime', () => {
+    expect(previewKindFrom('my-todos.app', '.chats/cht_abc/artifacts/my-todos.app', undefined)).toBe('app')
+  })
+
+  it('classifies .app directory by path basename even without mime', () => {
+    expect(previewKindFrom('My Todos App', '.chats/cht_abc/artifacts/my-todos.app', undefined)).toBe('app')
+  })
 })
 
 describe('previewBlobFor', () => {

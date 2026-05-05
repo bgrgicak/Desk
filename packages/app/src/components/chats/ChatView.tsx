@@ -202,7 +202,7 @@ function ArtifactsPanel({
               const isApp = isAppArtifactFile(file)
               // App directories are openable (the click target points the
               // detail view at the app's manifest so PR-C can render the
-              // same-origin static iframe). Plain directories stay
+              // session-scoped iframe). Plain directories stay
               // non-interactive.
               const isClickable = !file.isDir || isApp
               const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
@@ -1096,9 +1096,8 @@ export function ChatView({
                 }}
                 onChatArtifactClick={(file) => {
                   // For a `<name>.app/` chat artifact, route the click at the
-                  // app's `desk.app.json` so the detail panel renders the
-                  // manifest. PR-C replaces this with the iframe served from
-                  // `/apps/chat/...`.
+                  // app's `desk.app.json`; ContextDetail uses AppPreview to
+                  // issue a scoped app session and render `/apps/chat/...`.
                   if (isAppArtifactFile(file)) {
                     onAttachmentClick?.({
                       path: `${file.path}/desk.app.json`,
