@@ -34,6 +34,12 @@ type AppPreviewProps =
 
 export type AppPreviewVariant = 'detail' | 'inline'
 
+function appBasePathFromSessionUrl(rawUrl: string): string {
+  const url = new URL(rawUrl, window.location.origin)
+  const distIndex = url.pathname.indexOf('/dist')
+  return distIndex === -1 ? url.pathname.replace(/\/$/, '') : url.pathname.slice(0, distIndex)
+}
+
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
@@ -101,7 +107,13 @@ export function AppPreview(props: AppPreviewProps) {
       if (event.data.key !== session.bridgeKey) return
 
       void handleAppBridgeRequest(
-        { chatId: chatId ?? '', appName, capabilities: session.capabilities },
+        {
+          scope: props.scope,
+          chatId: chatId ?? '',
+          appName,
+          appBasePath: appBasePathFromSessionUrl(session.url),
+          capabilities: session.capabilities,
+        },
         event.data,
       )
         .then((result) => {
@@ -113,7 +125,7 @@ export function AppPreview(props: AppPreviewProps) {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [chatId, appName, session])
+  }, [props.scope, chatId, appName, session])
 
   const iframe = session ? (
         <iframe

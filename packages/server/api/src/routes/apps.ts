@@ -946,7 +946,7 @@ export async function handleStaticLibraryAppRequest(
   const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
   const cookiePath = routeWorkspaceId
     ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeURIComponent(appName)}`
-    : `/apps/library/${encodeURIComponent(appName)}/dist`;
+    : `/apps/library/${encodeURIComponent(appName)}`;
   const cookieName = libraryCookieNameFor(workspaceId!, appName);
 
   if (queryToken) {

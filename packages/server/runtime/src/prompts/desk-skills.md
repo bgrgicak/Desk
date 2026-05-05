@@ -9,5 +9,8 @@ load a Desk skill only when you need the detailed reference:
 - `desk-cli-chat-attach-artifact` — artifact attachment syntax and examples.
 - `desk-app-scaffold` — directory layout, fragment shape, build workflow,
   and rules for authoring a Desk app under the `app` goal.
+- `desk-app-storage` — how to inspect an app's own skill files and safely
+  list, read, create, update, delete, import, export, migrate, or repair
+  records in an existing Desk app's storage.
 
 Do not mention skill loading to the user.

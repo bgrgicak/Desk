@@ -25,8 +25,10 @@ export interface AppBridgeResponse {
 }
 
 export interface ChatAppBridgeContext {
+  scope: 'chat' | 'library'
   chatId: string
   appName: string
+  appBasePath?: string
   capabilities: string[]
 }
 
@@ -109,7 +111,10 @@ function storageUrl(
 ): string {
   const input = paramsObject(params)
   const collection = stringParam(input, 'collection', STORAGE_COLLECTION_PATTERN)
-  const base = `/apps/chat/${encodeURIComponent(ctx.chatId)}/${encodeURIComponent(ctx.appName)}/storage/${encodeURIComponent(collection)}`
+  const appPath = ctx.appBasePath ?? (ctx.scope === 'chat'
+    ? `/apps/chat/${encodeURIComponent(ctx.chatId)}/${encodeURIComponent(ctx.appName)}`
+    : `/apps/library/${encodeURIComponent(ctx.appName)}`)
+  const base = `${appPath}/storage/${encodeURIComponent(collection)}`
   if (!requireDocId) return base
   const id = stringParam(input, 'id', STORAGE_DOC_ID_PATTERN)
   return `${base}/${encodeURIComponent(id)}`

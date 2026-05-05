@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { GOAL_KEYS } from "@agent-desk/shared";
 import { loadAndSub, renderPromptBody } from "../src/prompt.js";
+import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
 
 describe("loadAndSub", () => {
   it("substitutes {{name}} placeholders from vars", () => {
@@ -74,6 +75,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Desk native skills");
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).toContain("desk-app-storage");
     expect(body).not.toContain("# Desk CLI");
     expect(body).not.toContain("### Cron quick reference");
     expect(body).not.toContain("NO_TOKEN");
@@ -233,6 +235,9 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, goal: "app" });
     expect(body).toContain("desk-agent app create");
     expect(body).toContain("desk-app-scaffold");
+    expect(body).toContain("getStorageClient()");
+    expect(body).toContain("storage.read");
+    expect(body).not.toContain("per-app storage API in later issues");
     expect(body).toMatch(/fragment/i);
     expect(body).not.toContain("self-contained HTML file");
   });
@@ -246,5 +251,27 @@ describe("renderPromptBody", () => {
   it("renders (none) when instructions are empty", () => {
     const body = renderPromptBody({ ...baseInput });
     expect(body).toContain("(none)");
+  });
+});
+
+describe("Desk reference skills", () => {
+  it("publishes a general app storage CRUD guide", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-storage");
+
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/CRUD/);
+    expect(skill?.body()).toContain("First, load the app's contract");
+    expect(skill?.body()).toContain(".storage/data.sqlite");
+    expect(skill?.body()).toContain("What app and fragment skills should document");
+  });
+
+  it("keeps scaffold guidance explicit about app storage contracts", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-scaffold");
+    const body = skill?.body() ?? "";
+
+    expect(body).toContain("Persistent app storage");
+    expect(body).toContain("App and fragment skills");
+    expect(body).toContain("Storage contract");
+    expect(body).toContain("getStorageClient()");
   });
 });
