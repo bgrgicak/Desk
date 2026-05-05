@@ -45,6 +45,54 @@ This directory is the template for an agent-authored Desk app. When
    embedding. Same component source, two render contexts. **Don't
    duplicate the component.**
 
+## When to split into fragments
+
+Reach for a fragment any time a piece of the app could plausibly stand
+on its own in the chat — both as a way for the agent to drop just that
+surface into a message, and as a way to author + reason about each
+part independently.
+
+Heuristics:
+
+- **One screen with no internal navigation** → no fragments. Put the
+  whole UI in `src/App.tsx`. Trivial calculators, single-form tools,
+  and "show me X" displays fit here. The example fragment can stay
+  as a placeholder while you build, but delete it before you ship.
+- **Multiple views the user navigates between** (list + detail, list +
+  add-form, dashboard with cards that drill in) → one fragment per
+  view. The full app composes them via `react-router-dom` routes;
+  the fragment-standalone build embeds the same view by itself.
+- **Surfaces with different capability profiles** (a "view" fragment
+  reads storage, an "import" fragment writes storage + library) →
+  always split. Fragments declare capabilities individually in
+  `desk.fragment.json`, and that's how the bridge can grant least
+  privilege per surface.
+
+### Concrete examples
+
+- *"todo tracker"* → fragments: `todo-list` (read), `add-todo` (write).
+  Full app shows the list with the add form below; standalone, the
+  list and the form each work as their own chat-message embed.
+- *"trip planner"* → fragments: `itinerary`, `expenses`,
+  `packing-list`. The full app is a tabbed shell over the three;
+  each fragment is shareable on its own.
+- *"daily mood log"* → fragments: `today-entry`, `history-chart`.
+- *"unit converter"* → no fragments; one `src/App.tsx` is enough.
+
+### Don't do this
+
+- **Don't build two `.app/` directories** for what's really one app
+  with two screens. The user has to install + open + reason about
+  each `.app/` individually; collapse them into one app with two
+  fragments instead.
+- **Don't duplicate component source** between `fragments/<a>/` and
+  `src/`. The fragment's `Component.tsx` is the only render of that
+  surface; the full app imports it.
+- **Don't depend on the full app from inside a fragment.** Fragments
+  must be standalone-renderable (mounted at `#root` in their own
+  `index.html`), so a fragment that imports `App.tsx` or hits a
+  full-app-only Redux store breaks the standalone embed.
+
 ## Directory layout
 
 ```
