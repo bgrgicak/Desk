@@ -5,6 +5,7 @@
 // - `src/prompts/**` → `dist/prompts/**`  (read by `prompt.ts`)
 // - `../sandbox-cli/skill.md` → `dist/sandbox-cli-skill.md`  (materialized as Desk skills)
 // - `../../app-scaffold/AGENTS.md` → `dist/app-scaffold-agents.md`  (the desk-app-scaffold skill body)
+// - `src/app-storage-skill.md` → `dist/app-storage-skill.md`  (the desk-app-storage skill body)
 //
 // Source-mode (tsx / vitest with the `@agent-desk/dev` export condition)
 // reads these files from `src/` and `../sandbox-cli/` directly; the dist
@@ -47,3 +48,8 @@ const scaffoldGuideSrc = path.resolve(runtimeRoot, "..", "..", "app-scaffold", "
 const scaffoldGuideDest = path.join(runtimeRoot, "dist", "app-scaffold-agents.md");
 fs.mkdirSync(path.dirname(scaffoldGuideDest), { recursive: true });
 fs.copyFileSync(scaffoldGuideSrc, scaffoldGuideDest);
+
+const appStorageSkillSrc = path.join(runtimeRoot, "src", "app-storage-skill.md");
+const appStorageSkillDest = path.join(runtimeRoot, "dist", "app-storage-skill.md");
+fs.mkdirSync(path.dirname(appStorageSkillDest), { recursive: true });
+fs.copyFileSync(appStorageSkillSrc, appStorageSkillDest);

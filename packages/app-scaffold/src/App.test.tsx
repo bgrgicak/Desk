@@ -1,15 +1,8 @@
-import type { ButtonHTMLAttributes } from 'react'
 import { renderToString } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import App from './App'
 import ExampleFragment from '../fragments/example/Component'
-
-vi.mock('@agent-desk/ui', () => ({
-  Button: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
-}))
 
 describe('Desk app scaffold', () => {
   it('renders the full app shell', () => {

@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run test && npm run build"
+    "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
     "@agent-desk/ui": "*",

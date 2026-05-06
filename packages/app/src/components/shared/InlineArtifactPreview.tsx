@@ -3,7 +3,7 @@ import { ExternalLink } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
-import { AppPreview } from '@/components/context/AppPreview'
+import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
 import { useGetLibraryFileQuery } from '@/store/api'
 import { fetchLibraryContent } from '@/store/library-download'
 import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
@@ -30,19 +30,23 @@ function canRenderInline(kind: FileKind): boolean {
   return kind === 'html' || kind === 'image' || kind === 'text' || kind === 'app'
 }
 
-function parseChatAppPath(path: string): { chatId: string; appName: string } | null {
-  const match = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app$/.exec(path)
-  if (!match) return null
-  return { chatId: match[1], appName: match[2] }
+export function inlineAppPreviewFor(
+  path: string,
+  name: string,
+  mime?: string | null,
+): Parameters<typeof AppPreview>[0] | null {
+  void name
+  void mime
+  return appAttachmentToPreview(path)
 }
 
 export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
-  const guessedKind = previewKindFrom(name, path, mime)
-  const chatAppRef = useMemo(
-    () => guessedKind === 'app' ? parseChatAppPath(path) : null,
-    [guessedKind, path],
+  const appPreviewRef = useMemo(
+    () => inlineAppPreviewFor(path, name, mime),
+    [path, name, mime],
   )
+  const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
   const shouldFetchFile = shouldTryPreview && guessedKind !== 'app'
   const { data: fileMeta, isError: metaError } = useGetLibraryFileQuery(
@@ -52,7 +56,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
 
   useEffect(() => {
     if (guessedKind === 'app') {
-      setState(chatAppRef ? { status: 'ready', kind: 'app' } : { status: 'fallback' })
+      setState(appPreviewRef ? { status: 'ready', kind: 'app' } : { status: 'fallback' })
       return
     }
 
@@ -99,7 +103,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, guessedKind, chatAppRef])
+  }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, guessedKind, appPreviewRef])
 
   if (state.status === 'fallback') return <>{fallback}</>
 
@@ -115,8 +119,8 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, a
 
   return (
     <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
-      {state.kind === 'app' && chatAppRef ? (
-        <AppPreview scope="chat" chatId={chatAppRef.chatId} appName={chatAppRef.appName} />
+      {state.kind === 'app' && appPreviewRef ? (
+        <AppPreview {...appPreviewRef} />
       ) : state.kind === 'html' && state.blobUrl ? (
         <iframe
           title={name}

@@ -438,6 +438,42 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     expect(capturedGoal).toBeNull();
   });
 
+  it("omits goal autodetection for the first user message when the chat already has a goal", async () => {
+    const explicitGoalChatId = await createChat("explicit initial goal");
+    await pool.query(`UPDATE chats SET goal = 'app' WHERE id = ?`, [explicitGoalChatId]);
+
+    const captured: unknown[] = [];
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog, opts) => {
+        captured.push(opts?.agentFileInput.includeGoalAutodetect);
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const firstUserMessageId = await insertChatRow({
+      targetChatId: explicitGoalChatId,
+      role: "user",
+      content: { type: "text", text: "create a trivial task list" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    const secondUserMessageId = await insertChatRow({
+      targetChatId: explicitGoalChatId,
+      role: "user",
+      content: { type: "text", text: "actually make it a document" },
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+
+    const firstTriggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: firstUserMessageId }, explicitGoalChatId);
+    await mgr.fireMessage(firstTriggerId);
+
+    const secondTriggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: secondUserMessageId }, explicitGoalChatId);
+    await mgr.fireMessage(secondTriggerId);
+
+    expect(captured).toEqual([false, true]);
+  });
+
   it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
     let captured: { goal?: unknown; chatId?: unknown } = {};
     const mgr = createRunManager({

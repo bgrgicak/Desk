@@ -29,7 +29,7 @@ describe('app bridge', () => {
 
   it('rejects storage reads when the app lacks storage.read', async () => {
     await expect(handleAppBridgeRequest(
-      { chatId: 'cht_1', appName: 'todo-app', capabilities: [] },
+      { scope: 'chat', chatId: 'cht_1', appName: 'todo-app', capabilities: [] },
       request('storage.list', { collection: 'todos' }),
     )).rejects.toThrow('Missing app capability: storage.read')
   })
@@ -42,6 +42,7 @@ describe('app bridge', () => {
 
     await expect(handleAppBridgeRequest(
       {
+        scope: 'chat',
         chatId: 'cht_123',
         appName: 'todo-app',
         capabilities: ['storage.read', 'storage.write'],
@@ -61,12 +62,52 @@ describe('app bridge', () => {
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
   })
 
+  it('routes library storage calls to library-scoped endpoints', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => (
+      new Response(JSON.stringify({ items: [] }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(handleAppBridgeRequest(
+      {
+        scope: 'library',
+        chatId: '',
+        appName: 'todo-app',
+        appBasePath: '/apps/library/wks_123/abc123/todo-app',
+        capabilities: ['storage.read'],
+      },
+      request('storage.list', { collection: 'todos' }),
+    )).resolves.toEqual([])
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/apps/library/wks_123/abc123/todo-app/storage/todos',
+      expect.objectContaining({ method: 'GET', credentials: 'include' }),
+    )
+  })
+
+  it('rejects malformed storage list responses', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => (
+      new Response(JSON.stringify({ nextCursor: null }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(handleAppBridgeRequest(
+      {
+        scope: 'chat',
+        chatId: 'cht_123',
+        appName: 'todo-app',
+        capabilities: ['storage.read'],
+      },
+      request('storage.list', { collection: 'todos' }),
+    )).rejects.toThrow('Invalid storage list response')
+  })
+
   it('rejects invalid storage paths before fetch', async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(null))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(handleAppBridgeRequest(
-      { chatId: 'cht_1', appName: 'todo-app', capabilities: ['storage.read'] },
+      { scope: 'chat', chatId: 'cht_1', appName: 'todo-app', capabilities: ['storage.read'] },
       request('storage.get', { collection: '../secrets', id: 'doc' }),
     )).rejects.toThrow('Invalid storage collection')
     expect(fetchMock).not.toHaveBeenCalled()
