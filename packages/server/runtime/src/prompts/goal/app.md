@@ -39,13 +39,22 @@ Workflow:
    or capabilities. Replace/delete the example fragment before shipping real
    work.
 
-5. Before saying the app is ready, run `npm run verify` from the app directory.
-   This is the readiness contract: it must build the app, confirm `dist/` exists
-   and is populated, and fail clearly when the app is broken. Never surface an
-   app as complete when `npm run verify` fails.
+5. Before saying the app is ready, run `npm run build` from the app directory
+   explicitly. If `npm run build` fails or appears to hang because of sandbox
+   process, worker-thread, or fork limits, retry once with a direct
+   `npx vite build` call.
 
-   Then manually test the built app in Desk's sandboxed iframe, including real
-   standalone fragment entries and storage-backed flows.
+   After any build step, confirm `dist/` was actually produced by checking
+   `ls <app-dir>/dist/`. If the directory is missing or empty, the app is not
+   ready. Never surface an app as complete until `ls dist/` shows populated
+   output; an app with no `dist/` is broken regardless of what the build command
+   reported.
+
+   Then run `npm run verify` when the sandbox environment supports test runners
+   that spawn workers or fork child processes. If verification cannot run
+   because of sandbox limits, report that explicitly instead of treating the app
+   as fully verified. Manually test the built app in Desk's sandboxed iframe,
+   including real standalone fragment entries and storage-backed flows.
 
    When writing tests for components that use storage, do not mock
    `getStorageClient()` or `window.desk.storage`. Vitest can use fabricated

@@ -35,11 +35,13 @@ Non-negotiable rules:
    `storage.write` in `desk.app.json`, and in each storage-backed fragment's
    `desk.fragment.json`.
 4. Replace or delete `fragments/example/` before shipping real work.
-5. Run `npm run verify` from the app directory. This is the readiness contract:
-   it builds the app, confirms `dist/` exists and is populated, and fails clearly
-   when the app is broken. Do not attach or call the app ready when verification
-   fails.
-6. Manually test the built app in Desk's sandboxed iframe, including each real
+5. Run `npm run build` from the app directory, then confirm `dist/` exists and
+   is populated. If build hangs or fails because of sandbox worker/fork limits,
+   retry once with `npx vite build`.
+6. Run `npm run verify` when the sandbox supports worker/fork-heavy test
+   runners. If verification cannot run because of sandbox limits, report that
+   explicitly instead of treating the app as fully verified.
+7. Manually test the built app in Desk's sandboxed iframe, including each real
    standalone fragment entry and the main user flow.
 
 Useful commands:
