@@ -24,6 +24,12 @@ export {
   workspaceJournalPath,
   workspaceRootPath,
   workspacesRoot,
+  userMemoryDir,
+  userJournalDir,
+  userJournalPath,
+  workspaceMemoryDir,
+  workspaceJournalDir,
+  workspaceJournalPath,
 } from "./layout.js";
 export {
   uploadArtifact,

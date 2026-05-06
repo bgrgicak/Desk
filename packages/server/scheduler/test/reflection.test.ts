@@ -8,7 +8,7 @@ import { generateId } from "@agent-desk/shared";
 import {
   runDailyReflection,
   runWorkspaceReflection,
-  yesterdayDateUTC,
+  yesterdayDateLocal,
   type ReflectFn,
   type WorkspaceReflectionInput,
   type UserReflectionInput,
@@ -86,10 +86,14 @@ afterAll(async () => {
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
-describe("yesterdayDateUTC", () => {
-  it("formats yesterday in UTC as YYYY-MM-DD", () => {
-    const out = yesterdayDateUTC(new Date("2026-05-06T01:00:00.000Z"));
-    expect(out).toBe("2026-05-05");
+describe("yesterdayDateLocal", () => {
+  it("formats yesterday in server local time as YYYY-MM-DD", () => {
+    // Reference: noon local on the date we expect "yesterday" to be
+    // computed from. Picking 12:00 avoids the cross-midnight DST/UTC
+    // skew the UTC implementation suffered from when the cron fired
+    // at server-local 03:00.
+    const noon = new Date(2026, 4, 6, 12, 0, 0); // 2026-05-06 12:00 local
+    expect(yesterdayDateLocal(noon)).toBe("2026-05-05");
   });
 });
 
@@ -184,6 +188,84 @@ describe("runWorkspaceReflection", () => {
       const entries = await fs.readdir(journalDir);
       expect(entries).toEqual([]);
     }
+  });
+
+  it("uses atomic write-then-rename: a concurrent user edit is never read as an empty/truncated file", async () => {
+    // P87.1 — replace fs.writeFile with rename(tmp → target). The
+    // concurrency property we care about: while reflection is mid-write,
+    // a reader of the target file should see *some* coherent body
+    // (either pre- or post-write), never a half-flushed or empty one.
+    //
+    // Strategy: race many concurrent writers against the journal target
+    // and continuously read it, asserting every observation is a
+    // complete, non-empty body. Without atomic rename, fs.writeFile
+    // truncates the file before streaming bytes back in, so the
+    // observer occasionally sees zero bytes.
+    const memoryEditPath = "concurrency-prefs.md";
+    const memoryAbs = path.join(
+      home,
+      "Desk",
+      "workspaces",
+      workspaceASlug,
+      ".memory",
+      memoryEditPath,
+    );
+    await fs.mkdir(path.dirname(memoryAbs), { recursive: true });
+    const baseline = "# Concurrency prefs\n\nbaseline body that pre-existed before the run.\n";
+    await fs.writeFile(memoryAbs, baseline, "utf-8");
+
+    const writers = Array.from({ length: 20 }, (_, i) =>
+      runWorkspaceReflection({
+        pool,
+        home,
+        date: REFLECTION_DATE,
+        workspaceId: workspaceAId,
+        workspaceSlug: workspaceASlug,
+        workspaceName: "WS A",
+        reflectWorkspace: async () => ({
+          journal: `# Journal — iteration ${i}\n`.padEnd(2048, "x"),
+          memoryEdits: [
+            { path: memoryEditPath, body: `# Concurrency prefs\n\niteration=${i}\n`.padEnd(1024, "y") },
+          ],
+        }),
+        reflectUser: async () => ({ journal: "" }),
+      }),
+    );
+
+    // While writers are racing, observe the file repeatedly. A
+    // truncated/partial read from a non-atomic write would surface as
+    // an empty string here.
+    let observations = 0;
+    let stop = false;
+    const observer = (async () => {
+      while (!stop) {
+        try {
+          const body = await fs.readFile(memoryAbs, "utf-8");
+          expect(body.length).toBeGreaterThan(0);
+          // The body should be either the baseline or one of the
+          // reflection iterations — always a coherent prefix.
+          expect(body.startsWith("# Concurrency prefs")).toBe(true);
+          observations += 1;
+        } catch (err) {
+          // ENOENT is acceptable in this race only if rename hasn't
+          // landed yet; we pre-created the file so this should never
+          // fire. Any other error is a failure.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        }
+      }
+    })();
+
+    await Promise.all(writers);
+    stop = true;
+    await observer;
+
+    expect(observations).toBeGreaterThan(0);
+
+    // Final body matches one of the reflection writes (proves the
+    // memory-edit path was actually exercised).
+    const final = await fs.readFile(memoryAbs, "utf-8");
+    expect(final).toMatch(/^# Concurrency prefs/);
+    expect(final).toMatch(/iteration=/);
   });
 
   it("rejects malformed memory-edit paths (path traversal / non-md)", async () => {

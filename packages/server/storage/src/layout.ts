@@ -259,6 +259,48 @@ export function workspaceRootPath(home: string, slug: string): string {
   return workspaceRoot(home, slug);
 }
 
+const MEMORY_DIR = ".memory";
+const JOURNAL_DIR = "journal";
+
+/** Validates a journal date stamp. Must be exactly `YYYY-MM-DD`. */
+function validateJournalDate(date: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new ValidationError(`Invalid journal date: ${date} (expected YYYY-MM-DD)`);
+  }
+}
+
+/** Absolute path to the user memory root: `~/Desk/.memory/`. */
+export function userMemoryDir(home: string): string {
+  return path.join(home, "Desk", MEMORY_DIR);
+}
+
+/** Absolute path to the user journal directory: `~/Desk/.memory/journal/`. */
+export function userJournalDir(home: string): string {
+  return path.join(userMemoryDir(home), JOURNAL_DIR);
+}
+
+/** Absolute path to a user journal entry: `~/Desk/.memory/journal/<YYYY-MM-DD>.md`. */
+export function userJournalPath(home: string, date: string): string {
+  validateJournalDate(date);
+  return path.join(userJournalDir(home), `${date}.md`);
+}
+
+/** Absolute path to a workspace memory root: `~/Desk/workspaces/<slug>/.memory/`. */
+export function workspaceMemoryDir(home: string, slug: string): string {
+  return path.join(workspaceRoot(home, slug), MEMORY_DIR);
+}
+
+/** Absolute path to the workspace journal directory. */
+export function workspaceJournalDir(home: string, slug: string): string {
+  return path.join(workspaceMemoryDir(home, slug), JOURNAL_DIR);
+}
+
+/** Absolute path to a workspace journal entry. */
+export function workspaceJournalPath(home: string, slug: string, date: string): string {
+  validateJournalDate(date);
+  return path.join(workspaceJournalDir(home, slug), `${date}.md`);
+}
+
 /**
  * Resolves a file's absolute host path from its stored (workspace-relative)
  * path. Validates against path traversal.

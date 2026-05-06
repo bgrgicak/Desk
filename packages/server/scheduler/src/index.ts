@@ -9,7 +9,7 @@ export {
   runWorkspaceReflection,
   runUserReflectionRollup,
   startDailyReflection,
-  yesterdayDateUTC,
+  yesterdayDateLocal,
 } from "./reflection.js";
 export type {
   WorkspaceReflectionInput,
