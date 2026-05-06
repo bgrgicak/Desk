@@ -147,6 +147,71 @@ describeIf("sandbox integration", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toContain("hello from sandbox");
   });
 
+  it("ships document conversion tools", async () => {
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const engine = await detectEngine();
+    const h = await engine.exec({
+      containerId: handle.containerId,
+      cmd: ["sh", "-lc", "pandoc --version >/dev/null && pdftotext -v >/dev/null && desk-agent file to-markdown --help >/dev/null"],
+    });
+    const stderr: Buffer[] = [];
+    h.stderr.on("data", (c: Buffer) => stderr.push(c));
+    const exitCode = await h.wait();
+    expect(exitCode, Buffer.concat(stderr).toString("utf8")).toBe(0);
+  });
+
+  it("converts real documents inside the sandbox", async () => {
+    await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const workspace = workspaceRootPath(home, testWorkspaceSlug);
+    await fs.writeFile(
+      path.join(workspace, "sample.html"),
+      "<!doctype html><h1>Quarterly Report</h1><p>Revenue increased.</p>",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(workspace, "sample.pdf"),
+      [
+        "%PDF-1.1",
+        "1 0 obj",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "endobj",
+        "2 0 obj",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "endobj",
+        "3 0 obj",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "endobj",
+        "4 0 obj",
+        "<< /Length 44 >>",
+        "stream",
+        "BT /F1 24 Tf 100 700 Td (Hello PDF text) Tj ET",
+        "endstream",
+        "endobj",
+        "5 0 obj",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "endobj",
+        "trailer",
+        "<< /Root 1 0 R >>",
+        "%%EOF",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const html = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["desk-agent", "file", "to-markdown", "sample.html"],
+    });
+    expect(html.exitCode, html.stderr).toBe(0);
+    expect(html.stdout).toContain("# Quarterly Report");
+    expect(html.stdout).toContain("Revenue increased.");
+
+    const pdf = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["desk-agent", "file", "to-markdown", "sample.pdf"],
+    });
+    expect(pdf.exitCode, pdf.stderr).toBe(0);
+    expect(pdf.stdout).toContain("Hello PDF text");
+  });
+
   it("forwards provider API keys from host env to the sandbox", async () => {
     // Pick a sentinel from the forwarded set that opencode recognises
     // (see PROVIDER_KEY_VARS in @agent-desk/shared).

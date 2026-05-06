@@ -29,7 +29,7 @@ FROM node:22-slim
 # Install basics. Node.js/npm are provided by the base image; installing Ubuntu's
 # npm package pulls hundreds of Debian packages and has made CI builds stall.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl xvfb \
+    ca-certificates curl pandoc poppler-utils xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install OpenCode CLI (global). `opencode` becomes available on PATH.

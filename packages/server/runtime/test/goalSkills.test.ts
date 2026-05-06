@@ -11,6 +11,7 @@ import {
 import {
   DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
   DESK_CLI_SKILL_NAME,
+  DESK_FILE_TO_MARKDOWN_SKILL_NAME,
   DESK_TASK_SCHEDULE_SKILL_NAME,
 } from "../src/skills.js";
 
@@ -18,6 +19,7 @@ const REFERENCE_SKILLS = [
   DESK_CLI_SKILL_NAME,
   DESK_TASK_SCHEDULE_SKILL_NAME,
   DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
+  DESK_FILE_TO_MARKDOWN_SKILL_NAME,
 ] as const;
 
 describe("Desk skills", () => {
@@ -65,9 +67,11 @@ describe("Desk skills", () => {
       const cli = await fs.readFile(path.join(skillsDir, DESK_CLI_SKILL_NAME, "SKILL.md"), "utf-8");
       const schedule = await fs.readFile(path.join(skillsDir, DESK_TASK_SCHEDULE_SKILL_NAME, "SKILL.md"), "utf-8");
       const attach = await fs.readFile(path.join(skillsDir, DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME, "SKILL.md"), "utf-8");
+      const convert = await fs.readFile(path.join(skillsDir, DESK_FILE_TO_MARKDOWN_SKILL_NAME, "SKILL.md"), "utf-8");
 
       expect(cli).toContain("# Desk CLI");
       expect(cli).toContain("## desk-agent chat attach-artifact");
+      expect(cli).toContain("## desk-agent file to-markdown");
       expect(cli).toContain("## desk-agent task schedule");
 
       expect(schedule).toContain("## desk-agent task schedule");
@@ -78,6 +82,11 @@ describe("Desk skills", () => {
       expect(attach).toContain("## desk-agent chat attach-artifact");
       expect(attach).toContain("desk-agent chat attach-artifact --chat <id>");
       expect(attach).not.toContain("## desk-agent task schedule");
+
+      expect(convert).toContain("## desk-agent file to-markdown");
+      expect(convert).toContain("desk-agent file to-markdown [--output <path>]");
+      expect(convert).toContain("Scanned PDFs and image-only pages");
+      expect(convert).not.toContain("## desk-agent task schedule");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

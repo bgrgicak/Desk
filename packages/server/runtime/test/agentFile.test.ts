@@ -31,6 +31,7 @@ describe("renderAgentFile", () => {
     // Desk reference manuals are native OpenCode skills, not inlined prompt text.
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("desk-cli-task-schedule");
+    expect(result).toContain("desk-cli-file-to-markdown");
     expect(result).toContain("desk-agent task schedule");
     expect(result).not.toContain("# Desk CLI");
     expect(result.indexOf("## Desk native skills")).toBeLessThan(result.indexOf("## User instructions"));

@@ -5,11 +5,13 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have three commands:
+You have four commands:
 - `desk-agent app create` — clone the Desk app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
 - `desk-agent chat attach-artifact` — surface a generated file **or directory**
   as an `artifactRef` card in the current chat.
+- `desk-agent file to-markdown` — convert PDFs, DOCX, ODT, RTF, HTML, EPUB,
+  LaTeX, and plain text files into agent-readable Markdown/text.
 - `desk-agent task schedule` — create or schedule Tasks board work.
 
 Reach for them when:
@@ -30,7 +32,12 @@ Reach for them when:
    `--at` or `--cron` re-enters the chat at fire time with your `<content>`
    as the prompt.
 
-5. **The user wants you to build an app.** Run
+5. **You need to read a document attachment that is not already text.** Run
+   `desk-agent file to-markdown "<path>"` before summarizing, extracting, or
+   transforming its contents. Use `--output <path>.md` when you need to inspect
+   or reuse the converted text across steps.
+
+6. **The user wants you to build an app.** Run
    `desk-agent app create <name> --chat <chatId>` to scaffold a new
    `<name>.app/` chat artifact, then load the `desk-app-scaffold`
    skill for the development workflow.
@@ -128,6 +135,36 @@ Attach with a custom display name:
 desk-agent chat attach-artifact --chat cht_abc \
     --name "Weekly report" \
     .chats/cht_abc/artifacts/report.md
+```
+
+## desk-agent file to-markdown
+
+Convert a document to agent-readable Markdown/text. Use this before analyzing
+uploaded office documents, PDFs, ebooks, or HTML when raw file contents are not
+directly readable.
+
+```
+desk-agent file to-markdown [--output <path>] <workspace-relative-path>
+```
+
+Supported formats:
+- `.pdf` through `pdftotext -layout`
+- `.docx`, `.odt`, `.rtf`, `.html`, `.htm`, `.epub`, `.tex`, `.rst` through `pandoc`
+- `.md`, `.markdown`, `.txt`, `.csv`, `.tsv`, `.json`, `.xml`, `.yaml`, `.yml` as already-readable text
+
+This is text extraction/conversion, not OCR. Scanned PDFs and image-only pages
+need a separate OCR workflow.
+
+### Examples
+
+Convert a PDF to stdout:
+```
+desk-agent file to-markdown Reports/Q1.pdf
+```
+
+Write a DOCX conversion to a reusable Markdown file:
+```
+desk-agent file to-markdown --output Reports/Q1.md Reports/Q1.docx
 ```
 
 ## desk-agent task schedule

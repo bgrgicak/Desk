@@ -12,6 +12,7 @@ export interface DeskSkillSpec {
 export const DESK_CLI_SKILL_NAME = "desk-cli";
 export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
 export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
+export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 
 const CLI_SKILL_FILE = {
@@ -62,6 +63,14 @@ function chatAttachArtifactReference(): string {
   ].join("\n");
 }
 
+function fileToMarkdownReference(): string {
+  return [
+    "# Desk document conversion reference",
+    "",
+    extractSection(readCliManual(), "## desk-agent file to-markdown"),
+  ].join("\n");
+}
+
 function readAppScaffoldGuide(): string {
   return readSkill(APP_SCAFFOLD_AGENTS_FILE);
 }
@@ -84,6 +93,12 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when the agent needs syntax or examples for surfacing generated artifacts in Desk chat.",
     body: chatAttachArtifactReference,
+  },
+  {
+    name: DESK_FILE_TO_MARKDOWN_SKILL_NAME,
+    description:
+      "Use when the agent needs syntax, supported formats, or examples for converting documents to Markdown/text.",
+    body: fileToMarkdownReference,
   },
   {
     name: DESK_APP_SCAFFOLD_SKILL_NAME,
