@@ -9,61 +9,45 @@
  * `dist/` URL so subsequent asset requests carry the cookie. See
  * `packages/server/api/src/routes/apps.ts`.
  */
-import { useEffect, useMemo, useState } from 'react'
-import { Check, Loader2, RotateCw } from 'lucide-react'
-import { Button } from '@agent-desk/ui'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { getSessionToken } from '@/auth/session'
+import {
+  bridgeError,
+  bridgeResponse,
+  handleAppBridgeRequest,
+  isAppBridgeRequest,
+} from '@/lib/app-bridge'
 
 interface IssuedAppSession {
   token: string
   url: string
   expiresAt: string
   cookieName: string
+  bridgeKey: string
   capabilities: string[]
 }
 
 type AppPreviewProps =
-  | {
-      scope: 'chat'
-      chatId: string
-      appName: string
-      /** Optional fragment name; renders `dist/fragments/<name>/` standalone. */
-      fragment?: string
-      variant?: AppPreviewVariant
-    }
-  | {
-      scope: 'library'
-      appName: string
-      /** Optional fragment name; renders `dist/fragments/<name>/` standalone. */
-      fragment?: string
-      variant?: AppPreviewVariant
-    }
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; variant?: AppPreviewVariant }
+  | { scope: 'library'; appName: string; fragment?: string; variant?: AppPreviewVariant }
 
-/**
- * `'detail'` renders the AppPreview inside the right-side ContextDetail
- * pane: full-height iframe with header + capability checklist below.
- *
- * `'inline'` renders a compact card sized for chat-message embedding:
- * fixed-height iframe (~280px) with a slim header, no checklist (the
- * full detail view shows it).
- */
 export type AppPreviewVariant = 'detail' | 'inline'
 
-interface AppManifest {
-  name: string
-  displayName?: string
-  description?: string
-  capabilities?: string[]
+function appBasePathFromSessionUrl(rawUrl: string): string {
+  const url = new URL(rawUrl, window.location.origin)
+  const distIndex = url.pathname.indexOf('/dist')
+  return distIndex === -1 ? url.pathname.replace(/\/$/, '') : url.pathname.slice(0, distIndex)
 }
 
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
-  const issueUrl =
+  const url =
     props.scope === 'chat'
-      ? `/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
-      : `/apps/library/${encodeURIComponent(props.appName)}/issue`
-  const res = await fetch(issueUrl, {
+      ? `/api/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
+      : `/api/apps/library/${encodeURIComponent(props.appName)}/issue`
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -76,17 +60,12 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
     throw new Error(`Issue failed (${res.status}): ${body}`)
   }
   const issued = (await res.json()) as IssuedAppSession
-  // The server's bootstrap URL targets the dist root. When we want a
-  // fragment, rewrite the URL so the iframe loads
-  // `…/dist/fragments/<fragment>/?t=<token>` instead. The bridge runs
-  // identically — the static-app route recognizes fragment entries as
-  // bridge-injection points (PR-F).
   if (props.fragment) {
     const u = new URL(issued.url, window.location.origin)
-    const t = u.searchParams.get('t') ?? ''
-    const baseDist = u.pathname.replace(/\/?$/, '/')
-    u.pathname = `${baseDist}fragments/${encodeURIComponent(props.fragment)}/`
-    u.searchParams.set('t', t)
+    const tokenParam = u.searchParams.get('t') ?? ''
+    const distRoot = u.pathname.replace(/\/?$/, '/')
+    u.pathname = `${distRoot}fragments/${encodeURIComponent(props.fragment)}/`
+    u.searchParams.set('t', tokenParam)
     issued.url = `${u.pathname}${u.search}`
   }
   return issued
@@ -100,9 +79,8 @@ export function AppPreview(props: AppPreviewProps) {
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [manifest, setManifest] = useState<AppManifest | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
-  // Issue (or re-issue) a session whenever the iframe needs to (re)load.
   useEffect(() => {
     let cancelled = false
     setSession(null)
@@ -120,140 +98,83 @@ export function AppPreview(props: AppPreviewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.scope, chatId, appName, fragment, reloadKey])
 
-  // Load the manifest for the capability checklist (independent of the
-  // iframe — the manifest is also useful to display when the iframe
-  // hasn't yet loaded).
   useEffect(() => {
-    let cancelled = false
-    const token = getSessionToken()
-    if (!token) return
-    const manifestPath =
-      props.scope === 'chat'
-        ? `.chats/${props.chatId}/artifacts/${appName}.app/desk.app.json`
-        : `${appName}.app/desk.app.json`
-    fetch(`/api/library/content?path=${encodeURIComponent(manifestPath)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (res) => {
-        if (!res.ok) return null
-        const text = await res.text()
-        try {
-          return JSON.parse(text) as AppManifest
-        } catch {
-          return null
-        }
-      })
-      .then((m) => {
-        if (!cancelled) setManifest(m)
-      })
-      .catch(() => {
-        if (!cancelled) setManifest(null)
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName, reloadKey])
+    if (!session) return
+    const onMessage = (event: MessageEvent) => {
+      const iframeWindow = iframeRef.current?.contentWindow
+      if (!iframeWindow || event.source !== iframeWindow) return
+      if (!isAppBridgeRequest(event.data)) return
+      if (event.data.key !== session.bridgeKey) return
 
-  const capabilities = useMemo(() => {
-    return manifest?.capabilities ?? session?.capabilities ?? []
-  }, [manifest, session])
+      void handleAppBridgeRequest(
+        {
+          scope: props.scope,
+          chatId: chatId ?? '',
+          appName,
+          appBasePath: appBasePathFromSessionUrl(session.url),
+          capabilities: session.capabilities,
+        },
+        event.data,
+      )
+        .then((result) => {
+          iframeWindow.postMessage(bridgeResponse(event.data.id, result), '*')
+        })
+        .catch((err) => {
+          iframeWindow.postMessage(bridgeError(event.data.id, err), '*')
+        })
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [props.scope, chatId, appName, session])
 
   const iframe = session ? (
-    <iframe
-      // The token is consumed once; reload re-issues. Each reload
-      // gets a fresh url, so key on the token to force the iframe
-      // to remount instead of navigating in place (which the
-      // browser may suppress as same-document).
-      key={session.token}
-      title={appName}
-      src={session.url}
-      sandbox="allow-scripts allow-same-origin"
-      className="w-full h-full border-0"
-    />
-  ) : error ? (
-    <div className="h-full flex items-center justify-center px-4">
-      <p className="text-sm text-destructive">Failed to load app: {error}</p>
-    </div>
-  ) : (
-    <div className="h-full flex items-center justify-center text-muted-foreground">
-      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-      <span className="text-sm">Issuing app session…</span>
-    </div>
-  )
+        <iframe
+          key={session.token}
+          ref={iframeRef}
+          title={appName}
+          src={session.url}
+          sandbox="allow-scripts"
+          className="h-full min-h-0 w-full flex-1 border-0"
+        />
+      ) : error ? (
+        <div className="h-full flex items-center justify-center px-4">
+          <p className="text-sm text-destructive">Failed to load app: {error}</p>
+        </div>
+      ) : (
+        <div className="h-full flex items-center justify-center text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+          <span className="text-sm">Issuing app session…</span>
+        </div>
+      )
 
   if (variant === 'inline') {
     return (
-      <div className="rounded-lg border overflow-hidden bg-background max-w-[480px]">
-        <div className="border-b px-3 py-2 flex items-center justify-between gap-2 text-xs">
-          <span className="font-medium truncate">
-            {manifest?.displayName ?? manifest?.name ?? appName}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
+      <div className="max-w-[480px] overflow-hidden rounded-lg border bg-background">
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
+          <span className="truncate font-medium">{fragment ? `${appName}/${fragment}` : appName}</span>
+          <button
+            type="button"
             onClick={() => setReloadKey((k) => k + 1)}
-            aria-label="Reload app"
-            className="h-6 text-xs"
+            className="text-muted-foreground hover:text-foreground"
           >
-            <RotateCw className="h-3 w-3 mr-1" />
             Reload
-          </Button>
+          </button>
         </div>
-        <div className="bg-white" style={{ height: 280 }}>
-          {iframe}
-        </div>
+        <div className="bg-white" style={{ height: 280 }}>{iframe}</div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div className="border-b px-4 py-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="font-medium">
-          {manifest?.displayName ?? manifest?.name ?? appName}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setReloadKey((k) => k + 1)}
-          aria-label="Reload app"
-          className="h-7"
-        >
-          <RotateCw className="h-3.5 w-3.5 mr-1.5" />
-          Reload
-        </Button>
-      </div>
-
-      <div className="flex-1 min-h-0 bg-white">{iframe}</div>
-
-      <div className="border-t px-4 py-3 bg-muted/30">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-          Capabilities
-        </p>
-        {capabilities.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            This app declared no capabilities.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {capabilities.map((cap) => (
-              <li key={cap} className="flex items-center gap-2 text-sm">
-                <Check className="h-3.5 w-3.5 text-muted-foreground" />
-                <code className="text-xs">{cap}</code>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      {iframe}
     </div>
   )
 }
 
 /**
- * Parses a workspace-relative path of the form
- * `.chats/<chatId>/artifacts/<name>.app/desk.app.json` and extracts the
- * `chatId` + `appName`. Returns null when the path doesn't match.
+ * Parses a workspace-relative path that targets a chat-artifact app and
+ * extracts its `chatId` + `appName`.
  */
 export function parseChatAppManifestPath(
   p: string,
@@ -291,10 +212,6 @@ export function parseLibraryAppDirPath(p: string): { appName: string } | null {
   return { appName: m[1] }
 }
 
-/**
- * Parses a workspace-relative path that points at a chat-artifact
- * `<name>.app/` directory: `.chats/<chatId>/artifacts/<name>.app`.
- */
 export function parseChatAppDirPath(
   p: string,
 ): { chatId: string; appName: string } | null {
@@ -303,12 +220,6 @@ export function parseChatAppDirPath(
   return { chatId: m[1], appName: m[2] }
 }
 
-/**
- * Parses a workspace-relative path that points at a chat-artifact
- * fragment's standalone build:
- * `.chats/<chatId>/artifacts/<name>.app/dist/fragments/<fragment>/index.html`
- * or just `…/dist/fragments/<fragment>` (directory form). Issue #47, PR-F.
- */
 export function parseChatAppFragmentPath(
   p: string,
 ): { chatId: string; appName: string; fragment: string } | null {
@@ -320,12 +231,6 @@ export function parseChatAppFragmentPath(
   return { chatId: m[1], appName: m[2], fragment: m[3] }
 }
 
-/**
- * Parses a workspace-relative path that points at a library app
- * fragment's standalone build:
- * `<sub>/<name>.app/dist/fragments/<fragment>/index.html` (or directory
- * form). Rejects chat-artifact paths. Issue #47, PR-F.
- */
 export function parseLibraryAppFragmentPath(
   p: string,
 ): { appName: string; fragment: string } | null {
@@ -338,19 +243,12 @@ export function parseLibraryAppFragmentPath(
   return { appName: m[1], fragment: m[2] }
 }
 
-/**
- * Resolves an attachment path to the AppPreview props that render it
- * inline in a chat message. Returns null when the attachment isn't an
- * app reference. Issue #47, PR-F.
- */
 export function appAttachmentToPreview(
   path: string,
 ):
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
   | { scope: 'library'; appName: string; fragment?: string }
   | null {
-  // Fragment-specific paths take priority — they're more specific than
-  // the bare-app-dir form and would otherwise match the directory regex.
   const chatFragment = parseChatAppFragmentPath(path)
   if (chatFragment) {
     return {
@@ -361,28 +259,14 @@ export function appAttachmentToPreview(
     }
   }
   const libraryFragment = parseLibraryAppFragmentPath(path)
-  if (libraryFragment) {
-    return {
-      scope: 'library',
-      appName: libraryFragment.appName,
-      fragment: libraryFragment.fragment,
-    }
-  }
+  if (libraryFragment) return { scope: 'library', ...libraryFragment }
   const chatDir = parseChatAppDirPath(path)
-  if (chatDir) {
-    return { scope: 'chat', chatId: chatDir.chatId, appName: chatDir.appName }
-  }
+  if (chatDir) return { scope: 'chat', chatId: chatDir.chatId, appName: chatDir.appName }
   const chatManifest = parseChatAppManifestPath(path)
-  if (chatManifest) {
-    return { scope: 'chat', chatId: chatManifest.chatId, appName: chatManifest.appName }
-  }
+  if (chatManifest) return { scope: 'chat', chatId: chatManifest.chatId, appName: chatManifest.appName }
   const libraryDir = parseLibraryAppDirPath(path)
-  if (libraryDir) {
-    return { scope: 'library', appName: libraryDir.appName }
-  }
+  if (libraryDir) return { scope: 'library', appName: libraryDir.appName }
   const libraryManifest = parseLibraryAppManifestPath(path)
-  if (libraryManifest) {
-    return { scope: 'library', appName: libraryManifest.appName }
-  }
+  if (libraryManifest) return { scope: 'library', appName: libraryManifest.appName }
   return null
 }

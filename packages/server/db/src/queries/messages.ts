@@ -77,6 +77,35 @@ export async function listByChat(
   return { items, nextCursor };
 }
 
+export async function listAgentContextByChat(
+  db: Pool,
+  chatId: string,
+): Promise<Message[]> {
+  const { rows } = await db.query(
+    `WITH latest_summary AS (
+       SELECT created_at, id FROM messages
+       WHERE chat_id = ?
+         AND json_extract(content, '$.type') = 'summary'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1
+     )
+     SELECT * FROM messages
+     WHERE chat_id = ?
+       AND (
+         NOT EXISTS (SELECT 1 FROM latest_summary)
+         OR created_at > (SELECT created_at FROM latest_summary)
+         OR (
+           created_at = (SELECT created_at FROM latest_summary)
+           AND id >= (SELECT id FROM latest_summary)
+         )
+       )
+      ORDER BY created_at, id
+    `,
+    [chatId, chatId],
+  );
+  return rows.map(rowToMessage);
+}
+
 export async function insert(
   db: Pool,
   data: {

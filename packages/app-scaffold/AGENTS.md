@@ -13,12 +13,13 @@ This directory is the template for an agent-authored Desk app. When
    webhooks. The only backend is the Desk API.
 
 2. **Identity comes from Desk.** Don't author your own auth. The
-   capability bridge (PR-C, issue #47) injects identity at iframe load
-   time.
+   capability bridge injects identity at iframe load time and mediates
+   privileged operations from the parent Desk app.
 
 3. **No direct persistence.** Don't write to `localStorage` or
    `IndexedDB` as a source of truth. Both are fine as caches. Real
-   persistence goes through the per-app storage API (PR-H, issue #47).
+   persistence goes through `src/storage/client.ts`, which calls
+   `window.desk.storage` over the capability bridge.
 
 4. **No backend creep.** If a feature seems to need a server, it's
    either:
@@ -26,17 +27,23 @@ This directory is the template for an agent-authored Desk app. When
    - a missing capability — flag it to the user instead of inventing
      a sidecar.
 
-5. **Same-origin.** Apps are served by `desk-server` at
+5. **Sandboxed iframe.** Apps are served by `desk-server` at
    `/apps/library/<name>/dist/*` (library apps) or
    `/apps/chat/<chatId>/<name>/dist/*` (chat artifacts). Use relative
    paths in built assets — `vite.config.ts` already sets `base: './'`.
+   Do not depend on same-origin browser APIs; the iframe runs without
+   `allow-same-origin`.
 
 6. **Components are the unit of reuse, fragments are the unit of
-   embedding.** A fragment lives in `fragments/<name>/`, owns its
-   `Component.tsx`, and exists in two places at once: the full app
-   imports it as a route, and the fragment's own `index.html` mounts
-   it standalone for chat-message embedding. Same component source,
-   two render contexts. **Don't duplicate the component.**
+   embedding.** A fragment is a focused app surface that can be embedded
+   directly in a chat message, such as a chart, form, preview, or task
+   editor. Create one when that surface is useful outside the full app
+   shell; keep ordinary subcomponents in `src/components/`. A fragment
+   lives in `fragments/<name>/`, owns its `Component.tsx`, and exists in
+   two render contexts: the full app imports it as a route, and the
+   fragment's own `index.html` mounts it standalone for chat-message
+   embedding. Same component source, two render contexts. **Don't
+   duplicate the component.**
 
 ## When to split into fragments
 
@@ -98,63 +105,72 @@ Heuristics:
     main.tsx                # full-app bootstrap
     App.tsx                 # imports fragment components, wires routes
     index.css               # Tailwind entry; @import "@agent-desk/ui/styles.css"
-    storage/client.ts       # shared Desk storage API client (PR-H stub)
+    storage/client.ts       # shared Desk storage bridge client
   fragments/
     <fragment>/
       Component.tsx         # the actual UI — the only render of the component
       main.tsx              # standalone bootstrap (mounts Component at #root)
       index.html            # standalone entry
       desk.fragment.json    # name, description, capabilities
-      skill.md              # how the agent should drive this fragment
+      skill.md              # fragment behavior + storage CRUD contract for agents
   dist/                     # produced by `npm run build`
 ```
 
 Every fragment must have `Component.tsx`, `main.tsx`, `index.html`,
 `desk.fragment.json`, and `skill.md`. Vite's multi-entry config
-discovers fragments by reading `fragments/*/index.html` so adding a
-fragment is "create the directory, run build."
+discovers fragments by reading `fragments/*/index.html`.
 
 ## Develop and build
 
 ```
 npm run typecheck    # tsc --noEmit
+npm run test         # vitest run
 npm run build        # vite build → dist/
+npm run verify       # typecheck + tests + build
 npm run dev          # local Vite dev (mainly for human verification)
 ```
 
 The sandbox image already has Node 22, npm, and an offline-installed
-`node_modules/`. Use `npm run build` to verify your changes; you don't
+`node_modules/`. Use `npm run verify` to verify your changes; you don't
 need to `npm install` unless you're adding a new dependency.
 
-## Build before responding
+## Test before responding
 
-Always run `npm run build` after editing the app and confirm it exits
-zero before telling the user the app is ready. A build failure is
-something the user should never see surface as "the app is broken in
-the iframe."
+Write or update tests for every user-visible behavior change before you
+implement the feature. Build success only proves the bundle compiles; it
+does not prove the app behaves correctly.
 
-## How to add a fragment
+Run `npm run verify` after editing the app and confirm it exits zero
+before telling the user the app is ready. A verification failure is
+something the user should never see surface as "the app is broken in the
+iframe."
 
-1. `mkdir fragments/<kebab-name>`
-2. Create `Component.tsx` — the React component, exported default.
-3. Create `main.tsx` — three-line bootstrap that mounts `Component`
-   at `#root` (copy from `fragments/example/main.tsx`).
-4. Create `index.html` — copy from `fragments/example/index.html`,
-   adjust `<title>`.
-5. Create `desk.fragment.json` — name, description, capabilities[].
-6. Create `skill.md` — describe what the fragment does and what
-   Desk-API actions drive equivalent behavior.
-7. Wire the route in `src/App.tsx` so the full-app view exposes it.
-8. Add the fragment name to `fragments` in `desk.app.json`.
-9. `npm run build` — confirm zero exit.
+Vitest runs in Node. Prefer tests around pure data transformations,
+capability/API adapters, and server-render smoke tests for app and
+fragment composition. If a browser-only interaction needs manual
+verification, still cover the state transition or validation logic with
+an automated test.
+
+## Fragment checklist
+
+When adding a fragment, copy the shape of `fragments/example/`: create
+`Component.tsx`, `main.tsx`, `index.html`, `desk.fragment.json`, and
+`skill.md`; import the component from `src/App.tsx`; and add the fragment
+name to `desk.app.json`.
+
+If the fragment reads or writes storage, its `skill.md` must document the
+agent-facing CRUD contract: collections, document shapes, ID strategy,
+allowed operations, validation rules, invariants, and at least one example
+record. Agents use that skill before doing direct imports, exports,
+migrations, or repair work against `.storage/data.sqlite`.
 
 ## How to remove the example fragment
 
 When you've written the real fragments:
 
-1. Delete `fragments/example/`.
-2. Remove the import and route from `src/App.tsx`.
-3. Remove `"example"` from `fragments` in `desk.app.json`.
+Delete `fragments/example/`, remove the import and route from
+`src/App.tsx`, remove `"example"` from `fragments` in `desk.app.json`,
+and replace the scaffold smoke tests with tests for the real app.
 
 The build won't fail with the example present, but leaving placeholder
 content in shipped apps is sloppy.
@@ -173,11 +189,112 @@ shadcn/ui or chakra/etc.
 
 ## Capability and API story
 
-Capability bridge ships in PR-C (issue #47). Until then:
+Desk apps run in a sandboxed iframe without same-origin privileges:
 
-- Don't call any Desk API from app code.
+- Don't call Desk APIs directly from app code.
 - Declare capabilities you intend to use in `desk.app.json`
-  (`capabilities: ["library.read", ...]`) so the user knows ahead of
-  PR-C what the app expects.
-- Storage methods on `src/storage/client.ts` throw — they're a
-  placeholder so the import site is stable.
+  (`capabilities: ["storage.read", "storage.write"]`) so Desk can grant
+  only the operations the app needs.
+- Use `getStorageClient()` from `src/storage/client.ts` for persistence.
+  It calls `window.desk.storage`, which is parent-mediated and capability
+  checked.
+
+## Persistent app storage
+
+Use storage for user records that must survive refreshes, app reloads,
+chat artifact promotion, or future editing sessions. The storage database
+lives inside the app directory at `.storage/data.sqlite`, so it travels
+with the `.app/` when Desk promotes or replaces the app.
+
+1. Add capabilities to `desk.app.json`:
+
+   ```json
+   {
+     "capabilities": ["storage.read", "storage.write"]
+   }
+   ```
+
+2. Import the scaffold client from app or fragment code:
+
+   ```ts
+   import { getStorageClient } from './storage/client'
+   ```
+
+   From a fragment, use the correct relative path, usually:
+
+   ```ts
+   import { getStorageClient } from '../../src/storage/client'
+   ```
+
+3. Store JSON documents in named collections:
+
+   ```ts
+   interface Todo {
+     title: string
+     done: boolean
+   }
+
+   const storage = getStorageClient()
+
+   const page = await storage.list<Todo>('todos')
+   const todo = await storage.create<Todo>('todos', { title: 'Plan trip', done: false })
+   await storage.put<Todo>('todos', todo.id, { ...todo.doc, done: true })
+   await storage.delete('todos', todo.id)
+   ```
+
+The API shape is:
+
+- `list<T>(collection): Promise<StorageDoc<T>[]>`
+- `get<T>(collection, id): Promise<StorageDoc<T> | null>`
+- `create<T>(collection, doc): Promise<StorageDoc<T>>`
+- `put<T>(collection, id, doc): Promise<StorageDoc<T>>`
+- `delete(collection, id): Promise<void>`
+
+Collection names must match `^[a-z][a-z0-9_-]{0,62}$`. Document IDs are
+created automatically by `create`; use `put` when you need a stable app-
+chosen ID. Keep documents JSON-serializable.
+
+Use `localStorage`, `sessionStorage`, or `IndexedDB` only for disposable
+UI cache. Never treat browser storage as the record of truth for user
+data.
+
+## App and fragment skills
+
+Skills are not just authoring notes; they are the operational contract for
+future agents interacting with the app. Keep them accurate when you change
+storage behavior.
+
+For each app or fragment that uses storage, include a section like:
+
+````md
+## Storage contract
+
+Capabilities: `storage.read`, `storage.write`
+
+Collections:
+- `todos`
+
+Document shape:
+```ts
+interface Todo {
+  title: string
+  done: boolean
+  createdAt: string
+}
+```
+
+IDs: generated by `storage.create`; do not choose semantic IDs.
+
+Allowed agent operations:
+- List/export todos.
+- Create todos from user-provided titles.
+- Update `done` only through explicit user request.
+- Delete only after the user asks to remove a todo.
+
+Invariants:
+- `title` is non-empty after trimming.
+- `createdAt` is an ISO timestamp.
+````
+
+If you add storage but leave this contract vague, the next agent will have
+to inspect source or SQLite directly and may corrupt the app's data model.

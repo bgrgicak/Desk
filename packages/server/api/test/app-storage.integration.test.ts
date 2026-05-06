@@ -18,6 +18,7 @@ import {
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
+  workspaceRootPath,
 } from "@agent-desk/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -35,6 +36,7 @@ let authToken: string;
 
 const RW_APP = "todo-tracker";
 const READONLY_APP = "viewer-app";
+const LIBRARY_APP = "library-store";
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-int-db-"));
@@ -85,6 +87,19 @@ beforeAll(async () => {
       "utf8",
     );
   }
+
+  const libraryAppRoot = path.join(workspaceRootPath(home, workspaceSlug), `${LIBRARY_APP}.app`);
+  await fs.mkdir(path.join(libraryAppRoot, "dist"), { recursive: true });
+  await fs.writeFile(
+    path.join(libraryAppRoot, "desk.app.json"),
+    JSON.stringify({ name: LIBRARY_APP, capabilities: ["storage.read", "storage.write"] }),
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(libraryAppRoot, "dist", "index.html"),
+    "<!doctype html><html><head></head><body></body></html>",
+    "utf8",
+  );
 
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   const runManager = createRunManager({ pool });
@@ -188,6 +203,28 @@ async function appCookie(appName: string): Promise<string> {
   const cookie = pickSetCookie(bootstrap.headers, data.cookieName);
   if (!cookie) throw new Error(`No cookie set for ${appName}`);
   return cookie;
+}
+
+async function libraryAppCookie(appName: string): Promise<{ cookie: string; setCookie: string; appBasePath: string }> {
+  const issue = await httpRaw(
+    "POST",
+    `/apps/library/${appName}/issue`,
+    { bearer: authToken },
+  );
+  expect(issue.status).toBe(201);
+  const data = issue.bodyJson as { url: string; cookieName: string };
+  const distIndex = data.url.indexOf("/dist");
+  const appBasePath = distIndex === -1 ? data.url.split("?")[0] : data.url.slice(0, distIndex);
+  const bootstrap = await httpRaw("GET", data.url);
+  expect(bootstrap.status).toBe(302);
+  const cookie = pickSetCookie(bootstrap.headers, data.cookieName);
+  if (!cookie) throw new Error(`No cookie set for ${appName}`);
+  const raw = bootstrap.headers["set-cookie"] ?? [];
+  const setCookie = (Array.isArray(raw) ? raw : [raw]).find(
+    (line): line is string => typeof line === "string" && line.startsWith(`${data.cookieName}=`),
+  );
+  if (!setCookie) throw new Error(`No Set-Cookie header for ${appName}`);
+  return { cookie, setCookie, appBasePath };
 }
 
 describe("per-app storage CRUD (PR-H)", () => {
@@ -316,6 +353,36 @@ describe("per-app storage CRUD (PR-H)", () => {
       { headers: { Cookie: cookie } },
     );
     expect(badDocId.status).toBe(400);
+
+    const extraSegment = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${RW_APP}/storage/items/doc_1/extra`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(extraSegment.status).toBe(400);
+  });
+
+  it("round-trips library app storage using the library cookie path", async () => {
+    const { cookie, setCookie, appBasePath } = await libraryAppCookie(LIBRARY_APP);
+    expect(setCookie).toContain(`Path=${appBasePath}`);
+
+    const created = await httpRaw(
+      "POST",
+      `${appBasePath}/storage/items`,
+      { headers: { Cookie: cookie }, body: { title: "library doc" } },
+    );
+    expect(created.status).toBe(201);
+    const createdDoc = created.bodyJson as { id: string; doc: { title: string } };
+    expect(createdDoc.doc.title).toBe("library doc");
+
+    const listed = await httpRaw(
+      "GET",
+      `${appBasePath}/storage/items`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(listed.status).toBe(200);
+    const list = listed.bodyJson as { items: Array<{ id: string; doc: { title: string } }> };
+    expect(list.items.map((item) => item.id)).toContain(createdDoc.id);
   });
 
   it("creates the storage SQLite file on disk inside the app directory", async () => {
@@ -481,6 +548,69 @@ describe("per-app storage CRUD (PR-H)", () => {
       { headers: { Cookie: cookie } },
     );
     expect(badLimit.status).toBe(400);
+
+    const badCursor = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${PAGE_APP}/storage/items?cursor=not-a-cursor`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(badCursor.status).toBe(400);
+  });
+
+  it("rejects symlinked storage directories instead of writing outside the app", async () => {
+    const SYMLINK_APP = "symlink-store";
+    const appRoot = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${SYMLINK_APP}.app`,
+    );
+    await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "desk.app.json"),
+      JSON.stringify({ name: SYMLINK_APP, capabilities: ["storage.read", "storage.write"] }),
+      "utf8",
+    );
+    const cookie = await appCookie(SYMLINK_APP);
+
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-escape-"));
+    await fs.symlink(outside, path.join(appRoot, ".storage"), "dir");
+
+    const create = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${SYMLINK_APP}/storage/items`,
+      { headers: { Cookie: cookie }, body: { escaped: true } },
+    );
+    expect(create.status).toBe(404);
+    await expect(fs.stat(path.join(outside, "data.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("rejects symlinked app roots instead of writing outside the workspace", async () => {
+    const SYMLINK_ROOT_APP = "symlink-root";
+    const appRoot = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${SYMLINK_ROOT_APP}.app`,
+    );
+    await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "desk.app.json"),
+      JSON.stringify({ name: SYMLINK_ROOT_APP, capabilities: ["storage.read", "storage.write"] }),
+      "utf8",
+    );
+    const cookie = await appCookie(SYMLINK_ROOT_APP);
+
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-root-escape-"));
+    await fs.rm(appRoot, { recursive: true, force: true });
+    await fs.symlink(outside, appRoot, "dir");
+
+    const create = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${SYMLINK_ROOT_APP}/storage/items`,
+      { headers: { Cookie: cookie }, body: { escaped: true } },
+    );
+    expect(create.status).toBe(404);
+    await expect(fs.stat(path.join(outside, ".storage", "data.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.rm(outside, { recursive: true, force: true });
+    await fs.rm(appRoot, { force: true });
   });
 
   it("rejects POST/PUT with no body (400) but accepts explicit null as a doc", async () => {

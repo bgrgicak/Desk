@@ -19,6 +19,16 @@ npm run test:host
 npm run test:e2e
 ```
 
+## CI layout
+
+GitHub Actions runs the independent gates in parallel:
+
+1. `Typecheck` runs `npm run typecheck`.
+2. `Vitest (host suite)` builds the sandbox CLI and `desk/sandbox:v1`, then runs the host Vitest suite.
+3. `Playwright e2e` builds `@agent-desk/api` and its Nx dependencies, installs Chromium, then runs the UI e2e suite with the fake sandbox driver.
+
+The final `Test (host suite)` job is an aggregate compatibility check that fails unless all three parallel jobs pass.
+
 ## Test tiers
 
 ### Unit tests

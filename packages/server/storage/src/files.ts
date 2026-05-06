@@ -133,13 +133,21 @@ export async function uniqueDestPath(dir: string, name: string): Promise<string>
   let i = 1;
   while (true) {
     try {
-      await fs.access(path.join(dir, candidate));
+      await fs.lstat(path.join(dir, candidate));
       candidate = `${stem}-${i}${ext}`;
       i += 1;
     } catch {
       return path.join(dir, candidate);
     }
   }
+}
+
+/**
+ * Symlinks inside the workspace must survive the sandbox mount, where the
+ * same tree appears under /home/agent instead of the host's absolute path.
+ */
+export function relativeSymlinkTarget(linkPath: string, targetAbs: string): string {
+  return path.relative(path.dirname(linkPath), targetAbs).split(path.sep).join("/") || ".";
 }
 
 /**
@@ -214,6 +222,23 @@ async function fileRefFromDisk(home: string, slug: string, relPath: string): Pro
   const abs = resolveHostPath(home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
+  // Allow `.app/` directories to be stat'd so the frontend can render them
+  // as app iframes. Other directories are still rejected.
+  if (stat.isDirectory()) {
+    const name = path.basename(abs);
+    if (!name.endsWith(".app") || name === ".app") {
+      throw new NotFoundError(`Not a file: ${relPath}`);
+    }
+    return {
+      path: relPath.split(path.sep).join("/"),
+      name,
+      mime: "inode/directory",
+      size: 0,
+      createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
+    };
+  }
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
   return {
     path: relPath.split(path.sep).join("/"),
@@ -329,16 +354,11 @@ export async function pinLibraryFileToChat(
   const targetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
   const targetStat = await fs.stat(targetAbs).catch(() => null);
   if (!targetStat) throw new NotFoundError(`File not found: ${libraryRelPath}`);
-  // PR-F: allow `<name>.app/` directories so chat-message attachments
-  // can carry library apps. Other directories still bounce — pinning a
-  // raw library folder doesn't have a clear meaning today.
   const isAppDir =
     targetStat.isDirectory() &&
     path.basename(targetAbs).endsWith(".app") &&
     path.basename(targetAbs) !== ".app";
-  if (!targetStat.isFile() && !isAppDir) {
-    throw new ValidationError(`Not a file: ${libraryRelPath}`);
-  }
+  if (!targetStat.isFile() && !isAppDir) throw new ValidationError(`Not a file: ${libraryRelPath}`);
 
   const root = workspaceRootPath(ctx.home, slug);
   const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
@@ -362,9 +382,25 @@ export async function pinLibraryFileToChat(
       ? existingTarget
       : path.resolve(attDir, existingTarget);
     if (resolvedExisting === targetAbs) {
+      const portableTarget = relativeSymlinkTarget(sameNameAbs, targetAbs);
+      if (existingTarget !== portableTarget) {
+        await fs.unlink(sameNameAbs);
+        await fs.symlink(portableTarget, sameNameAbs);
+      }
       const stat = await fs.stat(sameNameAbs).catch(() => null);
       if (stat) {
         const relPath = path.relative(root, sameNameAbs).split(path.sep).join("/");
+        if (isAppDir) {
+          return {
+            path: relPath,
+            name: desiredName,
+            mime: "application/vnd.desk.app+directory",
+            size: 0,
+            createdAt: stat.birthtime.toISOString(),
+            updatedAtMs: String(stat.mtimeMs),
+            isDir: true,
+          };
+        }
         return {
           path: relPath,
           name: desiredName,
@@ -378,7 +414,7 @@ export async function pinLibraryFileToChat(
   }
 
   const linkPath = await uniqueDestPath(attDir, desiredName);
-  await fs.symlink(targetAbs, linkPath);
+  await fs.symlink(relativeSymlinkTarget(linkPath, targetAbs), linkPath);
 
   const stat = await fs.stat(linkPath);
   const relPath = path.relative(root, linkPath).split(path.sep).join("/");
@@ -451,7 +487,7 @@ export async function saveChatAttachmentToLibrary(
   // Best-effort: leave a symlink at the old path so the chat still shows
   // the file via `listAttachments`. If the symlink can't be created the
   // save still succeeded — the chat sidebar will just lose the row.
-  await fs.symlink(destAbs, srcAbs).catch(() => {});
+  await fs.symlink(relativeSymlinkTarget(srcAbs, destAbs), srcAbs).catch(() => {});
 
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
@@ -466,8 +502,8 @@ export async function saveChatAttachmentToLibrary(
  * The source directory is renamed in place; the chat artifact is then
  * gone from `.chats/{chatId}/artifacts/`. Unlike attachments, no
  * symlink is left behind — promoted apps are intended to live in the
- * library; PR-G covers the modify-as-version flow that copies a library
- * app back into a chat for editing.
+ * library; the modify-as-version flow copies a library app back into a
+ * chat for editing.
  *
  * `artifactName` must be a basename ending in `.app`. The destination
  * defaults to the workspace root; pass `destSubpath` to land under a
@@ -556,10 +592,42 @@ export interface CopyLibraryAppResult extends FileRef {
   sourceVersion: string | null;
 }
 
+function validateLibraryAppPath(raw: string, field: string): string {
+  if (raw.includes("\\")) {
+    throw new ValidationError(`Invalid ${field}: ${raw}`);
+  }
+
+  const trimmed = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!trimmed || !trimmed.endsWith(".app") || trimmed === ".app") {
+    throw new ValidationError(`${field} must be a <name>.app path`);
+  }
+
+  const segments = trimmed.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+      throw new ValidationError(`Invalid ${field} segment: ${segment}`);
+    }
+  }
+
+  return segments.join("/");
+}
+
+function validateChatAppArtifactName(raw: string): string {
+  if (raw.includes("\\")) {
+    throw new ValidationError(`Invalid artifact name: ${raw}`);
+  }
+  if (path.basename(raw) !== raw) {
+    throw new ValidationError(`Invalid artifact name: ${raw}`);
+  }
+  if (!raw.endsWith(".app") || raw === ".app" || raw.startsWith(".")) {
+    throw new ValidationError(`Invalid app artifact name: ${raw}`);
+  }
+  return raw;
+}
+
 /**
  * Copies a library `<name>.app/` directory into a chat's artifacts dir
  * so the agent can iterate on it without touching the library copy.
- * Issue #47, PR-G.
  */
 export async function copyLibraryAppToChat(
   ctx: StorageContext,
@@ -568,7 +636,12 @@ export async function copyLibraryAppToChat(
   libraryRelPath: string,
 ): Promise<CopyLibraryAppResult> {
   const root = workspaceRootPath(ctx.home, slug);
-  const srcAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const libraryPath = validateLibraryAppPath(libraryRelPath, "library app path");
+  const srcAbs = resolveHostPath(ctx.home, slug, libraryPath);
+  const linkStat = await fs.lstat(srcAbs).catch(() => null);
+  if (linkStat?.isSymbolicLink()) {
+    throw new ValidationError(`Library app must not be a symlink: ${libraryPath}`);
+  }
   const stat = await fs.stat(srcAbs).catch(() => null);
   if (!stat) throw new NotFoundError(`Library app not found: ${libraryRelPath}`);
   if (!stat.isDirectory()) {
@@ -663,9 +736,8 @@ async function pruneAppVersionTrash(home: string): Promise<void> {
 
 /**
  * Promotes a chat-artifact `<name>.app/` back into the library, replacing
- * the prior library version of the same name. Prior copy → trash for
+ * the prior library version of the same name. Prior copy goes to trash for
  * recovery; lazy retention sweep clears entries older than 30 days.
- * Issue #47, PR-G.
  */
 export async function replaceLibraryAppFromChat(
   ctx: StorageContext,
@@ -675,35 +747,30 @@ export async function replaceLibraryAppFromChat(
   targetRelPath: string,
   opts: ReplaceLibraryAppOptions = {},
 ): Promise<FileRef> {
-  if (!artifactName.endsWith(".app") || artifactName === ".app") {
-    throw new ValidationError(
-      `replaceLibraryAppFromChat only supports <name>.app/ directories: ${artifactName}`,
-    );
-  }
-  if (!targetRelPath.endsWith(".app") || targetRelPath === ".app") {
-    throw new ValidationError(
-      `replaceLibraryAppFromChat target must be a <name>.app path: ${targetRelPath}`,
-    );
-  }
+  const appName = validateChatAppArtifactName(artifactName);
+  const targetPath = validateLibraryAppPath(targetRelPath, "target path");
   const root = workspaceRootPath(ctx.home, slug);
   const srcAbs = path.join(
     chatArtifactsDir(ctx.home, slug, chatId),
-    artifactName,
+    appName,
   );
   const srcStat = await fs.lstat(srcAbs).catch(() => null);
   if (!srcStat) {
-    throw new NotFoundError(`Chat artifact not found: ${artifactName}`);
+    throw new NotFoundError(`Chat artifact not found: ${appName}`);
+  }
+  if (srcStat.isSymbolicLink()) {
+    throw new ValidationError(`Chat artifact must not be a symlink: ${appName}`);
   }
   if (!srcStat.isDirectory()) {
-    throw new ValidationError(`Not a directory: ${artifactName}`);
+    throw new ValidationError(`Not a directory: ${appName}`);
   }
 
-  const destAbs = resolveHostPath(ctx.home, slug, targetRelPath);
+  const destAbs = resolveHostPath(ctx.home, slug, targetPath);
   const destStat = await fs.lstat(destAbs).catch(() => null);
 
   if (destStat) {
     if (!destStat.isDirectory()) {
-      throw new ValidationError(`Library target is not a directory: ${targetRelPath}`);
+      throw new ValidationError(`Library target is not a directory: ${targetPath}`);
     }
 
     if (opts.expectedSourceVersion !== undefined) {
@@ -721,7 +788,7 @@ export async function replaceLibraryAppFromChat(
     const stamp = new Date()
       .toISOString()
       .replace(/[:.]/g, "-");
-    const backupAbs = path.join(versionsRoot, `${path.basename(targetRelPath)}-${stamp}`);
+    const backupAbs = path.join(versionsRoot, `${path.basename(targetPath)}-${stamp}`);
     await fs.rename(destAbs, backupAbs);
   } else {
     await fs.mkdir(path.dirname(destAbs), { recursive: true });
@@ -754,6 +821,9 @@ export async function deleteChatApp(
   chatId: string,
   appName: string,
 ): Promise<void> {
+  if (path.basename(appName) !== appName) {
+    throw new ValidationError(`Invalid app directory name: ${appName}`);
+  }
   if (!appName.endsWith(".app") || appName === ".app") {
     throw new ValidationError(`Not an app directory: ${appName}`);
   }
@@ -772,8 +842,8 @@ export async function deleteChatApp(
 /**
  * Removes a library `<name>.app/` directory by moving it to
  * `~/Desk/.trash/.app-versions/<name>-<timestamp>/`. Recoverable via
- * the same trash bucket modify-as-version uses (PR-G's lazy sweep
- * clears entries older than 30 days). Issue #47, PR-E.
+ * the same trash bucket modify-as-version uses; its lazy sweep clears
+ * entries older than 30 days. Issue #47, PR-E.
  */
 export async function deleteLibraryApp(
   ctx: StorageContext,
@@ -781,6 +851,9 @@ export async function deleteLibraryApp(
   libraryRelPath: string,
 ): Promise<void> {
   const baseName = path.basename(libraryRelPath);
+  if (baseName !== libraryRelPath) {
+    throw new ValidationError(`Invalid app directory name: ${libraryRelPath}`);
+  }
   if (!baseName.endsWith(".app") || baseName === ".app") {
     throw new ValidationError(`Not an app directory: ${libraryRelPath}`);
   }
@@ -812,8 +885,8 @@ export async function moveFile(
   const toAbs = resolveHostPath(ctx.home, slug, toRel);
   await fs.mkdir(path.dirname(toAbs), { recursive: true });
   await fs.rename(fromAbs, toAbs);
-  // Leave a symlink at the old path pointing to the new absolute location.
-  await fs.symlink(toAbs, fromAbs).catch(() => {
+  // Leave a symlink at the old path pointing to the new location.
+  await fs.symlink(relativeSymlinkTarget(fromAbs, toAbs), fromAbs).catch(() => {
     // If the symlink can't be created (e.g. parent dir gone), swallow — the
     // move still succeeded; references to the old path will fail-fast.
   });

@@ -76,8 +76,8 @@ async function withAppDb<T>(
   ctx: AppStorageContext,
   fn: (db: DatabaseSync) => T,
 ): Promise<T> {
-  await fs.mkdir(ctx.storageDir, { recursive: true });
-  const dbPath = path.join(ctx.storageDir, "data.sqlite");
+  const storageDirReal = await ensureSafeStorageDir(ctx);
+  const dbPath = path.join(storageDirReal, "data.sqlite");
   const db = new DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA journal_mode=WAL");
@@ -119,9 +119,44 @@ const LIBRARY_COOKIE_PREFIX = "desk_libapp_";
 interface AppStorageContext {
   scope: "chat" | "library";
   storageDir: string;          // <appRoot>/.storage
+  appRootReal: string;
   capabilities: string[];
   appName: string;
   chatId: string | null;
+}
+
+async function resolveSafeAppRoot(
+  appRoot: string,
+  workspaceRoot: string,
+  appName: string,
+): Promise<string> {
+  const linkStat = await fs.lstat(appRoot).catch(() => null);
+  if (!linkStat || linkStat.isSymbolicLink() || !linkStat.isDirectory()) {
+    throw new NotFoundError(`App not found: ${appName}`);
+  }
+
+  const [appRootReal, workspaceRootReal] = await Promise.all([
+    fs.realpath(appRoot),
+    fs.realpath(workspaceRoot).catch(() => workspaceRoot),
+  ]);
+  if (!appRootReal.startsWith(workspaceRootReal + path.sep) && appRootReal !== workspaceRootReal) {
+    throw new NotFoundError(`App not found: ${appName}`);
+  }
+  return appRootReal;
+}
+
+async function ensureSafeStorageDir(ctx: AppStorageContext): Promise<string> {
+  await fs.mkdir(ctx.storageDir, { recursive: true });
+  const linkStat = await fs.lstat(ctx.storageDir).catch(() => null);
+  if (!linkStat || linkStat.isSymbolicLink() || !linkStat.isDirectory()) {
+    throw new NotFoundError(`App storage not found: ${ctx.appName}`);
+  }
+
+  const storageDirReal = await fs.realpath(ctx.storageDir);
+  if (!storageDirReal.startsWith(ctx.appRootReal + path.sep)) {
+    throw new NotFoundError(`App storage not found: ${ctx.appName}`);
+  }
+  return storageDirReal;
 }
 
 async function resolveChatStorage(
@@ -147,14 +182,17 @@ async function resolveChatStorage(
   );
   if (rows.length === 0) throw new NotFoundError(`Chat not found: ${chatId}`);
   const slug = rows[0].path;
+  const workspaceRoot = workspaceRootPath(storage.home, slug);
   const appRoot = path.join(
     chatArtifactsDir(storage.home, slug, chatId),
     `${appName}.app`,
   );
+  const appRootReal = await resolveSafeAppRoot(appRoot, workspaceRoot, appName);
   const storageDir = path.join(appRoot, ".storage");
   return {
     scope: "chat",
     storageDir,
+    appRootReal,
     capabilities: session.capabilities,
     appName,
     chatId,
@@ -166,6 +204,8 @@ async function resolveLibraryStorage(
   storage: StorageContext,
   req: IncomingMessage,
   appName: string,
+  expectedWorkspaceId?: string,
+  expectedAssetToken?: string,
 ): Promise<AppStorageContext> {
   const cookies = parseCookies(req);
   const cookieEntry = Object.entries(cookies).find(
@@ -179,6 +219,12 @@ async function resolveLibraryStorage(
   if (session.appName !== appName) {
     throw new UnauthorizedError("Token scope mismatch");
   }
+  if (expectedWorkspaceId && session.workspaceId !== expectedWorkspaceId) {
+    throw new UnauthorizedError("Token scope mismatch");
+  }
+  if (expectedAssetToken && session.tokenHash !== expectedAssetToken) {
+    throw new UnauthorizedError("Token scope mismatch");
+  }
 
   const { rows } = await pool.query<{ path: string }>(
     "SELECT path FROM workspaces WHERE id = ?",
@@ -187,10 +233,12 @@ async function resolveLibraryStorage(
   if (rows.length === 0) throw new NotFoundError("Workspace not found");
   const wsRoot = workspaceRootPath(storage.home, rows[0].path);
   const appRoot = path.join(wsRoot, `${appName}.app`);
+  const appRootReal = await resolveSafeAppRoot(appRoot, wsRoot, appName);
   const storageDir = path.join(appRoot, ".storage");
   return {
     scope: "library",
     storageDir,
+    appRootReal,
     capabilities: session.capabilities,
     appName,
     chatId: null,
@@ -438,6 +486,28 @@ function matchAppStoragePath(
       resolveCtx: () => resolveChatStorage(pool, storage, req, chatId, appName),
     };
   }
+  // /apps/library/:workspaceId/:assetToken/:appName/storage/...
+  // Mirrors the tokenized static-app URL so the HttpOnly cookie can stay
+  // path-scoped to one library app and still cover storage calls.
+  if (
+    segments.length >= 7 &&
+    segments[0] === "apps" &&
+    segments[1] === "library" &&
+    /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) &&
+    /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3])) &&
+    segments[5] === "storage"
+  ) {
+    const workspaceId = decodeURIComponent(segments[2]);
+    const assetToken = decodeURIComponent(segments[3]);
+    const appName = decodeURIComponent(segments[4]);
+    if (!APP_NAME_PATTERN.test(appName)) return null;
+    return {
+      scope: "library",
+      segmentsAfterStorage: segments.slice(6),
+      resolveCtx: () => resolveLibraryStorage(pool, storage, req, appName, workspaceId, assetToken),
+    };
+  }
+
   // /apps/library/:appName/storage/...
   if (
     segments.length >= 5 &&
@@ -472,6 +542,9 @@ export async function handleAppStorageRequest(
   if (!match) return false;
 
   const [collectionRaw, docIdRaw] = match.segmentsAfterStorage;
+  if (match.segmentsAfterStorage.length > 2) {
+    throw new ValidationError("Too many storage path segments");
+  }
   const collection = collectionRaw ? decodeURIComponent(collectionRaw) : "";
   const docId = docIdRaw ? decodeURIComponent(docIdRaw) : null;
   if (!collection) {
@@ -495,6 +568,9 @@ export async function handleAppStorageRequest(
         throw new ValidationError(`Invalid limit: ${limitParam}`);
       }
       const cursor = url.searchParams.get("cursor") ?? null;
+      if (cursor && !decodeCursor(cursor)) {
+        throw new ValidationError("Invalid cursor");
+      }
       const page = await listDocs(ctx, collection, { limit, cursor });
       sendJson(res, 200, page);
       return true;

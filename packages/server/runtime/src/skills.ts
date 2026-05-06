@@ -13,6 +13,7 @@ export const DESK_CLI_SKILL_NAME = "desk-cli";
 export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
 export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
+export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
 
 const CLI_SKILL_FILE = {
   built: "sandbox-cli-skill.md",
@@ -22,6 +23,11 @@ const CLI_SKILL_FILE = {
 const APP_SCAFFOLD_AGENTS_FILE = {
   built: "app-scaffold-agents.md",
   source: "../../../app-scaffold/AGENTS.md",
+} as const;
+
+const APP_STORAGE_SKILL_FILE = {
+  built: "app-storage-skill.md",
+  source: "app-storage-skill.md",
 } as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +72,10 @@ function readAppScaffoldGuide(): string {
   return readSkill(APP_SCAFFOLD_AGENTS_FILE);
 }
 
+function readAppStorageGuide(): string {
+  return readSkill(APP_STORAGE_SKILL_FILE);
+}
+
 export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
   {
     name: DESK_CLI_SKILL_NAME,
@@ -90,5 +100,11 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when authoring or modifying a Desk app: scaffold layout, fragments, build workflow, capability rules, and the static-only constraint.",
     body: readAppScaffoldGuide,
+  },
+  {
+    name: DESK_APP_STORAGE_SKILL_NAME,
+    description:
+      "Use when inspecting, importing, exporting, migrating, repairing, or doing CRUD against an existing Desk app's stored records.",
+    body: readAppStorageGuide,
   },
 ];

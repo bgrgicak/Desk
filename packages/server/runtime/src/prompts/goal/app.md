@@ -17,14 +17,18 @@ Workflow for this goal:
    That clones the Desk app scaffold into
    `~/.chats/<chatId>/artifacts/<name>.app/`. Don't `mkdir`, `touch`, or
    `npm init` your own structure — the scaffold ships a multi-entry
-   Vite project, a fragment template, an `AGENTS.md`, and pre-installed
-   `node_modules/` so build works without network access.
+   Vite project, a fragment template, a storage client, an `AGENTS.md`,
+   and pre-installed `node_modules/` so build works without network
+   access.
 
 2. **Load the `desk-app-scaffold` skill** for the directory layout,
    fragment shape, build commands, capability rules, and the
-   static-only constraint. Follow it. The scaffold's `AGENTS.md` is the
-   source of truth for app authoring; nothing in this prompt overrides
-   it.
+   static-only constraint. Follow it. For persistent app state, declare
+   `storage.read` / `storage.write` in `desk.app.json` and use
+   `getStorageClient()` from `src/storage/client.ts`; don't use
+   `localStorage` or `IndexedDB` as the source of truth. The scaffold's
+   `AGENTS.md` is the source of truth for app authoring; nothing in this
+   prompt overrides it.
 
 3. **Compose with fragments, don't pile up routes.** For anything more
    than a single screen — multiple views, distinct pieces the user
@@ -46,22 +50,22 @@ Workflow for this goal:
    - One-screen calculator → no fragments needed; the single root
      component lives in `src/App.tsx`.
 
-4. **Edit, build, attach.** When iterating:
+4. **Edit, verify, attach.** When iterating:
    - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
    - Update `desk.app.json` `fragments` array whenever you add or
      remove a fragment.
-   - Run `npm run build` from the app directory — confirm zero exit
+   - Run `npm run verify` from the app directory — confirm zero exit
      before telling the user the app is ready.
-   - Use `desk-agent chat attach-artifact` once per visible update to
-     surface the `<name>.app/` directory in the chat.
+   - Use `desk-agent chat attach-artifact --chat <chatId> .chats/<chatId>/artifacts/<name>.app`
+      once per visible update to surface the app in chat as an interactive
+      iframe. Pass the **directory** path (`<name>.app`), not a file inside it.
 
 5. **Iterate, don't rewrite.** "Make it look better" or "add X" should
    patch the existing files, not regenerate the app from scratch.
    Multiple `.app/` directories per chat are allowed if the user is
    clearly steering toward separate apps.
 
-Apps are static client-side bundles. They must not embed servers,
-auth, persistence-of-record, or background jobs — those land via the
-Desk capability bridge and per-app storage API in later issues. Keep
-new apps inside the static-only constraint described in the
-`desk-app-scaffold` skill.
+Apps are static client-side bundles. They must not embed servers, auth,
+or background jobs. Persistent records go through the Desk capability
+bridge and per-app storage client described in the `desk-app-scaffold`
+skill. Keep new apps inside that static-only constraint.

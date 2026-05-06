@@ -9,7 +9,7 @@ export const usage =
 export const help = `\
 desk-agent app create — clone the Desk app scaffold into a new chat-artifact
 app directory. The result is a self-contained Vite project with
-node_modules/ pre-installed, ready to \`npm run build\`.
+node_modules/ pre-installed, ready to \`npm run verify\`.
 
 Required:
   --chat <id>          The chat whose artifacts directory should host the app.
@@ -82,9 +82,14 @@ export async function run(argv: string[]): Promise<void> {
     );
   }
 
-  await fs.cp(templatePath, target, { recursive: true });
-  await substituteName(target, name);
-  await assertNoUnsubstitutedMarkers(target);
+  try {
+    await fs.cp(templatePath, target, { recursive: true });
+    await substituteName(target, name);
+    await assertNoUnsubstitutedMarkers(target);
+  } catch (err) {
+    await fs.rm(target, { recursive: true, force: true });
+    throw err;
+  }
 
   output({ name, path: target, chatId });
 }

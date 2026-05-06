@@ -46,6 +46,7 @@ import { ConversationPanel } from './ConversationPanel'
 import type { Artifact, ArtifactUpdate } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
 import { fetchLibraryContent } from '@/store/library-download'
+import { previewBlobFor } from '@/lib/preview-blob'
 
 interface ArtifactDetailProps {
   artifact: Artifact
@@ -94,7 +95,9 @@ export function ArtifactDetail({ artifact, onBack, onDelete, update, isUpdateRea
       .then(async ({ blob }) => {
         if (cancelled) return
         if (artifact.type === 'image') {
-          createdUrl = URL.createObjectURL(blob)
+          const previewBlob = await previewBlobFor('image', blob, artifact.name, artifact.id, blob.type)
+          if (cancelled) return
+          createdUrl = URL.createObjectURL(previewBlob)
           setArtifactBlobUrl(createdUrl)
         } else {
           const text = await blob.text()

@@ -171,6 +171,80 @@ export function createRunManager(opts: RunManagerOptions) {
     "Use the chat-summary format described in the agent instructions.",
   ].join("\n");
 
+  function messageTextForPrompt(message: Message): string | null {
+    const content = message.content;
+    switch (content.type) {
+      case "text":
+        return content.text;
+      case "artifactRef":
+        return `Attached artifact: ${content.name ?? content.path} (${content.path})`;
+      case "summary":
+        return content.body;
+      case "events":
+        return deriveTextFromLog(content.log) || null;
+      default:
+        return null;
+    }
+  }
+
+  function formatMessageForPrompt(message: Message): { role: string; text: string } | null {
+    const text = messageTextForPrompt(message);
+    const attachmentText = (message.attachments ?? [])
+      .map((attachment) => `${attachment.name ?? path.basename(attachment.path)} (${attachment.path})`)
+      .join(", ");
+    const body = [text, attachmentText ? `Attachments: ${attachmentText}` : ""]
+      .filter((part): part is string => Boolean(part && part.trim()))
+      .join("\n");
+    if (!body.trim()) return null;
+    const role = message.content.type === "summary"
+      ? "Summary"
+      : message.role === "user"
+        ? "User"
+        : message.role === "agent"
+          ? "Agent"
+          : "System";
+    return {
+      role,
+      text: body.trim(),
+    };
+  }
+
+  function shouldIncludeInPromptContext(message: Message): boolean {
+    const type = message.content.type;
+    if (type === "agent_turn" || type === "summary_request") return false;
+    if (message.state === "pending" || message.state === "running") return false;
+    return message.role === "user" || message.role === "agent" || type === "summary";
+  }
+
+  async function buildChatTranscriptContext(
+    currentMessage: Message,
+    currentUserMessageId?: string,
+  ): Promise<string> {
+    const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
+    const entries = items
+      .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
+      .filter(shouldIncludeInPromptContext)
+      .map(formatMessageForPrompt)
+      .filter((entry): entry is { role: string; text: string } => entry !== null);
+    return entries.map((entry) => `${entry.role}:\n${entry.text}`).join("\n\n---\n\n");
+  }
+
+  async function withChatTranscriptContext(
+    currentMessage: Message,
+    prompt: string,
+    currentUserMessageId?: string,
+  ): Promise<string> {
+    const context = await buildChatTranscriptContext(currentMessage, currentUserMessageId);
+    if (!context) return prompt;
+    return [
+      "Chat transcript context (oldest to newest; newest summary, if any, is the compaction boundary):",
+      context,
+      "",
+      "Current task:",
+      prompt,
+    ].join("\n");
+  }
+
   /**
    * Returns the prompt the agent will receive plus any workspace-relative
    * attachment paths to forward to opencode via `--file`. We don't inline
@@ -184,19 +258,21 @@ export function createRunManager(opts: RunManagerOptions) {
     // Self-firing kinds (task / summary) carry the prompt directly on the
     // message — no parent lookup needed.
     if (msg.kind === "summary") {
-      return { prompt: CHAT_SUMMARY_PROMPT };
+      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
     }
     if (msg.kind === "task") {
       const c = msg.content as { type?: string; text?: string };
       const text = c?.type === "text" && typeof c.text === "string" ? c.text : "";
       const refs = msg.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: text, attachments };
+      return { prompt: await withChatTranscriptContext(msg, text), attachments };
     }
     const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
-    if (c?.type === "text" && typeof c.text === "string") return { prompt: c.text };
+    if (c?.type === "text" && typeof c.text === "string") {
+      return { prompt: await withChatTranscriptContext(msg, c.text) };
+    }
     if (c?.type === "summary_request") {
-      return { prompt: CHAT_SUMMARY_PROMPT };
+      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
@@ -204,9 +280,10 @@ export function createRunManager(opts: RunManagerOptions) {
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: text, attachments };
+      return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
     }
-    return { prompt: JSON.stringify(msg.content) };
+    const fallback = JSON.stringify(msg.content);
+    return { prompt: await withChatTranscriptContext(msg, fallback) };
   }
 
   function outputContentTypeFor(msg: Message): "summary" | "text" {
@@ -373,7 +450,9 @@ export function createRunManager(opts: RunManagerOptions) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
         const home = resolveDeskHome();
-        const handle = await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
+        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+          ? { containerId: "fake-sandbox", workspaceId }
+          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,

@@ -17,17 +17,19 @@
  *   - The parent loads the iframe at the bootstrap URL with `?t=<token>`.
  *     The first response sets a path-scoped HttpOnly cookie and redirects
  *     to the clean URL.
- *   - Asset requests inside the iframe carry the cookie automatically.
- *     A request without the cookie (or for a different app) is 401.
+ *   - HTML entrypoints require that cookie and receive the injected bridge.
+ *     Non-HTML built assets are served as unprivileged subresources because
+ *     opaque sandbox origins do not send cookies for module-script loads.
  *
- * Same-origin serving means the iframe can `fetch('/api/...')` directly,
- * and the user's main session bearer is *not* attached. To call an API
- * from inside an app the iframe must use `window.desk.fetch(...)`, which
- * the bridge `<script>` injects and which sends the per-app token instead.
+ * The iframe is rendered without `allow-same-origin`, so generated app
+ * JavaScript gets an opaque origin and cannot read the parent SPA's
+ * sessionStorage/localStorage or act as first-party Desk code. Privileged
+ * operations go through the injected `window.desk` postMessage bridge and
+ * are mediated by the parent SPA.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { type Pool, queries } from "@agent-desk/db";
@@ -144,6 +146,10 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function bridgeKeyFor(token: string): string {
+  return createHash("sha256").update(`bridge:${token}`).digest("hex");
+}
+
 function cookieNameFor(chatId: string, appName: string): string {
   // SameSite=Strict + path scope means the per-app cookie can never be
   // sent to another app's URL space. The cookie name itself encodes the
@@ -247,11 +253,10 @@ export async function resolveChatAppDist(
   const artifactsRoot = chatArtifactsDir(storage.home, ws.slug, chatId);
   const appRoot = path.join(artifactsRoot, `${appName}.app`);
   const distDir = path.join(appRoot, "dist");
-  const wsRoot = workspaceRootPath(storage.home, ws.slug);
-  const fs = await import("node:fs/promises");
+  const wsRoot = await realpath(workspaceRootPath(storage.home, ws.slug)).catch(() => workspaceRootPath(storage.home, ws.slug));
   let real: string;
   try {
-    real = await fs.realpath(distDir);
+    real = await realpath(distDir);
   } catch {
     throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
   }
@@ -266,6 +271,7 @@ export interface IssueResult {
   expiresAt: string;
   url: string;
   cookieName: string;
+  bridgeKey: string;
   capabilities: string[];
 }
 
@@ -314,6 +320,7 @@ export async function issueAppSession(
     expiresAt: expiresAt.toISOString(),
     url,
     cookieName: cookieNameFor(chatId, appName),
+    bridgeKey: bridgeKeyFor(token),
     capabilities,
   };
 }
@@ -347,13 +354,15 @@ async function verifyAppToken(
 interface BridgeContext {
   chatId: string;
   appName: string;
+  bridgeKey: string;
   capabilities: string[];
 }
 
 /**
- * Inlines `window.desk` into the served `index.html`. The bridge exposes
- * just enough for an app to know its own identity and capabilities; later
- * PRs add postMessage-based capability calls + storage.
+  * Inlines `window.desk` into the served `index.html`. The bridge exposes
+  * identity, declared capabilities, and narrow postMessage-backed methods.
+  * The parent SPA validates the source iframe and performs privileged calls
+  * on the app's behalf; the app itself runs with an opaque sandbox origin.
  *
  * Security: the JSON payload is escaped so any `</script>` sequence inside
  * a string value (e.g. a capability the manifest tampered with) becomes
@@ -362,22 +371,39 @@ interface BridgeContext {
  * against `KNOWN_CAPABILITIES` at issue time, so this is defense in depth
  * rather than the primary gate.
  */
+/**
+ * Vite (and most bundlers) emit `<script type="module" src="...">` tags
+ * with no nonce. Our CSP uses `strict-dynamic`, which ignores `'self'`
+ * and only trusts scripts with the matching nonce (plus what those
+ * scripts dynamically import). Without this rewrite the entry bundle is
+ * blocked and the app never boots. Apply to every `<script>` that
+ * doesn't already carry a nonce — including the bridge tag would be a
+ * no-op since `injectBridge` already sets one.
+ */
+function applyScriptNonce(html: string, nonce: string): string {
+  return html.replace(
+    /<script\b(?![^>]*\bnonce=)([^>]*)>/g,
+    `<script nonce="${nonce}"$1>`,
+  );
+}
+
 function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   const payload = JSON.stringify({
     app: { name: ctx.appName },
     chatId: ctx.chatId,
+    bridgeKey: ctx.bridgeKey,
     capabilities: ctx.capabilities,
   })
     // Escape all `<` so `</script>`, `<!--`, and `<![CDATA[` inside a JSON
     // string can't break out of the surrounding `<script>` tag.
     .replace(/</g, "\\u003c");
-  // The bridge is small enough to inline. `window.desk.fetch` defaults
-  // to a no-op until PR-D / PR-H wire the postMessage channel; we ship
-  // the shape now so apps authored against the scaffold can reference
-  // it without conditional-undefined branches. The `nonce` matches the
-  // CSP we set alongside this response so the inline script runs even
-  // under a strict policy that forbids `'unsafe-inline'`.
-  const script = `<script nonce="${nonce}">(()=>{const c=${payload};window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,fetch(){throw new Error("desk.fetch is not enabled yet (issue #47)")}};})();</script>`;
+  // The bridge is small enough to inline. The bridge key lets the parent
+  // reject messages from any later iframe navigation that did not receive
+  // this injected script. `postMessage('*')` is deliberate:
+  // sandboxed iframes without `allow-same-origin` have an opaque `null`
+  // origin, so the parent authenticates messages by exact contentWindow
+  // identity instead of by Origin.
+  const script = `<script nonce="${nonce}">(()=>{const c=${payload};const t="desk.app.request";const r="desk.app.response";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};})();</script>`;
   if (html.includes("</head>")) {
     return html.replace("</head>", `${script}</head>`);
   }
@@ -406,7 +432,7 @@ function setAppCookie(
   token: string,
   cookiePath: string,
 ): void {
-  // Path-scoped + HttpOnly + SameSite=Strict means a leaked token can't
+  // App-scoped + HttpOnly + SameSite=Strict means a leaked token can't
   // be reused by JS in a different origin, can't be sent on cross-site
   // navigations, and is invisible to the iframe's own scripts. `Secure`
   // is gated on DESK_SECURE_COOKIES so dev keeps working over HTTP.
@@ -428,13 +454,14 @@ function setAppCookie(
  * Production security headers shared by every `/apps/*` response. These
  * apply to both `index.html` and asset bytes — the iframe's contents
  * never load cross-origin scripts, never get framed in another tab,
- * never sniff MIME types. Same-origin with the SPA means we *can*
- * tighten these without breaking the iframe relationship.
+  * never sniff MIME types. The iframe itself is sandboxed to an opaque
+  * origin; these headers protect both direct navigations and subresources.
  *
  * Tradeoffs:
  * - **`Content-Security-Policy`**: `'self'` for scripts + styles +
- *   images + fonts + connect lets the app load its own bundles, hit
- *   the Desk API, and embed `@agent-desk/ui` styles. Inline `<script>`
+  *   images + fonts + connect lets the app load its own bundles and
+  *   embed `@agent-desk/ui` styles. Privileged Desk calls go through the
+  *   parent postMessage bridge, not direct iframe fetches. Inline `<script>`
  *   from the bridge is gated on its sha256 hash so the CSP doesn't
  *   need `'unsafe-inline'`. Inline styles from Tailwind v4 / shadcn
  *   require `'unsafe-inline'` for now — Tailwind emits a few inline
@@ -462,8 +489,8 @@ function setSecurityHeaders(res: ServerResponse, nonce: string): void {
   // bridge runs. No inline styles from external sources; inline-style
   // 'unsafe-inline' is allowed only because Tailwind/shadcn emit a small
   // number of style blocks at build time and we don't have hashes for
-  // those yet. Connect is `'self'` so the iframe can `fetch('/api/...')`
-  // and `fetch('/apps/.../storage/...')` directly.
+  // those yet. Connect is `'self'` for app-owned assets and non-privileged
+  // same-origin calls; Desk capabilities are parent-mediated.
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
@@ -472,6 +499,7 @@ function setSecurityHeaders(res: ServerResponse, nonce: string): void {
     "font-src 'self' data:",
     "connect-src 'self'",
     "frame-ancestors 'self'",
+    "navigate-to 'self'",
     "base-uri 'self'",
     "form-action 'self'",
     "object-src 'none'",
@@ -512,16 +540,18 @@ async function serveAsset(
     "Content-Type": mimeFor(target),
     "Content-Length": String(s.size),
     "Cache-Control": "no-store",
+    // The iframe sandbox lacks `allow-same-origin`, so it has a null
+    // origin and module/CSS chunk fetches go out as CORS requests.
+    // These bytes are public-by-design (URL is unguessable; privileged
+    // calls go through the bridge), so `*` is safe and matches the
+    // null-origin requester without credentials.
+    "Access-Control-Allow-Origin": "*",
   });
   createReadStream(target).pipe(res);
 }
 
 interface IndexResponseOpts {
   distDir: string;
-  /**
-   * Subpath of the index.html to serve, relative to distDir. Empty
-   * string for the dist root; `fragments/<name>` for a fragment entry.
-   */
   subpath: string;
   bridge: BridgeContext;
   res: ServerResponse;
@@ -529,10 +559,8 @@ interface IndexResponseOpts {
 
 async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts): Promise<void> {
   const indexPath = path.join(distDir, subpath, "index.html");
-  // Defense-in-depth: ensure the resolved path is still under distDir
-  // even though `subpath` is built from validated segments upstream.
-  const real = path.normalize(indexPath);
-  if (!real.startsWith(distDir + path.sep) && real !== path.join(distDir, "index.html")) {
+  const normalized = path.normalize(indexPath);
+  if (!normalized.startsWith(distDir + path.sep) && normalized !== path.join(distDir, "index.html")) {
     throw new NotFoundError("index.html not found");
   }
   let html: string;
@@ -542,7 +570,7 @@ async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts):
     throw new NotFoundError("index.html not found");
   }
   const nonce = nonceForRequest();
-  const injected = injectBridge(html, bridge, nonce);
+  const injected = applyScriptNonce(injectBridge(html, bridge, nonce), nonce);
   const buf = Buffer.from(injected, "utf-8");
   setSecurityHeaders(res, nonce);
   res.writeHead(200, {
@@ -553,27 +581,11 @@ async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts):
   res.end(buf);
 }
 
-/**
- * Recognized HTML entry points inside an app's `dist/`:
- *   - `""` / `"index.html"`            → full-app entry
- *   - `"fragments/<name>"` / `"fragments/<name>/"` /
- *     `"fragments/<name>/index.html"` → fragment standalone entry
- *
- * Returns the subpath of the entry's directory (relative to distDir),
- * or null when the request isn't for an entry point. Fragment names
- * follow the same kebab-case rule as app names.
- */
 function matchEntryPoint(tail: string): { subpath: string } | null {
-  if (tail === "" || tail === "index.html") {
-    return { subpath: "" };
-  }
-  // `fragments/<name>` (with optional trailing slash) or
-  // `fragments/<name>/index.html`
-  const fragMatch = /^fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(tail);
-  if (fragMatch) {
-    return { subpath: `fragments/${fragMatch[1]}` };
-  }
-  return null;
+  if (tail === "" || tail === "index.html") return { subpath: "" };
+  const fragment = /^fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(tail);
+  if (!fragment) return null;
+  return { subpath: `fragments/${fragment[1]}` };
 }
 
 /**
@@ -606,6 +618,19 @@ export async function handleStaticAppRequest(
   }
 
   const tail = segments.slice(5).map((s) => decodeURIComponent(s)).join("/");
+
+  // Sandboxed iframes without `allow-same-origin` have an opaque origin.
+  // Chromium does not send same-site cookies for module-script subresource
+  // loads from that opaque origin, so built JS/CSS/image assets cannot rely
+  // on the app-session cookie. Keep HTML entrypoints authenticated and bridge-
+  // injected; serve non-HTML assets as unprivileged bytes under an unguessable
+  // chat/app URL. Privileged data still requires the parent-mediated bridge.
+  if (tail !== "" && path.extname(tail).toLowerCase() !== ".html") {
+    const { distDir } = await resolveChatAppDist(pool, storage, chatId, appName);
+    await serveAsset(distDir, tail, res);
+    return true;
+  }
+
   const cookies = parseCookies(req);
   const cookieName = cookieNameFor(chatId, appName);
   const queryToken = url.searchParams.get("t");
@@ -623,7 +648,7 @@ export async function handleStaticAppRequest(
   }
 
   const { distDir } = await resolveChatAppDist(pool, storage, chatId, appName);
-  const cookiePath = `/apps/chat/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}/dist`;
+  const cookiePath = `/apps/chat/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}`;
 
   // Bootstrap (query token present): set cookie, redirect to clean URL
   // so the address bar doesn't leak the token to copy-paste. Preserve a
@@ -649,6 +674,7 @@ export async function handleStaticAppRequest(
       bridge: {
         chatId,
         appName,
+        bridgeKey: bridgeKeyFor(cookieToken),
         capabilities: session.capabilities,
       },
       res,
@@ -724,7 +750,7 @@ export async function resolveLibraryAppDist(
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
-  const wsRoot = workspaceRootPath(storage.home, workspaceSlug);
+  const wsRoot = await realpath(workspaceRootPath(storage.home, workspaceSlug)).catch(() => workspaceRootPath(storage.home, workspaceSlug));
   const appRoot = path.join(wsRoot, `${appName}.app`);
   const distDir = path.join(appRoot, "dist");
   const fsp = await import("node:fs/promises");
@@ -773,12 +799,14 @@ export async function issueLibraryAppSession(
     expiresAt,
   });
 
-  const url = `/apps/library/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
+  const assetToken = hashToken(token);
+  const url = `/apps/library/${encodeURIComponent(ws.id)}/${encodeURIComponent(assetToken)}/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
   return {
     token,
     expiresAt: expiresAt.toISOString(),
     url,
     cookieName: libraryCookieNameFor(ws.id, appName),
+    bridgeKey: bridgeKeyFor(token),
     capabilities,
   };
 }
@@ -803,11 +831,11 @@ async function verifyLibraryAppToken(
 }
 
 /**
- * Handles `GET /apps/library/:appName/dist/...`. The library variant
- * resolves the workspace from the *cookie* (or from the bootstrap query
- * token) so the URL doesn't have to embed the workspaceId. The cookie
- * name does encode it, which means a leaked cookie still can't be
- * replayed across workspaces.
+ * Handles `GET /apps/library/:workspaceId/:assetToken/:appName/dist/...`. The
+ * asset token is in the path so sandboxed iframe subresource loads can resolve
+ * JS/CSS chunks even when Chromium omits cookies for the opaque origin.
+ * The legacy `/apps/library/:appName/dist/...` shape is still accepted for
+ * cookie/query-authenticated HTML entrypoints.
  */
 export async function handleStaticLibraryAppRequest(
   pool: Pool,
@@ -817,20 +845,49 @@ export async function handleStaticLibraryAppRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  // Expect: ["apps", "library", appName, "dist", ...rest]
-  if (
-    segments.length < 4 ||
-    segments[0] !== "apps" ||
-    segments[1] !== "library" ||
-    segments[3] !== "dist"
-  ) {
+  if (segments[0] !== "apps" || segments[1] !== "library") {
     return false;
   }
-  const appName = decodeURIComponent(segments[2]);
+
+  const hasWorkspaceAssetSegment =
+    segments.length >= 6 &&
+    /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) &&
+    /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3])) &&
+    segments[5] === "dist";
+  const hasWorkspaceSegment = segments.length >= 5 && /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) && segments[4] === "dist";
+  const legacyShape = segments.length >= 4 && segments[3] === "dist";
+  if (!hasWorkspaceAssetSegment && !hasWorkspaceSegment && !legacyShape) return false;
+
+  const routeWorkspaceId = (hasWorkspaceAssetSegment || hasWorkspaceSegment) ? decodeURIComponent(segments[2]) : null;
+  const routeAssetToken = hasWorkspaceAssetSegment ? decodeURIComponent(segments[3]) : null;
+  const appName = decodeURIComponent(segments[hasWorkspaceAssetSegment ? 4 : hasWorkspaceSegment ? 3 : 2]);
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
-  const tail = segments.slice(4).map((s) => decodeURIComponent(s)).join("/");
+  const tailStart = hasWorkspaceAssetSegment ? 6 : hasWorkspaceSegment ? 5 : 4;
+  const tail = segments.slice(tailStart).map((s) => decodeURIComponent(s)).join("/");
+
+  if (routeWorkspaceId && tail !== "" && path.extname(tail).toLowerCase() !== ".html") {
+    if (!routeAssetToken) throw new UnauthorizedError("Missing app asset token");
+    const ses = await queries.appSessions.verify(pool, routeAssetToken);
+    if (
+      !ses ||
+      ses.scope !== "library" ||
+      ses.workspaceId !== routeWorkspaceId ||
+      ses.appName !== appName
+    ) {
+      throw new UnauthorizedError("Invalid app asset token");
+    }
+    const { rows } = await pool.query<{ path: string }>(
+      "SELECT path FROM workspaces WHERE id = ?",
+      [routeWorkspaceId],
+    );
+    const workspaceSlug = rows[0]?.path;
+    if (!workspaceSlug) throw new NotFoundError("Workspace not found");
+    const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
+    await serveAsset(distDir, tail, res);
+    return true;
+  }
 
   const queryToken = url.searchParams.get("t");
   // Library cookie name embeds the workspaceId, so we can't compute the
@@ -858,7 +915,8 @@ export async function handleStaticLibraryAppRequest(
       appName: ses.appName,
       capabilities: ses.capabilities,
     };
-    workspaceId = ses.workspaceId;
+    workspaceId = routeWorkspaceId ?? ses.workspaceId;
+    if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");
   } else if (cookieToken) {
     const ses = await queries.appSessions.verify(pool, hashToken(cookieToken));
     if (!ses || ses.scope !== "library" || ses.appName !== appName) {
@@ -872,7 +930,8 @@ export async function handleStaticLibraryAppRequest(
     }
     session = await verifyLibraryAppToken(pool, cookieToken, appName, ses.workspaceId);
     if (!session) throw new UnauthorizedError("Invalid app token");
-    workspaceId = ses.workspaceId;
+    workspaceId = routeWorkspaceId ?? ses.workspaceId;
+    if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");
   } else {
     throw new UnauthorizedError("Missing app token");
   }
@@ -885,7 +944,9 @@ export async function handleStaticLibraryAppRequest(
   if (!workspaceSlug) throw new NotFoundError("Workspace not found");
 
   const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
-  const cookiePath = `/apps/library/${encodeURIComponent(appName)}/dist`;
+  const cookiePath = routeWorkspaceId
+    ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeURIComponent(appName)}`
+    : `/apps/library/${encodeURIComponent(appName)}`;
   const cookieName = libraryCookieNameFor(workspaceId!, appName);
 
   if (queryToken) {
@@ -903,13 +964,14 @@ export async function handleStaticLibraryAppRequest(
     await serveIndex({
       distDir,
       subpath: entry.subpath,
-      bridge: {
-        chatId: "",
-        appName,
-        capabilities: session.capabilities,
-      },
-      res,
-    });
+        bridge: {
+          chatId: "",
+          appName,
+          bridgeKey: bridgeKeyFor(cookieToken!),
+          capabilities: session.capabilities,
+        },
+        res,
+      });
     return true;
   }
   await serveAsset(distDir, tail, res);

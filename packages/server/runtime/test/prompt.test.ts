@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { GOAL_KEYS } from "@agent-desk/shared";
 import { loadAndSub, renderPromptBody } from "../src/prompt.js";
+import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
 
 describe("loadAndSub", () => {
   it("substitutes {{name}} placeholders from vars", () => {
@@ -74,6 +75,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Desk native skills");
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).toContain("desk-app-storage");
     expect(body).not.toContain("# Desk CLI");
     expect(body).not.toContain("### Cron quick reference");
     expect(body).not.toContain("NO_TOKEN");
@@ -109,7 +111,12 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
-    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<workspace-relative-path>"');
+    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
+    expect(body).toContain("as the last step of any turn");
+    expect(body).toContain("no exceptions for type");
+    expect(body).toContain("pass the directory path");
+    expect(body).toContain("Do not reply to the user until the attach command has been executed");
+    expect(body).toContain("If the command fails, report the error inline instead of silently skipping");
     expect(body).toContain("Quote the path.");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("chat-xyz");
@@ -117,7 +124,7 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment omits attach-artifact instruction when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("After writing a new artifact or making a significant update, run");
+    expect(body).not.toContain("Always run `desk-agent chat attach-artifact");
   });
 
   it("summary mode uses summary-only instructions and omits artifact workflow", () => {
@@ -156,6 +163,8 @@ describe("renderPromptBody", () => {
     expect(body).toContain("When you need more context, prefer sources in this order:");
     expect(body).toContain("This is a priority order, not\na requirement to load every source.");
     expect(body).toContain("Don't scan attachments, artifacts, or ~/\neagerly");
+    expect(body).toContain("If the user says they pasted, shared, or provided something earlier");
+    expect(body).toContain("checked the visible transcript context you already received");
 
     const idxChat = body.indexOf("1. The current chat conversation");
     const idxCurrentAttachment = body.indexOf("2. File attached to the current message");
@@ -175,6 +184,14 @@ describe("renderPromptBody", () => {
 
     expect(body).toContain("Ask for feedback or clarification only when a missing choice would materially");
     expect(body).toContain("Otherwise choose a reasonable\ndefault, act, and state the assumption briefly.");
+  });
+
+  it("guides Library-file fallback when attachment symlinks are broken", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("When the user names a Library file, the Library is `~/`.");
+    expect(body).toContain("try the\nLibrary file with the same basename");
+    expect(body).toContain("not missing user context");
   });
 
   it("includes timezone-known fragment when userTimezone is provided", () => {
@@ -218,6 +235,9 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, goal: "app" });
     expect(body).toContain("desk-agent app create");
     expect(body).toContain("desk-app-scaffold");
+    expect(body).toContain("getStorageClient()");
+    expect(body).toContain("storage.read");
+    expect(body).not.toContain("per-app storage API in later issues");
     expect(body).toMatch(/fragment/i);
     expect(body).not.toContain("self-contained HTML file");
   });
@@ -231,5 +251,27 @@ describe("renderPromptBody", () => {
   it("renders (none) when instructions are empty", () => {
     const body = renderPromptBody({ ...baseInput });
     expect(body).toContain("(none)");
+  });
+});
+
+describe("Desk reference skills", () => {
+  it("publishes a general app storage CRUD guide", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-storage");
+
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/CRUD/);
+    expect(skill?.body()).toContain("First, load the app's contract");
+    expect(skill?.body()).toContain(".storage/data.sqlite");
+    expect(skill?.body()).toContain("What app and fragment skills should document");
+  });
+
+  it("keeps scaffold guidance explicit about app storage contracts", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-scaffold");
+    const body = skill?.body() ?? "";
+
+    expect(body).toContain("Persistent app storage");
+    expect(body).toContain("App and fragment skills");
+    expect(body).toContain("Storage contract");
+    expect(body).toContain("getStorageClient()");
   });
 });

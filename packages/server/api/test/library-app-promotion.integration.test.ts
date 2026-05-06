@@ -9,8 +9,9 @@
  *     `isDir: true` and `mime: 'application/vnd.desk.app+directory'`;
  *   - the library walker does NOT recurse into the `.app/` directory
  *     (no node_modules / dist children leak into the listing);
- *   - `POST /apps/library/<appName>/issue` mints a session and the
- *     bootstrap URL serves the bridge-injected index.html.
+ *   - `POST /apps/library/<appName>/issue` mints a session, the bootstrap
+ *     URL serves the bridge-injected index.html, and sandbox subresources
+ *     load without cookies.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -37,6 +38,7 @@ let server: http.Server;
 let port: number;
 let home: string;
 let dbPath: string;
+let workspaceId: string;
 let workspaceSlug: string;
 let chatId: string;
 let authToken: string;
@@ -60,6 +62,7 @@ beforeAll(async () => {
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
   );
+  workspaceId = wsRows[0].id;
   workspaceSlug = wsRows[0].path;
   await ensureWorkspaceLayout(home, workspaceSlug);
 
@@ -89,7 +92,17 @@ beforeAll(async () => {
   );
   await fs.writeFile(
     path.join(appRoot, "dist", "index.html"),
-    "<!doctype html><html><head><title>App</title></head><body><div id=\"root\"></div></body></html>",
+    "<!doctype html><html><head><title>App</title></head><body><div id=\"root\"></div><script type=\"module\" src=\"./assets/index.js\"></script></body></html>",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(appRoot, "dist", "assets", "index.js"),
+    "import './chunk.js'; export const sentinel = 'LIBRARY-APP-ASSET-PROBE'",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(appRoot, "dist", "assets", "chunk.js"),
+    "export const chunkSentinel = 'LIBRARY-APP-CHUNK-PROBE'",
     "utf8",
   );
   await fs.writeFile(
@@ -271,7 +284,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     };
     expect(issued.token.startsWith("app_")).toBe(true);
     expect(issued.cookieName.startsWith("desk_libapp_")).toBe(true);
-    expect(issued.url.startsWith(`/apps/library/${APP_NAME}/dist/?t=`)).toBe(true);
+    expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}/dist/\\?t=`));
 
     const bootstrap = await httpRaw("GET", issued.url);
     expect(bootstrap.status).toBe(302);
@@ -279,16 +292,57 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     expect(cookie).toBeTruthy();
 
     const cleanPath = bootstrap.headers["location"]!;
+    const setCookie = String(bootstrap.headers["set-cookie"]?.[0] ?? "");
+    const cookiePath = /Path=([^;]+)/.exec(setCookie)?.[1] ?? "";
+    expect(String(cleanPath).startsWith(cookiePath)).toBe(true);
     const indexResp = await httpRaw("GET", cleanPath, {
       headers: { Cookie: cookie! },
     });
     expect(indexResp.status).toBe(200);
     expect(indexResp.body).toContain("window.desk");
     expect(indexResp.body).toContain(`"name":"${APP_NAME}"`);
+    expect(indexResp.body).toContain('./assets/index.js');
     // Library scope: chatId is the empty string in the bridge payload so
     // app code can branch on whether it's running standalone or in a
     // chat context.
     expect(indexResp.body).toContain('"chatId":""');
+  });
+
+  it("serves library app JS assets without cookies for opaque sandbox subresource loads", async () => {
+    const issue = await httpRaw(
+      "POST",
+      `/apps/library/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    const issued = issue.bodyJson as { url: string };
+    const bootstrap = await httpRaw("GET", issued.url);
+    const cleanPath = String(bootstrap.headers["location"]);
+    const assetRootMatch = cleanPath.match(new RegExp(`^(/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}/dist/)`));
+    expect(assetRootMatch).toBeTruthy();
+    const assetRoot = assetRootMatch![1];
+
+    const asset = await httpRaw(
+      "GET",
+      `${assetRoot}assets/index.js`,
+    );
+
+    expect(asset.status).toBe(200);
+    expect(asset.body).toContain("LIBRARY-APP-ASSET-PROBE");
+    expect(asset.headers["content-type"]).toContain("application/javascript");
+    expect(asset.headers["access-control-allow-origin"]).toBe("*");
+
+    const chunk = await httpRaw(
+      "GET",
+      `${assetRoot}assets/chunk.js`,
+    );
+    expect(chunk.status).toBe(200);
+    expect(chunk.body).toContain("LIBRARY-APP-CHUNK-PROBE");
+
+    const noAssetToken = await httpRaw(
+      "GET",
+      `/apps/library/${workspaceId}/${APP_NAME}/dist/assets/index.js`,
+    );
+    expect(noAssetToken.status).toBe(401);
   });
 
   it("rejects promotion of non-`.app` artifacts", async () => {
