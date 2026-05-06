@@ -23,7 +23,7 @@ export interface RunOptions {
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
    * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle" or
-   * "anthropic/claude-sonnet-4-6". When omitted, opencode picks its default.
+   * "opencode/gpt-5-nano". When omitted, opencode picks its default.
    */
   model?: string;
   /**

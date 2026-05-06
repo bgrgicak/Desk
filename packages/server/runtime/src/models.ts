@@ -8,14 +8,14 @@
 import { execInSandbox } from "./sandboxExec.js";
 
 export interface ModelRef {
-  /** Opencode's canonical model id, e.g. "anthropic/claude-opus-4-7". Pass this to `opencode run --model`. */
+  /** Opencode's canonical model id, e.g. "opencode/gpt-5-nano". Pass this to `opencode run --model`. */
   id: string;
   /** Provider portion of `id`, denormalised so UIs can group/filter without parsing. */
   provider: string;
 }
 
 export interface ListModelsOptions {
-  /** Restrict to a single provider, e.g. "anthropic". */
+  /** Restrict to a single provider, e.g. "opencode". */
   provider?: string;
   timeoutMs?: number;
   /** Provider API keys to inject when the sandbox is first created. */
