@@ -18,8 +18,13 @@ import {
   resolveDeskHome,
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { auditSandboxMounts, writeGoalSkillFiles } from "@agent-desk/runtime";
+import { createRunManager, startDailyReflection } from "@agent-desk/scheduler";
+import {
+  auditSandboxMounts,
+  productionReflectUser,
+  productionReflectWorkspace,
+  writeGoalSkillFiles,
+} from "@agent-desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -119,6 +124,31 @@ async function main(): Promise<void> {
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
 
+  // Memory-system Phase 5 — daily reflection cron. Fires at 03:00
+  // server-local time by default (overridable via env). Set
+  // DESK_DAILY_REFLECTION=off to disable in dev / tests so the cron
+  // doesn't surprise anyone at 3am with a real opencode call.
+  const reflectionDisabled =
+    (process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() === "off";
+  const reflectionCron =
+    !reflectionDisabled
+      ? startDailyReflection({
+          pool,
+          home: DESK_HOME,
+          cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+          reflectWorkspace: productionReflectWorkspace,
+          reflectUser: productionReflectUser,
+          onError: (err) => {
+            // eslint-disable-next-line no-console
+            console.error("daily reflection job failed:", err);
+          },
+        })
+      : null;
+  if (reflectionDisabled) {
+    // eslint-disable-next-line no-console
+    console.log("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
+  }
+
   const server = createApp({
     pool,
     storage: { pool, home: DESK_HOME },
@@ -149,6 +179,7 @@ async function main(): Promise<void> {
     console.log(`received ${signal}, shutting down`);
     clearInterval(pollTimer);
     clearInterval(retentionTimer);
+    if (reflectionCron) reflectionCron.stop();
     clearConnections();
     server.close();
     await pool.end();
