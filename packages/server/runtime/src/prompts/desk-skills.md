@@ -21,6 +21,12 @@ records for an existing `.app/`, load `desk-app-storage` before touching
 contract; if the request names a collection such as `habits`, prefer the
 matching fragment skill over the first skill file returned by search.
 
+Show the smallest useful scope. When the user asks to see, open, inspect, or
+work on a named fragment, component, file, or storage record, show that target
+inline and do not attach the full `.app/` unless you changed and rebuilt the
+app for the user to load or test. Attach a full app only for deliverable app
+updates, not for read-only exploration or storage-only operations.
+
 The sandbox has Firefox, Playwright, Xvfb, the `playwright` MCP server,
 `pandoc`, `pdftotext`, `jq`, `git`, Python 3/pip, and ImageMagick
 (`convert`, `identify`) pre-wired.
