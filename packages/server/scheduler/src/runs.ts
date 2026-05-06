@@ -286,6 +286,36 @@ export function createRunManager(opts: RunManagerOptions) {
     return { prompt: await withChatTranscriptContext(msg, fallback) };
   }
 
+  function currentUserMessageIdForGoalAutodetectGate(msg: Message): string | null {
+    const c = msg.content as { type?: string; userMessageId?: string };
+    if (c?.type === "agent_turn" && typeof c.userMessageId === "string") return c.userMessageId;
+    return msg.role === "user" ? msg.id : null;
+  }
+
+  async function isFirstUserMessageInChat(chatId: string, userMessageId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT 1
+       FROM messages m
+       WHERE m.id = ?
+         AND m.chat_id = ?
+         AND m.role = 'user'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM messages prior
+           WHERE prior.chat_id = m.chat_id
+             AND prior.role = 'user'
+             AND prior.id <> m.id
+             AND (
+               prior.created_at < m.created_at
+               OR (prior.created_at = m.created_at AND prior.id < m.id)
+             )
+         )
+       LIMIT 1`,
+      [userMessageId, chatId],
+    );
+    return rows.length > 0;
+  }
+
   function outputContentTypeFor(msg: Message): "summary" | "text" {
     if (msg.kind === "summary") return "summary";
     const c = msg.content as { type?: string };
@@ -433,6 +463,10 @@ export function createRunManager(opts: RunManagerOptions) {
         );
       }
       const agent = await queries.agents.findById(pool, agentId);
+      const userMessageIdForGoalGate = currentUserMessageIdForGoalAutodetectGate(msg);
+      const includeGoalAutodetect = chatGoal && userMessageIdForGoalGate
+        ? !(await isFirstUserMessageInChat(msg.chatId, userMessageIdForGoalGate))
+        : true;
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
@@ -442,6 +476,7 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
         chatId: msg.chatId,
         goal: chatGoal,
+        includeGoalAutodetect,
         runMode: outputKind === "summary" ? "summary" : "chat",
       };
 

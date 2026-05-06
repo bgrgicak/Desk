@@ -97,6 +97,13 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## User's goal: build a site");
   });
 
+  it("can omit goal autodetection while keeping the persisted goal section", () => {
+    const body = renderPromptBody({ ...baseInput, goal: "app", includeGoalAutodetect: false });
+    expect(body).not.toContain("## Goal autodetection");
+    expect(body).not.toContain("desk-goal-<goal>");
+    expect(body).toContain("## User's goal: build an app");
+  });
+
   it("artifacts fragment includes the chat paths when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
     expect(body).toContain("Chat artifacts:   ~/.chats/chat-abc/artifacts/");
