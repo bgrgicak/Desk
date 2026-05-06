@@ -30,8 +30,8 @@ interface IssuedAppSession {
 }
 
 type AppPreviewProps =
-  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; variant?: AppPreviewVariant }
-  | { scope: 'library'; appName: string; fragment?: string; variant?: AppPreviewVariant }
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
+  | { scope: 'library'; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
 
 export type AppPreviewVariant = 'detail' | 'inline'
 
@@ -67,6 +67,14 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
     const distRoot = u.pathname.replace(/\/?$/, '/')
     u.pathname = `${distRoot}fragments/${encodeURIComponent(props.fragment)}/`
     u.searchParams.set('t', tokenParam)
+    // Memory-system P4.7 — forward concrete fragment params as query
+    // string so the fragment can read them via window.location.search.
+    if (props.params) {
+      for (const [k, v] of Object.entries(props.params)) {
+        if (k === 't') continue
+        u.searchParams.set(k, v)
+      }
+    }
     issued.url = `${u.pathname}${u.search}`
   }
   return issued

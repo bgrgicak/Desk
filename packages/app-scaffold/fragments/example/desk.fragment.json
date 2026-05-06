@@ -1,5 +1,6 @@
 {
   "name": "example",
-  "description": "Placeholder fragment — replace with the real UI.",
-  "capabilities": []
+  "description": "Placeholder fragment — replace with the real UI and update this description so the discovery tool surfaces it for the right user requests.",
+  "capabilities": [],
+  "params": {}
 }

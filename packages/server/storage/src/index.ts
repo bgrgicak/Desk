@@ -62,3 +62,11 @@ export {
 } from "./summaryHistory.js";
 export type { SummaryVersion } from "./summaryHistory.js";
 export { enforceLogRetention } from "./logRetention.js";
+export {
+  indexLibraryFile,
+  indexAppManifest,
+  indexFragmentManifest,
+  unindexLibraryPath,
+  backfillWorkspaceLibrary,
+} from "./libraryIndexer.js";
+export type { LibraryKind } from "./libraryIndexer.js";

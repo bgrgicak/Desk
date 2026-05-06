@@ -566,6 +566,52 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Memory-system P4.6 — discovery for the in-sandbox agent.
+    // Returns matching apps / fragments / notes / docs by free-text or
+    // recency. Same auth + workspace-scope rules as the search endpoint.
+    if (path === "/sandbox/find/artifacts" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params2 = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params2.get("q") ?? params2.get("query") ?? "";
+      const kindParam = params2.get("kind") ?? "any";
+      const workspaceParam = params2.get("workspace") ?? undefined;
+      const limitParam = Number.parseInt(params2.get("limit") ?? "25", 10);
+
+      let workspaceSlug: string | undefined;
+      if (workspaceParam === "*") {
+        workspaceSlug = "*";
+      } else if (workspaceParam) {
+        workspaceSlug = workspaceParam;
+      } else if (session.workspaceId) {
+        const ws = await queries.workspaces.findById(pool, session.workspaceId);
+        workspaceSlug = ws?.path;
+      }
+
+      const ownedSlugs = workspaceSlug === "*"
+        ? (await queries.workspaces.listByUser(pool, agent.userId)).map((w) => w.path)
+        : null;
+
+      let hits = await queries.findArtifacts.findArtifacts(pool, {
+        query: q || undefined,
+        kind:
+          kindParam === "app" || kindParam === "fragment" ||
+          kindParam === "note" || kindParam === "doc"
+            ? kindParam
+            : "any",
+        workspaceSlug: workspaceSlug === "*" ? undefined : workspaceSlug,
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+      if (ownedSlugs !== null) {
+        const allowed = new Set(ownedSlugs);
+        hits = hits.filter((h) => allowed.has(h.workspaceSlug));
+      }
+
+      sendJson(res, 200, { hits });
+      return;
+    }
+
     // Memory-system P3.5 — full-text search for the in-sandbox agent.
     // Authed via X-Desk-Sandbox-Token. Workspace scope defaults to the
     // session's workspace; `workspace=*` widens to every workspace owned

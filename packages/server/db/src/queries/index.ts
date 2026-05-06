@@ -1,3 +1,4 @@
+export * as findArtifacts from "./findArtifacts.js";
 export * as search from "./search.js";
 export * as users from "./users.js";
 export * as agents from "./agents.js";

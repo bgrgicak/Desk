@@ -169,6 +169,34 @@ desk-agent chat search-messages --query "deploy notes" --kind summary
 desk-agent chat search-messages --query "passwords" --workspace "*"
 ```
 
+## desk-agent find artifacts
+
+Discover apps, fragments, notes, and docs in the user's library by
+free-text match or recency. Use BEFORE building something new — if a
+fragment already does the task, embed it inline instead of writing a
+one-shot HTML page.
+
+```
+desk-agent find artifacts [--query <text>] [--kind app|fragment|note|doc|any]
+                          [--workspace <slug>|*] [--limit N]
+```
+
+`--kind` defaults to `any`. `--workspace` defaults to the current
+workspace; pass `"*"` for cross-workspace. When `--query` is omitted
+the result is the most-recently-modified artifacts in scope.
+
+The response is a JSON object `{hits: [...]}`. Each hit has `kind`,
+`path` (workspace-relative), `name`, `description`, `workspaceSlug`,
+`lastModified`, and a relevance `score`.
+
+### Examples
+
+```
+desk-agent find artifacts --query "note editor" --kind fragment
+desk-agent find artifacts --query "todos"
+desk-agent find artifacts --kind app
+```
+
 ## desk-agent file to-markdown
 
 Convert a document to agent-readable Markdown/text. Use this before analyzing

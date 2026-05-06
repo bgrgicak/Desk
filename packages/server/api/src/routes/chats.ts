@@ -140,6 +140,11 @@ const AttachArtifactRefSchema = z.object({
   path: z.string(),
   name: z.string().optional(),
   mime: z.string().optional(),
+  /**
+   * Memory-system P4.7 — concrete fragment params. Forwarded to the
+   * iframe as a query string. Ignored for non-fragment embeds.
+   */
+  params: z.record(z.string(), z.string()).optional(),
 });
 
 function normalizeWorkspaceRelativePath(raw: string): string {
@@ -384,6 +389,7 @@ export async function attachArtifactRef(
       path: relPath,
       name: data.name?.trim() || path.basename(relPath),
       mime: data.mime?.trim() || inferredMime,
+      ...(data.params ? { params: data.params } : {}),
     },
     agentId: opts?.agentId ?? chat.agentId,
     model: opts?.model ?? null,

@@ -32,7 +32,7 @@ export type MessageContent =
   | { type: "text"; text: string }
   | { type: "toolCall"; toolName: string; args: Record<string, unknown> }
   | { type: "toolResult"; toolName: string; result: unknown }
-  | { type: "artifactRef"; path: string; name?: string; mime?: string }
+  | { type: "artifactRef"; path: string; name?: string; mime?: string; params?: Record<string, string> }
   | { type: "events"; log: AgentLogEntry[] }
   | { type: "summary"; body: string }
   | { type: "summary_request" }

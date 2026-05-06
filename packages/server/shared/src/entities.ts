@@ -85,6 +85,14 @@ export const MessageContentArtifactRefSchema = z.object({
   /** Caller-facing display name, usually the basename. */
   name: z.string().optional(),
   mime: z.string().optional(),
+  /**
+   * Memory-system Phase 4 (P4.7) — concrete parameter values for a
+   * fragment embed. Forwarded to the iframe as a query string so the
+   * fragment can read them via `window.location.search`. Values are
+   * always strings; the fragment's `desk.fragment.json` `params`
+   * declaration documents the type. Ignored for non-fragment embeds.
+   */
+  params: z.record(z.string(), z.string()).optional(),
 });
 
 /** A single event from the agent's JSON event stream. */

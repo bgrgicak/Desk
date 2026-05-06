@@ -122,6 +122,7 @@ function MessageContentView({
           path={content.path}
           name={content.name}
           mime={content.mime}
+          params={content.params}
           onClick={onAttachmentClick
             ? () => onAttachmentClick({ path: content.path, name: content.name ?? basenamePath(content.path), mime: content.mime })
             : undefined}
@@ -165,7 +166,7 @@ function basenamePath(path: string) {
   return parts[parts.length - 1] ?? path
 }
 
-function ArtifactRefRow({ workspaceId, path, name, mime, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string; onClick?: () => void }) {
+function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string; params?: Record<string, string>; onClick?: () => void }) {
   const label = name ?? basenamePath(path)
   const className = 'inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs'
   const inner = (
@@ -192,6 +193,7 @@ function ArtifactRefRow({ workspaceId, path, name, mime, onClick }: { workspaceI
       path={path}
       name={label}
       mime={mime}
+      params={params}
       onOpen={onClick}
       fallback={fallback}
     />
