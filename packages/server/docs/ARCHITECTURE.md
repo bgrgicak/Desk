@@ -85,6 +85,8 @@ Software that runs inside the sandbox.
 * Temporary runtime state
 * Agent identity and scoped credentials accompany every host-bound tool call; the Tool API session token is injected into the sandbox as an environment variable, so the host Tool API can resolve the caller and apply the allowlist check
 * Desk-managed OpenCode skills are generated on the host under `${DESK_HOME}/Desk/.skills/<skill-name>/SKILL.md` and mounted read-only at `~/.config/opencode/skills/` inside the sandbox. The base system prompt keeps short behavior rules and tells agents to load `desk-cli*` reference skills or `desk-goal-*` goal skills only when needed.
+* The sandbox image includes platform-pinned browser/display tooling for visual work: Playwright `1.60.0-alpha-1777669338000`, Firefox installed through Playwright into `/opt/playwright-browsers`, `@playwright/mcp` `0.0.73`, and Xvfb on `DISPLAY=:99` at `1920x1080x24`. The Playwright version is pinned to the MCP server's declared dependency so browser revisions stay aligned. OpenCode gets the Playwright MCP server from managed config at `/etc/opencode/opencode.json`, so every workspace can inspect rendered pages and take screenshots without `.deskrc` setup. The measured uncompressed image-size delta is +262,534,030 bytes, about +250 MiB (`desk/sandbox:v1` 613,897,093 bytes vs baseline 351,363,063 bytes on 2026-05-06).
+* Browser tooling follows the sandbox image partition rule: bake in tools needed by most workspaces, expensive to install on demand, or version-sensitive enough to need platform pinning. Firefox is the default browser because it keeps the image smaller than Chromium; CDP-specific Chromium workflows remain workspace-installed via `.deskrc` when needed.
 
 ### 7. Tool Layer
 

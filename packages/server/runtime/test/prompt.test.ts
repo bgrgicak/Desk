@@ -74,6 +74,8 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Desk native skills");
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).toContain("the `playwright` MCP server");
+    expect(body).toContain("assume Firefox");
     expect(body).not.toContain("# Desk CLI");
     expect(body).not.toContain("### Cron quick reference");
     expect(body).not.toContain("NO_TOKEN");

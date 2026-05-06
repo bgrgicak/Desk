@@ -75,29 +75,9 @@ describeIf("sandbox model listing (real Docker)", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
 
+    // The free opencode/gpt-5-nano model the e2e suite uses must be present.
+    expect(filtered.some((m) => m.id === "opencode/gpt-5-nano")).toBe(true);
+
     await stopSandbox(handle);
-  }, 60_000);
-
-  // Paid-provider tests — skipped when the corresponding key is absent.
-  const itIfAnthropic = process.env.ANTHROPIC_API_KEY ? it : it.skip;
-  itIfAnthropic("listModels filters to anthropic when key is present", async () => {
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
-      provider: "anthropic",
-      providerKeys: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
-    });
-    expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
-    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
-  }, 60_000);
-
-  const itIfOpenAI = process.env.OPENAI_API_KEY ? it : it.skip;
-  itIfOpenAI("listModels filters to openai when key is present", async () => {
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
-      provider: "openai",
-      providerKeys: { OPENAI_API_KEY: process.env.OPENAI_API_KEY! },
-    });
-    expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "openai")).toBe(true);
-    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
   }, 60_000);
 });

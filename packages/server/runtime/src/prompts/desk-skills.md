@@ -10,4 +10,9 @@ load a Desk skill only when you need the detailed reference:
 - `desk-app-scaffold` — directory layout, fragment shape, build workflow,
   and rules for authoring a Desk app under the `app` goal.
 
+The sandbox has Firefox, Playwright, Xvfb, and the `playwright` MCP server
+pre-wired. Use the Playwright MCP tools for rendered pages, screenshots, DOM
+inspection, and browser automation; assume Firefox unless the workspace installs
+another browser.
+
 Do not mention skill loading to the user.
