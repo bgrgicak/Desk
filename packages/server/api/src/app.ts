@@ -566,6 +566,60 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Memory-system P3.5 — full-text search for the in-sandbox agent.
+    // Authed via X-Desk-Sandbox-Token. Workspace scope defaults to the
+    // session's workspace; `workspace=*` widens to every workspace owned
+    // by the agent's user (defense in depth — never expose other users').
+    if (path === "/sandbox/search/messages" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const chatIdParam = params.get("chat") ?? undefined;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+
+      // Resolve workspace scope. Default = the session's workspace slug.
+      let workspaceSlug: string | undefined;
+      if (workspaceParam === "*") {
+        workspaceSlug = "*";
+      } else if (workspaceParam) {
+        workspaceSlug = workspaceParam;
+      } else if (session.workspaceId) {
+        const ws = await queries.workspaces.findById(pool, session.workspaceId);
+        workspaceSlug = ws?.path;
+      }
+
+      // Cross-workspace search filters by userId at the chats join — the
+      // FTS index has no user column. Resolve the user's workspace slug
+      // set and scope to it when workspaceSlug === "*".
+      const ownedWorkspaceSlugs = workspaceSlug === "*"
+        ? (await queries.workspaces.listByUser(pool, agent.userId)).map((w) => w.path)
+        : null;
+
+      // When chatId is supplied, gate ownership.
+      if (chatIdParam) {
+        await requireOwnedChat(pool, chatIdParam, agent.userId);
+      }
+
+      let hits = await queries.search.searchChatMessages(pool, {
+        query: q,
+        chatId: chatIdParam,
+        workspaceSlug: workspaceSlug === "*" ? undefined : workspaceSlug,
+        kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+      if (ownedWorkspaceSlugs !== null) {
+        const allowed = new Set(ownedWorkspaceSlugs);
+        hits = hits.filter((h) => h.workspaceSlug !== null && allowed.has(h.workspaceSlug));
+      }
+
+      sendJson(res, 200, { hits });
+      return;
+    }
+
     if (path === "/sandbox/artifacts" && method === "POST") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;

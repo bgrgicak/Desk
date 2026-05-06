@@ -137,6 +137,38 @@ desk-agent chat attach-artifact --chat cht_abc \
     .chats/cht_abc/artifacts/report.md
 ```
 
+## desk-agent chat search-messages
+
+Full-text search the user's chat history. Use when the user references
+something that happened "before", "in another chat", "last week", etc., or
+when you need to recall a fact from earlier in this same chat that landed
+before the most recent summary.
+
+```
+desk-agent chat search-messages --query <text> [--chat <id>]
+                                [--workspace <slug>|*]
+                                [--kind any|message|summary]
+                                [--limit N]
+```
+
+`--query` is whitespace-tokenized; every token must appear in the indexed
+body. Wrap multi-word phrases in quotes at the shell level. Workspace scope
+defaults to the current workspace; pass `--workspace "*"` to search every
+workspace the user owns. `--kind summary` returns only chat-summary bodies;
+`--kind message` returns only raw transcript lines.
+
+The response is a JSON object `{hits: [...]}`. Each hit has `chatId`,
+`messageId`, `workspaceSlug`, `kind`, a `snippet` with `<mark>…</mark>`
+highlights, `createdAt`, and a relevance `score`.
+
+### Examples
+
+```
+desk-agent chat search-messages --query "kanban board"
+desk-agent chat search-messages --query "deploy notes" --kind summary
+desk-agent chat search-messages --query "passwords" --workspace "*"
+```
+
 ## desk-agent file to-markdown
 
 Convert a document to agent-readable Markdown/text. Use this before analyzing

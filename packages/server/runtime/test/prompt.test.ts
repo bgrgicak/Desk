@@ -281,6 +281,16 @@ describe("Desk reference skills", () => {
     expect(skill?.body()).toContain("What app and fragment skills should document");
   });
 
+  it("publishes a chat-message search reference (P3.5)", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-search-messages");
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/recall|history|search/i);
+    const body = skill?.body() ?? "";
+    expect(body).toContain("desk-agent chat search-messages");
+    expect(body).toContain("--query");
+    expect(body).toContain("--workspace");
+  });
+
   it("keeps scaffold guidance explicit about app storage contracts", () => {
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-scaffold");
     const body = skill?.body() ?? "";

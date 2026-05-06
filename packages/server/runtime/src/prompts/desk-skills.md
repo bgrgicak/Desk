@@ -7,6 +7,9 @@ load a Desk skill only when you need the detailed reference:
 - `desk-cli-task-schedule` — scheduling syntax, cron examples, `--at` format,
   and failure modes.
 - `desk-cli-chat-attach-artifact` — artifact attachment syntax and examples.
+- `desk-cli-chat-search-messages` — full-text recall over the user's chat
+  history (messages + chat summaries). Use when the user references something
+  from "another chat", "before", or "earlier in this chat".
 - `desk-cli-file-to-markdown` — document conversion syntax, supported formats,
   and examples.
 - `desk-app-scaffold` — directory layout, fragment shape, build workflow,
