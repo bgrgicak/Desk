@@ -40,6 +40,12 @@ export interface SandboxHandle {
   workspaceId: string;
 }
 
+const SANDBOX_PIDS_LIMIT = 1024;
+const SANDBOX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
+const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=1g" };
+const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
+const SANDBOX_RESOURCE_PROFILE = "pids=1024,memory=4g,tmpfs=/tmp:size=1g";
+
 /**
  * Ensures the sandbox image exists locally. If absent, attempts a pull —
  * the published-install path where the image lives on a registry but
@@ -104,7 +110,8 @@ export async function createOrReuse(
     const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
     const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
-    if (imageMatches && mountsMatch && userMatches) {
+    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === SANDBOX_RESOURCE_PROFILE;
+    if (imageMatches && mountsMatch && userMatches && resourcesMatch) {
       if (!existing.running) await engine.start(containerName);
       return { containerId: existing.id, workspaceId };
     }
@@ -128,6 +135,7 @@ export async function createOrReuse(
       // ways (host → sandbox and sandbox → host) without any chown dance.
       user: expectedUser,
       env: providerKeyEnv(providerKeys),
+      labels: { [SANDBOX_RESOURCE_PROFILE_LABEL]: SANDBOX_RESOURCE_PROFILE },
       capDrop: ["ALL"],
       network: "bridge",
       // host-gateway lets the in-sandbox `desk` CLI reach the host-side
@@ -135,11 +143,13 @@ export async function createOrReuse(
       // bridge default has no DNS name for the host, so the agent has no
       // route back to /sandbox/messages.
       extraHosts: ["host.docker.internal:host-gateway"],
-      pidsLimit: 256,
-      // 2 GiB — opencode + node + the LLM SDK plus a working set for tool
-      // calls. Earlier 512 MiB cap OOM-killed real runs (exit 137).
-      memoryBytes: 2 * 1024 * 1024 * 1024,
-      tmpfs: { "/tmp": "" },
+      // Modern JS tooling routinely uses worker threads and forked helper
+      // processes; keep a real blast-radius limit without blocking builds.
+      pidsLimit: SANDBOX_PIDS_LIMIT,
+      // 4 GiB — opencode + node + the LLM SDK plus enough headroom for Vite,
+      // Tailwind, Vitest, and package-manager subprocesses.
+      memoryBytes: SANDBOX_MEMORY_BYTES,
+      tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
     });
     return { containerId, workspaceId };

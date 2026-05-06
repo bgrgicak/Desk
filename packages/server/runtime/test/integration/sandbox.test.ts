@@ -66,6 +66,12 @@ describeIf("sandbox integration", () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     expect(handle.workspaceId).toBe(testWorkspaceId);
     expect(handle.containerId).toBeTruthy();
+
+    const engine = await detectEngine();
+    const info = await engine.inspect(handle.containerId);
+    expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
+      "pids=1024,memory=4g,tmpfs=/tmp:size=1g",
+    );
   });
 
   it("createOrReuse is idempotent — second call returns same container", async () => {

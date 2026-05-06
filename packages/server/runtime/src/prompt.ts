@@ -56,6 +56,7 @@ export interface RenderPromptInput {
   userTimezone?: string;
   chatId?: string;
   goal?: GoalKey | null;
+  includeGoalAutodetect?: boolean;
   runMode?: "chat" | "summary";
 }
 
@@ -95,7 +96,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
           userTimezone: input.userTimezone,
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
-  (input) => input.runMode === "summary" ? null : loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
   (input) =>
     input.runMode !== "summary" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
   (input) => input.runMode === "summary" ? null : loadAndSub("desk-skills.md", {}),

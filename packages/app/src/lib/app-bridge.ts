@@ -25,8 +25,10 @@ export interface AppBridgeResponse {
 }
 
 export interface ChatAppBridgeContext {
+  scope: 'chat' | 'library'
   chatId: string
   appName: string
+  appBasePath?: string
   capabilities: string[]
 }
 
@@ -52,7 +54,7 @@ export async function handleAppBridgeRequest(
   switch (request.method) {
     case 'storage.list':
       requireCapability(ctx, 'storage.read')
-      return appFetch(storageUrl(ctx, request.params, false), { method: 'GET' })
+      return storageListItems(await appFetch(storageUrl(ctx, request.params, false), { method: 'GET' }))
     case 'storage.get':
       requireCapability(ctx, 'storage.read')
       return appFetch(storageUrl(ctx, request.params, true), { method: 'GET' })
@@ -109,7 +111,10 @@ function storageUrl(
 ): string {
   const input = paramsObject(params)
   const collection = stringParam(input, 'collection', STORAGE_COLLECTION_PATTERN)
-  const base = `/apps/chat/${encodeURIComponent(ctx.chatId)}/${encodeURIComponent(ctx.appName)}/storage/${encodeURIComponent(collection)}`
+  const appPath = ctx.appBasePath ?? (ctx.scope === 'chat'
+    ? `/apps/chat/${encodeURIComponent(ctx.chatId)}/${encodeURIComponent(ctx.appName)}`
+    : `/apps/library/${encodeURIComponent(ctx.appName)}`)
+  const base = `${appPath}/storage/${encodeURIComponent(collection)}`
   if (!requireDocId) return base
   const id = stringParam(input, 'id', STORAGE_DOC_ID_PATTERN)
   return `${base}/${encodeURIComponent(id)}`
@@ -121,6 +126,13 @@ function storageBody(params: unknown): BodyInit {
     throw new Error('Missing storage doc')
   }
   return JSON.stringify(input.doc)
+}
+
+function storageListItems(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || !Array.isArray((result as { items?: unknown }).items)) {
+    throw new Error('Invalid storage list response')
+  }
+  return (result as { items: unknown[] }).items
 }
 
 function paramsObject(params: unknown): Record<string, unknown> {
