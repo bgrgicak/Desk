@@ -77,12 +77,29 @@ describe('app bridge', () => {
         capabilities: ['storage.read'],
       },
       request('storage.list', { collection: 'todos' }),
-    )).resolves.toEqual({ items: [] })
+    )).resolves.toEqual([])
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/apps/library/wks_123/abc123/todo-app/storage/todos',
       expect.objectContaining({ method: 'GET', credentials: 'include' }),
     )
+  })
+
+  it('rejects malformed storage list responses', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => (
+      new Response(JSON.stringify({ nextCursor: null }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(handleAppBridgeRequest(
+      {
+        scope: 'chat',
+        chatId: 'cht_123',
+        appName: 'todo-app',
+        capabilities: ['storage.read'],
+      },
+      request('storage.list', { collection: 'todos' }),
+    )).rejects.toThrow('Invalid storage list response')
   })
 
   it('rejects invalid storage paths before fetch', async () => {

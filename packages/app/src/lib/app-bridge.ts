@@ -54,7 +54,7 @@ export async function handleAppBridgeRequest(
   switch (request.method) {
     case 'storage.list':
       requireCapability(ctx, 'storage.read')
-      return appFetch(storageUrl(ctx, request.params, false), { method: 'GET' })
+      return storageListItems(await appFetch(storageUrl(ctx, request.params, false), { method: 'GET' }))
     case 'storage.get':
       requireCapability(ctx, 'storage.read')
       return appFetch(storageUrl(ctx, request.params, true), { method: 'GET' })
@@ -126,6 +126,13 @@ function storageBody(params: unknown): BodyInit {
     throw new Error('Missing storage doc')
   }
   return JSON.stringify(input.doc)
+}
+
+function storageListItems(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || !Array.isArray((result as { items?: unknown }).items)) {
+    throw new Error('Invalid storage list response')
+  }
+  return (result as { items: unknown[] }).items
 }
 
 function paramsObject(params: unknown): Record<string, unknown> {

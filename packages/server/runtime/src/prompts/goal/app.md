@@ -43,6 +43,13 @@ Workflow:
    and manually test the built app in Desk's sandboxed iframe, including real
    standalone fragment entries and storage-backed flows.
 
+   When writing tests for components that use storage, do not mock
+   `getStorageClient()` or `window.desk.storage`. Vitest can use fabricated
+   real-shaped `StorageDoc<T>[]` data for rendering and pure transform tests;
+   stub only browser APIs that are genuinely unavailable, such as canvas or
+   WebGL. Cover the storage bridge itself with integration or end-to-end tests
+   against the documented adapter shape.
+
 6. Surface visible updates with:
 
    ```sh

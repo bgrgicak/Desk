@@ -223,6 +223,40 @@ Storage-backed tests must use an isolated real SQLite database with the real
 never use a mocked or in-memory storage client as the only proof that storage
 works.
 
+Never mock `window.desk.storage`, `getStorageClient()`, or any Desk capability
+bridge. A mocked bridge validates a contract that does not exist in production
+and hides real sandbox, capability, and adapter bugs.
+
+Instead:
+
+- Extract sort, filter, validation, and transformation logic into pure functions
+  and test those directly.
+- Test component rendering with inline real-shaped `StorageDoc<T>[]` fixtures;
+  fabricate data, not the storage client.
+- Add storage integration smoke tests that exercise the real adapter shape.
+- If a function requires async storage, test the synchronous transformation layer
+  separately and cover the storage path with integration or end-to-end testing.
+
+Example component fixture pattern:
+
+```ts
+import type { StorageDoc } from './storage/client'
+
+interface Task {
+  title: string
+  done: boolean
+}
+
+const tasks: StorageDoc<Task>[] = [
+  {
+    id: 'task_1',
+    doc: { title: 'Plan trip', done: false },
+    createdAt: 1710000000000,
+    updatedAt: 1710000000000,
+  },
+]
+```
+
 Before telling the user the app is ready, verify:
 
 - `npm run verify` exits zero.

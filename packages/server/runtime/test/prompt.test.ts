@@ -76,6 +76,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("desk-app-storage");
+    expect(body).toContain("load `desk-app-storage` before touching");
     expect(body).not.toContain("# Desk CLI");
     expect(body).not.toContain("### Cron quick reference");
     expect(body).not.toContain("NO_TOKEN");
@@ -262,6 +263,11 @@ describe("Desk reference skills", () => {
     expect(skill?.description).toMatch(/CRUD/);
     expect(skill?.body()).toContain("First, load the app's contract");
     expect(skill?.body()).toContain(".storage/data.sqlite");
+    expect(skill?.body()).toContain("create the `.storage/` directory");
+    expect(skill?.body()).toContain("Never create a parallel fallback store");
+    expect(skill?.body()).toContain("just read the first `skill.md` returned by glob");
+    expect(skill?.body()).toContain("Use Node's `node:sqlite` module for direct CRUD");
+    expect(skill?.body()).toContain("Recommended direct-write pattern");
     expect(skill?.body()).toContain("What app and fragment skills should document");
   });
 

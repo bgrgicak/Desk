@@ -18,6 +18,7 @@ import {
   handleAppBridgeRequest,
   isAppBridgeRequest,
 } from '@/lib/app-bridge'
+import { GENERATED_APP_IFRAME_SANDBOX } from "@/lib/iframe-sandbox";
 
 interface IssuedAppSession {
   token: string
@@ -128,24 +129,24 @@ export function AppPreview(props: AppPreviewProps) {
   }, [props.scope, chatId, appName, session])
 
   const iframe = session ? (
-        <iframe
-          key={session.token}
-          ref={iframeRef}
-          title={appName}
-          src={session.url}
-          sandbox="allow-scripts"
-          className="h-full min-h-0 w-full flex-1 border-0"
-        />
-      ) : error ? (
-        <div className="h-full flex items-center justify-center px-4">
-          <p className="text-sm text-destructive">Failed to load app: {error}</p>
-        </div>
-      ) : (
-        <div className="h-full flex items-center justify-center text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-          <span className="text-sm">Issuing app session…</span>
-        </div>
-      )
+    <iframe
+      key={session.token}
+      ref={iframeRef}
+      title={appName}
+      src={session.url}
+      sandbox={GENERATED_APP_IFRAME_SANDBOX}
+      className="h-full min-h-0 w-full flex-1 border-0"
+    />
+  ) : error ? (
+    <div className="h-full flex items-center justify-center px-4">
+      <p className="text-sm text-destructive">Failed to load app: {error}</p>
+    </div>
+  ) : (
+    <div className="h-full flex items-center justify-center text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+      <span className="text-sm">Issuing app session…</span>
+    </div>
+  );
 
   if (variant === 'inline') {
     return (
