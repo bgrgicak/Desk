@@ -43,8 +43,8 @@ test("/me/providers is reachable via GET", async ({
   // The seeded user has no keys stored — every known provider is null.
   const providers = (get.body as { providers: Record<string, string | null> })
     .providers;
-  expect(providers).toHaveProperty("ANTHROPIC_API_KEY");
-  expect(providers.ANTHROPIC_API_KEY).toBeNull();
+  expect(providers).toHaveProperty("GEMINI_API_KEY");
+  expect(providers.GEMINI_API_KEY).toBeNull();
 });
 
 test("/tools/models returns a list", async ({ loggedInPage, token }) => {

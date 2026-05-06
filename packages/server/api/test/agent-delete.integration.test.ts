@@ -130,7 +130,7 @@ async function insertAgent(userId: string, name: string): Promise<string> {
     userId,
     name,
     instructions: "",
-    model: "anthropic/claude-sonnet-4-5",
+    model: "opencode/gpt-5-nano",
   });
   return id;
 }

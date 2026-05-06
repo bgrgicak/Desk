@@ -214,7 +214,7 @@ describe("MessageSchema execution metadata", () => {
       ...base,
       role: "agent",
       content: { type: "text", text: "hello" },
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
     };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });

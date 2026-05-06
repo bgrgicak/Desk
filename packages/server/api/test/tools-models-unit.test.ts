@@ -45,7 +45,7 @@ const FREE_MODELS = [
 ];
 const ALL_MODELS = [
   ...FREE_MODELS,
-  { id: "anthropic/claude-sonnet-4-6", provider: "anthropic" },
+  { id: "openai/gpt-5", provider: "openai" },
 ];
 
 beforeEach(() => {
@@ -80,12 +80,12 @@ describe("listModels — decryption failure fallback", () => {
 describe("listModels — happy path", () => {
   it("returns all models when no provider filter is given", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
-    vi.mocked(resolveProviderKeys).mockResolvedValue({ ANTHROPIC_API_KEY: "sk-test" });
+    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
     vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
 
     const models = await listModels(fakePool, {});
     expect(models.length).toBeGreaterThan(0);
-    expect(models.some((m) => m.provider === "anthropic")).toBe(true);
+    expect(models.some((m) => m.provider === "openai")).toBe(true);
   });
 
   it("filters by provider", async () => {

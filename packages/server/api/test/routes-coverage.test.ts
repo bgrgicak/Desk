@@ -267,7 +267,7 @@ describe("Routes coverage (real Postgres)", () => {
     const body = res.body as { providers: Record<string, string | null> };
     expect(typeof body.providers).toBe("object");
     // Every PROVIDER_KEY_VARS entry must appear; exact names checked below.
-    expect(body.providers).toHaveProperty("ANTHROPIC_API_KEY");
+    expect(body.providers).toHaveProperty("GEMINI_API_KEY");
     expect(body.providers).toHaveProperty("OPENAI_API_KEY");
     expect(body.providers).toHaveProperty("AWS_REGION");
   });
@@ -275,14 +275,14 @@ describe("Routes coverage (real Postgres)", () => {
   it("PUT /me/providers — sets, updates, masks, deletes a key", async () => {
     // Set
     const setRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: "sk-ant-abcdefghijklmnop" },
+      providers: { GEMINI_API_KEY: "test-key-abcdefghijklmnop" },
     });
     expect(setRes.status).toBe(200);
     const setBody = setRes.body as { providers: Record<string, string | null> };
-    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect(setBody.providers.GEMINI_API_KEY).not.toBeNull();
     // Masking: full value must not appear verbatim
-    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBe("sk-ant-abcdefghijklmnop");
-    expect(setBody.providers.ANTHROPIC_API_KEY).toContain("...");
+    expect(setBody.providers.GEMINI_API_KEY).not.toBe("test-key-abcdefghijklmnop");
+    expect(setBody.providers.GEMINI_API_KEY).toContain("...");
 
     // Partial update leaves other keys alone
     const updateRes = await request("PUT", "/me/providers", token, {
@@ -290,16 +290,16 @@ describe("Routes coverage (real Postgres)", () => {
     });
     expect(updateRes.status).toBe(200);
     const updateBody = updateRes.body as { providers: Record<string, string | null> };
-    expect(updateBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect(updateBody.providers.GEMINI_API_KEY).not.toBeNull();
     expect(updateBody.providers.OPENAI_API_KEY).not.toBeNull();
 
     // Delete via null
     const delRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: null },
+      providers: { GEMINI_API_KEY: null },
     });
     expect(delRes.status).toBe(200);
     const delBody = delRes.body as { providers: Record<string, string | null> };
-    expect(delBody.providers.ANTHROPIC_API_KEY).toBeNull();
+    expect(delBody.providers.GEMINI_API_KEY).toBeNull();
     expect(delBody.providers.OPENAI_API_KEY).not.toBeNull();
 
     // Clean up
@@ -328,7 +328,7 @@ describe("Routes coverage (real Postgres)", () => {
     const createRes = await request("POST", "/agents", token, {
       name: "Sidekick",
       instructions: "Assist",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/gpt-5-nano",
     });
     expect(createRes.status).toBe(201);
     const created = createRes.body as { id: string };
@@ -530,7 +530,7 @@ describe("Routes coverage (real Postgres)", () => {
     const createAgent = await request("POST", "/agents", token, {
       name: "Switcher",
       instructions: "Assist",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/gpt-5-nano",
     });
     const otherAgentId = (createAgent.body as { id: string }).id;
     const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
@@ -563,7 +563,7 @@ describe("Routes coverage (real Postgres)", () => {
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
       instructions: "",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/gpt-5-nano",
     });
     const strangerId = (createAgent.body as { id: string }).id;
 

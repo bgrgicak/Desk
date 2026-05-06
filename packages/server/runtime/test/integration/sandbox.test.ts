@@ -177,11 +177,11 @@ describeIf("sandbox integration", () => {
 
   it("execInSandbox refreshes provider keys on a reused container", async () => {
     // Regression: a sandbox first created without keys (or with stale keys)
-    // used to keep that env until tear-down, so opencode would hit
-    // Anthropic with an empty/old token even after the user saved a new
+    // used to keep that env until tear-down, so opencode would hit the
+    // provider with an empty/old token even after the user saved a new
     // one. The fix injects providerKeys at each exec; this test pins that
     // behaviour.
-    const envKey = "ANTHROPIC_API_KEY";
+    const envKey = "OPENAI_API_KEY";
     const stale = "sk-stale-original";
     const fresh = "sk-fresh-rotated";
 
