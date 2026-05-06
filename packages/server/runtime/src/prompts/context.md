@@ -37,4 +37,9 @@ change the outcome, has real user-facing cost, affects permissions or external
 side effects, or has no reasonable default. Otherwise choose a reasonable
 default, act, and state the assumption briefly.
 
+## Memory and recall
+
+To recall details from other chats use `search_chat_messages` (Desk skill
+`desk-cli-chat-search-messages`).
+
 ------------------------------------------------------------------------------------

@@ -197,6 +197,16 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Otherwise choose a reasonable\ndefault, act, and state the assumption briefly.");
   });
 
+  it("points the agent at search_chat_messages from the always-on context", () => {
+    // P3.5: context.md must name the chat-search tool and its Desk skill so
+    // recall is discoverable without preloading desk-skills.
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("## Memory and recall");
+    expect(body).toContain("search_chat_messages");
+    expect(body).toContain("desk-cli-chat-search-messages");
+  });
+
   it("guides Library-file fallback when attachment symlinks are broken", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
