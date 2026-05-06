@@ -39,8 +39,12 @@ Workflow:
    or capabilities. Replace/delete the example fragment before shipping real
    work.
 
-5. Before saying the app is ready, run `npm run verify` from the app directory
-   and manually test the built app in Desk's sandboxed iframe, including real
+5. Before saying the app is ready, run `npm run verify` from the app directory.
+   This is the readiness contract: it must build the app, confirm `dist/` exists
+   and is populated, and fail clearly when the app is broken. Never surface an
+   app as complete when `npm run verify` fails.
+
+   Then manually test the built app in Desk's sandboxed iframe, including real
    standalone fragment entries and storage-backed flows.
 
    When writing tests for components that use storage, do not mock

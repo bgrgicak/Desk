@@ -35,7 +35,10 @@ Non-negotiable rules:
    `storage.write` in `desk.app.json`, and in each storage-backed fragment's
    `desk.fragment.json`.
 4. Replace or delete `fragments/example/` before shipping real work.
-5. Run `npm run verify` from the app directory.
+5. Run `npm run verify` from the app directory. This is the readiness contract:
+   it builds the app, confirms `dist/` exists and is populated, and fails clearly
+   when the app is broken. Do not attach or call the app ready when verification
+   fails.
 6. Manually test the built app in Desk's sandboxed iframe, including each real
    standalone fragment entry and the main user flow.
 
@@ -260,6 +263,9 @@ const tasks: StorageDoc<Task>[] = [
 Before telling the user the app is ready, verify:
 
 - `npm run verify` exits zero.
+- `dist/` exists and contains built output. `npm run verify` checks this; an app
+  with missing or empty `dist/` is broken even if another command reported
+  success.
 - The built full app works inside an iframe with
   `sandbox="allow-scripts allow-forms"` and no `allow-same-origin`.
 - Every real standalone fragment entry loads and its main flow works.
