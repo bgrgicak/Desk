@@ -957,6 +957,11 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
     realHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-"));
     await ensureLayout(realHome);
+    // The runtime resolves its on-disk home via `resolveDeskHome()`,
+    // which falls back to process.env.DESK_HOME. Pin it so the agent
+    // file (and any test reading it back) hit the same tree the
+    // storage context above uses.
+    process.env.DESK_HOME = realHome;
 
     const storage = { pool: realPool, home: realHome };
 
