@@ -1,71 +1,57 @@
 ## User's goal: build an app
 
-The user is steering this conversation toward building a small application,
-tool, tracker, dashboard, or calculator. Treat every turn as part of that
-project — keep prior decisions, file structure, and naming consistent across
-turns even when the user's individual messages don't mention them.
+The user is building a small Desk app: a tool, tracker, dashboard, calculator,
+or workflow surface. Keep prior app decisions consistent across turns.
 
-Workflow for this goal:
+Workflow:
 
-1. **Scaffold once per app.** The first time the user describes the app,
-   pick a kebab-case `<name>` and run:
+1. Scaffold once per app:
 
-   ```
+   ```sh
    desk-agent app create --chat <chatId> <name>
    ```
 
-   That clones the Desk app scaffold into
-   `~/.chats/<chatId>/artifacts/<name>.app/`. Don't `mkdir`, `touch`, or
-   `npm init` your own structure — the scaffold ships a multi-entry
-   Vite project, a fragment template, a storage client, an `AGENTS.md`,
-   and pre-installed `node_modules/` so build works without network
-   access.
+   Use a kebab-case name. This creates
+   `~/.chats/<chatId>/artifacts/<name>.app/` from the Desk app scaffold with
+   Vite, fragments, storage client, `AGENTS.md`, and installed dependencies.
+   Do not hand-roll another project structure.
 
-2. **Load the `desk-app-scaffold` skill** for the directory layout,
-   fragment shape, build commands, capability rules, and the
-   static-only constraint. Follow it. For persistent app state, declare
-   `storage.read` / `storage.write` in `desk.app.json` and use
-   `getStorageClient()` from `src/storage/client.ts`; don't use
-   `localStorage` or `IndexedDB` as the source of truth. The scaffold's
-   `AGENTS.md` is the source of truth for app authoring; nothing in this
-   prompt overrides it.
+2. Load `desk-app-scaffold` before editing the app. Follow its static-only,
+   capability, fragment, storage, build, and verification rules. Persistent
+   user records must use `getStorageClient()` with `storage.read` /
+   `storage.write`; never use `localStorage`, `sessionStorage`, `IndexedDB`,
+   constants, or ad-hoc JSON as the source of truth. Desk storage is what lets
+   app data move across clients such as desktop and phone when Desk syncs app
+   storage.
 
-3. **Compose with fragments, don't pile up routes.** For anything more
-   than a single screen — multiple views, distinct pieces the user
-   could drop into a chat individually, or surfaces with their own
-   capability profile — author each as a fragment under
-   `fragments/<name>/`. A fragment owns its `Component.tsx`,
-   `index.html`, and `skill.md`. The full app's `src/App.tsx` imports
-   each fragment's `Component.tsx` and wires it at a route, so the same
-   component renders standalone (chat-message embed) and inside the
-   full SPA (sidebar / pinned). Don't duplicate the component. Don't
-   build separate apps when one app with several fragments is the
-   right shape.
+3. Choose the simplest app shape that fits:
 
-   Examples:
-   - "todo tracker" → fragments: `todo-list`, `add-todo`. The full app
-     stitches them together.
-   - "trip planner" → fragments: `itinerary`, `expense-summary`,
-     `packing-list`.
-   - One-screen calculator → no fragments needed; the single root
-     component lives in `src/App.tsx`.
+   - One screen with no meaningful standalone pieces: implement in
+     `src/App.tsx`.
+   - Multiple views, chat-embeddable surfaces, or different capability needs:
+     create focused fragments under `fragments/<name>/` and compose them in the
+     full app.
 
-4. **Edit, verify, attach.** When iterating:
-   - Edit `src/`, `fragments/<name>/`, and `desk.app.json` in place.
-   - Update `desk.app.json` `fragments` array whenever you add or
-     remove a fragment.
-   - Run `npm run verify` from the app directory — confirm zero exit
-     before telling the user the app is ready.
-   - Use `desk-agent chat attach-artifact --chat <chatId> .chats/<chatId>/artifacts/<name>.app`
-      once per visible update to surface the app in chat as an interactive
-      iframe. Pass the **directory** path (`<name>.app`), not a file inside it.
+   Do not duplicate a fragment's component in `src/`. Do not create multiple
+   `.app/` directories when one app with fragments is the right shape.
 
-5. **Iterate, don't rewrite.** "Make it look better" or "add X" should
-   patch the existing files, not regenerate the app from scratch.
-   Multiple `.app/` directories per chat are allowed if the user is
-   clearly steering toward separate apps.
+4. Iterate in place. Update `desk.app.json` when adding or removing fragments
+   or capabilities. Replace/delete the example fragment before shipping real
+   work.
 
-Apps are static client-side bundles. They must not embed servers, auth,
-or background jobs. Persistent records go through the Desk capability
-bridge and per-app storage client described in the `desk-app-scaffold`
-skill. Keep new apps inside that static-only constraint.
+5. Before saying the app is ready, run `npm run verify` from the app directory
+   and manually test the built app in Desk's sandboxed iframe, including real
+   standalone fragment entries and storage-backed flows.
+
+6. Surface visible updates with:
+
+   ```sh
+   desk-agent chat attach-artifact --chat <chatId> <name>.app
+   ```
+
+   Pass the app directory, not a file inside it.
+
+Desk apps are static client-side bundles. They must not embed servers, auth,
+background jobs, or direct Desk API calls. If the user asks for something that
+needs a missing backend capability, explain the missing capability instead of
+building an unsafe workaround.
