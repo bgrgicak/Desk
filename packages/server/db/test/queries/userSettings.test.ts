@@ -55,7 +55,7 @@ describe("user_settings queries", () => {
 
   it("setProviderKeys writes encrypted bytes; getProviderKeys decrypts", async () => {
     const id = await makeUser("provider-user");
-    const keys = { ANTHROPIC_API_KEY: "sk-ant-abc", OPENAI_API_KEY: "sk-oai-xyz" };
+    const keys = { GEMINI_API_KEY: "gem-test-abc", OPENAI_API_KEY: "sk-oai-xyz" };
     await userSettings.setProviderKeys(pool, id, keys);
 
     const { rows } = await pool.query(
@@ -65,7 +65,7 @@ describe("user_settings queries", () => {
     expect(rows.length).toBe(1);
     const ct = rows[0].provider_keys_encrypted as Buffer;
     // Encrypted bytes should never contain the plaintext value
-    expect(ct.toString("utf8")).not.toContain("sk-ant-abc");
+    expect(ct.toString("utf8")).not.toContain("gem-test-abc");
     expect(ct.toString("utf8")).not.toContain("sk-oai-xyz");
 
     expect(await userSettings.getProviderKeys(pool, id)).toEqual(keys);
@@ -74,42 +74,42 @@ describe("user_settings queries", () => {
   it("setProviderKeys is a full overwrite", async () => {
     const id = await makeUser("overwrite-user");
     await userSettings.setProviderKeys(pool, id, {
-      ANTHROPIC_API_KEY: "a",
+      GEMINI_API_KEY: "a",
       OPENAI_API_KEY: "o",
     });
-    await userSettings.setProviderKeys(pool, id, { ANTHROPIC_API_KEY: "a2" });
+    await userSettings.setProviderKeys(pool, id, { GEMINI_API_KEY: "a2" });
     expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      ANTHROPIC_API_KEY: "a2",
+      GEMINI_API_KEY: "a2",
     });
   });
 
   it("mergeProviderKeys sets, updates, and deletes selectively", async () => {
     const id = await makeUser("merge-user");
     await userSettings.setProviderKeys(pool, id, {
-      ANTHROPIC_API_KEY: "a",
+      GEMINI_API_KEY: "a",
       OPENAI_API_KEY: "o",
     });
 
     await userSettings.mergeProviderKeys(pool, id, {
-      ANTHROPIC_API_KEY: "a2",
+      GEMINI_API_KEY: "a2",
       GROQ_API_KEY: "g",
     });
     expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      ANTHROPIC_API_KEY: "a2",
+      GEMINI_API_KEY: "a2",
       OPENAI_API_KEY: "o",
       GROQ_API_KEY: "g",
     });
 
     await userSettings.mergeProviderKeys(pool, id, { OPENAI_API_KEY: null });
     expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      ANTHROPIC_API_KEY: "a2",
+      GEMINI_API_KEY: "a2",
       GROQ_API_KEY: "g",
     });
   });
 
   it("cascades on user delete", async () => {
     const id = await makeUser("cascade-user");
-    await userSettings.setProviderKeys(pool, id, { ANTHROPIC_API_KEY: "x" });
+    await userSettings.setProviderKeys(pool, id, { GEMINI_API_KEY: "x" });
     await pool.query("DELETE FROM users WHERE id = ?", [id]);
     const { rows } = await pool.query(
       "SELECT 1 FROM user_settings WHERE user_id = ?",

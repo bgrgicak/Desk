@@ -1,47 +1,47 @@
 /**
- * Slice 16 — Settings → Connections → Claude detail.
+ * Slice 16 — Settings → Connections → ChatGPT detail.
  *
  * Saving a provider key calls PUT /me/providers and the masked echo
  * comes back from GET /me/providers on reload. The API-key input lives
- * inside the Claude connection's detail page.
+ * inside the ChatGPT connection's detail page.
  */
 import { test, expect } from "../fixtures";
 
-async function openClaudeConnection(page: import("@playwright/test").Page) {
+async function openChatGPTConnection(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Customize/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   // Connections list is derived from /me/providers — only configured kinds
   // appear. On first run the list is empty so we open the picker; on reload
-  // (after a key is saved) the Claude row exists and we edit it directly.
+  // (after a key is saved) the ChatGPT row exists and we edit it directly.
   // Wait briefly for the async fetch to settle before deciding.
-  const claudeRow = dialog.locator("div.group", { hasText: /^Claude/ }).first();
+  const chatgptRow = dialog.locator("div.group", { hasText: /^ChatGPT/ }).first();
   try {
-    await claudeRow.waitFor({ state: "visible", timeout: 3_000 });
-    await claudeRow.getByRole("button", { name: "More actions" }).click();
+    await chatgptRow.waitFor({ state: "visible", timeout: 3_000 });
+    await chatgptRow.getByRole("button", { name: "More actions" }).click();
     await page.getByRole("menuitem", { name: /^Edit$/ }).click();
   } catch {
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
-    await dialog.getByRole("button", { name: /^Claude/ }).click();
+    await dialog.getByRole("button", { name: /^ChatGPT/ }).click();
   }
   return dialog;
 }
 
-test("storing an Anthropic key persists and echoes back masked", async ({
+test("storing a ChatGPT key persists and echoes back masked", async ({
   loggedInPage,
   serverUrl,
   token,
 }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  let dialog = await openClaudeConnection(loggedInPage);
+  let dialog = await openChatGPTConnection(loggedInPage);
 
-  const input = dialog.getByTestId("provider-key-ANTHROPIC_API_KEY");
+  const input = dialog.getByTestId("provider-key-OPENAI_API_KEY");
   await expect(input).toBeVisible();
 
-  const longKey = "sk-ant-test-1234567890abcdef".padEnd(40, "x");
+  const longKey = "sk-test-1234567890abcdef".padEnd(40, "x");
   await input.fill(longKey);
-  await dialog.getByTestId("provider-save-ANTHROPIC_API_KEY").click();
+  await dialog.getByTestId("provider-save-OPENAI_API_KEY").click();
 
   // Server confirms — masking format is `prefix...suffix`.
   await expect.poll(async () => {
@@ -49,15 +49,15 @@ test("storing an Anthropic key persists and echoes back masked", async ({
       headers: { Authorization: `Bearer ${token}` },
     });
     const body = (await res.json()) as { providers: Record<string, string | null> };
-    return body.providers.ANTHROPIC_API_KEY ?? null;
+    return body.providers.OPENAI_API_KEY ?? null;
   }, { timeout: 5_000 }).not.toBeNull();
 
   // Reload — the masked echo from /me/providers is shown.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  dialog = await openClaudeConnection(loggedInPage);
+  dialog = await openChatGPTConnection(loggedInPage);
 
-  const inputAfterReload = dialog.getByTestId("provider-key-ANTHROPIC_API_KEY");
+  const inputAfterReload = dialog.getByTestId("provider-key-OPENAI_API_KEY");
   await expect(inputAfterReload).toBeVisible();
   // Server masks with `...` separator. Wait for the GET /me/providers to
   // populate the input (RTK Query is async).

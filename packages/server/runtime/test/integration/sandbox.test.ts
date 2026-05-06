@@ -147,6 +147,71 @@ describeIf("sandbox integration", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toContain("hello from sandbox");
   });
 
+  it("ships document conversion tools", async () => {
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const engine = await detectEngine();
+    const h = await engine.exec({
+      containerId: handle.containerId,
+      cmd: ["sh", "-lc", "pandoc --version >/dev/null && pdftotext -v >/dev/null && desk-agent file to-markdown --help >/dev/null"],
+    });
+    const stderr: Buffer[] = [];
+    h.stderr.on("data", (c: Buffer) => stderr.push(c));
+    const exitCode = await h.wait();
+    expect(exitCode, Buffer.concat(stderr).toString("utf8")).toBe(0);
+  });
+
+  it("converts real documents inside the sandbox", async () => {
+    await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const workspace = workspaceRootPath(home, testWorkspaceSlug);
+    await fs.writeFile(
+      path.join(workspace, "sample.html"),
+      "<!doctype html><h1>Quarterly Report</h1><p>Revenue increased.</p>",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(workspace, "sample.pdf"),
+      [
+        "%PDF-1.1",
+        "1 0 obj",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "endobj",
+        "2 0 obj",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "endobj",
+        "3 0 obj",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "endobj",
+        "4 0 obj",
+        "<< /Length 44 >>",
+        "stream",
+        "BT /F1 24 Tf 100 700 Td (Hello PDF text) Tj ET",
+        "endstream",
+        "endobj",
+        "5 0 obj",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "endobj",
+        "trailer",
+        "<< /Root 1 0 R >>",
+        "%%EOF",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const html = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["desk-agent", "file", "to-markdown", "sample.html"],
+    });
+    expect(html.exitCode, html.stderr).toBe(0);
+    expect(html.stdout).toContain("# Quarterly Report");
+    expect(html.stdout).toContain("Revenue increased.");
+
+    const pdf = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["desk-agent", "file", "to-markdown", "sample.pdf"],
+    });
+    expect(pdf.exitCode, pdf.stderr).toBe(0);
+    expect(pdf.stdout).toContain("Hello PDF text");
+  });
+
   it("forwards provider API keys from host env to the sandbox", async () => {
     // Pick a sentinel from the forwarded set that opencode recognises
     // (see PROVIDER_KEY_VARS in @agent-desk/shared).
@@ -177,11 +242,11 @@ describeIf("sandbox integration", () => {
 
   it("execInSandbox refreshes provider keys on a reused container", async () => {
     // Regression: a sandbox first created without keys (or with stale keys)
-    // used to keep that env until tear-down, so opencode would hit
-    // Anthropic with an empty/old token even after the user saved a new
+    // used to keep that env until tear-down, so opencode would hit the
+    // provider with an empty/old token even after the user saved a new
     // one. The fix injects providerKeys at each exec; this test pins that
     // behaviour.
-    const envKey = "ANTHROPIC_API_KEY";
+    const envKey = "OPENAI_API_KEY";
     const stale = "sk-stale-original";
     const fresh = "sk-fresh-rotated";
 
@@ -198,6 +263,76 @@ describeIf("sandbox integration", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(fresh);
     expect(result.stdout).not.toContain(stale);
+  });
+
+  it("ships browser automation tooling and a working display", async () => {
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const engine = await detectEngine();
+
+    const htmlPath = "/tmp/desk-playwright-smoke.html";
+    const screenshotPath = "/tmp/desk-playwright-smoke.png";
+    const h = await engine.exec({
+      containerId: handle.containerId,
+      cmd: [
+        "sh",
+        "-lc",
+        [
+          "set -eu",
+          "test \"$DISPLAY\" = ':99'",
+          "playwright --version",
+          "playwright-mcp --version >/dev/null",
+          "node -e \"const mcp=require('/usr/local/lib/node_modules/@playwright/mcp/package.json'); const pw=require('/usr/local/lib/node_modules/playwright/package.json'); if (mcp.dependencies.playwright !== pw.version) throw new Error(`playwright mismatch ${mcp.dependencies.playwright} !== ${pw.version}`);\"",
+          "test -S /tmp/.X11-unix/X99",
+          `printf '%s' '<!doctype html><title>Desk Browser Smoke</title><main>Firefox works</main>' > ${htmlPath}`,
+          `node - <<'NODE'
+const { firefox } = require('/usr/local/lib/node_modules/playwright');
+const fs = require('node:fs');
+
+(async () => {
+  const browser = await firefox.launch({ headless: false });
+  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  await page.goto('file://${htmlPath}');
+  const title = await page.title();
+  await page.screenshot({ path: '${screenshotPath}' });
+  await browser.close();
+
+  if (title !== 'Desk Browser Smoke') throw new Error(` + "`unexpected title ${title}`" + `);
+  if (fs.statSync('${screenshotPath}').size <= 0) throw new Error('empty screenshot');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+NODE`,
+        ].join("\n"),
+      ],
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    h.stdout.on("data", (c: Buffer) => stdoutChunks.push(c));
+    h.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
+    const exitCode = await h.wait();
+
+    expect({
+      exitCode,
+      stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+      stderr: Buffer.concat(stderrChunks).toString("utf8"),
+    }).toMatchObject({ exitCode: 0 });
+  });
+
+  it("pre-registers Playwright MCP in OpenCode's resolved config", async () => {
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const engine = await detectEngine();
+    const h = await engine.exec({
+      containerId: handle.containerId,
+      cmd: [
+        "sh",
+        "-lc",
+        "opencode debug config | node -e \"let raw=''; process.stdin.on('data', c => raw += c); process.stdin.on('end', () => { const start = raw.indexOf('{'); const cfg = JSON.parse(raw.slice(start)); const mcp = cfg.mcp && cfg.mcp.playwright; if (!mcp) process.exit(1); if (mcp.type !== 'local') process.exit(2); if (mcp.enabled !== true) process.exit(3); if (JSON.stringify(mcp.command) !== JSON.stringify(['playwright-mcp','--browser','firefox'])) process.exit(4); });\"",
+      ],
+    });
+    const exitCode = await h.wait();
+
+    expect(exitCode).toBe(0);
   });
 
   it("stopSandbox stops the container", async () => {

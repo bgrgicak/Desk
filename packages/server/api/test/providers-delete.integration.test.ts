@@ -111,25 +111,25 @@ describe("PUT /me/providers — remove connection", () => {
   it("sending null removes the provider key so it no longer appears", async () => {
     // Save a key
     const setRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: "sk-ant-test-key-1234" },
+      providers: { GEMINI_API_KEY: "gem-test-key-1234" },
     });
     expect(setRes.status).toBe(200);
 
     // Key should now appear (masked)
     const afterSet = await request("GET", "/me/providers", token);
     expect(afterSet.status).toBe(200);
-    expect((afterSet.body as { providers: Record<string, string | null> }).providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect((afterSet.body as { providers: Record<string, string | null> }).providers.GEMINI_API_KEY).not.toBeNull();
 
     // Remove by sending null (the correct way)
     const delRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: null },
+      providers: { GEMINI_API_KEY: null },
     });
     expect(delRes.status).toBe(200);
 
     // Key must be gone
     const afterDel = await request("GET", "/me/providers", token);
     expect(afterDel.status).toBe(200);
-    expect((afterDel.body as { providers: Record<string, string | null> }).providers.ANTHROPIC_API_KEY).toBeNull();
+    expect((afterDel.body as { providers: Record<string, string | null> }).providers.GEMINI_API_KEY).toBeNull();
   });
 
   it("sending empty string does NOT remove the key (documents current server contract)", async () => {

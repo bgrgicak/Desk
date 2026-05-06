@@ -6,7 +6,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_123",
       agentName: "Jarvis",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "Help me with code reviews.",
       userName: "Desk",
     });
@@ -14,7 +14,7 @@ describe("renderAgentFile", () => {
     // Frontmatter
     expect(result).toContain("---\n");
     expect(result).toContain("description: Jarvis");
-    expect(result).toContain("model: anthropic/claude-sonnet-4-5");
+    expect(result).toContain("model: opencode/gpt-5-nano");
     expect(result).toContain("mode: primary");
 
     // Identity framing
@@ -31,6 +31,7 @@ describe("renderAgentFile", () => {
     // Desk reference manuals are native OpenCode skills, not inlined prompt text.
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("desk-cli-task-schedule");
+    expect(result).toContain("desk-cli-file-to-markdown");
     expect(result).toContain("desk-agent task schedule");
     expect(result).not.toContain("# Desk CLI");
     expect(result.indexOf("## Desk native skills")).toBeLessThan(result.indexOf("## User instructions"));
@@ -44,7 +45,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_empty",
       agentName: "Assistant",
-      model: "anthropic/claude-haiku-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Alice",
     });
@@ -58,7 +59,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_tz",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
       userTimezone: "America/Los_Angeles",
@@ -72,7 +73,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_no_tz",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
     });
@@ -85,7 +86,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
     });
@@ -100,7 +101,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
       chatId: "cht_abc",
@@ -115,7 +116,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_summary",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
       chatId: "cht_abc",
@@ -133,7 +134,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_nogoal",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
     });
@@ -155,7 +156,7 @@ describe("renderAgentFile", () => {
       const result = renderAgentFile({
         agentId: `agt_${goal}`,
         agentName: "Helper",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "opencode/gpt-5-nano",
         instructions: "",
         userName: "Desk",
         goal,
@@ -168,7 +169,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_baseline",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "Stay focused.",
       userName: "Desk",
     });
@@ -188,7 +189,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_doc",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/gpt-5-nano",
       instructions: "",
       userName: "Desk",
       chatId: "chat-x",

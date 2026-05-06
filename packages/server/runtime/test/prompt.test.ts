@@ -75,6 +75,9 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Desk native skills");
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).toContain("desk-cli-file-to-markdown");
+    expect(body).toContain("the `playwright` MCP server");
+    expect(body).toContain("assume Firefox");
     expect(body).toContain("desk-app-storage");
     expect(body).toContain("load `desk-app-storage` before touching");
     expect(body).not.toContain("# Desk CLI");

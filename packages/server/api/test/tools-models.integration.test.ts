@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import { detectEngine, sandboxImage, type Engine } from "@agent-desk/runtime";
@@ -22,8 +22,6 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-const HAS_ANTHROPIC_KEY = !!process.env.ANTHROPIC_API_KEY;
-const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
 let engineForSetup: Engine | null = null;
 let SKIP = false;
 try {
@@ -59,17 +57,6 @@ beforeAll(async () => {
   process.env.DESK_HOME = home;
 
   process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-
-  // Paid-provider tests require keys in user_settings. Pull whatever's set
-  // in the host env into the seeded user's row so opencode in the sandbox
-  // can see them.
-  const envKeys: Record<string, string> = {};
-  if (process.env.ANTHROPIC_API_KEY) envKeys.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (process.env.OPENAI_API_KEY) envKeys.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (Object.keys(envKeys).length > 0) {
-    const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
-    await queries.userSettings.setProviderKeys(pool, rows[0].id as string, envKeys);
-  }
 
   const runManager = createRunManager({
     pool,
@@ -132,32 +119,14 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     }
   }, 90_000);
 
-  it("?provider=opencode returns only opencode models", async () => {
+  it("?provider=opencode returns only opencode models, including the free gpt-5-nano model", async () => {
     const res = await httpJson("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
     expect(body.every((m) => m.provider === "opencode")).toBe(true);
-  }, 60_000);
-
-  // Paid-provider tests — skipped when the corresponding key is absent.
-  const itIfAnthropic = HAS_ANTHROPIC_KEY ? it : it.skip;
-  itIfAnthropic("?provider=anthropic returns only anthropic models", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=anthropic", token);
-    expect(res.status).toBe(200);
-    const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "anthropic")).toBe(true);
-  }, 60_000);
-
-  const itIfOpenAI = HAS_OPENAI_KEY ? it : it.skip;
-  itIfOpenAI("?provider=openai returns only openai models", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=openai", token);
-    expect(res.status).toBe(200);
-    const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "openai")).toBe(true);
+    expect(body.some((m) => m.id === "opencode/gpt-5-nano")).toBe(true);
   }, 60_000);
 });
 

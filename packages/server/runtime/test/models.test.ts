@@ -14,10 +14,10 @@ afterEach(() => {
 describe("parseModelsOutput", () => {
   it("parses provider/model lines", () => {
     const out = parseModelsOutput(
-      "anthropic/claude-opus-4-7\nopenai/gpt-5\n  \nopencode/big-pickle\n",
+      "opencode/gpt-5-nano\nopenai/gpt-5\n  \nopencode/big-pickle\n",
     );
     expect(out).toEqual([
-      { id: "anthropic/claude-opus-4-7", provider: "anthropic" },
+      { id: "opencode/gpt-5-nano", provider: "opencode" },
       { id: "openai/gpt-5", provider: "openai" },
       { id: "opencode/big-pickle", provider: "opencode" },
     ]);
@@ -41,6 +41,6 @@ describe("listModels", () => {
     await expect(listModels("wks_test", "desk", { provider: "opencode" })).resolves.toEqual([
       { id: "opencode/big-pickle", provider: "opencode" },
     ]);
-    await expect(listModels("wks_test", "desk", { provider: "anthropic" })).resolves.toEqual([]);
+    await expect(listModels("wks_test", "desk", { provider: "openai" })).resolves.toEqual([]);
   });
 });

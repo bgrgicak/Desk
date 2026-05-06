@@ -909,9 +909,9 @@ describe("API e2e (real Postgres)", () => {
 
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
- * Anthropic → assistant message persisted → WS event. Auto-skips without
- * ANTHROPIC_API_KEY or when no usable container engine + sandbox image is
- * available locally.
+ * opencode CLI → free opencode/gpt-5-nano model → assistant message persisted
+ * → WS event. Auto-skips when no usable container engine + sandbox image is
+ * available locally. No API keys required.
  */
 const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   try {
@@ -923,8 +923,10 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
-  "real-stack e2e (real Anthropic + Docker)",
+const FREE_MODEL = "opencode/gpt-5-nano";
+
+describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
+  "real-stack e2e (real Docker + free opencode model)",
   () => {
   let realPool: Pool;
   let realServer: http.Server;
@@ -979,38 +981,18 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
 
     const storage = { pool: realPool, home: realHome };
 
-    // Use real Anthropic API but bypass Docker sandbox
-    const runManager = createRunManager({
-      pool: realPool,
-      execRunFn: async (_runId, _agentId, prompt, onLog, execOpts) => {
-        // Call real Anthropic API, using agent instructions as the Anthropic system param
-        const apiKey = process.env.ANTHROPIC_API_KEY!;
-        const body: Record<string, unknown> = {
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 256,
-          messages: [{ role: "user", content: prompt }],
-        };
-        if (execOpts?.agentFileInput?.instructions) {
-          body.system = execOpts.agentFileInput.instructions;
-        }
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json() as { content?: Array<{ text: string }> };
-        const text = data.content?.[0]?.text ?? "no response";
-        await onLog({ runId: _runId, seq: 0, kind: "stdout", payload: text });
-        return { exitCode: res.ok ? 0 : 1 };
-      },
-    });
+    // No execRunFn — let the scheduler invoke the real opencode driver in a
+    // real Docker sandbox. The seeded agent's model is patched to the free
+    // opencode/gpt-5-nano below so this runs without paid provider keys.
+    const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
     const broadcastUserId = userRows[0].id as string;
+
+    // The seeded agent defaults to opencode/big-pickle. Switch it to the
+    // smaller, faster free model the suite uses so each spec finishes in a
+    // bearable time.
+    await realPool.query("UPDATE agents SET model = ?", [FREE_MODEL]);
 
     realServer = createApp({ pool: realPool, storage, runManager, broadcastUserId });
     await new Promise<void>((resolve) => realServer.listen(0, "127.0.0.1", resolve));
@@ -1022,6 +1004,18 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
     clearConnections();
     realServer?.close();
     if (realPool) await realPool.end();
+
+    // The scheduler spawned a real desk-sandbox-* container during the run.
+    // Best-effort remove so test runs don't leave detritus on the host.
+    try {
+      const { detectEngine } = await import("@agent-desk/runtime");
+      const engine = await detectEngine();
+      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      for (const c of containers) {
+        await engine.remove(c.id, true).catch(() => {});
+      }
+    } catch { /* engine may not be available; nothing to clean */ }
+
     if (realHome) await fs.rm(realHome, { recursive: true, force: true });
     if (realDbPath) await fs.rm(path.dirname(realDbPath), { recursive: true, force: true });
   });
@@ -1058,8 +1052,8 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
 
     // Poll the chat's messages for an agent reply (messages-as-truth).
     let assistantMsgs: Array<{ role: string; content: unknown }> = [];
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
+    for (let i = 0; i < 150; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
       const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
       if (msgsRes.status !== 200) continue;
       const messages = msgsRes.body as { items: Array<{ role: string; content: unknown }> };
@@ -1067,7 +1061,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (assistantMsgs.length > 0) break;
     }
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
-  }, 120000); // Allow up to 2 minutes for real Anthropic
+  }, 360_000); // Free opencode runs are slower than paid APIs
 
   // G10: Agent instructions actually reach the running agent
   it("PATCH /agents/:id instructions are used as system prompt and affect agent output", async () => {
@@ -1141,7 +1135,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
     };
 
     let agentText = "";
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 150; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
       if (msgsRes.status !== 200) continue;
@@ -1153,5 +1147,5 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (agentText.includes("CORSAIR_SENTINEL")) break;
     }
     expect(agentText).toContain("CORSAIR_SENTINEL");
-  }, 180000);
+  }, 360_000);
 });

@@ -371,13 +371,13 @@ authenticated.
 
 **Query parameters:**
 
-- `provider` (optional) — restrict to a single provider, e.g. `anthropic`
+- `provider` (optional) — restrict to a single provider, e.g. `opencode`
 
 **Response:** bare array, matching `/workspaces`, `/agents`, `/runs`.
 
 ```json
 [
-  { "id": "anthropic/claude-opus-4-7", "provider": "anthropic" }
+  { "id": "opencode/gpt-5-nano", "provider": "opencode" }
 ]
 ```
 

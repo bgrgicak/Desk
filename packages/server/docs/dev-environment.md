@@ -18,9 +18,10 @@ lives under `~/Desk/`.
   Detection lives in
   [`packages/server/runtime/src/engine.ts`](../runtime/src/engine.ts);
   override the auto-pick with `DESK_CONTAINER_ENGINE=docker|nerdctl`.
-- A `.env` file at the repo root with an `ANTHROPIC_API_KEY=…`
-  (gitignored). The dev script generates `DESK_SECRET_KEY` on first
-  run and appends it here.
+- A `.env` file at the repo root (gitignored). The dev script
+  generates `DESK_SECRET_KEY` on first run and writes it here.
+  AI-provider API keys are configured per-user via
+  Settings → Connections, not via this file.
 
 ## First-time setup
 

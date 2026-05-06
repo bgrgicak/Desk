@@ -5,9 +5,10 @@
 | Variable | Default | Purpose |
 |---|---|---|
 | `DESK_HOME` | `$HOME` | Where the test fixture writes per-run sqlite + workspace dirs (under a `mkdtemp` subdir, not the user's real `~/Desk`) |
-| `ANTHROPIC_API_KEY` | (none) | Enables real AI end-to-end tests. Loaded from `.env` at repo root |
 | Docker daemon | auto-detected | Sandbox integration tests run when `docker info` succeeds. Rootful and rootless Linux + macOS Docker Desktop all work |
 | `at` / `crontab` | auto-detected | Scheduler integration tests run when the commands are available |
+
+Real AI tests use the free `opencode/gpt-5-nano` model and require no API key.
 
 ## Running tests
 
@@ -47,8 +48,10 @@ login, CRUD, message sending, run triggering, and WebSocket event
 delivery. The Playwright suite drives the UI through Vite's preview
 proxy at `:5179`.
 
-When `ANTHROPIC_API_KEY` is set, the runtime `opencode.test.ts`
-exercises a real AI invocation inside a real Docker container.
+The runtime `opencode.test.ts` and the API `e2e.test.ts` real-stack
+block exercise a real AI invocation inside a real Docker container
+against the free `opencode/gpt-5-nano` model — no API key required.
+They auto-skip when the sandbox image isn't available locally.
 
 ## Test isolation
 
