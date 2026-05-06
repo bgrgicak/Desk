@@ -18,6 +18,7 @@ import {
   createOrReuse,
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
+  estimateMessagesTokens,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
@@ -644,9 +645,25 @@ export function createRunManager(opts: RunManagerOptions) {
     await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
-  /** Schedules a summary refresh for the chat, replacing any still-pending refresh. */
+  /**
+   * Hybrid summary trigger (memory-system spec, P2.2).
+   *
+   * Counts tokens in the transcript-since-last-summary; if the token
+   * budget breaches `SUMMARY_TRIGGER_FRACTION` of the model context
+   * window, fire the summary immediately (executeAt = now). Otherwise
+   * the existing time-based 30-minute fallback applies.
+   *
+   * The model context window defaults to 200_000 tokens (Claude
+   * Sonnet/Opus and most modern frontier models) and can be overridden
+   * via `DESK_SUMMARY_MODEL_CONTEXT_WINDOW`. The fraction can be
+   * overridden via `DESK_SUMMARY_TRIGGER_FRACTION` (default `0.6`).
+   */
   async function scheduleSummary(chatId: string): Promise<void> {
     await cancelSummaryForChat(chatId);
+    const urgent = await isSummaryBudgetExceeded(chatId);
+    const executeAt = urgent
+      ? new Date().toISOString()
+      : new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const messageId = generateId("message");
     await queries.messages.insert(pool, {
       id: messageId,
@@ -655,8 +672,35 @@ export function createRunManager(opts: RunManagerOptions) {
       content: { type: "summary_request" },
       state: "pending",
       kind: "summary",
-      executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      executeAt,
     });
+  }
+
+  function summaryModelContextWindow(): number {
+    const fromEnv = Number.parseInt(
+      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW ?? "",
+      10,
+    );
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 200_000;
+  }
+
+  function summaryTriggerFraction(): number {
+    const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
+    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.6;
+  }
+
+  async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
+    const items = await queries.messages.listAgentContextByChat(pool, chatId);
+    const tokenized = items
+      .filter(shouldIncludeInPromptContext)
+      .map((m) => {
+        const formatted = formatMessageForPrompt(m);
+        return formatted ? { role: formatted.role, text: formatted.text } : null;
+      })
+      .filter((m): m is { role: string; text: string } => m !== null);
+    const used = estimateMessagesTokens(tokenized);
+    const budget = Math.floor(summaryModelContextWindow() * summaryTriggerFraction());
+    return used >= budget;
   }
 
   async function cancelSummaryForChat(chatId: string): Promise<void> {

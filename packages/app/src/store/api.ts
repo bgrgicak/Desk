@@ -471,6 +471,24 @@ export const api = createApi({
         { type: "Message", id: "CROSS" },
       ],
     }),
+    /**
+     * Snapshot history for a `summary`-content message. Each PATCH and
+     * each AI-driven refresh writes the prior body into
+     * `.chats/{chatId}/notes/.history/`. Used by the dev UI to show a
+     * red/green diff against the most recent snapshot whenever a summary
+     * is regenerated (memory-system spec, P2.5).
+     */
+    getSummaryHistory: build.query<
+      { versions: Array<{ timestamp: string; body: string }> },
+      { chatId: string; messageId: string }
+    >({
+      query: ({ chatId, messageId }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/summary-history`,
+      }),
+      providesTags: (_r, _e, { messageId }) => [
+        { type: "Message", id: `SUMMARY_HISTORY_${messageId}` },
+      ],
+    }),
 
     // ── Cross-chat messages (runs, today) ─────────────────────────────
     getMessages: build.query<ListMessagesResponse, MessagesFilter>({
@@ -726,6 +744,7 @@ export const {
   usePatchMessageMutation,
   useDeleteMessageMutation,
   useRunMessageMutation,
+  useGetSummaryHistoryQuery,
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,

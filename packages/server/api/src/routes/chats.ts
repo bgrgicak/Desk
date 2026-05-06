@@ -22,6 +22,7 @@ import {
   copyLibraryAppToChat,
   replaceLibraryAppFromChat,
   snapshotSummary,
+  snapshotAndReplaceSummary,
   trashChatDirectories,
   uploadArtifact,
   validateLibrarySubpath,
@@ -446,12 +447,20 @@ export async function patchMessage(
       const chat = await queries.chats.findById(pool, chatId);
       const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
       if (ws) {
-        if (prev?.type === "summary" && typeof prev.body === "string") {
-          await snapshotSummary(storage.home, ws.path, chatId, messageId, prev.body);
-        }
         const next = data.content as { type?: string; body?: string };
         if (next?.type === "summary" && typeof next.body === "string") {
-          await materializeSummary(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+          // Per-chat lock + atomic write — two concurrent PATCHes can no
+          // longer drop the intermediate body from history.
+          await snapshotAndReplaceSummary(
+            storage.home,
+            ws.path,
+            chatId,
+            messageId,
+            next.body,
+          ).catch(() => { /* best-effort */ });
+        } else if (prev?.type === "summary" && typeof prev.body === "string") {
+          // Content changed away from a summary — preserve the body in history.
+          await snapshotSummary(storage.home, ws.path, chatId, messageId, prev.body);
         }
       }
     }

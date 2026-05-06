@@ -54,6 +54,7 @@ export type { LibraryContext, FolderRef, CreateLinkInput, IgnoreFrame } from "./
 export { reconcileArtifactRefs } from "./reconcile.js";
 export {
   snapshotSummary,
+  snapshotAndReplaceSummary,
   listSummaryHistory,
   summaryHistoryDir,
   summaryStorageDir,

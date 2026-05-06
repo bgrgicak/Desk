@@ -144,8 +144,14 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Chat summary");
     expect(body).toContain("Do not write `chat-summary.md`");
     expect(body).toContain("# Chat Summary — <short descriptive title>");
-    expect(body).toContain("## Conversation arc");
-    expect(body).toContain("## Open threads");
+    // Thread-based format (P2.3): active / closed / open-threads sections.
+    expect(body).toContain("## Active threads");
+    expect(body).toContain("## Closed threads");
+    expect(body).toContain("## Open threads / next steps");
+    expect(body).toContain("Preserve every fact from the prior summary");
+    // Old chronology-based "Conversation arc" + "Artifacts" table are gone.
+    expect(body).not.toContain("## Conversation arc");
+    expect(body).not.toContain("| File | Description |");
     expect(body).toContain("Chat summaries: ~/.chats/chat-abc/notes/");
     expect(body).toContain("Chat artifacts:  ~/.chats/chat-abc/artifacts/");
     expect(body).not.toContain("## Your workspace");
