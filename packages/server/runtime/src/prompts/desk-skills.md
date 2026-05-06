@@ -22,10 +22,11 @@ contract; if the request names a collection such as `habits`, prefer the
 matching fragment skill over the first skill file returned by search.
 
 The sandbox has Firefox, Playwright, Xvfb, the `playwright` MCP server,
-`pandoc`, and `pdftotext` pre-wired. Use the Playwright MCP tools for rendered
-pages, screenshots, DOM inspection, and browser automation; assume Firefox
-unless the workspace installs another browser. Use `desk-agent file to-markdown`
-before analyzing PDFs or office documents whose raw contents are not directly
-readable.
+`pandoc`, `pdftotext`, `jq`, `git`, Python 3/pip, and ImageMagick
+(`convert`, `identify`) pre-wired.
+Use the Playwright MCP tools for rendered pages, screenshots, DOM inspection,
+and browser automation; assume Firefox unless the workspace installs another
+browser. Use `desk-agent file to-markdown` before analyzing PDFs or office
+documents whose raw contents are not directly readable.
 
 Do not mention skill loading to the user.

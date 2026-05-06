@@ -147,12 +147,25 @@ describeIf("sandbox integration", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toContain("hello from sandbox");
   });
 
-  it("ships document conversion tools", async () => {
+  it("ships baseline CLI tools", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
     const h = await engine.exec({
       containerId: handle.containerId,
-      cmd: ["sh", "-lc", "pandoc --version >/dev/null && pdftotext -v >/dev/null && desk-agent file to-markdown --help >/dev/null"],
+      cmd: [
+        "sh",
+        "-lc",
+        [
+          "pandoc --version >/dev/null",
+          "pdftotext -v >/dev/null",
+          "jq --version >/dev/null",
+          "git --version >/dev/null",
+          "python3 --version >/dev/null",
+          "python3 -m pip --version >/dev/null",
+          "convert --version >/dev/null",
+          "desk-agent file to-markdown --help >/dev/null",
+        ].join(" && "),
+      ],
     });
     const stderr: Buffer[] = [];
     h.stderr.on("data", (c: Buffer) => stderr.push(c));
