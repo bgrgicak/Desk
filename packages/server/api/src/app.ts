@@ -594,6 +594,7 @@ export function createApp(opts: AppOptions): Server {
         : null;
 
       let hits = await queries.findArtifacts.findArtifacts(pool, {
+        home: storage.home,
         query: q || undefined,
         kind:
           kindParam === "app" || kindParam === "fragment" ||

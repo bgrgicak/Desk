@@ -5,6 +5,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import { Pool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
 import { generateId } from "@agent-desk/shared";
@@ -15,10 +16,12 @@ import {
   indexLibraryFile,
   indexAppManifest,
   indexFragmentManifest,
+  backfillWorkspaceLibrary,
 } from "@agent-desk/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
+import * as libraryRoutes from "../src/routes/library.js";
 
 let pool: Pool;
 let server: http.Server;
@@ -151,17 +154,22 @@ describe("GET /sandbox/find/artifacts", () => {
     expect(body.hits[0].kind).toBe("note");
   });
 
-  it("filters by kind=fragment", async () => {
+  it("filters by kind=fragment and returns params_schema", async () => {
     const token = await issueSandboxToken(workspaceAId);
     const res = await sandboxGet(
       `/sandbox/find/artifacts?q=${encodeURIComponent("list")}&kind=fragment`,
       token,
     );
     expect(res.status).toBe(200);
-    const body = res.body as { hits: Array<{ kind: string; path: string }> };
+    const body = res.body as {
+      hits: Array<{ kind: string; path: string; params_schema?: Record<string, string> }>;
+    };
     expect(body.hits.length).toBe(1);
     expect(body.hits[0].kind).toBe("fragment");
     expect(body.hits[0].path).toBe("todos.app/fragments/list");
+    // P86.1 — fragment hits must surface the manifest's params block so
+    // the agent can parameterize an inline embed.
+    expect(body.hits[0].params_schema).toEqual({ "filter?": "all | open | done" });
   });
 
   it("returns recently-modified artifacts when no query is provided", async () => {
@@ -178,5 +186,52 @@ describe("GET /sandbox/find/artifacts", () => {
       "tok_does-not-exist",
     );
     expect(res.status).toBe(401);
+  });
+
+  it("indexes new files written through the library route (P86.2 on-write hook)", async () => {
+    // Drop a note via the library save handler and verify the search
+    // index picks it up immediately, with no manual indexer call.
+    const root = workspaceRootPath(home, workspaceASlug);
+    await fs.mkdir(path.join(root, "notes"), { recursive: true });
+    // Pre-create the file so saveContent (overwrite) succeeds; on-write
+    // indexing covers create + update.
+    await fs.writeFile(path.join(root, "notes/hooked.md"), "");
+    await libraryRoutes.saveContent(
+      { pool, home },
+      workspaceAId,
+      "notes/hooked.md",
+      Readable.from(["Hooked-on-write content about ferrets."]),
+      () => {},
+    );
+
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("ferrets")}`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ kind: string; path: string }> };
+    expect(body.hits.some((h) => h.path === "notes/hooked.md")).toBe(true);
+  });
+
+  it("indexes files placed on disk before backfill (P86.2 boot backfill)", async () => {
+    // Simulate boot-time backfill: drop a file directly on disk and
+    // call the same helper main.ts runs at startup.
+    const root = workspaceRootPath(home, workspaceASlug);
+    await fs.mkdir(path.join(root, "notes"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "notes/preboot.md"),
+      "Preboot note about chinchillas.",
+    );
+    await backfillWorkspaceLibrary(pool, home, workspaceASlug);
+
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("chinchillas")}`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ kind: string; path: string }> };
+    expect(body.hits.some((h) => h.path === "notes/preboot.md")).toBe(true);
   });
 });

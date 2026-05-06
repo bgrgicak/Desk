@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Readable } from "node:stream";
 import { queries } from "@agent-desk/db";
 import { ConflictError, NotFoundError, type WsEvent } from "@agent-desk/shared";
@@ -12,6 +13,10 @@ import {
   downloadFile,
   statFile,
   overwriteFile,
+  indexLibraryFile,
+  indexAppManifest,
+  indexFragmentManifest,
+  unindexLibraryPath,
   type StorageContext,
   type FileRef,
   type FolderRef,
@@ -25,6 +30,41 @@ async function resolveSlug(ctx: StorageContext, workspaceId: string): Promise<st
   const ws = await queries.workspaces.findById(ctx.pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
   return ws.path;
+}
+
+/**
+ * Memory-system Phase 4 — every library write is mirrored into the
+ * `chat_search_index` so `find_artifacts` can return notes/apps users
+ * just created. Indexing is best-effort: a failure here must never
+ * unwind the original write, otherwise a search-index hiccup would
+ * surface as a "save failed" to the user.
+ *
+ * The relPath is inspected to decide which indexer to invoke:
+ *   - `desk.app.json`        → indexAppManifest on the parent dir
+ *   - `desk.fragment.json`   → indexFragmentManifest on the parent dir
+ *   - any other library file → indexLibraryFile on the file itself
+ */
+async function indexLibraryWrite(
+  ctx: StorageContext,
+  slug: string,
+  relPath: string,
+): Promise<void> {
+  const baseName = path.posix.basename(relPath);
+  const parentRel = path.posix.dirname(relPath);
+  try {
+    if (baseName === "desk.app.json") {
+      await indexAppManifest(ctx.pool, ctx.home, slug, parentRel === "." ? "" : parentRel);
+      return;
+    }
+    if (baseName === "desk.fragment.json") {
+      await indexFragmentManifest(ctx.pool, ctx.home, slug, parentRel === "." ? "" : parentRel);
+      return;
+    }
+    await indexLibraryFile(ctx.pool, ctx.home, slug, relPath);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("library index hook failed:", relPath, err);
+  }
 }
 
 export async function list(
@@ -74,6 +114,8 @@ export async function upload(
     subpath: data.subpath,
   });
 
+  await indexLibraryWrite(ctx, slug, file.path);
+
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "added" },
@@ -116,6 +158,7 @@ export async function saveContent(
     }
   }
   const file = await overwriteFile(ctx, slug, relPath, stream);
+  await indexLibraryWrite(ctx, slug, file.path);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "updated" },
@@ -152,6 +195,7 @@ export async function createLink(
     url: input.url,
     subpath: input.subpath,
   });
+  await indexLibraryWrite(ctx, slug, file.path);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "added" },
@@ -195,6 +239,14 @@ export async function move(
   const result = await moveLibraryEntry(ctx, slug, from, to);
   if (result.kind === "file") {
     await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, from, to);
+    // Re-key the search index from the old path to the new one.
+    try {
+      await unindexLibraryPath(ctx.pool, from);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("library unindex (move) failed:", from, err);
+    }
+    await indexLibraryWrite(ctx, slug, to);
   } else {
     await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, from, to);
   }
@@ -235,6 +287,23 @@ export async function remove(
 ): Promise<void> {
   const slug = await resolveSlug(ctx, workspaceId);
   await deleteLibraryEntry(ctx, slug, relPath);
+  // Best-effort unindex; if relPath was a file, this drops its row. If
+  // it was a directory we also drop the parent path of any nested
+  // manifests/files (handled implicitly because manifest rows are keyed
+  // by the directory's relPath, and file rows by the file path itself).
+  try {
+    const parent = path.posix.dirname(relPath);
+    await unindexLibraryPath(ctx.pool, relPath);
+    // If a manifest's parent directory was deleted, the manifest row
+    // is keyed on the parent dir — also try unindexing that.
+    const baseName = path.posix.basename(relPath);
+    if (baseName === "desk.app.json" || baseName === "desk.fragment.json") {
+      await unindexLibraryPath(ctx.pool, parent === "." ? "" : parent);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("library unindex (remove) failed:", relPath, err);
+  }
   emit({
     type: "library.changed",
     payload: { workspaceId, path: relPath, op: "removed" },

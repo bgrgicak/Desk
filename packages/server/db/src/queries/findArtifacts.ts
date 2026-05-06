@@ -1,3 +1,11 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import {
+  AppManifestSchema,
+  FragmentManifestSchema,
+  type AppManifest,
+  type FragmentManifest,
+} from "@agent-desk/shared";
 import { type Pool } from "../pool.js";
 
 export type ArtifactKind = "app" | "fragment" | "note" | "doc";
@@ -19,6 +27,11 @@ export interface FindArtifactsParams {
   workspaceSlug?: string;
   /** Max rows returned. Defaults to 25, capped at 100. */
   limit?: number;
+  /**
+   * DESK_HOME root. Required when manifests need to be re-read from
+   * disk to populate `params_schema` on app/fragment hits.
+   */
+  home: string;
 }
 
 export interface FindArtifactsHit {
@@ -34,6 +47,12 @@ export interface FindArtifactsHit {
   lastModified: string;
   /** Relevance score: token-occurrence count. */
   score: number;
+  /**
+   * For `kind === "app"` or `kind === "fragment"`, the manifest's
+   * `params` block — the agent uses this to know what to pass when
+   * embedding a fragment inline. Absent for note/doc hits.
+   */
+  params_schema?: Record<string, string>;
 }
 
 const ARTIFACT_KINDS: readonly ArtifactKind[] = ["app", "fragment", "note", "doc"];
@@ -66,20 +85,55 @@ function firstLine(s: string): string {
   return (nl === -1 ? s : s.slice(0, nl)).trim();
 }
 
-function describeHit(kind: ArtifactKind, path: string, body: string): { name: string; description: string } {
+function describeHit(kind: ArtifactKind, p: string, body: string): { name: string; description: string } {
   if (kind === "app" || kind === "fragment") {
     // Manifest body is `name\ndescription\nparams`. Recover the first
     // two lines as name + description.
     const [name, ...rest] = body.split("\n");
     return {
-      name: name?.trim() || basenameWithoutExt(path),
+      name: name?.trim() || basenameWithoutExt(p),
       description: rest.join("\n").split("\n")[0]?.trim() || "",
     };
   }
   return {
-    name: path.split("/").pop() ?? path,
+    name: p.split("/").pop() ?? p,
     description: firstLine(body),
   };
+}
+
+/**
+ * Re-reads a manifest from disk and returns its `params` block. Falls
+ * back to `undefined` on missing/invalid manifests — `find_artifacts`
+ * is best-effort, so a manifest that can't be parsed still yields a
+ * hit, just without `params_schema`.
+ *
+ * Re-reading at query time is preferable to parsing the indexed body:
+ * `manifestSearchBody` flattens params with `=` and ` ` separators, so
+ * values containing whitespace round-trip lossily.
+ */
+async function readManifestParams(
+  home: string,
+  workspaceSlug: string,
+  relPath: string,
+  kind: "app" | "fragment",
+): Promise<Record<string, string> | undefined> {
+  if (!workspaceSlug) return undefined;
+  const fileName = kind === "app" ? "desk.app.json" : "desk.fragment.json";
+  const manifestPath = path.join(home, "Desk", "workspaces", workspaceSlug, relPath, fileName);
+  let raw: string;
+  try {
+    raw = await fs.readFile(manifestPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const manifest: AppManifest | FragmentManifest =
+      kind === "app" ? AppManifestSchema.parse(parsed) : FragmentManifestSchema.parse(parsed);
+    return manifest.params;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -96,20 +150,24 @@ export async function findArtifacts(
 ): Promise<FindArtifactsHit[]> {
   const limit = Math.max(1, Math.min(params.limit ?? 25, 100));
   const tokens = tokenize(params.query ?? "");
-  const kindFilter =
-    params.kind && params.kind !== "any"
-      ? ARTIFACT_KINDS.includes(params.kind as ArtifactKind)
-        ? `AND kind = '${params.kind}'`
-        : "AND 1 = 0"
-      : `AND kind IN ('app', 'fragment', 'note', 'doc')`;
+  const sqlParams: unknown[] = [];
+
+  let kindFilter: string;
+  if (params.kind && params.kind !== "any") {
+    if (ARTIFACT_KINDS.includes(params.kind as ArtifactKind)) {
+      kindFilter = "AND kind = ?";
+      sqlParams.push(params.kind);
+    } else {
+      kindFilter = "AND 1 = 0";
+    }
+  } else {
+    kindFilter = "AND kind IN ('app', 'fragment', 'note', 'doc')";
+  }
+
   const workspaceClause =
     params.workspaceSlug && params.workspaceSlug !== "*"
       ? "AND workspace_slug = ?"
       : "";
-
-  const sqlParams: unknown[] = [];
-  // Order matters: bind in the same order placeholders appear in the SQL
-  // (workspace_slug first, then the LIKE tokens, then LIMIT).
   if (params.workspaceSlug && params.workspaceSlug !== "*") {
     sqlParams.push(params.workspaceSlug);
   }
@@ -135,32 +193,40 @@ export async function findArtifacts(
     sqlParams,
   );
 
-  const hits: FindArtifactsHit[] = rows.map((row) => {
-    const body = row.body as string;
-    const bodyLc = row.body_lc as string;
-    let score = 0;
-    for (const tok of tokens) {
-      let from = 0;
-      while (true) {
-        const idx = bodyLc.indexOf(tok, from);
-        if (idx === -1) break;
-        score += 1;
-        from = idx + tok.length;
+  const hits: FindArtifactsHit[] = await Promise.all(
+    rows.map(async (row) => {
+      const body = row.body as string;
+      const bodyLc = row.body_lc as string;
+      let score = 0;
+      for (const tok of tokens) {
+        let from = 0;
+        while (true) {
+          const idx = bodyLc.indexOf(tok, from);
+          if (idx === -1) break;
+          score += 1;
+          from = idx + tok.length;
+        }
       }
-    }
-    const kind = row.kind as ArtifactKind;
-    const path = row.ref_id as string;
-    const { name, description } = describeHit(kind, path, body);
-    return {
-      kind,
-      path,
-      name,
-      description,
-      workspaceSlug: (row.workspace_slug as string | null) ?? "",
-      lastModified: row.created_at as string,
-      score,
-    };
-  });
+      const kind = row.kind as ArtifactKind;
+      const refPath = row.ref_id as string;
+      const workspaceSlug = (row.workspace_slug as string | null) ?? "";
+      const { name, description } = describeHit(kind, refPath, body);
+      const hit: FindArtifactsHit = {
+        kind,
+        path: refPath,
+        name,
+        description,
+        workspaceSlug,
+        lastModified: row.created_at as string,
+        score,
+      };
+      if (kind === "app" || kind === "fragment") {
+        const paramsSchema = await readManifestParams(params.home, workspaceSlug, refPath, kind);
+        if (paramsSchema) hit.params_schema = paramsSchema;
+      }
+      return hit;
+    }),
+  );
 
   hits.sort((a, b) => b.score - a.score || (a.lastModified < b.lastModified ? 1 : -1));
   return hits.slice(0, limit);

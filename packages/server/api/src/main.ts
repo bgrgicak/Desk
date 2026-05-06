@@ -16,6 +16,7 @@ import {
   enforceLogRetention,
   reconcileArtifactRefs,
   resolveDeskHome,
+  backfillWorkspaceLibrary,
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
@@ -87,6 +88,33 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(
       `artifactRef reconcile: checked=${reconciled.checked} repaired=${reconciled.repaired} missing=${reconciled.missing}`,
+    );
+  }
+
+  // Memory-system Phase 4 — boot-time library backfill. Walks every
+  // workspace and repopulates the search index for files placed on
+  // disk while the server was down. `INSERT OR REPLACE` keeps this
+  // idempotent on every boot. Sequential on purpose: workspaces are
+  // few and concurrency would be premature here.
+  {
+    const workspacesForIndex = await queries.workspaces.list(pool);
+    const indexStart = Date.now();
+    let totalFiles = 0;
+    let totalManifests = 0;
+    for (const ws of workspacesForIndex) {
+      try {
+        const res = await backfillWorkspaceLibrary(pool, DESK_HOME, ws.path);
+        totalFiles += res.filesIndexed;
+        totalManifests += res.manifestsIndexed;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`library backfill failed for workspace ${ws.path}:`, err);
+      }
+    }
+    const ms = Date.now() - indexStart;
+    // eslint-disable-next-line no-console
+    console.log(
+      `library backfill: indexed ${totalFiles} files / ${totalManifests} manifests across ${workspacesForIndex.length} workspaces in ${ms} ms`,
     );
   }
 
