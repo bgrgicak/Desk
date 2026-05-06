@@ -128,15 +128,63 @@ describe("indexAppManifest + indexFragmentManifest", () => {
     expect(paramHits.find((h) => h.ref_id === "todos.app/fragments/list")).toBeTruthy();
   });
 
-  it("rejects an invalid manifest by silently skipping", async () => {
+  it("indexes a degraded entry when validation fails (so the manifest is still findable)", async () => {
     await writeWorkspaceFile(
       "broken.app/desk.app.json",
       JSON.stringify({ name: "broken", description: "" }), // empty description rejected
     );
     await indexAppManifest(pool, home, workspaceASlug, "broken.app");
 
+    // Searchable by name even though strict validation rejects the manifest.
     const hits = await searchRefIds("broken");
-    expect(hits.find((h) => h.ref_id === "broken.app")).toBeUndefined();
+    expect(hits.find((h) => h.ref_id === "broken.app" && h.kind === "app")).toBeTruthy();
+  });
+
+  it("accepts unknown fields like displayName on a fragment manifest", async () => {
+    await writeWorkspaceFile(
+      "todos.app/fragments/note-editor/desk.fragment.json",
+      JSON.stringify({
+        name: "note-editor",
+        displayName: "Note Editor", // extra field — strict() would reject
+        description: "Edit a single note inline.",
+        params: { note_id: "string" },
+      }),
+    );
+    await indexFragmentManifest(
+      pool,
+      home,
+      workspaceASlug,
+      "todos.app/fragments/note-editor",
+    );
+
+    const hits = await searchRefIds("edit a single note");
+    const hit = hits.find((h) => h.ref_id === "todos.app/fragments/note-editor");
+    expect(hit?.kind).toBe("fragment");
+
+    // params should still be searchable, proving full (not degraded) indexing.
+    const paramHits = await searchRefIds("note_id");
+    expect(paramHits.find((h) => h.ref_id === "todos.app/fragments/note-editor")).toBeTruthy();
+  });
+
+  it("indexes a degraded fragment entry when JSON is unparseable", async () => {
+    await writeWorkspaceFile(
+      "junk.app/fragments/garbage/desk.fragment.json",
+      "{ this is not json", // unparseable
+    );
+    await indexFragmentManifest(
+      pool,
+      home,
+      workspaceASlug,
+      "junk.app/fragments/garbage",
+    );
+
+    // Falls back to the directory basename as the indexed name.
+    const hits = await searchRefIds("garbage");
+    expect(
+      hits.find(
+        (h) => h.ref_id === "junk.app/fragments/garbage" && h.kind === "fragment",
+      ),
+    ).toBeTruthy();
   });
 });
 
@@ -189,5 +237,51 @@ describe("backfillWorkspaceLibrary", () => {
     expect(refs.has("todos.app")).toBe(true);
     // Hidden dir skipped.
     expect(refs.has(".chats/secret.md")).toBe(false);
+  });
+
+  it("does not double-index manifest files (no kind=doc twin for desk.app.json/desk.fragment.json)", async () => {
+    const slug = `libidx-noDouble-${Date.now().toString(36)}`;
+    const wsId = generateId("workspace");
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) SELECT ?, user_id, ?, ? FROM workspaces LIMIT 1`,
+      [wsId, "Libidx NoDouble", slug],
+    );
+    await ensureWorkspaceLayout(home, slug);
+
+    const root = workspaceRootPath(home, slug);
+    await fs.mkdir(path.join(root, "todos.app/fragments/list"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "todos.app/desk.app.json"),
+      JSON.stringify({ name: "todos", description: "Task list app." }),
+    );
+    await fs.writeFile(
+      path.join(root, "todos.app/fragments/list/desk.fragment.json"),
+      JSON.stringify({ name: "list", description: "Inline list view." }),
+    );
+
+    await backfillWorkspaceLibrary(pool, home, slug);
+
+    const { rows } = await pool.query<{ ref_id: string; kind: string }>(
+      `SELECT ref_id, kind FROM chat_search_index WHERE workspace_slug = ? ORDER BY ref_id, kind`,
+      [slug],
+    );
+    // Each manifest path appears exactly once, only under its dedicated kind —
+    // never as kind=doc.
+    const docHits = rows.filter((r) => r.kind === "doc");
+    expect(docHits.find((r) => r.ref_id === "todos.app/desk.app.json")).toBeUndefined();
+    expect(
+      docHits.find(
+        (r) => r.ref_id === "todos.app/fragments/list/desk.fragment.json",
+      ),
+    ).toBeUndefined();
+
+    // The manifest-aware path indexes the parent dir as the ref_id; that
+    // entry should be there exactly once.
+    const appHits = rows.filter((r) => r.kind === "app" && r.ref_id === "todos.app");
+    expect(appHits).toHaveLength(1);
+    const fragHits = rows.filter(
+      (r) => r.kind === "fragment" && r.ref_id === "todos.app/fragments/list",
+    );
+    expect(fragHits).toHaveLength(1);
   });
 });

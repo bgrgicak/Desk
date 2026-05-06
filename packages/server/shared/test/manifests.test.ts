@@ -57,14 +57,16 @@ describe("AppManifestSchema", () => {
     ).toThrow();
   });
 
-  it("rejects unknown top-level keys (strict)", () => {
-    expect(() =>
-      AppManifestSchema.parse({
-        name: "x",
-        description: "x",
-        bogus: 1,
-      }),
-    ).toThrow();
+  it("passes through unknown top-level keys (lenient)", () => {
+    // Hand-authored manifests routinely grow ad-hoc keys (displayName,
+    // version, tags…). Strict mode would silently lose them from the
+    // search index, so we accept-and-ignore.
+    const m = AppManifestSchema.parse({
+      name: "x",
+      description: "x",
+      bogus: 1,
+    });
+    expect(m.name).toBe("x");
   });
 });
 

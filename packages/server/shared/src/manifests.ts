@@ -42,6 +42,11 @@ export type ManifestParams = z.infer<typeof ParamsSchema>;
 
 const APP_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 
+// Passthrough (not strict): manifests authored by hand or copy-pasted
+// from sibling files often grow ad-hoc keys. Rejecting on a stray
+// `displayName` would mean the index silently loses the manifest,
+// which is invisible to the user — they just don't see their
+// fragment in `find_artifacts`. Better to accept and ignore extras.
 export const AppManifestSchema = z
   .object({
     name: z.string().regex(APP_NAME_PATTERN),
@@ -52,7 +57,7 @@ export const AppManifestSchema = z
     fragments: z.array(z.string()).optional(),
     params: ParamsSchema.optional(),
   })
-  .strict();
+  .passthrough();
 
 export type AppManifest = z.infer<typeof AppManifestSchema>;
 
@@ -63,7 +68,7 @@ export const FragmentManifestSchema = z
     capabilities: z.array(z.string()).optional(),
     params: ParamsSchema.optional(),
   })
-  .strict();
+  .passthrough();
 
 export type FragmentManifest = z.infer<typeof FragmentManifestSchema>;
 

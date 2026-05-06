@@ -38,7 +38,15 @@ const READABLE_EXTENSIONS = new Set([
 ]);
 const MAX_INDEXED_BYTES = 256 * 1024;
 
+// Manifest filenames that have their own dedicated indexers
+// (`indexAppManifest` / `indexFragmentManifest`). The generic doc path
+// must skip them, otherwise `find_artifacts` returns the same path
+// twice — once as `kind=app`/`kind=fragment` and once as `kind=doc`.
+const MANIFEST_FILENAMES = new Set(["desk.app.json", "desk.fragment.json"]);
+
 function classifyExt(rel: string): LibraryKind | null {
+  const base = path.basename(rel);
+  if (MANIFEST_FILENAMES.has(base)) return null;
   const ext = path.extname(rel).toLowerCase();
   if (NOTE_EXTENSIONS.has(ext)) return "note";
   if (READABLE_EXTENSIONS.has(ext)) return "doc";
@@ -66,6 +74,21 @@ function manifestSearchBody(m: AppManifest | FragmentManifest): string {
     ? Object.entries(m.params).map(([k, v]) => `${k}=${v}`).join(" ")
     : "";
   const parts = [m.name, m.description, params].filter((p) => p && p.length > 0);
+  return parts.join("\n");
+}
+
+// Best-effort recovery when a manifest fails strict validation: pluck
+// any name/description fields the JSON happens to expose, fall back to
+// the directory basename. The hit ends up with empty params_schema —
+// not great, but better than the manifest never appearing at all.
+function degradedManifestBody(
+  raw: unknown,
+  fallbackName: string,
+): string {
+  const obj = (raw && typeof raw === "object") ? (raw as Record<string, unknown>) : {};
+  const rawName = typeof obj.name === "string" && obj.name.length > 0 ? obj.name : fallbackName;
+  const rawDescription = typeof obj.description === "string" ? obj.description : "";
+  const parts = [rawName, rawDescription].filter((p) => p && p.length > 0);
   return parts.join("\n");
 }
 
@@ -138,15 +161,30 @@ export async function indexAppManifest(
   } catch {
     return;
   }
-  let parsed: AppManifest;
+  let body: string;
+  let parsedJson: unknown;
   try {
-    parsed = AppManifestSchema.parse(JSON.parse(raw));
+    parsedJson = JSON.parse(raw);
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn("indexAppManifest: invalid manifest", appDirRelPath, err);
-    return;
+    console.warn("indexAppManifest: unparseable JSON", appDirRelPath, err);
+    parsedJson = null;
   }
-  const body = manifestSearchBody(parsed);
+  const parseResult = AppManifestSchema.safeParse(parsedJson);
+  if (parseResult.success) {
+    body = manifestSearchBody(parseResult.data);
+  } else {
+    // Degraded: still index so the agent can find the manifest by name,
+    // even when an extra field or missing description trips validation.
+    // eslint-disable-next-line no-console
+    console.warn(
+      "indexAppManifest: invalid manifest, indexing degraded entry",
+      appDirRelPath,
+      parseResult.error.issues,
+    );
+    const fallbackName = appDirRelPath.split("/").pop() || appDirRelPath || "app";
+    body = degradedManifestBody(parsedJson, fallbackName);
+  }
   const stat = await fs.stat(manifestPath).catch(() => null);
   const createdAt = stat ? stat.mtime.toISOString() : new Date().toISOString();
   await upsertIndex(pool, "app", appDirRelPath, workspaceSlug, body, createdAt);
@@ -170,15 +208,29 @@ export async function indexFragmentManifest(
   } catch {
     return;
   }
-  let parsed: FragmentManifest;
+  let body: string;
+  let parsedJson: unknown;
   try {
-    parsed = FragmentManifestSchema.parse(JSON.parse(raw));
+    parsedJson = JSON.parse(raw);
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn("indexFragmentManifest: invalid manifest", fragmentDirRelPath, err);
-    return;
+    console.warn("indexFragmentManifest: unparseable JSON", fragmentDirRelPath, err);
+    parsedJson = null;
   }
-  const body = manifestSearchBody(parsed);
+  const parseResult = FragmentManifestSchema.safeParse(parsedJson);
+  if (parseResult.success) {
+    body = manifestSearchBody(parseResult.data);
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "indexFragmentManifest: invalid manifest, indexing degraded entry",
+      fragmentDirRelPath,
+      parseResult.error.issues,
+    );
+    const fallbackName =
+      fragmentDirRelPath.split("/").pop() || fragmentDirRelPath || "fragment";
+    body = degradedManifestBody(parsedJson, fallbackName);
+  }
   const stat = await fs.stat(manifestPath).catch(() => null);
   const createdAt = stat ? stat.mtime.toISOString() : new Date().toISOString();
   await upsertIndex(pool, "fragment", fragmentDirRelPath, workspaceSlug, body, createdAt);
