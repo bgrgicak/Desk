@@ -49,6 +49,7 @@ export interface RunSpec {
   user?: string;
   /** Pre-formatted `KEY=VALUE` strings. */
   env: string[];
+  labels?: Record<string, string>;
   capDrop?: string[];
   /** Defaults to `bridge`. */
   network?: string;
@@ -66,6 +67,7 @@ export interface ContainerInfo {
   imageId: string;
   /** As reported by the engine (typically `<uid>:<gid>` or empty). */
   user: string;
+  labels: Record<string, string>;
   /** Bind-mount strings in the form returned by `inspect` for parity comparisons. */
   binds: string[];
   running: boolean;
@@ -230,6 +232,7 @@ class CliEngine implements Engine {
       id: raw.Id,
       imageId,
       user: raw.Config?.User ?? "",
+      labels: raw.Config?.Labels ?? {},
       binds,
       running: raw.State?.Running ?? false,
     };
@@ -239,6 +242,9 @@ class CliEngine implements Engine {
     const args: string[] = ["run", "-d", "--name", spec.name];
     if (spec.user) args.push("--user", spec.user);
     for (const e of spec.env) args.push("--env", e);
+    for (const [key, value] of Object.entries(spec.labels ?? {})) {
+      args.push("--label", `${key}=${value}`);
+    }
     for (const c of spec.capDrop ?? []) args.push("--cap-drop", c);
     args.push("--network", spec.network ?? "bridge");
     for (const h of spec.extraHosts ?? []) args.push("--add-host", h);
@@ -411,7 +417,7 @@ export const _wrapExecChildForTest = wrapExecChild;
 interface ContainerInspect {
   Id: string;
   Image: string;
-  Config?: { User?: string };
+  Config?: { User?: string; Labels?: Record<string, string> };
   HostConfig?: { Binds?: string[] };
   Mounts?: Array<{ Type?: string; Source?: string; Destination?: string; Mode?: string }>;
   State?: { Running?: boolean };
