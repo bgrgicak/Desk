@@ -129,7 +129,6 @@ async function insertAgent(userId: string, name: string): Promise<string> {
     id,
     userId,
     name,
-    instructions: "",
     model: "opencode/gpt-5-nano",
   });
   return id;

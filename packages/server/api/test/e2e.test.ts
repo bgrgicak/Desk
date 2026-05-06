@@ -872,27 +872,6 @@ describe("API e2e (real Postgres)", () => {
     throw new Error("no trigger message reached succeeded in time");
   });
 
-  // Gap 10: Agent instruction PATCH reflected in next run
-  it("PATCH /agents/:id instructions reflected in subsequent run prompt wiring", async () => {
-    const agentsRes = await request("GET", "/agents", token);
-    const agents = agentsRes.body as Array<{ id: string; instructions: string }>;
-    const agentId = agents[0].id;
-
-    // Patch instructions
-    const patchRes = await request("PATCH", `/agents/${agentId}`, token, {
-      instructions: "You are a test assistant with updated instructions XYZ123.",
-    });
-    expect(patchRes.status).toBe(200);
-    const patched = patchRes.body as { id: string; instructions: string };
-    expect(patched.instructions).toContain("XYZ123");
-
-    // Verify GET returns updated instructions
-    const getRes = await request("GET", `/agents/${agentId}`, token);
-    expect(getRes.status).toBe(200);
-    const agent = getRes.body as { instructions: string };
-    expect(agent.instructions).toContain("XYZ123");
-  });
-
   it("invalid login returns 401", async () => {
     const res = await request("POST", "/auth/login", undefined, {
       username: "testuser",
@@ -1063,8 +1042,8 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
   }, 360_000); // Free opencode runs are slower than paid APIs
 
-  // G10: Agent instructions actually reach the running agent
-  it("PATCH /agents/:id instructions are used as system prompt and affect agent output", async () => {
+  // G10: User memory (~/Desk/.memory/memory.md) reaches the running agent
+  it("user memory.md is injected into the system prompt and affects agent output", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
         username: "testuser",
@@ -1073,42 +1052,35 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
       realToken = (loginRes.body as { token: string }).token;
     }
 
-    // Get the agent and patch instructions with a sentinel
+    // Write a sentinel rule into the user memory index.
+    const memoryDir = path.join(realHome, "Desk", ".memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, "memory.md"),
+      "# User memory\n\n- You are a pirate-themed test agent. End every reply with the token CORSAIR_SENTINEL and nothing else after it.\n",
+      "utf-8",
+    );
+
     const agentsRes = await realRequest("GET", "/agents", realToken);
     const agents = agentsRes.body as Array<{ id: string }>;
     const agentId = agents[0].id;
 
-    const patchRes = await realRequest("PATCH", `/agents/${agentId}`, realToken, {
-      instructions: "You are a pirate-themed test agent. End every reply with the token CORSAIR_SENTINEL and nothing else after it.",
-    });
-    expect(patchRes.status).toBe(200);
-    const patched = patchRes.body as { instructions: string };
-    expect(patched.instructions).toContain("CORSAIR_SENTINEL");
-
-    // Get workspace
     const wsRes = await realRequest("GET", "/workspaces", realToken);
     const workspaces = wsRes.body as Array<{ id: string }>;
 
-    // Create a chat with that agent
     const chatRes = await realRequest("POST", "/chats", realToken, {
       workspaceId: workspaces[0].id,
       agentId,
-      title: "G10 Instructions Test Chat",
+      title: "G10 User Memory Test Chat",
     });
     expect(chatRes.status).toBe(201);
     const chat = chatRes.body as { id: string };
 
-    // Send a message
     const msgRes = await realRequest("POST", `/chats/${chat.id}/messages`, realToken, {
       content: "Say hi briefly.",
     });
     expect(msgRes.status).toBe(201);
 
-    // Poll chat messages for an agent reply carrying the sentinel.
-    // Agent output is persisted as { type: "events", log: [...] } — each entry
-    // is either a structured agent event, a stderr line, or an unparsed stdout
-    // line. The test driver emits a single plain-text stdout, which lands as
-    // an "unparsed" entry; real opencode runs emit structured "text" events.
     type LogEntry =
       | { kind: "event"; event: { type: string; part?: { text?: string } } }
       | { kind: "stderr"; line: string }

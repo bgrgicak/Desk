@@ -235,7 +235,6 @@ export const api = createApi({
       ServerAgent,
       {
         name: string;
-        instructions?: string;
         model?: string;
       }
     >({
@@ -246,7 +245,7 @@ export const api = createApi({
       ServerAgent,
       {
         id: string;
-        patch: Partial<Pick<ServerAgent, "name" | "instructions" | "model">>;
+        patch: Partial<Pick<ServerAgent, "name" | "model">>;
       }
     >({
       query: ({ id, patch }) => ({

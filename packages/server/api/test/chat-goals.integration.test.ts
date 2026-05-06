@@ -60,7 +60,6 @@ beforeAll(async () => {
     id: agentId,
     userId,
     name: "agent-goals",
-    instructions: "",
     model: "opencode/gpt-5-nano",
   });
   await pool.query(

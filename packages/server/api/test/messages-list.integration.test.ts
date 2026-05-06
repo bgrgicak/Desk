@@ -102,7 +102,6 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
     model: "opencode/gpt-5-nano",
   });
   for (const ws of [wsA, wsB]) {

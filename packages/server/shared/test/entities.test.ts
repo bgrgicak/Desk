@@ -39,7 +39,6 @@ describe("AgentSchema", () => {
     id: "agt_abc",
     userId: "usr_abc",
     name: "Helper",
-    instructions: "Be helpful",
     model: "gpt-4",
   };
 
@@ -48,11 +47,11 @@ describe("AgentSchema", () => {
   });
 
   it("rejects missing name", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", instructions: "x", model: "m" })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", model: "m" })).toThrow();
   });
 
   it("rejects missing userId (M3 invariant)", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", instructions: "x", model: "m" })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", model: "m" })).toThrow();
   });
 
   it("round-trips through JSON", () => {

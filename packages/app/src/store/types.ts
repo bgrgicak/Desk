@@ -50,7 +50,6 @@ export interface ServerAgent {
   id: string;
   userId: string;
   name: string;
-  instructions: string;
   model: string;
 }
 

@@ -98,7 +98,6 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
     model: "opencode/gpt-5-nano",
   });
   await pool.query(

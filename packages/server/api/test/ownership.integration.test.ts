@@ -63,7 +63,6 @@ async function seedUser(suffix: string): Promise<Seeded> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
     model: "opencode/gpt-5-nano",
   });
 

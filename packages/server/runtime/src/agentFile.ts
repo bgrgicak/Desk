@@ -19,7 +19,6 @@ export interface AgentFileInput {
   agentId: string;
   agentName: string;
   model: string;
-  instructions: string;
   userName: string;
   /**
    * IANA zone (e.g. `America/Los_Angeles`) reported by the user's app
@@ -46,6 +45,14 @@ export interface AgentFileInput {
    * returns markdown only and never writes artifacts.
    */
   runMode?: "chat" | "summary";
+  /**
+   * DESK_HOME root, threaded through so the prompt renderer can read the
+   * user `.memory/memory.md` index and the workspace `.memory/workspace.md`
+   * index. Optional — when missing, memory injection is skipped.
+   */
+  home?: string;
+  /** Workspace slug for resolving the workspace memory index. */
+  workspaceSlug?: string;
 }
 
 /**
@@ -63,12 +70,13 @@ export function renderAgentFile(input: AgentFileInput): string {
   const body = renderPromptBody({
     agentName: input.agentName,
     userName: input.userName,
-    instructions: input.instructions,
     userTimezone: input.userTimezone,
     chatId: input.chatId,
     goal: input.goal ?? null,
     includeGoalAutodetect: input.includeGoalAutodetect,
     runMode: input.runMode ?? "chat",
+    home: input.home,
+    workspaceSlug: input.workspaceSlug,
   });
 
   return `${frontmatter}\n\n${body}\n`;
@@ -88,7 +96,7 @@ export async function writeAgentFile(
   workspaceSlug: string,
   input: AgentFileInput,
 ): Promise<void> {
-  const content = renderAgentFile(input);
+  const content = renderAgentFile({ ...input, home, workspaceSlug });
   const agentDir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode", "agents");
   const filePath = path.join(agentDir, `${input.agentId}.md`);
   await fs.mkdir(agentDir, { recursive: true });
