@@ -116,7 +116,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"providers\": {\n    \"ANTHROPIC_API_KEY\": \"sk-ant-...\"\n  }\n}"
+              "raw": "{\n  \"providers\": {\n    \"OPENAI_API_KEY\": \"sk-...\"\n  }\n}"
             },
             "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
           }
@@ -228,7 +228,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"anthropic/claude-opus-4-7\"\n}"
+              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"opencode/gpt-5-nano\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
           }
@@ -578,11 +578,11 @@
             "method": "GET",
             "description": "Lists AI models that are ready to use — every entry is a provider opencode has authenticated inside the sandbox via a host-forwarded API key. Server-wide, not agent-scoped. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
             "url": {
-              "raw": "{{baseUrl}}/tools/models?provider=anthropic",
+              "raw": "{{baseUrl}}/tools/models?provider=opencode",
               "host": ["{{baseUrl}}"],
               "path": ["tools", "models"],
               "query": [
-                { "key": "provider", "value": "anthropic", "description": "Restrict to a single provider id, e.g. anthropic." }
+                { "key": "provider", "value": "opencode", "description": "Restrict to a single provider id, e.g. opencode." }
               ]
             }
           }

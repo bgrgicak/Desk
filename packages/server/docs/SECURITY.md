@@ -2,7 +2,7 @@
 
 ## Provider API key storage
 
-User-supplied API keys (Anthropic, OpenAI, etc.) are stored in the `user_settings` table as an AES-256-GCM-encrypted BYTEA blob (`provider_keys_encrypted`). A fresh 12-byte IV is generated per encryption; the auth tag is appended to detect tampering.
+User-supplied AI-provider API keys are stored in the `user_settings` table as an AES-256-GCM-encrypted BYTEA blob (`provider_keys_encrypted`). A fresh 12-byte IV is generated per encryption; the auth tag is appended to detect tampering.
 
 ### Encryption key management
 
@@ -58,7 +58,7 @@ CREATE TABLE provider_key_access_log (
 );
 ```
 
-`providers[]` holds the key names (e.g. `["ANTHROPIC_API_KEY"]`), never values.
+`providers[]` holds the key names (e.g. `["OPENAI_API_KEY"]`), never values.
 
 ### Call sites
 

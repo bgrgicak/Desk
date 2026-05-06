@@ -91,7 +91,7 @@ The DB stores derivatives, not raw secrets:
 - **Auth session tokens**: SHA-256 hashes in `auth_sessions.token_hash` —
   the raw token only ever exists in the cookie/header sent by the
   browser.
-- **Provider API keys** (Anthropic, OpenAI, etc.): AES-256-GCM
+- **Provider API keys** (user-supplied per-provider tokens): AES-256-GCM
   encrypted blobs in `user_settings.provider_keys_encrypted`. The
   encryption key is `DESK_SECRET_KEY` from `.env` (preferred) or a
   32-byte file at `$DESK_SECRET_KEY_PATH` — back it up alongside the
