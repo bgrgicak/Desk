@@ -665,6 +665,36 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    if (path === "/sandbox/find/artifacts" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      let workspaceId: string | undefined;
+      if (workspaceParam && workspaceParam !== "*") {
+        const ws = ownedWorkspaces.find((w) => w.path === workspaceParam || w.id === workspaceParam);
+        if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        workspaceId = ws.id;
+      } else if (!workspaceParam && session.workspaceId) {
+        workspaceId = session.workspaceId;
+      }
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+      const result = await searchRoutes.findArtifacts(pool, storage, agent.userId, {
+        query: params.get("q") ?? params.get("query") ?? undefined,
+        kind:
+          kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"
+            ? kindParam
+            : "any",
+        workspaceId,
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+      sendJson(res, 200, { hits: result });
+      return;
+    }
+
     if (path === "/sandbox/artifacts" && method === "POST") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;

@@ -13,6 +13,7 @@ export const DESK_CLI_SKILL_NAME = "desk-cli";
 export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
 export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
 export const DESK_CHAT_SEARCH_MESSAGES_SKILL_NAME = "desk-cli-chat-search-messages";
+export const DESK_FIND_ARTIFACTS_SKILL_NAME = "desk-cli-find-artifacts";
 export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
@@ -84,6 +85,14 @@ function chatSearchMessagesReference(): string {
   ].join("\n");
 }
 
+function findArtifactsReference(): string {
+  return [
+    "# Desk artifact discovery reference",
+    "",
+    extractSection(readCliManual(), "## desk-agent find artifacts"),
+  ].join("\n");
+}
+
 function fileToMarkdownReference(): string {
   return [
     "# Desk document conversion reference",
@@ -128,6 +137,12 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when the agent needs to recall something the user mentioned in another chat, earlier in this chat (before the latest summary), or across the workspace's history. Full-text search over messages and chat summaries.",
     body: chatSearchMessagesReference,
+  },
+  {
+    name: DESK_FIND_ARTIFACTS_SKILL_NAME,
+    description:
+      "Use before building a new app, fragment, note, or doc to discover reusable library artifacts and their params_schema.",
+    body: findArtifactsReference,
   },
   {
     name: DESK_FILE_TO_MARKDOWN_SKILL_NAME,

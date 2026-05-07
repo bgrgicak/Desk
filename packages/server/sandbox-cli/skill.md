@@ -137,6 +137,13 @@ desk-agent chat attach-artifact --chat cht_abc \
     .chats/cht_abc/artifacts/report.md
 ```
 
+Attach a parameterized fragment:
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    --param note_id=abc-123 --param mode=edit \
+    notes.app/dist/fragments/note-editor
+```
+
 ## desk-agent chat search-messages
 
 Full-text search the user's chat history. Use when the user references
@@ -169,6 +176,29 @@ highlights, `createdAt`, and a relevance `score`.
 desk-agent chat search-messages --query "kanban board"
 desk-agent chat search-messages --query "deploy notes" --kind summary
 desk-agent chat search-messages --query "passwords"
+```
+
+## desk-agent find artifacts
+
+Discover reusable apps, fragments, notes, and docs in the user's library. Use
+this before building something new; if a fragment already solves the task,
+attach it with `desk-agent chat attach-artifact` instead of creating a duplicate.
+
+```
+desk-agent find artifacts [--query <text>] [--kind app|fragment|note|doc|any]
+                          [--workspace <slug>|*] [--limit N]
+```
+
+When `--query` is omitted, the command returns recent artifacts. App and
+fragment hits may include `params_schema`; pass concrete values with repeated
+`--param key=value` flags when attaching a fragment.
+
+### Examples
+
+```
+desk-agent find artifacts --query "note editor" --kind fragment
+desk-agent find artifacts --query "todos"
+desk-agent find artifacts --kind app
 ```
 
 ## desk-agent file to-markdown

@@ -16,6 +16,7 @@ interface InlineArtifactPreviewProps {
   path: string
   name: string
   mime?: string | null
+  params?: Record<string, string>
   onOpen?: () => void
   actions?: ReactNode
   fallback: ReactNode
@@ -40,12 +41,12 @@ export function inlineAppPreviewFor(
   return appAttachmentToPreview(path)
 }
 
-export function InlineArtifactPreview({ workspaceId, path, name, mime, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
+export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
-  const appPreviewRef = useMemo(
-    () => inlineAppPreviewFor(path, name, mime),
-    [path, name, mime],
-  )
+  const appPreviewRef = useMemo(() => {
+    const base = inlineAppPreviewFor(path, name, mime)
+    return base && params ? { ...base, params } : base
+  }, [path, name, mime, params])
   const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
   const shouldFetchFile = shouldTryPreview && guessedKind !== 'app'

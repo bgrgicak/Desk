@@ -47,6 +47,12 @@ export interface SearchChatMessagesHit {
   score: number;
 }
 
+export interface ListSearchDocumentsParams {
+  workspaceSlugs: string[];
+  kinds: SearchDocumentKind[];
+  limit?: number;
+}
+
 export type SearchDocumentKind =
   | "chat"
   | "message"
@@ -245,4 +251,37 @@ export async function deleteSearchDocumentsForWorkspace(
      WHERE workspace_slug = ? AND kind IN (${kinds.map(() => "?").join(", ")})`,
     [workspaceSlug, ...kinds],
   );
+}
+
+export async function listSearchDocuments(
+  db: Pool,
+  params: ListSearchDocumentsParams,
+): Promise<SearchChatMessagesHit[]> {
+  if (params.workspaceSlugs.length === 0 || params.kinds.length === 0) return [];
+  const limit = Math.max(1, Math.min(params.limit ?? 25, 500));
+  const { rows } = await db.query(
+    `
+    SELECT ref_id, body, chat_id, workspace_slug, kind, created_at
+    FROM chat_search_index
+    WHERE workspace_slug IN (${params.workspaceSlugs.map(() => "?").join(", ")})
+      AND kind IN (${params.kinds.map(() => "?").join(", ")})
+    ORDER BY created_at DESC
+    LIMIT ?
+    `,
+    [...params.workspaceSlugs, ...params.kinds, limit],
+  );
+
+  return rows.map((row) => {
+    const body = row.body as string;
+    return {
+      chatId: (row.chat_id as string | null) ?? null,
+      refId: row.ref_id as string,
+      messageId: row.ref_id as string,
+      workspaceSlug: (row.workspace_slug as string | null) ?? null,
+      kind: row.kind as SearchDocumentKind,
+      snippet: body.length > SNIPPET_RADIUS * 2 ? body.slice(0, SNIPPET_RADIUS * 2) + "…" : body,
+      createdAt: row.created_at as string,
+      score: 0,
+    };
+  });
 }

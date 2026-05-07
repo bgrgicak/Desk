@@ -30,8 +30,8 @@ interface IssuedAppSession {
 }
 
 type AppPreviewProps =
-  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; variant?: AppPreviewVariant }
-  | { scope: 'library'; appName: string; fragment?: string; variant?: AppPreviewVariant }
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
+  | { scope: 'library'; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
 
 export type AppPreviewVariant = 'detail' | 'inline'
 
@@ -67,6 +67,11 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
     const distRoot = u.pathname.replace(/\/?$/, '/')
     u.pathname = `${distRoot}fragments/${encodeURIComponent(props.fragment)}/`
     u.searchParams.set('t', tokenParam)
+    if (props.params) {
+      for (const [key, value] of Object.entries(props.params)) {
+        if (key !== 't') u.searchParams.set(key, value)
+      }
+    }
     issued.url = `${u.pathname}${u.search}`
   }
   return issued
@@ -77,6 +82,7 @@ export function AppPreview(props: AppPreviewProps) {
   const variant: AppPreviewVariant = props.variant ?? 'detail'
   const chatId = props.scope === 'chat' ? props.chatId : null
   const fragment = props.fragment ?? null
+  const paramsKey = props.params ? JSON.stringify(props.params) : ''
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -97,7 +103,7 @@ export function AppPreview(props: AppPreviewProps) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName, fragment, reloadKey])
+  }, [props.scope, chatId, appName, fragment, paramsKey, reloadKey])
 
   useEffect(() => {
     if (!session) return

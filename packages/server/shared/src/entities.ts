@@ -84,6 +84,7 @@ export const MessageContentArtifactRefSchema = z.object({
   /** Caller-facing display name, usually the basename. */
   name: z.string().optional(),
   mime: z.string().optional(),
+  params: z.record(z.string(), z.string()).optional(),
 });
 
 /** A single event from the agent's JSON event stream. */

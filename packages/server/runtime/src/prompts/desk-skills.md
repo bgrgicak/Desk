@@ -10,6 +10,8 @@ load a Desk skill only when you need the detailed reference:
 - `desk-cli-chat-search-messages` — full-text recall over the user's chat
   history (messages + chat summaries). Use when the user references something
   from "another chat", "before", or "earlier in this chat".
+- `desk-cli-find-artifacts` — discover reusable apps, fragments, notes, and
+  docs before building something new.
 - `desk-cli-file-to-markdown` — document conversion syntax, supported formats,
   and examples.
 - `desk-app-scaffold` — directory layout, fragment shape, build workflow,
