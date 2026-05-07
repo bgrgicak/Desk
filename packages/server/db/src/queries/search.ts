@@ -53,8 +53,7 @@ export type SearchDocumentKind =
   | "summary"
   | "library_file"
   | "attachment"
-  | "artifact"
-  | "app_file";
+  | "artifact";
 
 export interface UpsertSearchDocumentParams {
   refId: string;

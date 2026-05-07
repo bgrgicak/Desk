@@ -31,10 +31,9 @@ type SearchKind =
   | "summary"
   | "library_file"
   | "attachment"
-  | "artifact"
-  | "app_file";
+  | "artifact";
 
-const FILE_KINDS: SearchKind[] = ["library_file", "attachment", "artifact", "app_file"];
+const FILE_KINDS: SearchKind[] = ["library_file", "attachment", "artifact"];
 const CHAT_KINDS: SearchKind[] = ["chat", "message", "summary"];
 const INDEXED_TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".markdown", ".json", ".html", ".css", ".js", ".jsx",
@@ -90,13 +89,17 @@ function isSafeIndexedTextPath(relPath: string): boolean {
   return INDEXED_TEXT_EXTENSIONS.has(path.extname(relPath).toLowerCase());
 }
 
+function encodeFileRef(workspaceSlug: string, relPath: string): string {
+  return `${workspaceSlug}::${relPath}`;
+}
+
+function decodeFileRef(workspaceSlug: string, refId: string): string {
+  const prefix = `${workspaceSlug}::`;
+  return refId.startsWith(prefix) ? refId.slice(prefix.length) : refId;
+}
+
 function classifyFileKind(relPath: string): { kind: SearchKind; chatId: string | null } | null {
   const segments = relPath.split("/");
-  const appIdx = segments.findIndex((segment) => segment.endsWith(".app") && segment !== ".app");
-  if (appIdx !== -1) {
-    const chatId = segments[0] === ".chats" ? segments[1] ?? null : null;
-    return { kind: "app_file", chatId };
-  }
   if (segments[0] === ".chats") {
     const chatId = segments[1] ?? null;
     if (segments[2] === "attachments") return { kind: "attachment", chatId };
@@ -137,7 +140,7 @@ async function refreshWorkspaceFileIndex(
     if (!body) continue;
     const stat = await fs.stat(file.abs).catch(() => null);
     await queries.search.upsertSearchDocument(pool, {
-      refId: rel,
+      refId: encodeFileRef(workspaceSlug, rel),
       body,
       chatId: classified.chatId,
       workspaceSlug,
@@ -150,8 +153,8 @@ async function refreshWorkspaceFileIndex(
 function kindsForScope(scope: "artifacts" | "chats" | "library" | "all" | "files"): SearchKind[] {
   switch (scope) {
     case "chats": return CHAT_KINDS;
-    case "library": return ["library_file", "app_file"];
-    case "artifacts": return ["attachment", "artifact", "app_file"];
+    case "library": return ["library_file"];
+    case "artifacts": return ["attachment", "artifact"];
     case "files": return FILE_KINDS;
     case "all": return [...CHAT_KINDS, ...FILE_KINDS];
   }
@@ -238,9 +241,9 @@ export async function search(
     }
     return [{
       type: "file",
-      id: hit.refId,
+      id: decodeFileRef(hit.workspaceSlug, hit.refId),
       refId: hit.refId,
-      title: path.basename(hit.refId),
+      title: path.basename(decodeFileRef(hit.workspaceSlug, hit.refId)),
       snippet: hit.snippet,
       workspaceId: ws.id,
       workspaceSlug: ws.path,

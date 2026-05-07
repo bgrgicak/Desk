@@ -656,7 +656,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "q", in: "query", required: true, schema: { type: "string" } },
             { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library", "files"] } },
-            { name: "kind", in: "query", schema: { type: "string", description: "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact,app_file" } },
+            { name: "kind", in: "query", schema: { type: "string", description: "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact" } },
             { name: "workspaceId", in: "query", schema: { type: "string" } },
             { name: "chatId", in: "query", schema: { type: "string" } },
             { name: "showHidden", in: "query", schema: { type: "boolean" } },

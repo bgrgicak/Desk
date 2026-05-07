@@ -98,7 +98,7 @@ export interface SearchResult {
   workspaceId?: string;
   workspaceSlug?: string;
   messageId?: string;
-  kind?: "chat" | "message" | "summary";
+  kind?: "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
   score?: number;
 }
 
