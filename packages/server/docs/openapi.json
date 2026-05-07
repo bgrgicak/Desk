@@ -1666,6 +1666,9 @@
           },
           "404": {
             "description": "No sandbox available"
+          },
+          "503": {
+            "description": "No container runtime is available to query the sandbox"
           }
         }
       }

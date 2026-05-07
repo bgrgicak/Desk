@@ -3,7 +3,7 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent chat search-messages --query <text> [--chat <id>] [--workspace <slug>|*] [--kind any|message|summary] [--limit N]";
+  "desk-agent chat search-messages --query <text> [--chat <id>] [--workspace <current-slug>] [--kind any|message|summary] [--limit N]";
 
 export const help = `\
 desk-agent chat search-messages — full-text search over the user's chat
@@ -15,8 +15,10 @@ Required:
 
 Optional:
   --chat <id>              Restrict to a single chat (in-chat recall).
-  --workspace <slug>|*     Workspace scope. Defaults to the current
-                           workspace; pass "*" for cross-workspace.
+  --workspace <current-slug>
+                           Optional assertion for the current workspace.
+                           Recall is scoped to the sandbox session workspace;
+                           cross-workspace recall is not available.
   --kind any|message|summary
                            Default: any. "summary" hits compress-then
                            -recall context; "message" hits return raw
@@ -26,7 +28,7 @@ Optional:
 Examples:
   desk-agent chat search-messages --query "kanban board"
   desk-agent chat search-messages --query "deploy notes" --kind summary
-  desk-agent chat search-messages --query "passwords" --workspace "*"
+  desk-agent chat search-messages --query "passwords"
 
 Output:
   JSON object {hits: [...]} where each hit has chatId, messageId,

@@ -384,6 +384,9 @@ authenticated.
 `id` is opencode's canonical model id — pass it straight to `opencode run --model`.
 `provider` is denormalised so UIs can group or filter without splitting the id.
 
+If no container runtime is reachable, the endpoint returns `503` with
+`code: "RUNTIME_UNAVAILABLE"` and an actionable message from runtime detection.
+
 ## Search
 
 | Method | Path     | Description                                 |

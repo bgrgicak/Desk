@@ -35,7 +35,7 @@ describe("desk-agent chat search-messages", () => {
       "--chat",
       "cht_a",
       "--workspace",
-      "*",
+      "project-a",
       "--kind",
       "summary",
       "--limit",
@@ -45,7 +45,7 @@ describe("desk-agent chat search-messages", () => {
     const params = new URLSearchParams(url.split("?")[1]);
     expect(params.get("q")).toBe("owls");
     expect(params.get("chat")).toBe("cht_a");
-    expect(params.get("workspace")).toBe("*");
+    expect(params.get("workspace")).toBe("project-a");
     expect(params.get("kind")).toBe("summary");
     expect(params.get("limit")).toBe("5");
   });

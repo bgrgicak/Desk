@@ -28,6 +28,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { PassThrough, type Readable } from "node:stream";
 import { promisify } from "node:util";
+import { DeskError } from "@agent-desk/shared";
 
 const execFileAsync = promisify(execFile);
 const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
@@ -102,6 +103,13 @@ export interface EngineConflictError extends Error {
   conflict: true;
 }
 
+export class ContainerRuntimeUnavailableError extends DeskError {
+  constructor(message: string) {
+    super("RUNTIME_UNAVAILABLE", message);
+    this.name = "ContainerRuntimeUnavailableError";
+  }
+}
+
 /** Caller-facing surface. Pure shell-out under the hood. */
 export interface Engine {
   readonly name: EngineName;
@@ -153,11 +161,14 @@ function engineEnv(name: EngineName): NodeJS.ProcessEnv {
 class CliEngine implements Engine {
   constructor(public readonly name: EngineName) {}
 
-  private async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private async run(
+    args: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string }> {
     const { stdout, stderr } = await execFileAsync(this.name, args, {
       env: engineEnv(this.name),
       maxBuffer: 8 * 1024 * 1024,
-      timeout: ENGINE_COMMAND_TIMEOUT_MS,
+      timeout: opts?.timeoutMs ?? ENGINE_COMMAND_TIMEOUT_MS,
       killSignal: "SIGKILL",
     });
     return { stdout, stderr };
@@ -285,7 +296,9 @@ class CliEngine implements Engine {
 
   async stop(nameOrId: string, graceSeconds = 10): Promise<void> {
     try {
-      await this.run(["stop", "-t", String(graceSeconds), nameOrId]);
+      await this.run(["stop", "-t", String(graceSeconds), nameOrId], {
+        timeoutMs: Math.max(ENGINE_COMMAND_TIMEOUT_MS, (graceSeconds + 5) * 1000),
+      });
     } catch (err) {
       // Ignore "already stopped" / "no such container" — stop is idempotent
       // from the caller's perspective.
@@ -457,7 +470,7 @@ export async function detectEngine(): Promise<Engine> {
     }
     errors.push(`${candidate} info failed`);
   }
-  throw new Error(
+  throw new ContainerRuntimeUnavailableError(
     `No container runtime available. Tried: ${errors.join(", ")}. ` +
       `Install docker or nerdctl, or set DESK_CONTAINER_ENGINE.`,
   );

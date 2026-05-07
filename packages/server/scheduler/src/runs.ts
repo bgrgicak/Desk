@@ -341,6 +341,14 @@ export function createRunManager(opts: RunManagerOptions) {
     return { type: "events", log: entries };
   }
 
+  function errorLogLines(err: unknown): string[] {
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      "Agent run failed before it could complete.",
+      message,
+    ].filter((line) => line.trim().length > 0);
+  }
+
   /**
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
@@ -569,16 +577,36 @@ export function createRunManager(opts: RunManagerOptions) {
       emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [] };
     } catch (err) {
-      logStream.end();
       // eslint-disable-next-line no-console
       console.error(`fireMessage ${messageId} failed:`, err);
+      for (const line of errorLogLines(err)) {
+        await onLog({ runId, seq: 0, kind: "stderr", payload: line });
+      }
+      await new Promise<void>((resolve) => {
+        logStream.once("finish", resolve);
+        logStream.end();
+      });
       await queries.messages.finalizeExecution(pool, runId, "failed");
       emit({
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
       await afterTaskRun(msg, "failed", fireOptions);
-      return { fired: true, childIds: [] };
+      const entries = await readLogEntries(logFile);
+      const content = buildOutputContent("text", entries);
+      if (!content) {
+        return { fired: true, childIds: [] };
+      }
+      const child = await queries.messages.insert(pool, {
+        id: generateId("message"),
+        chatId: msg.chatId,
+        role: "agent",
+        content,
+        parentId: runId,
+      });
+      emit({ type: "message.appended", payload: child });
+      emit({ type: "workspace.synced", payload: { workspaceId } });
+      return { fired: true, childIds: [child.id] };
     }
   }
 

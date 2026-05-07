@@ -146,16 +146,18 @@ before the most recent summary.
 
 ```
 desk-agent chat search-messages --query <text> [--chat <id>]
-                                [--workspace <slug>|*]
+                                [--workspace <current-slug>]
                                 [--kind any|message|summary]
                                 [--limit N]
 ```
 
 `--query` is whitespace-tokenized; every token must appear in the indexed
-body. Wrap multi-word phrases in quotes at the shell level. Workspace scope
-defaults to the current workspace; pass `--workspace "*"` to search every
-workspace the user owns. `--kind summary` returns only chat-summary bodies;
-`--kind message` returns only raw transcript lines.
+body. Wrap multi-word phrases in quotes at the shell level. Recall is scoped to
+the current sandbox session workspace. Do not use “other chats” as a reason to
+search other workspaces; cross-workspace recall is not available yet.
+`--workspace` is only an optional assertion for the current workspace slug.
+`--kind summary` returns only chat-summary bodies; `--kind message` returns only
+raw transcript lines.
 
 The response is a JSON object `{hits: [...]}`. Each hit has `chatId`,
 `messageId`, `workspaceSlug`, `kind`, a `snippet` with `<mark>…</mark>`
@@ -166,7 +168,7 @@ highlights, `createdAt`, and a relevance `score`.
 ```
 desk-agent chat search-messages --query "kanban board"
 desk-agent chat search-messages --query "deploy notes" --kind summary
-desk-agent chat search-messages --query "passwords" --workspace "*"
+desk-agent chat search-messages --query "passwords"
 ```
 
 ## desk-agent file to-markdown

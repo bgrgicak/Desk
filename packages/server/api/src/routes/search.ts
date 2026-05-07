@@ -197,7 +197,11 @@ export async function search(
     : await queries.workspaces.listByUser(pool, userId);
 
   const selectedKinds = opts?.kinds && opts.kinds.length > 0 ? opts.kinds : kindsForScope(scope);
-  if (selectedKinds.some((kind) => FILE_KINDS.includes(kind))) {
+  // Explicit file scopes refresh the on-disk index synchronously. The default
+  // global search path must stay responsive while users type, so it searches
+  // whatever file rows are already indexed and never blocks chat/title results
+  // on a full workspace walk.
+  if (scope !== "all" && selectedKinds.some((kind) => FILE_KINDS.includes(kind))) {
     for (const ws of workspaces) await refreshWorkspaceFileIndex(pool, storage, ws.path, { showHidden });
   }
 

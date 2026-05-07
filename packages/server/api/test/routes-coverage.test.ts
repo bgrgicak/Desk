@@ -20,15 +20,11 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
-import { detectEngine, sandboxImage } from "@agent-desk/runtime";
-
-// /tools/models hits the runtime; skip those cases when there's no
-// sandbox image available locally. Other routes don't touch the engine.
-let SANDBOX_AVAILABLE = false;
-try {
-  const engine = await detectEngine();
-  SANDBOX_AVAILABLE = (await engine.imageId(sandboxImage())) !== null;
-} catch { /* no engine = no sandbox */ }
+// Route coverage keeps /tools/models on the fake driver; real Docker/opencode
+// coverage lives in tools-models.integration.test.ts.
+const PRIOR_DESK_SANDBOX_DRIVER = process.env.DESK_SANDBOX_DRIVER;
+process.env.DESK_SANDBOX_DRIVER = "fake";
+const SANDBOX_AVAILABLE = true;
 
 let pool: Pool;
 let server: http.Server;
@@ -74,6 +70,12 @@ afterAll(async () => {
   await clearSessions(pool);
   clearConnections();
   server?.close();
+
+  if (PRIOR_DESK_SANDBOX_DRIVER === undefined) {
+    delete process.env.DESK_SANDBOX_DRIVER;
+  } else {
+    process.env.DESK_SANDBOX_DRIVER = PRIOR_DESK_SANDBOX_DRIVER;
+  }
 
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });

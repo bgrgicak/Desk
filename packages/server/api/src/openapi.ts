@@ -647,6 +647,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             },
             "400": { description: "Sandbox rejected the listing" },
             "404": { description: "No sandbox available" },
+            "503": { description: "No container runtime is available to query the sandbox" },
           },
         },
       },

@@ -587,9 +587,9 @@ export function createApp(opts: AppOptions): Server {
     }
 
     // Memory-system P3.5 — full-text search for the in-sandbox agent.
-    // Authed via X-Desk-Sandbox-Token. Workspace scope defaults to the
-    // session's workspace; `workspace=*` widens to every workspace owned
-    // by the agent's user (defense in depth — never expose other users').
+    // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
+    // session's workspace; cross-workspace recall requires a future
+    // explicit home-workspace exception, not workspace=*.
     if (path === "/sandbox/search/messages" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
@@ -601,46 +601,32 @@ export function createApp(opts: AppOptions): Server {
       const kindParam = params.get("kind") ?? "any";
       const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
 
-      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
-
-      // Resolve workspace scope. Default = the session's workspace slug.
-      let workspaceSlug: string | undefined;
-      if (workspaceParam === "*") {
-        workspaceSlug = "*";
-      } else if (workspaceParam) {
-        if (!ownedWorkspaces.some((w) => w.path === workspaceParam)) {
-          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-        }
-        workspaceSlug = workspaceParam;
-      } else if (session.workspaceId) {
-        const ws = await queries.workspaces.findById(pool, session.workspaceId);
-        workspaceSlug = ws?.path;
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
       }
-
-      // Cross-workspace search filters by userId at the chats join — the
-      // FTS index has no user column. Resolve the user's workspace slug
-      // set and scope to it when workspaceSlug === "*".
-      const ownedWorkspaceSlugs = workspaceSlug === "*"
-        ? ownedWorkspaces.map((w) => w.path)
-        : null;
+      const ws = await queries.workspaces.findById(pool, session.workspaceId);
+      if (!ws || ws.userId !== agent.userId) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (workspaceParam && workspaceParam !== ws.path && workspaceParam !== "*") {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
 
       // When chatId is supplied, gate ownership.
       if (chatIdParam) {
-        await requireOwnedChat(pool, chatIdParam, agent.userId);
+        const chat = await requireOwnedChat(pool, chatIdParam, agent.userId);
+        if (chat.workspaceId !== session.workspaceId) {
+          throw new NotFoundError(`Chat not found: ${chatIdParam}`);
+        }
       }
 
-      let hits = await queries.search.searchChatMessages(pool, {
+      const hits = await queries.search.searchChatMessages(pool, {
         query: q,
         chatId: chatIdParam,
-        workspaceSlug: workspaceSlug === "*" ? undefined : workspaceSlug,
-        workspaceSlugs: workspaceSlug === "*" ? ownedWorkspaceSlugs ?? [] : undefined,
+        workspaceSlug: ws.path,
         kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
         limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
       });
-      if (ownedWorkspaceSlugs !== null) {
-        const allowed = new Set(ownedWorkspaceSlugs);
-        hits = hits.filter((h) => h.workspaceSlug !== null && allowed.has(h.workspaceSlug));
-      }
 
       sendJson(res, 200, { hits });
       return;
@@ -1408,6 +1394,19 @@ export function createApp(opts: AppOptions): Server {
         return;
       }
 
+      const realDistRoot = await fsRealpath(distRoot).catch(() => null);
+      if (!realDistRoot) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
+        return;
+      }
+      const assertInsideDist = async (filePath: string): Promise<string | null> => {
+        const realCandidate = await fsRealpath(filePath).catch(() => null);
+        if (!realCandidate) return null;
+        return realCandidate === realDistRoot || realCandidate.startsWith(realDistRoot + pathSep)
+          ? realCandidate
+          : null;
+      };
+
       const APP_MIME: Record<string, string> = {
         ".html": "text/html; charset=utf-8",
         ".js":   "application/javascript; charset=utf-8",
@@ -1437,6 +1436,11 @@ export function createApp(opts: AppOptions): Server {
       try {
         const st = await fsStat(candidate);
         if (!st.isFile()) throw new Error("not a file");
+        const realCandidate = await assertInsideDist(candidate);
+        if (!realCandidate) {
+          sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+          return;
+        }
         const headers: Record<string, string | string[]> = {
           "Content-Type": mime,
           "Content-Length": String(st.size),
@@ -1446,12 +1450,17 @@ export function createApp(opts: AppOptions): Server {
           headers["Set-Cookie"] = appTokenCookie;
         }
         res.writeHead(200, headers);
-        createReadStream(candidate).pipe(res);
+        createReadStream(realCandidate).pipe(res);
       } catch {
         // Fallback to index.html for SPA client-side routing within the app.
         const indexPath = pathJoin(distRoot, "index.html");
         try {
           const ist = await fsStat(indexPath);
+          const realIndexPath = await assertInsideDist(indexPath);
+          if (!realIndexPath) {
+            sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+            return;
+          }
           const headers: Record<string, string | string[]> = {
             "Content-Type": "text/html; charset=utf-8",
             "Content-Length": String(ist.size),
@@ -1459,7 +1468,7 @@ export function createApp(opts: AppOptions): Server {
           };
           if (appTokenCookie) headers["Set-Cookie"] = appTokenCookie;
           res.writeHead(200, headers);
-          createReadStream(indexPath).pipe(res);
+          createReadStream(realIndexPath).pipe(res);
         } catch {
           sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
         }

@@ -8,6 +8,7 @@ export function errorToStatus(err: DeskError): number {
     case "FORBIDDEN": return 403;
     case "VALIDATION": return 400;
     case "CONFLICT": return 409;
+    case "RUNTIME_UNAVAILABLE": return 503;
     default: return 500;
   }
 }

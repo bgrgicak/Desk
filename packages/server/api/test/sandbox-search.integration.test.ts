@@ -209,16 +209,23 @@ describe("GET /sandbox/search/messages", () => {
     expect((res.body as { hits: unknown[] }).hits).toEqual([]);
   });
 
-  it("widens to all of the user's workspaces when workspace=*", async () => {
+  it("does not widen to other workspaces when workspace=* is passed", async () => {
     const token = await issueSandboxToken(workspaceAId);
     const res = await sandboxGet(
       `/sandbox/search/messages?q=${encodeURIComponent("watercolor")}&workspace=*&limit=1`,
       token,
     );
     expect(res.status).toBe(200);
-    const body = res.body as { hits: Array<{ workspaceSlug: string }> };
-    expect(body.hits.length).toBe(1);
-    expect(body.hits[0].workspaceSlug).toBe(workspaceBSlug);
+    expect((res.body as { hits: unknown[] }).hits).toEqual([]);
+  });
+
+  it("rejects an explicit owned workspace slug outside the sandbox session workspace", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search/messages?q=${encodeURIComponent("watercolor")}&workspace=${workspaceBSlug}`,
+      token,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("rejects an explicit workspace slug not owned by the sandbox agent's user", async () => {
@@ -242,6 +249,15 @@ describe("GET /sandbox/search/messages", () => {
     for (const hit of body.hits) {
       expect(hit.chatId).toBe(chatA);
     }
+  });
+
+  it("rejects chat filters outside the sandbox session workspace", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search/messages?q=${encodeURIComponent("watercolor")}&chat=${chatB}`,
+      token,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("rejects missing or invalid sandbox token with 401", async () => {
