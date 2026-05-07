@@ -12,6 +12,7 @@ import * as search from "../../src/queries/search.js";
 let pool: Pool;
 let chatA: string;
 let chatB: string;
+let workspaceAId: string;
 let workspaceASlug: string;
 let workspaceBSlug: string;
 
@@ -29,10 +30,10 @@ beforeAll(async () => {
   const agentId = generateId("agent");
   await agents.insert(pool, { id: agentId, userId, name: "Searcher" });
 
-  const wsAId = generateId("workspace");
-  workspaceASlug = `wsa-${wsAId.slice(-6)}`;
+  workspaceAId = generateId("workspace");
+  workspaceASlug = `wsa-${workspaceAId.slice(-6)}`;
   await workspaces.insert(pool, {
-    id: wsAId,
+    id: workspaceAId,
     userId,
     name: "WS A",
     path: workspaceASlug,
@@ -50,14 +51,14 @@ beforeAll(async () => {
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
      VALUES (?, ?), (?, ?) ON CONFLICT DO NOTHING`,
-    [wsAId, agentId, wsBId, agentId],
+    [workspaceAId, agentId, wsBId, agentId],
   );
 
   chatA = generateId("chat");
   chatB = generateId("chat");
   await chats.insert(pool, {
     id: chatA,
-    workspaceId: wsAId,
+    workspaceId: workspaceAId,
     agentId,
     title: "Chat A",
   });
@@ -212,5 +213,68 @@ describe("searchChatMessages", () => {
     await pool.query(`DELETE FROM messages WHERE id = ?`, [messageId]);
     hits = await search.searchChatMessages(pool, { query: "ephemeral" });
     expect(hits).toEqual([]);
+  });
+
+  it("keeps workspace slug scope in sync when a workspace path changes", async () => {
+    const messageId = generateId("message");
+    await messages.insert(pool, {
+      id: messageId,
+      chatId: chatA,
+      role: "user",
+      content: { type: "text", text: "rename-sync marker" },
+    });
+
+    const renamedSlug = `${workspaceASlug}-renamed`;
+    await workspaces.updateMeta(pool, workspaceAId, { path: renamedSlug });
+    try {
+      const hits = await search.searchChatMessages(pool, {
+        query: "rename-sync",
+        workspaceSlug: renamedSlug,
+      });
+      expect(hits.map((h) => h.messageId)).toContain(messageId);
+      expect(hits[0].workspaceSlug).toBe(renamedSlug);
+    } finally {
+      await workspaces.updateMeta(pool, workspaceAId, { path: workspaceASlug });
+    }
+  });
+
+  it("ranks all filtered matches before applying the limit", async () => {
+    const oldHighScoreId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        oldHighScoreId,
+        chatA,
+        "user",
+        JSON.stringify({
+          type: "text",
+          text: "rankingneedle rankingneedle rankingneedle rankingneedle rankingneedle",
+        }),
+        "2026-01-01T00:00:00.000Z",
+      ],
+    );
+
+    for (let i = 0; i < 5; i++) {
+      await pool.query(
+        `INSERT INTO messages (id, chat_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          generateId("message"),
+          chatA,
+          "user",
+          JSON.stringify({ type: "text", text: "rankingneedle once" }),
+          `2026-01-02T00:00:0${i}.000Z`,
+        ],
+      );
+    }
+
+    const hits = await search.searchChatMessages(pool, {
+      query: "rankingneedle",
+      limit: 1,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].messageId).toBe(oldHighScoreId);
+    expect(hits[0].score).toBe(5);
   });
 });

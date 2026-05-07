@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Print a stable hash over the inputs that determine the sandbox docker
-# image: sandbox-cli sources & build config, the Dockerfile, and the
-# app-scaffold manifests baked into the image.
+# Print a stable hash over the build-relevant inputs that determine the
+# sandbox docker image: sandbox-cli, the Dockerfile, UI package sources,
+# and app-scaffold package sources.
 #
 # Used by ensure-sandbox-image.sh to decide whether dev.sh needs to
 # rebuild the local desk/sandbox:v1 image.
@@ -33,20 +33,23 @@ while IFS= read -r -d '' f; do
   files+=("$f")
 done < <(
   {
-    if [ -d "${REPO_ROOT}/packages/server/sandbox-cli/src" ]; then
-      find "${REPO_ROOT}/packages/server/sandbox-cli/src" -type f \
-        \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' \) -print0
-    fi
-    if [ -f "${REPO_ROOT}/packages/server/sandbox-cli/build.mjs" ]; then
-      printf '%s\0' "${REPO_ROOT}/packages/server/sandbox-cli/build.mjs"
+    if [ -d "${REPO_ROOT}/packages/server/sandbox-cli" ]; then
+      find "${REPO_ROOT}/packages/server/sandbox-cli" \
+        -type d \( -name node_modules -o -name dist -o -name coverage \) -prune -o \
+        -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' -o -name '*.mjs' \) -print0
     fi
     if [ -f "${REPO_ROOT}/packages/server/runtime/Dockerfile.sandbox" ]; then
       printf '%s\0' "${REPO_ROOT}/packages/server/runtime/Dockerfile.sandbox"
     fi
+    if [ -d "${REPO_ROOT}/packages/ui" ]; then
+      find "${REPO_ROOT}/packages/ui" \
+        -type d \( -name node_modules -o -name dist -o -name coverage \) -prune -o \
+        -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.json' -o -name '*.mjs' -o -name '*.css' \) -print0
+    fi
     if [ -d "${REPO_ROOT}/packages/app-scaffold" ]; then
       find "${REPO_ROOT}/packages/app-scaffold" \
-        -type d \( -name node_modules -o -name dist \) -prune -o \
-        -type f -name 'desk.*.json' -print0
+        -type d \( -name node_modules -o -name dist -o -name coverage \) -prune -o \
+        -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.json' -o -name '*.mjs' -o -name '*.css' -o -name '*.html' \) -print0
     fi
   }
 )

@@ -16,6 +16,7 @@ function makeFixtureRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "desk-fp-"));
   mkdirSync(join(root, "packages/server/sandbox-cli/src"), { recursive: true });
   mkdirSync(join(root, "packages/server/runtime"), { recursive: true });
+  mkdirSync(join(root, "packages/ui/src"), { recursive: true });
   mkdirSync(join(root, "packages/app-scaffold/fragments/example"), {
     recursive: true,
   });
@@ -29,12 +30,28 @@ function makeFixtureRepo(): string {
     "// fixture build script\n",
   );
   writeFileSync(
+    join(root, "packages/server/sandbox-cli/package.json"),
+    '{"name":"@agent-desk/sandbox-cli"}\n',
+  );
+  writeFileSync(
     join(root, "packages/server/runtime/Dockerfile.sandbox"),
     "FROM node:23-slim\n",
   );
   writeFileSync(
+    join(root, "packages/ui/package.json"),
+    '{"name":"@agent-desk/ui"}\n',
+  );
+  writeFileSync(
+    join(root, "packages/ui/src/index.ts"),
+    "export const Button = 'button';\n",
+  );
+  writeFileSync(
     join(root, "packages/app-scaffold/desk.app.json"),
     '{"name":"app"}\n',
+  );
+  writeFileSync(
+    join(root, "packages/app-scaffold/src.ts"),
+    "export const scaffold = true;\n",
   );
   writeFileSync(
     join(root, "packages/app-scaffold/fragments/example/desk.fragment.json"),
@@ -92,6 +109,33 @@ describe("sandbox-fingerprint.sh", () => {
     writeFileSync(
       join(root, "packages/app-scaffold/desk.app.json"),
       '{"name":"app","displayName":"App"}\n',
+    );
+    expect(fingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when app-scaffold source changes", () => {
+    const before = fingerprint(root);
+    writeFileSync(
+      join(root, "packages/app-scaffold/src.ts"),
+      "export const scaffold = false;\n",
+    );
+    expect(fingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when UI package source changes", () => {
+    const before = fingerprint(root);
+    writeFileSync(
+      join(root, "packages/ui/src/index.ts"),
+      "export const Button = 'updated';\n",
+    );
+    expect(fingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when sandbox-cli package metadata changes", () => {
+    const before = fingerprint(root);
+    writeFileSync(
+      join(root, "packages/server/sandbox-cli/package.json"),
+      '{"name":"@agent-desk/sandbox-cli","dependencies":{"x":"1.0.0"}}\n',
     );
     expect(fingerprint(root)).not.toBe(before);
   });

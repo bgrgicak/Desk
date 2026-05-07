@@ -18,6 +18,8 @@ export interface SearchChatMessagesParams {
    * memory-system spec.
    */
   workspaceSlug?: string;
+  /** Restrict to any of these workspace slugs, used for authorized cross-workspace search. */
+  workspaceSlugs?: string[];
   /** Filter by content kind. `'any'` means message OR summary. */
   kind?: "message" | "summary" | "any";
   /** Max rows returned. Defaults to 25. */
@@ -112,6 +114,7 @@ export async function searchChatMessages(
 ): Promise<SearchChatMessagesHit[]> {
   const tokens = tokenize(params.query ?? "");
   if (tokens.length === 0) return [];
+  if (params.workspaceSlugs && params.workspaceSlugs.length === 0) return [];
 
   const limit = params.limit ?? 25;
   const kindClause =
@@ -121,23 +124,28 @@ export async function searchChatMessages(
         ? "AND kind = 'message'"
         : "AND kind IN ('message', 'summary')";
   const chatClause = params.chatId ? "AND chat_id = ?" : "";
-  const workspaceClause =
-    params.workspaceSlug && params.workspaceSlug !== "*"
-      ? "AND workspace_slug = ?"
-      : "";
+  let workspaceClause = "";
+  if (params.workspaceSlugs) {
+    workspaceClause = `AND workspace_slug IN (${params.workspaceSlugs.map(() => "?").join(", ")})`;
+  } else if (params.workspaceSlug && params.workspaceSlug !== "*") {
+    workspaceClause = "AND workspace_slug = ?";
+  }
 
   const tokenClauses = tokens.map(() => "body_lc LIKE ? ESCAPE '\\'").join(" AND ");
+  const scoreExpr = tokens
+    .map(() => "((length(body_lc) - length(replace(body_lc, ?, ''))) / length(?))")
+    .join(" + ");
 
   const sqlParams: unknown[] = [];
   for (const tok of tokens) sqlParams.push(`%${escapeLike(tok)}%`);
   if (params.chatId) sqlParams.push(params.chatId);
-  if (params.workspaceSlug && params.workspaceSlug !== "*") {
+  if (params.workspaceSlugs) {
+    sqlParams.push(...params.workspaceSlugs);
+  } else if (params.workspaceSlug && params.workspaceSlug !== "*") {
     sqlParams.push(params.workspaceSlug);
   }
-  // Fetch a generous pool, then rank in JS — counting occurrences in
-  // SQL would require multiple passes per row.
-  sqlParams.push(limit * 4);
-
+  for (const tok of tokens) sqlParams.push(tok, tok);
+  sqlParams.push(limit);
   const { rows } = await db.query(
     `
     SELECT ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at
@@ -146,7 +154,7 @@ export async function searchChatMessages(
       ${chatClause}
       ${workspaceClause}
       ${kindClause}
-    ORDER BY created_at DESC
+    ORDER BY ${scoreExpr} DESC, created_at DESC
     LIMIT ?
     `,
     sqlParams,

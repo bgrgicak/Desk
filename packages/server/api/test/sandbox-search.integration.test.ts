@@ -20,6 +20,7 @@ let home: string;
 let dbPath: string;
 let workspaceASlug: string;
 let workspaceBSlug: string;
+let foreignWorkspaceSlug: string;
 let workspaceAId: string;
 let workspaceBId: string;
 let chatA: string;
@@ -85,6 +86,41 @@ beforeAll(async () => {
     chatId: chatB,
     role: "user",
     content: { type: "text", text: "Generate a watercolor of an owl." },
+  });
+
+  const foreignUserId = generateId("user");
+  const foreignAgentId = generateId("agent");
+  const foreignWorkspaceId = generateId("workspace");
+  const foreignChatId = generateId("chat");
+  foreignWorkspaceSlug = `foreign-${foreignWorkspaceId.slice(-6)}`;
+  await pool.query(
+    `INSERT INTO users (id, username, password_hash, email) VALUES (?, ?, ?, ?)`,
+    [foreignUserId, "other-search-user", "pw", "other-search@example.com"],
+  );
+  await pool.query(
+    `INSERT INTO agents (id, user_id, name) VALUES (?, ?, ?)`,
+    [foreignAgentId, foreignUserId, "Other Agent"],
+  );
+  await pool.query(
+    `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+    [foreignWorkspaceId, foreignUserId, "Foreign WS", foreignWorkspaceSlug],
+  );
+  await pool.query(
+    `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
+    [foreignWorkspaceId, foreignAgentId],
+  );
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+    [foreignChatId, foreignWorkspaceId, foreignAgentId, "Foreign Chat"],
+  );
+  await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId: foreignChatId,
+    role: "user",
+    content: {
+      type: "text",
+      text: "top secret foreign workspace keyword watercolor watercolor watercolor",
+    },
   });
 
   const runManager = createRunManager({ pool });
@@ -176,13 +212,22 @@ describe("GET /sandbox/search/messages", () => {
   it("widens to all of the user's workspaces when workspace=*", async () => {
     const token = await issueSandboxToken(workspaceAId);
     const res = await sandboxGet(
-      `/sandbox/search/messages?q=${encodeURIComponent("watercolor")}&workspace=*`,
+      `/sandbox/search/messages?q=${encodeURIComponent("watercolor")}&workspace=*&limit=1`,
       token,
     );
     expect(res.status).toBe(200);
     const body = res.body as { hits: Array<{ workspaceSlug: string }> };
     expect(body.hits.length).toBe(1);
     expect(body.hits[0].workspaceSlug).toBe(workspaceBSlug);
+  });
+
+  it("rejects an explicit workspace slug not owned by the sandbox agent's user", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search/messages?q=${encodeURIComponent("foreign")}&workspace=${foreignWorkspaceSlug}`,
+      token,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("filters by chat when chat=<id> is passed", async () => {

@@ -581,11 +581,16 @@ export function createApp(opts: AppOptions): Server {
       const kindParam = params.get("kind") ?? "any";
       const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
 
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+
       // Resolve workspace scope. Default = the session's workspace slug.
       let workspaceSlug: string | undefined;
       if (workspaceParam === "*") {
         workspaceSlug = "*";
       } else if (workspaceParam) {
+        if (!ownedWorkspaces.some((w) => w.path === workspaceParam)) {
+          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        }
         workspaceSlug = workspaceParam;
       } else if (session.workspaceId) {
         const ws = await queries.workspaces.findById(pool, session.workspaceId);
@@ -596,7 +601,7 @@ export function createApp(opts: AppOptions): Server {
       // FTS index has no user column. Resolve the user's workspace slug
       // set and scope to it when workspaceSlug === "*".
       const ownedWorkspaceSlugs = workspaceSlug === "*"
-        ? (await queries.workspaces.listByUser(pool, agent.userId)).map((w) => w.path)
+        ? ownedWorkspaces.map((w) => w.path)
         : null;
 
       // When chatId is supplied, gate ownership.
@@ -608,6 +613,7 @@ export function createApp(opts: AppOptions): Server {
         query: q,
         chatId: chatIdParam,
         workspaceSlug: workspaceSlug === "*" ? undefined : workspaceSlug,
+        workspaceSlugs: workspaceSlug === "*" ? ownedWorkspaceSlugs ?? [] : undefined,
         kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
         limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
       });

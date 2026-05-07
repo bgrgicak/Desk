@@ -105,6 +105,19 @@ BEGIN
   WHERE ref_id = OLD.id AND kind IN ('message', 'summary');
 END;
 
+-- Workspace path changes must keep the denormalized search scope in
+-- sync. The search endpoint scopes by the current workspace slug, so
+-- stale indexed slugs would make existing chat history disappear after
+-- a workspace rename.
+CREATE TRIGGER workspaces_au_chat_search_path
+AFTER UPDATE OF path ON workspaces
+WHEN OLD.path IS NOT NEW.path
+BEGIN
+  UPDATE chat_search_index
+  SET workspace_slug = NEW.path
+  WHERE workspace_slug = OLD.path;
+END;
+
 -- P3.3 — Backfill all eligible message rows into the index. Runs once
 -- during this migration; future inserts/updates/deletes flow through
 -- the triggers above.
