@@ -129,7 +129,7 @@ async function insertAgent(userId: string, name: string): Promise<string> {
     id,
     userId,
     name,
-    model: "opencode/gpt-5-nano",
+    model: "opencode/big-pickle",
   });
   return id;
 }

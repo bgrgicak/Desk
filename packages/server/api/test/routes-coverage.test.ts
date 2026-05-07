@@ -327,7 +327,7 @@ describe("Routes coverage (real Postgres)", () => {
   it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
     const createRes = await request("POST", "/agents", token, {
       name: "Sidekick",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
     });
     expect(createRes.status).toBe(201);
     const created = createRes.body as { id: string };
@@ -528,7 +528,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Create a second agent and enroll it in the workspace.
     const createAgent = await request("POST", "/agents", token, {
       name: "Switcher",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
     });
     const otherAgentId = (createAgent.body as { id: string }).id;
     const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
@@ -560,7 +560,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Create an agent but skip the workspace enrollment step.
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
     });
     const strangerId = (createAgent.body as { id: string }).id;
 

@@ -6,14 +6,14 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_123",
       agentName: "Jarvis",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
     // Frontmatter
     expect(result).toContain("---\n");
     expect(result).toContain("description: Jarvis");
-    expect(result).toContain("model: opencode/gpt-5-nano");
+    expect(result).toContain("model: opencode/big-pickle");
     expect(result).toContain("mode: primary");
 
     // Identity framing
@@ -42,7 +42,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_tz",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
       userTimezone: "America/Los_Angeles",
     });
@@ -55,7 +55,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_no_tz",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
@@ -67,7 +67,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
@@ -81,7 +81,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "cht_abc",
     });
@@ -95,7 +95,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_summary",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "cht_abc",
       runMode: "summary",
@@ -113,7 +113,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_nogoal",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
     expect(result).not.toContain("## User's goal:");
@@ -134,7 +134,7 @@ describe("renderAgentFile", () => {
       const result = renderAgentFile({
         agentId: `agt_${goal}`,
         agentName: "Helper",
-        model: "opencode/gpt-5-nano",
+        model: "opencode/big-pickle",
         userName: "Desk",
         goal,
       });
@@ -146,7 +146,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_baseline",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
@@ -164,7 +164,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_doc",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "chat-x",
       goal: "document",

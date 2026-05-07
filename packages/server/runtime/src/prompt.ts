@@ -79,27 +79,30 @@ const EMPTY_WORKSPACE_MEMORY = `# Workspace memory\n\n_(empty — nothing rememb
 
 /**
  * Reads a memory index file. Missing or empty files inject a stub so the
- * agent still sees the memory section header — the goal is for the agent
- * to know where memory lives even when nothing is recorded yet. Never
- * throws on read errors; surface as empty stub.
+ * agent still sees the memory section header. Unexpected filesystem errors
+ * are surfaced in the prompt instead of pretending memory is empty.
  */
-function readMemoryIndex(filePath: string, fallback: string): string {
+function readMemoryIndex(filePath: string, fallback: string, label: string): string {
   try {
     const raw = fs.readFileSync(filePath, "utf-8").trim();
     return raw.length > 0 ? raw : fallback;
-  } catch {
-    return fallback;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+      return fallback;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return `# ${label} memory\n\n_(memory unavailable: ${message})_\n`;
   }
 }
 
 function userMemoryFragment(home: string): string {
-  const body = readMemoryIndex(userMemoryIndexPath(home), EMPTY_USER_MEMORY);
-  return `<!-- ~/Desk/.memory/memory.md -->\n${body}`;
+  const body = readMemoryIndex(userMemoryIndexPath(home), EMPTY_USER_MEMORY, "User");
+  return `<!-- Desk user memory index -->\n${body}`;
 }
 
 function workspaceMemoryFragment(home: string, slug: string): string {
-  const body = readMemoryIndex(workspaceMemoryIndexPath(home, slug), EMPTY_WORKSPACE_MEMORY);
-  return `<!-- ~/Desk/workspaces/${slug}/.memory/workspace.md -->\n${body}`;
+  const body = readMemoryIndex(workspaceMemoryIndexPath(home, slug), EMPTY_WORKSPACE_MEMORY, "Workspace");
+  return `<!-- Desk workspace memory index -->\n${body}`;
 }
 
 type Fragment = (input: RenderPromptInput) => string | null;

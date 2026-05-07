@@ -310,8 +310,12 @@ describe("memory injection", () => {
     expect(idxWorkspaceIndex).toBeGreaterThan(idxUserIndex);
     expect(idxGoal).toBeGreaterThan(idxWorkspaceIndex);
 
-    expect(body).toContain("<!-- ~/Desk/.memory/memory.md -->");
-    expect(body).toContain("<!-- ~/Desk/workspaces/alpha/.memory/workspace.md -->");
+    expect(body).toContain("<!-- Desk user memory index -->");
+    expect(body).toContain("<!-- Desk workspace memory index -->");
+    expect(body).toContain("Workspace memory is writable from the sandbox");
+    expect(body).toContain("~/.memory/workspace.md");
+    expect(body).not.toContain("~/Desk/.memory/memory.md");
+    expect(body).not.toContain("~/Desk/workspaces/alpha/.memory/workspace.md");
   });
 
   it("injects empty stubs when memory indexes are missing", async () => {
@@ -331,10 +335,30 @@ describe("memory injection", () => {
     }
   });
 
+  it("surfaces unexpected memory read failures instead of injecting empty stubs", async () => {
+    const broken = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-broken-"));
+    try {
+      await fs.mkdir(path.dirname(userMemoryIndexPath(broken)), { recursive: true });
+      await fs.mkdir(userMemoryIndexPath(broken));
+
+      const body = renderPromptBody({
+        ...baseInput,
+        home: broken,
+        workspaceSlug: "alpha",
+      });
+
+      expect(body).toContain("# User memory");
+      expect(body).toContain("memory unavailable:");
+      expect(body).not.toContain("# User memory\n\n_(empty — nothing remembered yet)_");
+    } finally {
+      await fs.rm(broken, { recursive: true, force: true });
+    }
+  });
+
   it("skips memory injection when home/workspaceSlug are not provided", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("<!-- ~/Desk/.memory/memory.md -->");
-    expect(body).not.toContain("<!-- ~/Desk/workspaces/");
+    expect(body).not.toContain("<!-- Desk user memory index -->");
+    expect(body).not.toContain("<!-- Desk workspace memory index -->");
   });
 
   it("does not inject memory indexes during summary mode", () => {
@@ -346,7 +370,7 @@ describe("memory injection", () => {
       chatId: "chat-x",
     });
     expect(body).not.toContain("## Memory and recall");
-    expect(body).not.toContain("<!-- ~/Desk/.memory/memory.md -->");
+    expect(body).not.toContain("<!-- Desk user memory index -->");
   });
 });
 

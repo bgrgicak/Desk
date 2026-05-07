@@ -60,7 +60,7 @@ beforeAll(async () => {
     id: agentId,
     userId,
     name: "agent-goals",
-    model: "opencode/gpt-5-nano",
+    model: "opencode/big-pickle",
   });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,

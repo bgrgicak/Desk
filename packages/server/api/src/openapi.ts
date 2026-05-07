@@ -621,7 +621,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/tools/models": {
         get: {
           summary: "List AI models that are ready to use",
-          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/gpt-5-nano, opencode/big-pickle) are always present. Paid-provider models appear only when the user has configured the matching API key via /me/providers. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid-provider models appear only when the user has configured the matching API key via /me/providers. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
           parameters: [
             { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"opencode\"." },
           ],

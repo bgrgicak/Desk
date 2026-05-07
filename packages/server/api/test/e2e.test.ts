@@ -888,7 +888,7 @@ describe("API e2e (real Postgres)", () => {
 
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
- * opencode CLI → free opencode/gpt-5-nano model → assistant message persisted
+ * opencode CLI → free opencode/big-pickle model → assistant message persisted
  * → WS event. Auto-skips when no usable container engine + sandbox image is
  * available locally. No API keys required.
  */
@@ -902,7 +902,7 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-const FREE_MODEL = "opencode/gpt-5-nano";
+const FREE_MODEL = "opencode/big-pickle";
 
 describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   "real-stack e2e (real Docker + free opencode model)",
@@ -967,7 +967,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
     // No execRunFn — let the scheduler invoke the real opencode driver in a
     // real Docker sandbox. The seeded agent's model is patched to the free
-    // opencode/gpt-5-nano below so this runs without paid provider keys.
+    // opencode/big-pickle below so this runs without paid provider keys.
     const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
@@ -1049,7 +1049,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
   // G10: User memory (~/Desk/.memory/memory.md) is injected into the
   // system prompt the runtime ships to OpenCode. The free
-  // opencode/gpt-5-nano model doesn't reliably honor a user-memory
+  // The free opencode model doesn't reliably honor a user-memory
   // instruction over the always-on artifact-attach guidance, so the
   // assertion targets the *prompt rendering pipeline* (the
   // server-side agent file written before each run), not model
@@ -1112,6 +1112,6 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
       if (body.includes(sentinel)) break;
     }
     expect(body).toContain(sentinel);
-    expect(body).toContain("<!-- ~/Desk/.memory/memory.md -->");
+    expect(body).toContain("<!-- Desk user memory index -->");
   }, 120_000);
 });

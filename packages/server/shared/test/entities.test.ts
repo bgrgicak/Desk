@@ -213,7 +213,7 @@ describe("MessageSchema execution metadata", () => {
       ...base,
       role: "agent",
       content: { type: "text", text: "hello" },
-      model: "opencode/gpt-5-nano",
+      model: "opencode/big-pickle",
     };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
