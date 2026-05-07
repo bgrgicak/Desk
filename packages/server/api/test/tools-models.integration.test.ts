@@ -119,14 +119,14 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     }
   }, 90_000);
 
-  it("?provider=opencode returns only opencode models, including the free gpt-5-nano model", async () => {
+  it("?provider=opencode returns only opencode models, including the free big-pickle model", async () => {
     const res = await httpJson("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
     expect(body.every((m) => m.provider === "opencode")).toBe(true);
-    expect(body.some((m) => m.id === "opencode/gpt-5-nano")).toBe(true);
+    expect(body.some((m) => m.id === "opencode/big-pickle")).toBe(true);
   }, 60_000);
 });
 

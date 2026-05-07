@@ -14,6 +14,8 @@ load a Desk skill only when you need the detailed reference:
 - `desk-app-storage` — how to inspect an app's own skill files and safely
   list, read, create, update, delete, import, export, migrate, or repair
   records in an existing Desk app's storage.
+- `desk-persistence` — idempotent `~/.deskrc` patterns for setup that must
+  survive sandbox restarts.
 
 When the user asks you to inspect, import, export, migrate, repair, or CRUD
 records for an existing `.app/`, load `desk-app-storage` before touching

@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@agent-desk/db";
 import { runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout, materializeSummary } from "@agent-desk/storage";
@@ -60,11 +61,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await clearSessions(pool);
   clearConnections();
-  server?.close();
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 
   if (pool) await pool.end();
-  if (home) await fs.rm(home, { recursive: true, force: true });
-  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+  if (home) await rmTempTreeWithRetry(home);
+  if (dbPath) await rmTempTreeWithRetry(path.dirname(dbPath));
 });
 
 function request(
@@ -909,7 +910,7 @@ describe("API e2e (real Postgres)", () => {
 
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
- * opencode CLI → free opencode/gpt-5-nano model → assistant message persisted
+ * opencode CLI → free opencode/big-pickle model → assistant message persisted
  * → WS event. Auto-skips when no usable container engine + sandbox image is
  * available locally. No API keys required.
  */
@@ -923,7 +924,7 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-const FREE_MODEL = "opencode/gpt-5-nano";
+const FREE_MODEL = "opencode/big-pickle";
 
 describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   "real-stack e2e (real Docker + free opencode model)",
@@ -934,6 +935,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   let realHome: string;
   let realToken: string;
   let realDbPath: string;
+  let realWorkspaceIds: string[] = [];
 
   function realRequest(
     method: string,
@@ -975,6 +977,8 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     process.env.DESK_SEED_USERNAME = "testuser";
     process.env.DESK_SEED_PASSWORD = "testpass";
     await seedIfEmpty(realPool);
+    const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
+    realWorkspaceIds = workspaceRows.map((row) => row.id as string);
 
     realHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-"));
     await ensureLayout(realHome);
@@ -983,15 +987,14 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
     // No execRunFn — let the scheduler invoke the real opencode driver in a
     // real Docker sandbox. The seeded agent's model is patched to the free
-    // opencode/gpt-5-nano below so this runs without paid provider keys.
+    // opencode/big-pickle below so this runs without paid provider keys.
     const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
     const broadcastUserId = userRows[0].id as string;
 
-    // The seeded agent defaults to opencode/big-pickle. Switch it to the
-    // smaller, faster free model the suite uses so each spec finishes in a
-    // bearable time.
+    // Keep the suite pinned to a known free model so each spec runs without
+    // paid provider keys.
     await realPool.query("UPDATE agents SET model = ?", [FREE_MODEL]);
 
     realServer = createApp({ pool: realPool, storage, runManager, broadcastUserId });
@@ -1002,22 +1005,29 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   afterAll(async () => {
     if (realPool) await clearSessions(realPool);
     clearConnections();
-    realServer?.close();
+    if (realServer) await new Promise<void>((resolve) => realServer.close(() => resolve()));
     if (realPool) await realPool.end();
 
-    // The scheduler spawned a real desk-sandbox-* container during the run.
-    // Best-effort remove so test runs don't leave detritus on the host.
+    // The scheduler spawned real desk-sandbox-* containers during the run.
+    // Remove only sandboxes that bind this test's temp home so parallel suites
+    // keep their own containers.
     try {
       const { detectEngine } = await import("@agent-desk/runtime");
       const engine = await detectEngine();
-      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      for (const workspaceId of realWorkspaceIds) {
+        await engine.remove(`desk-sandbox-${workspaceId}`, true).catch(() => {});
+      }
+      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-" });
       for (const c of containers) {
-        await engine.remove(c.id, true).catch(() => {});
+        const info = await engine.inspect(c.id).catch(() => null);
+        if (info?.binds.some((bind) => bind.startsWith(`${realHome}:`) || bind.startsWith(`${realHome}/`))) {
+          await engine.remove(c.id, true).catch(() => {});
+        }
       }
     } catch { /* engine may not be available; nothing to clean */ }
 
-    if (realHome) await fs.rm(realHome, { recursive: true, force: true });
-    if (realDbPath) await fs.rm(path.dirname(realDbPath), { recursive: true, force: true });
+    if (realHome) await rmTempTreeWithRetry(realHome);
+    if (realDbPath) await rmTempTreeWithRetry(path.dirname(realDbPath));
   });
 
   it("sends a message through the full real stack and gets an assistant response", async () => {
@@ -1149,3 +1159,18 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     expect(agentText).toContain("CORSAIR_SENTINEL");
   }, 360_000);
 });
+
+async function rmTempTreeWithRetry(targetPath: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try {
+      await fs.rm(targetPath, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM" && code !== "EBUSY") throw err;
+      await delay(500);
+    }
+  }
+
+  await fs.rm(targetPath, { recursive: true, force: true });
+}

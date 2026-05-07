@@ -107,10 +107,9 @@ jobs:
         run: npm run typecheck
 
   vitest:
-    name: Vitest (host suite)
+    name: Vitest (unit suite)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    needs: prepare-sandbox-image
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -134,6 +133,40 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Run unit tests (vitest)
+        run: |
+          npx vitest run \
+            --exclude '**/integration/**' \
+            --exclude '**/*.integration.test.ts' \
+            --exclude '**/e2e/**' \
+            --exclude '**/e2e.test.ts' \
+            --passWithNoTests \
+            --reporter=verbose
+
+  vitest-integration:
+    name: Vitest (integration suite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: prepare-sandbox-image
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+        run: |
+          mkdir -p "$RUNNER_TEMP/desk-home"
+          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
+          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
       - name: Download sandbox image
         uses: actions/download-artifact@v4
         with:
@@ -143,11 +176,17 @@ jobs:
       - name: Load desk/sandbox:v1 image
         run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
 
-      - name: Run unit + integration tests (vitest)
-        # `--retry=2` tolerates known flakes around async fireMessage polling
-        # (see message-model-attachments, agent-delete); real failures still
-        # fail after three attempts.
-        run: npx vitest run --passWithNoTests --retry=2
+      - name: Run integration tests (vitest)
+        # `--retry=2` tolerates known flakes around async fireMessage polling;
+        # verbose output makes the currently running file visible if CI stalls.
+        run: |
+          npx vitest run \
+            'packages/server/**/*.integration.test.ts' \
+            'packages/server/**/test/integration/**/*.test.ts' \
+            'packages/server/api/test/e2e.test.ts' \
+            --passWithNoTests \
+            --retry=2 \
+            --reporter=verbose
 
   playwright:
     name: Playwright e2e
@@ -220,6 +259,7 @@ jobs:
       - prepare-sandbox-image
       - typecheck
       - vitest
+      - vitest-integration
       - playwright
     if: ${{ always() }}
 
@@ -230,6 +270,7 @@ jobs:
           PREPARE_SERVER_DIST_RESULT: ${{ needs.prepare-server-dist.result }}
           PREPARE_SANDBOX_IMAGE_RESULT: ${{ needs.prepare-sandbox-image.result }}
           VITEST_RESULT: ${{ needs.vitest.result }}
+          VITEST_INTEGRATION_RESULT: ${{ needs.vitest-integration.result }}
           PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
         run: |
           if [ "$PREPARE_SERVER_DIST_RESULT" != "success" ]; then
@@ -246,6 +287,10 @@ jobs:
           fi
           if [ "$VITEST_RESULT" != "success" ]; then
             echo "Vitest did not pass: $VITEST_RESULT"
+            exit 1
+          fi
+          if [ "$VITEST_INTEGRATION_RESULT" != "success" ]; then
+            echo "Vitest integration did not pass: $VITEST_INTEGRATION_RESULT"
             exit 1
           fi
           if [ "$PLAYWRIGHT_RESULT" != "success" ]; then

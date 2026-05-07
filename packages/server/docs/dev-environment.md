@@ -74,17 +74,24 @@ identical flags for the operations Desk needs (`run`, `exec`, `inspect`,
 `ps`, `image inspect`, `pull`, `top`, `stop`, `rm`), so one
 implementation parameterised by binary name covers both.
 
-Per-run, the container is started with `--user $(id -u):$(id -g)` of the
-desk-server process — except under a rootless runtime, where it's `0:0`
-(host uid → user-namespace root inside the container). See
-[`sandboxUser()` in runtime/src/docker.ts](../runtime/src/docker.ts) for
-the rationale. Override via `DESK_SANDBOX_USER` if a custom daemon needs
+The long-lived container starts as root so the entrypoint can configure the
+runtime `agent` user and passwordless sudo. Agent commands then run as
+`--user $(id -u):$(id -g)` of the desk-server process — except under a rootless
+runtime, where they run as `0:0` (host uid → user-namespace root inside the
+container). See [`sandboxUser()` in runtime/src/docker.ts](../runtime/src/docker.ts)
+for the rationale. Override via `DESK_SANDBOX_USER` if a custom daemon needs
 something else.
 
-The image bakes a baseline `agent` user at UID 2000, but that's only a
-fallback for `docker run` without a `--user` override. The real uid at
-runtime is the host's, which keeps reads/writes through the workspace
-bind-mount symmetric without any chown dance.
+The image bakes a baseline `agent` user at UID 2000 for `docker run` without
+Desk. At Desk runtime, the entrypoint rewires that user to the host uid/gid when
+needed, which keeps ordinary workspace writes symmetric while still allowing
+agents to install system packages with `sudo apt-get ...`.
+
+On container start, the sandbox entrypoint seeds `/etc/skel` dotfiles into the
+workspace home and then runs `~/.deskrc` if present. That file is the
+agent-maintained persistence recipe for setup outside the bind-mounted home;
+failures are logged to container stdout and do not block the sandbox from
+starting.
 
 ## Tests
 

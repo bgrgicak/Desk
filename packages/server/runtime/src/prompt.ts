@@ -97,6 +97,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
   (input) => input.runMode === "summary" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" ? null : loadAndSub("persistence.md", {}),
   (input) =>
     input.runMode !== "summary" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
   (input) => input.runMode === "summary" ? null : loadAndSub("desk-skills.md", {}),

@@ -75,8 +75,8 @@ describeIf("sandbox model listing (real Docker)", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
 
-    // The free opencode/gpt-5-nano model the e2e suite uses must be present.
-    expect(filtered.some((m) => m.id === "opencode/gpt-5-nano")).toBe(true);
+    // The free opencode/big-pickle model the e2e suite uses must be present.
+    expect(filtered.some((m) => m.id === "opencode/big-pickle")).toBe(true);
 
     await stopSandbox(handle);
   }, 60_000);
