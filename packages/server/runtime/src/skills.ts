@@ -15,6 +15,7 @@ export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifa
 export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
+export const DESK_PERSISTENCE_SKILL_NAME = "desk-persistence";
 
 const CLI_SKILL_FILE = {
   built: "sandbox-cli-skill.md",
@@ -29,6 +30,11 @@ const APP_SCAFFOLD_AGENTS_FILE = {
 const APP_STORAGE_SKILL_FILE = {
   built: "app-storage-skill.md",
   source: "app-storage-skill.md",
+} as const;
+
+const PERSISTENCE_SKILL_FILE = {
+  built: "persistence-skill.md",
+  source: "skills/persistence.md",
 } as const;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +91,10 @@ function readAppStorageGuide(): string {
   return readSkill(APP_STORAGE_SKILL_FILE);
 }
 
+function readPersistenceGuide(): string {
+  return readSkill(PERSISTENCE_SKILL_FILE);
+}
+
 export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
   {
     name: DESK_CLI_SKILL_NAME,
@@ -121,5 +131,11 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when inspecting, importing, exporting, migrating, repairing, or doing CRUD against an existing Desk app's stored records.",
     body: readAppStorageGuide,
+  },
+  {
+    name: DESK_PERSISTENCE_SKILL_NAME,
+    description:
+      "Use when making sandbox installs or configuration persist across restarts with ~/.deskrc.",
+    body: readPersistenceGuide,
   },
 ];

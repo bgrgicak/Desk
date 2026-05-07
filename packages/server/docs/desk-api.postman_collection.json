@@ -228,7 +228,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Sidekick\",\n  \"model\": \"opencode/big-pickle\"\n}"
+              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"opencode/big-pickle\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
           }

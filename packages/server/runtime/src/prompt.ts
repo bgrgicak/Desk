@@ -142,6 +142,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
   (input) => input.runMode === "summary" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" ? null : loadAndSub("persistence.md", {}),
   // Memory rules + retrieval pointers, then the user and workspace memory
   // indexes. Order: rules → user index → workspace index. The agent
   // resolves conflicts itself; workspace wins on workspace-specific

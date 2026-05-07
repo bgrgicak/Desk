@@ -19,6 +19,7 @@ import {
   stopSandbox,
   ensureImage,
   sandboxImage,
+  sandboxUser,
 } from "../../src/docker.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
@@ -70,7 +71,7 @@ describeIf("sandbox integration", () => {
     const engine = await detectEngine();
     const info = await engine.inspect(handle.containerId);
     expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
-      "pids=1024,memory=4g,tmpfs=/tmp:size=1g",
+      "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo",
     );
   });
 
@@ -78,6 +79,41 @@ describeIf("sandbox integration", () => {
     const h1 = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const h2 = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     expect(h1.containerId).toBe(h2.containerId);
+  });
+
+  it("replays .deskrc on container restart", async () => {
+    const workspace = workspaceRootPath(home, testWorkspaceSlug);
+    const sentinel = `/tmp/deskrc-restart-${Date.now()}`;
+    await fs.writeFile(path.join(workspace, ".deskrc"), `touch ${sentinel}\n`, "utf8");
+
+    const first = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const engine = await detectEngine();
+    await engine.stop(first.containerId, 10);
+
+    const second = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    expect(second.containerId).toBe(first.containerId);
+
+    const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["test", "-f", sentinel],
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+  });
+
+  it("continues startup when .deskrc exits non-zero", async () => {
+    const workspace = workspaceRootPath(home, testWorkspaceSlug);
+    await fs.writeFile(path.join(workspace, ".deskrc"), "echo deskrc before failure\nexit 42\n", "utf8");
+
+    const engine = await detectEngine();
+    await engine.remove(containerName, true).catch(() => {});
+
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: ["sh", "-lc", "printf ready"],
+    });
+
+    expect(handle.containerId).toBeTruthy();
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain("ready");
   });
 
   it("createOrReuse rebuilds a container whose binds drifted from the current plan", async () => {
@@ -140,6 +176,7 @@ describeIf("sandbox integration", () => {
     const h = await engine.exec({
       containerId: handle.containerId,
       cmd: ["echo", "hello from sandbox"],
+      user: await sandboxUser(engine),
     });
     const chunks: Buffer[] = [];
     h.stdout.on("data", (c: Buffer) => chunks.push(c));
@@ -147,17 +184,70 @@ describeIf("sandbox integration", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toContain("hello from sandbox");
   });
 
-  it("ships document conversion tools", async () => {
+  it("ships baseline CLI tools", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
     const h = await engine.exec({
       containerId: handle.containerId,
-      cmd: ["sh", "-lc", "pandoc --version >/dev/null && pdftotext -v >/dev/null && desk-agent file to-markdown --help >/dev/null"],
+      cmd: [
+        "sh",
+        "-lc",
+        [
+          "pandoc --version >/dev/null",
+          "pdftotext -v >/dev/null",
+          "jq --version >/dev/null",
+          "git --version >/dev/null",
+          "python3 --version >/dev/null",
+          "python3 -m pip --version >/dev/null",
+          "convert --version >/dev/null",
+          "desk-agent file to-markdown --help >/dev/null",
+        ].join(" && "),
+      ],
+      user: await sandboxUser(engine),
     });
     const stderr: Buffer[] = [];
     h.stderr.on("data", (c: Buffer) => stderr.push(c));
     const exitCode = await h.wait();
     expect(exitCode, Buffer.concat(stderr).toString("utf8")).toBe(0);
+  });
+
+  it("lets the agent install Debian packages", async () => {
+    const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+      argv: [
+        "sh",
+        "-lc",
+        [
+          "set -eu",
+          "if [ \"$(id -u)\" -eq 0 ]; then SUDO=; else sudo -n true; SUDO=sudo; fi",
+          "$SUDO apt-get update",
+          "$SUDO apt-get install -y --no-install-recommends fortune-mod fortunes-min",
+          "/usr/games/fortune >/dev/null",
+        ].join("\n"),
+      ],
+      timeoutMs: 120_000,
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+  });
+
+  it("grants sudo to an existing image user when the agent uid already exists", async () => {
+    const prev = process.env.DESK_SANDBOX_USER;
+    process.env.DESK_SANDBOX_USER = "1000:1000";
+
+    const engine = await detectEngine();
+    await engine.remove(containerName, true).catch(() => {});
+
+    try {
+      const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
+        argv: ["sh", "-lc", "test \"$(id -u)\" = 1000 && sudo -n true"],
+      });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env.DESK_SANDBOX_USER;
+      else process.env.DESK_SANDBOX_USER = prev;
+      await engine.remove(containerName, true).catch(() => {});
+    }
   });
 
   it("converts real documents inside the sandbox", async () => {
@@ -305,6 +395,7 @@ const fs = require('node:fs');
 NODE`,
         ].join("\n"),
       ],
+      user: await sandboxUser(engine),
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -329,6 +420,7 @@ NODE`,
         "-lc",
         "opencode debug config | node -e \"let raw=''; process.stdin.on('data', c => raw += c); process.stdin.on('end', () => { const start = raw.indexOf('{'); const cfg = JSON.parse(raw.slice(start)); const mcp = cfg.mcp && cfg.mcp.playwright; if (!mcp) process.exit(1); if (mcp.type !== 'local') process.exit(2); if (mcp.enabled !== true) process.exit(3); if (JSON.stringify(mcp.command) !== JSON.stringify(['playwright-mcp','--browser','firefox'])) process.exit(4); });\"",
       ],
+      user: await sandboxUser(engine),
     });
     const exitCode = await h.wait();
 

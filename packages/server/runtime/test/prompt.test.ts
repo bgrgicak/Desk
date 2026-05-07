@@ -51,7 +51,7 @@ describe("renderPromptBody", () => {
     userName: "Desk",
   };
 
-  it("orders mandate → artifacts → task context → scheduling → goal autodetect → memory rules → goal → Desk skill router", () => {
+  it("orders mandate → artifacts → task context → scheduling → goal autodetect → persistence → memory rules → goal → Desk skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -64,6 +64,7 @@ describe("renderPromptBody", () => {
     const idxTaskContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
     const idxGoalAutodetect = body.indexOf("## Goal autodetection");
+    const idxPersistence = body.indexOf("## Persistence (~/.deskrc)");
     const idxMemoryRules = body.indexOf("## Memory and recall");
     const idxGoal = body.indexOf("## User's goal: write a document");
     const idxSkills = body.indexOf("## Desk native skills");
@@ -73,9 +74,28 @@ describe("renderPromptBody", () => {
     expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
     expect(idxScheduling).toBeGreaterThan(idxTaskContext);
     expect(idxGoalAutodetect).toBeGreaterThan(idxScheduling);
-    expect(idxMemoryRules).toBeGreaterThan(idxGoalAutodetect);
+    expect(idxPersistence).toBeGreaterThan(idxGoalAutodetect);
+    expect(idxMemoryRules).toBeGreaterThan(idxPersistence);
     expect(idxGoal).toBeGreaterThan(idxMemoryRules);
     expect(idxSkills).toBeGreaterThan(idxGoal);
+  });
+
+  it("includes persistence guidance in chat-mode prompts", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+    expect(body).toContain("## Persistence (~/.deskrc)");
+    expect(body).toContain("There are no ephemeral package installs");
+    expect(body).toContain("always add the idempotent install command to");
+    expect(body).toContain("`~/.deskrc` immediately");
+    expect(body).toContain("`npm install -g`");
+    expect(body).toContain("Installing a package without persisting it in `~/.deskrc` is an incomplete");
+    expect(body).toContain("sudo apt-get update && sudo apt-get install -y --no-install-recommends");
+    expect(body).toContain("Every line must be idempotent");
+    expect(body).toContain("desk-persistence");
+  });
+
+  it("omits persistence guidance from summary-mode prompts", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "summary" });
+    expect(body).not.toContain("## Persistence (~/.deskrc)");
   });
 
   it("does not inline the long Desk CLI manual", () => {
@@ -84,6 +104,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("desk-cli-file-to-markdown");
+    expect(body).toContain("desk-persistence");
     expect(body).toContain("the `playwright` MCP server");
     expect(body).toContain("assume Firefox");
     expect(body).toContain("desk-app-storage");
@@ -163,6 +184,7 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("## Goal autodetection");
     expect(body).not.toContain("## User's goal:");
     expect(body).not.toContain("## Desk native skills");
+    expect(body).not.toContain("## Persistence (~/.deskrc)");
   });
 
   it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
@@ -375,6 +397,19 @@ describe("memory injection", () => {
 });
 
 describe("Desk reference skills", () => {
+  it("publishes a persistence playbook", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-persistence");
+
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/persist/);
+    expect(skill?.body()).toContain("# Desk persistence playbook");
+    expect(skill?.body()).toContain("sudo apt-get update && sudo apt-get install");
+    expect(skill?.body()).toContain("grep -qxF");
+    expect(skill?.body()).toContain("MCP server registrations");
+    expect(skill?.body()).toContain("Recovery flow");
+    expect(skill?.body()).toContain("Incorrect entries");
+  });
+
   it("publishes a general app storage CRUD guide", () => {
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-storage");
 
