@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type GoalKey } from "@agent-desk/shared";
+import {
+  userMemoryIndexPath,
+  workspaceMemoryIndexPath,
+} from "@agent-desk/storage";
 
 /**
  * System-prompt rendering pipeline.
@@ -52,12 +56,53 @@ export function loadAndSub(rel: string, vars: Record<string, string>): string {
 export interface RenderPromptInput {
   agentName: string;
   userName: string;
-  instructions: string;
   userTimezone?: string;
   chatId?: string;
   goal?: GoalKey | null;
   includeGoalAutodetect?: boolean;
   runMode?: "chat" | "summary";
+  /**
+   * DESK_HOME root used to read the user / workspace memory index files.
+   * When unset, memory injection is skipped (lets unit tests render the
+   * prompt without a real home tree).
+   */
+  home?: string;
+  /**
+   * Workspace slug whose `.memory/workspace.md` should be injected. Pass
+   * with `home`; without both, workspace memory is skipped.
+   */
+  workspaceSlug?: string;
+}
+
+const EMPTY_USER_MEMORY = `# User memory\n\n_(empty — nothing remembered yet)_\n`;
+const EMPTY_WORKSPACE_MEMORY = `# Workspace memory\n\n_(empty — nothing remembered yet)_\n`;
+
+/**
+ * Reads a memory index file. Missing or empty files inject a stub so the
+ * agent still sees the memory section header. Unexpected filesystem errors
+ * are surfaced in the prompt instead of pretending memory is empty.
+ */
+function readMemoryIndex(filePath: string, fallback: string, label: string): string {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8").trim();
+    return raw.length > 0 ? raw : fallback;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+      return fallback;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return `# ${label} memory\n\n_(memory unavailable: ${message})_\n`;
+  }
+}
+
+function userMemoryFragment(home: string): string {
+  const body = readMemoryIndex(userMemoryIndexPath(home), EMPTY_USER_MEMORY, "User");
+  return `<!-- Desk user memory index -->\n${body}`;
+}
+
+function workspaceMemoryFragment(home: string, slug: string): string {
+  const body = readMemoryIndex(workspaceMemoryIndexPath(home, slug), EMPTY_WORKSPACE_MEMORY, "Workspace");
+  return `<!-- Desk workspace memory index -->\n${body}`;
 }
 
 type Fragment = (input: RenderPromptInput) => string | null;
@@ -86,7 +131,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
-  (input) => input.runMode === "summary" ? null : loadAndSub("context.md", {}),
+  (input) => input.runMode === "summary" ? null : loadAndSub("task-context.md", {}),
   (input) =>
     input.runMode === "summary"
       ? null
@@ -98,14 +143,19 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       : loadAndSub("scheduling-tz-unknown.md", {}),
   (input) => input.runMode === "summary" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
   (input) => input.runMode === "summary" ? null : loadAndSub("persistence.md", {}),
+  // Memory rules + retrieval pointers, then the user and workspace memory
+  // indexes. Order: rules → user index → workspace index. The agent
+  // resolves conflicts itself; workspace wins on workspace-specific
+  // topics, user wins on cross-cutting style.
+  (input) => input.runMode === "summary" ? null : loadAndSub("context.md", {}),
+  (input) => input.runMode === "summary" || !input.home ? null : userMemoryFragment(input.home),
+  (input) =>
+    input.runMode === "summary" || !input.home || !input.workspaceSlug
+      ? null
+      : workspaceMemoryFragment(input.home, input.workspaceSlug),
   (input) =>
     input.runMode !== "summary" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
   (input) => input.runMode === "summary" ? null : loadAndSub("desk-skills.md", {}),
-  (input) =>
-    loadAndSub("user-instructions.md", {
-      userName: input.userName,
-      instructions: input.instructions || "(none)",
-    }),
 ];
 
 /**

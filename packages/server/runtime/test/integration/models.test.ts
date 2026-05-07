@@ -75,7 +75,7 @@ describeIf("sandbox model listing (real Docker)", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
 
-    // The free opencode/big-pickle model the e2e suite uses must be present.
+    // Keep the real integration pinned to a free opencode model that requires no API key.
     expect(filtered.some((m) => m.id === "opencode/big-pickle")).toBe(true);
 
     await stopSandbox(handle);

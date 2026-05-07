@@ -6,7 +6,6 @@ function rowToAgent(row: Record<string, unknown>): Agent {
     id: row.id,
     userId: row.user_id,
     name: row.name,
-    instructions: row.instructions,
     model: row.model,
   });
 }
@@ -31,17 +30,16 @@ export async function findById(db: Pool, id: string): Promise<Agent | null> {
 
 export async function insert(
   db: Pool,
-  data: { id: string; userId: string; name: string; instructions?: string; model?: string },
+  data: { id: string; userId: string; name: string; model?: string },
 ): Promise<Agent> {
   const { rows } = await db.query(
-    `INSERT INTO agents (id, user_id, name, instructions, model)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO agents (id, user_id, name, model)
+     VALUES (?, ?, ?, ?)
      RETURNING *`,
     [
       data.id,
       data.userId,
       data.name,
-      data.instructions ?? "",
       data.model ?? "opencode/big-pickle",
     ],
   );
@@ -51,7 +49,7 @@ export async function insert(
 export async function updateMeta(
   db: Pool,
   id: string,
-  data: { name?: string; instructions?: string; model?: string },
+  data: { name?: string; model?: string },
 ): Promise<Agent | null> {
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -59,10 +57,6 @@ export async function updateMeta(
   if (data.name !== undefined) {
     sets.push(`name = ?`);
     params.push(data.name);
-  }
-  if (data.instructions !== undefined) {
-    sets.push(`instructions = ?`);
-    params.push(data.instructions);
   }
   if (data.model !== undefined) {
     sets.push(`model = ?`);

@@ -251,7 +251,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My agent\",\n  \"instructions\": \"Be helpful\",\n  \"model\": \"claude-opus-4-7\"\n}"
+              "raw": "{\n  \"name\": \"My agent\",\n  \"model\": \"claude-opus-4-7\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/agents/{{agentId}}",

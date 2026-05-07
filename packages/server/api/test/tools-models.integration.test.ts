@@ -119,7 +119,7 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     }
   }, 90_000);
 
-  it("?provider=opencode returns only opencode models, including the free big-pickle model", async () => {
+  it("?provider=opencode returns only opencode models, including a free model", async () => {
     const res = await httpJson("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);

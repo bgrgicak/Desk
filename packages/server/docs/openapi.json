@@ -481,9 +481,6 @@
                   "name": {
                     "type": "string"
                   },
-                  "instructions": {
-                    "type": "string"
-                  },
                   "model": {
                     "type": "string"
                   }
@@ -522,7 +519,7 @@
         }
       },
       "patch": {
-        "summary": "Update agent (name, instructions, model)",
+        "summary": "Update agent (name, model)",
         "parameters": [
           {
             "name": "id",
@@ -540,9 +537,6 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
-                  },
-                  "instructions": {
                     "type": "string"
                   },
                   "model": {
@@ -670,7 +664,7 @@
       },
       "patch": {
         "summary": "Update chat",
-        "description": "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and instructions.",
+        "description": "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and the user's memory.",
         "parameters": [
           {
             "name": "id",
