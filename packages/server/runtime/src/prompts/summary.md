@@ -42,7 +42,7 @@ prior summary unless the latest exchange changed it.
 One line per thread that has wrapped up — what was decided or why it was
 dropped. Closed threads collapse to a single bullet; they are not deleted
 unless the user explicitly says "forget this".
-
+Keep a maximum of 50 closed threads; delete older threads from this list. 
 - <Thread name>: <one-line outcome>
 
 ## Open threads / next steps
