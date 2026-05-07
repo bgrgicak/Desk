@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
+import { NotFoundError } from "@agent-desk/shared";
 import {
   workspaceRootPath,
   loadGitignoreFrame,
@@ -13,9 +14,34 @@ import {
 export interface SearchResult {
   type: "file" | "chat" | "message";
   id: string;
+  refId?: string;
   title: string;
   snippet?: string;
+  workspaceId?: string;
+  workspaceSlug?: string;
+  chatId?: string;
+  messageId?: string;
+  kind?: SearchKind;
+  score?: number;
 }
+
+type SearchKind =
+  | "chat"
+  | "message"
+  | "summary"
+  | "library_file"
+  | "attachment"
+  | "artifact";
+
+const FILE_KINDS: SearchKind[] = ["library_file", "attachment", "artifact"];
+const CHAT_KINDS: SearchKind[] = ["chat", "message", "summary"];
+const INDEXED_TEXT_EXTENSIONS = new Set([
+  ".txt", ".md", ".markdown", ".json", ".html", ".css", ".js", ".jsx",
+  ".ts", ".tsx", ".mjs", ".cjs", ".yml", ".yaml", ".csv", ".xml", ".svg",
+  ".url", ".webloc", ".desktop",
+]);
+const EXCLUDED_INDEX_SEGMENTS = new Set([".git", ".storage", ".trash", "node_modules", "dist", "build"]);
+const MAX_INDEXED_FILE_BYTES = 128 * 1024;
 
 /**
  * Recursively walks a directory, collecting files. By default dot-prefixed
@@ -30,7 +56,7 @@ export interface SearchResult {
  */
 async function walkFiles(
   root: string,
-  opts: { showHidden: boolean },
+  opts: { showHidden: boolean; includeChats?: boolean },
   frames: IgnoreFrame[] = [],
   out: Array<{ abs: string; name: string }> = [],
 ): Promise<Array<{ abs: string; name: string }>> {
@@ -42,10 +68,10 @@ async function walkFiles(
 
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   for (const e of entries) {
-    if (!opts.showHidden && e.name.startsWith(".")) continue;
+    if (!opts.showHidden && e.name.startsWith(".") && !(opts.includeChats && e.name === ".chats")) continue;
     const abs = path.join(root, e.name);
     const isDir = e.isDirectory();
-    if (respectGitignore && isGitIgnored(abs, isDir, seeded)) continue;
+    if (respectGitignore && !(opts.includeChats && e.name === ".chats") && isGitIgnored(abs, isDir, seeded)) continue;
     if (isDir) {
       const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
       const childFrames = childFrame ? [...seeded, childFrame] : seeded;
@@ -55,6 +81,83 @@ async function walkFiles(
     }
   }
   return out;
+}
+
+function isSafeIndexedTextPath(relPath: string): boolean {
+  const segments = relPath.split("/");
+  if (segments.some((segment) => EXCLUDED_INDEX_SEGMENTS.has(segment))) return false;
+  return INDEXED_TEXT_EXTENSIONS.has(path.extname(relPath).toLowerCase());
+}
+
+function encodeFileRef(workspaceSlug: string, relPath: string): string {
+  return `${workspaceSlug}::${relPath}`;
+}
+
+function decodeFileRef(workspaceSlug: string, refId: string): string {
+  const prefix = `${workspaceSlug}::`;
+  return refId.startsWith(prefix) ? refId.slice(prefix.length) : refId;
+}
+
+function classifyFileKind(relPath: string): { kind: SearchKind; chatId: string | null } | null {
+  const segments = relPath.split("/");
+  if (segments[0] === ".chats") {
+    const chatId = segments[1] ?? null;
+    if (segments[2] === "attachments") return { kind: "attachment", chatId };
+    if (segments[2] === "artifacts") return { kind: "artifact", chatId };
+    return null;
+  }
+  return { kind: "library_file", chatId: null };
+}
+
+async function searchableBodyForFile(abs: string, relPath: string): Promise<string | null> {
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat || !stat.isFile()) return null;
+  if (stat.size > MAX_INDEXED_FILE_BYTES) return relPath;
+  if (!isSafeIndexedTextPath(relPath)) return relPath;
+  const buf = await fs.readFile(abs).catch(() => null);
+  if (!buf) return relPath;
+  if (buf.includes(0)) return relPath;
+  const text = buf.toString("utf-8");
+  const replacementCount = (text.match(/\uFFFD/g) ?? []).length;
+  if (replacementCount > Math.max(8, text.length / 100)) return relPath;
+  return `${relPath}\n${text}`;
+}
+
+async function refreshWorkspaceFileIndex(
+  pool: Pool,
+  storage: StorageContext,
+  workspaceSlug: string,
+  opts: { showHidden: boolean },
+): Promise<void> {
+  const root = workspaceRootPath(storage.home, workspaceSlug);
+  const files = await walkFiles(root, { showHidden: opts.showHidden, includeChats: true });
+  await queries.search.deleteSearchDocumentsForWorkspace(pool, workspaceSlug, FILE_KINDS);
+  for (const file of files) {
+    const rel = path.relative(root, file.abs).split(path.sep).join("/");
+    const classified = classifyFileKind(rel);
+    if (!classified) continue;
+    const body = await searchableBodyForFile(file.abs, rel);
+    if (!body) continue;
+    const stat = await fs.stat(file.abs).catch(() => null);
+    await queries.search.upsertSearchDocument(pool, {
+      refId: encodeFileRef(workspaceSlug, rel),
+      body,
+      chatId: classified.chatId,
+      workspaceSlug,
+      kind: classified.kind,
+      createdAt: stat?.mtime.toISOString(),
+    });
+  }
+}
+
+function kindsForScope(scope: "artifacts" | "chats" | "library" | "all" | "files"): SearchKind[] {
+  switch (scope) {
+    case "chats": return CHAT_KINDS;
+    case "library": return ["library_file"];
+    case "artifacts": return ["attachment", "artifact"];
+    case "files": return FILE_KINDS;
+    case "all": return [...CHAT_KINDS, ...FILE_KINDS];
+  }
 }
 
 /**
@@ -72,12 +175,14 @@ async function walkFiles(
 export async function search(
   pool: Pool,
   storage: StorageContext,
+  userId: string,
   query: string,
-  scope: "artifacts" | "chats" | "library" | "all" = "all",
-  opts?: { showHidden?: boolean; workspaceId?: string },
+  scope: "artifacts" | "chats" | "library" | "all" | "files" = "all",
+  opts?: { showHidden?: boolean; workspaceId?: string; chatId?: string; kinds?: SearchKind[] },
 ): Promise<SearchResult[]> {
-  const results: SearchResult[] = [];
-  const needle = query.toLowerCase();
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return [];
+
   const showHidden = opts?.showHidden ?? false;
   const workspaceId = opts?.workspaceId;
 
@@ -85,60 +190,70 @@ export async function search(
   // omitted we fall back to the full set so single-workspace callers (and
   // tests) still get results — multi-workspace callers should always scope.
   const workspaces = workspaceId
-    ? await queries.workspaces.findById(pool, workspaceId).then((w) => (w ? [w] : []))
-    : await queries.workspaces.list(pool);
+    ? await queries.workspaces.findById(pool, workspaceId).then((w) => {
+        if (!w || w.userId !== userId) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+        return [w];
+      })
+    : await queries.workspaces.listByUser(pool, userId);
 
-  if (scope === "all" || scope === "library") {
-    for (const ws of workspaces) {
-      const root = workspaceRootPath(storage.home, ws.path);
-      const libFiles = await walkFiles(root, { showHidden });
-      for (const f of libFiles) {
-        if (f.name.toLowerCase().includes(needle)) {
-          const rel = path.relative(root, f.abs).split(path.sep).join("/");
-          results.push({ type: "file", id: rel, title: f.name });
-        }
-      }
-    }
+  const selectedKinds = opts?.kinds && opts.kinds.length > 0 ? opts.kinds : kindsForScope(scope);
+  // Explicit file scopes refresh the on-disk index synchronously. The default
+  // global search path must stay responsive while users type, so it searches
+  // whatever file rows are already indexed and never blocks chat/title results
+  // on a full workspace walk.
+  if (scope !== "all" && selectedKinds.some((kind) => FILE_KINDS.includes(kind))) {
+    for (const ws of workspaces) await refreshWorkspaceFileIndex(pool, storage, ws.path, { showHidden });
   }
 
-  if (scope === "all" || scope === "artifacts") {
-    // Artifacts scope targets everything under `.chats/*/attachments/`.
-    // That includes both user-uploaded chat files (non-dot) and
-    // agent-generated artifacts (dot-prefixed). The split between the
-    // two is a rendering concern for the chat UI; for search we surface
-    // anything the agent or user parked in the chat's attachments dir.
-    for (const ws of workspaces) {
-      const root = workspaceRootPath(storage.home, ws.path);
-      const chatsRoot = path.join(root, ".chats");
-      const chatDirs = await fs.readdir(chatsRoot, { withFileTypes: true }).catch(() => []);
-      for (const entry of chatDirs) {
-        if (!entry.isDirectory()) continue;
-        const attachmentsDir = path.join(chatsRoot, entry.name, "attachments");
-        const files = await walkFiles(attachmentsDir, { showHidden: true });
-        for (const f of files) {
-          if (f.name.toLowerCase().includes(needle)) {
-            const rel = path.relative(root, f.abs).split(path.sep).join("/");
-            results.push({ type: "file", id: rel, title: f.name });
-          }
-        }
-      }
-    }
+  const workspaceBySlug = new Map(workspaces.map((ws) => [ws.path, ws]));
+  const hits = await queries.search.searchChatMessages(pool, {
+    query: trimmedQuery,
+    chatId: opts?.chatId,
+    workspaceSlugs: workspaces.map((ws) => ws.path),
+    kinds: selectedKinds,
+    limit: 40,
+  });
+  const chatIds = [...new Set(hits.map((hit) => hit.chatId).filter((id): id is string => Boolean(id)))];
+  const titleByChatId = new Map<string, string>();
+  if (chatIds.length > 0) {
+    const { rows } = await pool.query(
+      `SELECT id, title FROM chats WHERE id IN (${chatIds.map(() => "?").join(", ")})`,
+      chatIds,
+    );
+    for (const row of rows) titleByChatId.set(row.id as string, row.title as string);
   }
 
-  if (scope === "all" || scope === "chats") {
-    const pattern = `%${query}%`;
-    // SQLite's LIKE is case-insensitive for ASCII by default — sufficient
-    // for the latin-script titles users create. Bind params in textual
-    // order: workspaceId first when present, then the pattern.
-    const sql = workspaceId
-      ? `SELECT id, title FROM chats WHERE workspace_id = ? AND title LIKE ? ORDER BY updated_at DESC LIMIT 20`
-      : `SELECT id, title FROM chats WHERE title LIKE ? ORDER BY updated_at DESC LIMIT 20`;
-    const params = workspaceId ? [workspaceId, pattern] : [pattern];
-    const { rows } = await pool.query(sql, params);
-    for (const row of rows) {
-      results.push({ type: "chat", id: row.id as string, title: row.title as string });
+  return hits.flatMap((hit): SearchResult[] => {
+    if (!hit.workspaceSlug) return [];
+    const ws = workspaceBySlug.get(hit.workspaceSlug);
+    if (!ws) return [];
+    if (hit.kind === "chat" || hit.kind === "message" || hit.kind === "summary") {
+      if (!hit.chatId) return [];
+      return [{
+        type: hit.kind === "chat" ? "chat" : "message",
+        id: hit.chatId,
+        refId: hit.refId,
+        title: titleByChatId.get(hit.chatId) ?? "Chat message",
+        snippet: hit.snippet,
+        workspaceId: ws.id,
+        workspaceSlug: ws.path,
+        chatId: hit.chatId,
+        messageId: hit.kind === "chat" ? undefined : hit.refId,
+        kind: hit.kind,
+        score: hit.score,
+      }];
     }
-  }
-
-  return results.slice(0, 40);
+    return [{
+      type: "file",
+      id: decodeFileRef(hit.workspaceSlug, hit.refId),
+      refId: hit.refId,
+      title: path.basename(decodeFileRef(hit.workspaceSlug, hit.refId)),
+      snippet: hit.snippet,
+      workspaceId: ws.id,
+      workspaceSlug: ws.path,
+      chatId: hit.chatId ?? undefined,
+      kind: hit.kind,
+      score: hit.score,
+    }];
+  }).slice(0, 40);
 }

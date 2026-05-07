@@ -647,6 +647,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             },
             "400": { description: "Sandbox rejected the listing" },
             "404": { description: "No sandbox available" },
+            "503": { description: "No container runtime is available to query the sandbox" },
           },
         },
       },
@@ -655,9 +656,17 @@ export function generateOpenApiSpec(): OpenApiSpec {
           summary: "Search across artifacts, chats, and library",
           parameters: [
             { name: "q", in: "query", required: true, schema: { type: "string" } },
-            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library"] } },
+            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library", "files"] } },
+            { name: "kind", in: "query", schema: { type: "string", description: "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact" } },
+            { name: "workspaceId", in: "query", schema: { type: "string" } },
+            { name: "chatId", in: "query", schema: { type: "string" } },
+            { name: "showHidden", in: "query", schema: { type: "boolean" } },
           ],
-          responses: { "200": { description: "Search result array" } },
+          responses: {
+            "200": {
+              description: "Search result array. Chat results are indexed message or summary hits from chat_search_index.",
+            },
+          },
         },
       },
       "/ws": {

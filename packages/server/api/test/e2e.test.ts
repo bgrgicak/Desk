@@ -339,6 +339,13 @@ describe("API e2e (real Postgres)", () => {
     expect(res.status).toBe(200);
   });
 
+  it("GET /search rejects invalid filters", async () => {
+    const badScope = await request("GET", "/search?q=x&scope=bogus", token);
+    expect(badScope.status).toBe(400);
+    const badKind = await request("GET", "/search?q=x&kind=bogus", token);
+    expect(badKind.status).toBe(400);
+  });
+
   it("GET /openapi.json works without auth", async () => {
     const res = await request("GET", "/openapi.json");
     expect(res.status).toBe(200);
@@ -753,8 +760,8 @@ describe("API e2e (real Postgres)", () => {
     expect(body.every((f) => f.kind === "attachment")).toBe(true);
   });
 
-  // Gap 6: Fuzzy search returns uploaded artifact and chat
-  it("fuzzy search returns known artifact and chat IDs", async () => {
+  // Gap 6: Search returns uploaded artifacts and indexed chat messages.
+  it("search returns known artifact and message-backed chat IDs", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -763,9 +770,14 @@ describe("API e2e (real Postgres)", () => {
     const chatRes = await request("POST", "/chats", token, {
       workspaceId: workspaces[0].id,
       agentId: agents[0].id,
-      title: "SearchableUniqueTitle",
+      title: "Indexed Search Chat",
     });
     const chat = chatRes.body as { id: string };
+
+    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "SearchableUnique message body",
+    });
+    expect(msgRes.status).toBe(201);
 
     const uploadRes = await requestMultipart(
       "POST",
@@ -789,11 +801,38 @@ describe("API e2e (real Postgres)", () => {
     const artResults = artRes.body as Array<{ type: string; id: string }>;
     expect(artResults.some((r) => r.type === "file" && r.id === file.path)).toBe(true);
 
-    // Search chats
+    const libraryUploadRes = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${workspaces[0].id}`,
+      token,
+      [
+        {
+          name: "file",
+          filename: "universal-search-note.md",
+          contentType: "text/markdown",
+          body: Buffer.from("UniversalNeedle appears only inside this file body"),
+        },
+      ],
+    );
+    expect(libraryUploadRes.status).toBe(201);
+    const libraryFile = libraryUploadRes.body as { path: string };
+
+    const libraryContentRes = await request("GET", "/search?q=UniversalNeedle&scope=library", token);
+    expect(libraryContentRes.status).toBe(200);
+    const libraryContentResults = libraryContentRes.body as Array<{ type: string; id: string; kind?: string }>;
+    expect(libraryContentResults.some((r) => r.type === "file" && r.kind === "library_file" && r.id === libraryFile.path)).toBe(true);
+
+    // Search chats through the shared chat_search_index-backed search.
     const chatSearchRes = await request("GET", "/search?q=SearchableUnique&scope=chats", token);
     expect(chatSearchRes.status).toBe(200);
-    const chatResults = chatSearchRes.body as Array<{ id: string }>;
-    expect(chatResults.some((r) => r.id === chat.id)).toBe(true);
+    const chatResults = chatSearchRes.body as Array<{ type: string; id: string; snippet?: string }>;
+    expect(chatResults.some((r) => r.type === "message" && r.id === chat.id)).toBe(true);
+    expect(chatResults.some((r) => r.snippet?.includes("<mark>SearchableUnique</mark>"))).toBe(true);
+
+    const titleSearchRes = await request("GET", "/search?q=Indexed%20Search%20Chat&scope=chats", token);
+    expect(titleSearchRes.status).toBe(200);
+    const titleResults = titleSearchRes.body as Array<{ type: string; id: string; snippet?: string }>;
+    expect(titleResults.some((r) => r.type === "chat" && r.id === chat.id)).toBe(true);
 
     // Search all
     const allRes = await request("GET", "/search?q=Searchable&scope=all", token);

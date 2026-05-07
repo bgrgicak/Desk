@@ -56,4 +56,9 @@ flag, verify it still exists with filesystem or search tools.
 If the user says "ignore memory," "fresh start," or "don't use memory," stop
 applying remembered facts for the rest of the conversation.
 
+## Memory and recall
+
+To recall details from other chats use `search_chat_messages` (Desk skill
+`desk-cli-chat-search-messages`).
+
 ------------------------------------------------------------------------------------

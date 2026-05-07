@@ -8,8 +8,8 @@ function message(overrides: Partial<ServerMessage> = {}): ServerMessage {
     chatId: 'cht_test',
     role: 'system',
     content: { type: 'summary_request' },
-    createdAt: '2026-05-07T10:00:00.000Z',
-    executeAt: '2026-05-07T10:30:00.000Z',
+    createdAt: '2099-05-07T10:00:00.000Z',
+    executeAt: '2099-05-07T10:30:00.000Z',
     state: 'pending',
     kind: 'summary',
     ...overrides,
@@ -28,7 +28,7 @@ describe('task selectors', () => {
       workspaceId: 'wks_test',
       agentId: 'agent_test',
       title: 'Launch planning',
-      updatedAt: '2026-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
       awaitingUser: false,
       unread: false,
     }])
@@ -39,8 +39,8 @@ describe('task selectors', () => {
     expect(task.history).toEqual([
       {
         id: 'msg_summary_request-upcoming',
-        startedAt: new Date('2026-05-07T10:30:00.000Z'),
-        endedAt: new Date('2026-05-07T10:30:00.000Z'),
+        startedAt: new Date('2099-05-07T10:30:00.000Z'),
+        endedAt: new Date('2099-05-07T10:30:00.000Z'),
         status: 'scheduled',
       },
     ])

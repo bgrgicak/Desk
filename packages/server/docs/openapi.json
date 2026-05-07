@@ -855,8 +855,8 @@
     },
     "/chats/{id}/messages/{messageId}": {
       "patch": {
-        "summary": "Edit a message (content, cancel, reschedule)",
-        "description": "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+        "summary": "Edit a message (title, content, cancel, reschedule)",
+        "description": "Update title/content (e.g. user edits a task or summary), transition state (only 'cancelled', 'paused', or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
         "parameters": [
           {
             "name": "id",
@@ -884,10 +884,17 @@
                   "content": {
                     "type": "object"
                   },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "state": {
                     "type": "string",
                     "enum": [
                       "cancelled",
+                      "paused",
                       "pending"
                     ]
                   },
@@ -1659,6 +1666,9 @@
           },
           "404": {
             "description": "No sandbox available"
+          },
+          "503": {
+            "description": "No container runtime is available to query the sandbox"
           }
         }
       }
@@ -1684,14 +1694,44 @@
                 "all",
                 "artifacts",
                 "chats",
-                "library"
+                "library",
+                "files"
               ]
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact"
+            }
+          },
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "showHidden",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "Search result array"
+            "description": "Search result array. Chat results are indexed message or summary hits from chat_search_index."
           }
         }
       }

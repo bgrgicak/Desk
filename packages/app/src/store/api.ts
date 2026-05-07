@@ -95,6 +95,11 @@ export interface SearchResult {
   id: string;
   title: string;
   snippet?: string;
+  workspaceId?: string;
+  workspaceSlug?: string;
+  messageId?: string;
+  kind?: "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
+  score?: number;
 }
 
 export interface ModelRef {
@@ -693,11 +698,14 @@ export const api = createApi({
     // ── Search ────────────────────────────────────────────────────────
     search: build.query<
       SearchResult[],
-      { q: string; scope?: "chats" | "artifacts" | "library" | "all" }
+      { q: string; scope?: "chats" | "artifacts" | "library" | "files" | "all"; workspaceId?: string; chatId?: string; kind?: string }
     >({
-      query: ({ q, scope }) => {
+      query: ({ q, scope, workspaceId, chatId, kind }) => {
         const p = new URLSearchParams({ q });
         if (scope) p.set("scope", scope);
+        if (workspaceId) p.set("workspaceId", workspaceId);
+        if (chatId) p.set("chatId", chatId);
+        if (kind) p.set("kind", kind);
         return `/search?${p.toString()}`;
       },
     }),

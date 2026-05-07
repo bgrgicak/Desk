@@ -286,6 +286,37 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(msg?.state).toBe("failed");
   });
 
+  it("thrown run setup errors are appended as stderr event messages", async () => {
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async () => {
+        throw new Error("No container runtime available. Tried: docker info failed, nerdctl info failed.");
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "will throw" });
+    const result = await mgr.fireMessage(messageId);
+
+    expect(result.fired).toBe(true);
+    expect(result.childIds).toHaveLength(1);
+    const parent = await queries.messages.findById(pool, messageId);
+    expect(parent?.state).toBe("failed");
+
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as {
+      type: string;
+      log: Array<{ kind: string; line?: string }>;
+    };
+    expect(content.type).toBe("events");
+    expect(content.log).toEqual([
+      { kind: "stderr", line: "Agent run failed before it could complete." },
+      { kind: "stderr", line: "No container runtime available. Tried: docker info failed, nerdctl info failed." },
+    ]);
+    expect(events.some((e) => e.type === "message.appended" && e.payload.id === child?.id)).toBe(true);
+  });
+
   it("agent_turn resolves the referenced user message's text as the prompt (G2)", async () => {
     let capturedPrompt = "";
     const mgr = createRunManager({

@@ -12,6 +12,7 @@ export interface DeskSkillSpec {
 export const DESK_CLI_SKILL_NAME = "desk-cli";
 export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
 export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
+export const DESK_CHAT_SEARCH_MESSAGES_SKILL_NAME = "desk-cli-chat-search-messages";
 export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
@@ -75,6 +76,14 @@ function chatAttachArtifactReference(): string {
   ].join("\n");
 }
 
+function chatSearchMessagesReference(): string {
+  return [
+    "# Desk chat-message search reference",
+    "",
+    extractSection(readCliManual(), "## desk-agent chat search-messages"),
+  ].join("\n");
+}
+
 function fileToMarkdownReference(): string {
   return [
     "# Desk document conversion reference",
@@ -113,6 +122,12 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
     description:
       "Use when the agent needs syntax or examples for surfacing generated artifacts in Desk chat.",
     body: chatAttachArtifactReference,
+  },
+  {
+    name: DESK_CHAT_SEARCH_MESSAGES_SKILL_NAME,
+    description:
+      "Use when the agent needs to recall something the user mentioned in another chat, earlier in this chat (before the latest summary), or across the workspace's history. Full-text search over messages and chat summaries.",
+    body: chatSearchMessagesReference,
   },
   {
     name: DESK_FILE_TO_MARKDOWN_SKILL_NAME,

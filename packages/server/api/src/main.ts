@@ -60,16 +60,6 @@ async function main(): Promise<void> {
         "set DESK_HOME to pin the on-disk root.",
     );
   }
-  const drift = await auditSandboxMounts(DESK_HOME);
-  for (const d of drift) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
-        `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
-        `Container will be recreated on next run.`,
-    );
-  }
-
   await fs.mkdir(DESK_HOME, { recursive: true });
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
@@ -142,6 +132,17 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(`desk-server listening on :${PORT}`);
+
+  void auditSandboxMounts(DESK_HOME).then((drift) => {
+    for (const d of drift) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
+          `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
+          `Container will be recreated on next run.`,
+      );
+    }
+  });
 
   const shutdown = async (signal: string) => {
     // eslint-disable-next-line no-console

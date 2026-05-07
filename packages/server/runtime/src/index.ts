@@ -7,7 +7,7 @@ export {
   providerKeyEnv,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift } from "./docker.js";
-export { detectEngine } from "./engine.js";
+export { detectEngine, ContainerRuntimeUnavailableError } from "./engine.js";
 export type {
   Engine,
   EngineName,

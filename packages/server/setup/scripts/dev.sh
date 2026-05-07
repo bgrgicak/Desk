@@ -57,6 +57,15 @@ fi
 DESK_HOME_DEFAULT="${HOME}"
 mkdir -p "${DESK_HOME_DEFAULT}/Desk"
 
+# 3b. Rebuild the sandbox docker image when its inputs (sandbox-cli source,
+#     Dockerfile, app-scaffold manifests) have changed. Skipped silently
+#     when the existing image's `desk.fingerprint` label still matches.
+if [ -z "${DESK_SKIP_SANDBOX_BUILD:-}" ]; then
+  bash "${SCRIPT_DIR}/ensure-sandbox-image.sh" || {
+    echo "==> sandbox image rebuild failed; continuing with existing image." >&2
+  }
+fi
+
 # 4. Kill stale processes holding our ports from a previous run.
 for port in 5173 35138; do
   if lsof -ti ":${port}" >/dev/null 2>&1; then

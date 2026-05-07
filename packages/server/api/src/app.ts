@@ -49,6 +49,26 @@ import {
 
 type RunManager = ReturnType<typeof createRunManager>;
 
+const SEARCH_SCOPES = new Set(["all", "artifacts", "chats", "library", "files"]);
+const SEARCH_KINDS = new Set(["chat", "message", "summary", "library_file", "attachment", "artifact"]);
+type SearchScope = "artifacts" | "chats" | "library" | "files" | "all";
+type SearchKind = "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
+
+function parseSearchScope(raw: string | null): SearchScope {
+  const scope = raw ?? "all";
+  if (!SEARCH_SCOPES.has(scope)) throw new ValidationError(`Invalid search scope: ${scope}`);
+  return scope as SearchScope;
+}
+
+function parseSearchKinds(raw: string | null): SearchKind[] | undefined {
+  if (!raw) return undefined;
+  const kinds = raw.split(",").map((kind) => kind.trim()).filter(Boolean);
+  for (const kind of kinds) {
+    if (!SEARCH_KINDS.has(kind)) throw new ValidationError(`Invalid search kind: ${kind}`);
+  }
+  return kinds as SearchKind[];
+}
+
 export interface AppOptions {
   pool: Pool;
   storage: StorageContext;
@@ -563,6 +583,85 @@ export function createApp(opts: AppOptions): Server {
 
       const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, userMessage);
+      return;
+    }
+
+    // Memory-system P3.5 — full-text search for the in-sandbox agent.
+    // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
+    // session's workspace; cross-workspace recall requires a future
+    // explicit home-workspace exception, not workspace=*.
+    if (path === "/sandbox/search/messages" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const chatIdParam = params.get("chat") ?? undefined;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const ws = await queries.workspaces.findById(pool, session.workspaceId);
+      if (!ws || ws.userId !== agent.userId) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (workspaceParam && workspaceParam !== ws.path && workspaceParam !== "*") {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
+
+      // When chatId is supplied, gate ownership.
+      if (chatIdParam) {
+        const chat = await requireOwnedChat(pool, chatIdParam, agent.userId);
+        if (chat.workspaceId !== session.workspaceId) {
+          throw new NotFoundError(`Chat not found: ${chatIdParam}`);
+        }
+      }
+
+      const hits = await queries.search.searchChatMessages(pool, {
+        query: q,
+        chatId: chatIdParam,
+        workspaceSlug: ws.path,
+        kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+
+      sendJson(res, 200, { hits });
+      return;
+    }
+
+    if (path === "/sandbox/search" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      let workspaceId: string | undefined;
+      if (workspaceParam && workspaceParam !== "*") {
+        const ws = ownedWorkspaces.find((w) => w.path === workspaceParam || w.id === workspaceParam);
+        if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        workspaceId = ws.id;
+      } else if (!workspaceParam && session.workspaceId) {
+        workspaceId = session.workspaceId;
+      }
+      const result = await searchRoutes.search(
+        pool,
+        storage,
+        agent.userId,
+        q,
+        parseSearchScope(params.get("scope")),
+        {
+          workspaceId,
+          chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
+          kinds: parseSearchKinds(params.get("kind")),
+          showHidden: params.get("showHidden") === "true",
+        },
+      );
+      sendJson(res, 200, { hits: result });
       return;
     }
 
@@ -1182,12 +1281,16 @@ export function createApp(opts: AppOptions): Server {
     // Search
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
-      const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
+      const scope = parseSearchScope(query.get("scope"));
       const showHidden = query.get("showHidden") === "true";
       const workspaceId = query.get("workspaceId") ?? undefined;
-      const result = await searchRoutes.search(pool, storage, q, scope, {
+      const chatId = query.get("chatId") ?? undefined;
+      const kinds = parseSearchKinds(query.get("kind"));
+      const result = await searchRoutes.search(pool, storage, userId, q, scope, {
         showHidden,
         workspaceId,
+        chatId,
+        kinds,
       });
       sendJson(res, 200, result);
       return;
@@ -1291,6 +1394,19 @@ export function createApp(opts: AppOptions): Server {
         return;
       }
 
+      const realDistRoot = await fsRealpath(distRoot).catch(() => null);
+      if (!realDistRoot) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
+        return;
+      }
+      const assertInsideDist = async (filePath: string): Promise<string | null> => {
+        const realCandidate = await fsRealpath(filePath).catch(() => null);
+        if (!realCandidate) return null;
+        return realCandidate === realDistRoot || realCandidate.startsWith(realDistRoot + pathSep)
+          ? realCandidate
+          : null;
+      };
+
       const APP_MIME: Record<string, string> = {
         ".html": "text/html; charset=utf-8",
         ".js":   "application/javascript; charset=utf-8",
@@ -1320,6 +1436,11 @@ export function createApp(opts: AppOptions): Server {
       try {
         const st = await fsStat(candidate);
         if (!st.isFile()) throw new Error("not a file");
+        const realCandidate = await assertInsideDist(candidate);
+        if (!realCandidate) {
+          sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+          return;
+        }
         const headers: Record<string, string | string[]> = {
           "Content-Type": mime,
           "Content-Length": String(st.size),
@@ -1329,12 +1450,17 @@ export function createApp(opts: AppOptions): Server {
           headers["Set-Cookie"] = appTokenCookie;
         }
         res.writeHead(200, headers);
-        createReadStream(candidate).pipe(res);
+        createReadStream(realCandidate).pipe(res);
       } catch {
         // Fallback to index.html for SPA client-side routing within the app.
         const indexPath = pathJoin(distRoot, "index.html");
         try {
           const ist = await fsStat(indexPath);
+          const realIndexPath = await assertInsideDist(indexPath);
+          if (!realIndexPath) {
+            sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+            return;
+          }
           const headers: Record<string, string | string[]> = {
             "Content-Type": "text/html; charset=utf-8",
             "Content-Length": String(ist.size),
@@ -1342,7 +1468,7 @@ export function createApp(opts: AppOptions): Server {
           };
           if (appTokenCookie) headers["Set-Cookie"] = appTokenCookie;
           res.writeHead(200, headers);
-          createReadStream(indexPath).pipe(res);
+          createReadStream(realIndexPath).pipe(res);
         } catch {
           sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
         }

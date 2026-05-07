@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { detectEngine, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
+import { DeskError } from "@agent-desk/shared";
 
 const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
 const PRIOR_PATH = process.env.PATH;
@@ -47,7 +48,11 @@ describe("detectEngine — DESK_CONTAINER_ENGINE override", () => {
     // Neutralise PATH so neither binary can be found.
     process.env.PATH = "/nonexistent";
     delete process.env.DESK_CONTAINER_ENGINE;
-    await expect(detectEngine()).rejects.toThrow(/No container runtime/);
+    await expect(detectEngine()).rejects.toMatchObject({
+      code: "RUNTIME_UNAVAILABLE",
+      message: expect.stringMatching(/No container runtime/),
+    });
+    await expect(detectEngine()).rejects.toBeInstanceOf(DeskError);
   });
 });
 
@@ -102,6 +107,8 @@ async function binaryWorks(name: EngineName): Promise<boolean> {
             ? { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}` }
             : process.env,
         stdio: "ignore",
+        timeout: 3000,
+        killSignal: "SIGKILL",
       },
     );
     let settled = false;

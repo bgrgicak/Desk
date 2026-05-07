@@ -233,6 +233,16 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Otherwise choose a reasonable\ndefault, act, and state the assumption briefly.");
   });
 
+  it("points the agent at search_chat_messages from the always-on context", () => {
+    // P3.5: context.md must name the chat-search tool and its Desk skill so
+    // recall is discoverable without preloading desk-skills.
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("## Memory and recall");
+    expect(body).toContain("search_chat_messages");
+    expect(body).toContain("desk-cli-chat-search-messages");
+  });
+
   it("guides Library-file fallback when attachment symlinks are broken", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
@@ -429,6 +439,16 @@ describe("Desk reference skills", () => {
     expect(skill?.body()).toContain("Use Node's `node:sqlite` module for direct CRUD");
     expect(skill?.body()).toContain("Recommended direct-write pattern");
     expect(skill?.body()).toContain("What app and fragment skills should document");
+  });
+
+  it("publishes a chat-message search reference (P3.5)", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-search-messages");
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/recall|history|search/i);
+    const body = skill?.body() ?? "";
+    expect(body).toContain("desk-agent chat search-messages");
+    expect(body).toContain("--query");
+    expect(body).toContain("--workspace");
   });
 
   it("keeps scaffold guidance explicit about app storage contracts", () => {
