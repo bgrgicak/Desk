@@ -487,7 +487,7 @@ function AgentsList({
     return (
       <EmptyState
         title="No agents yet"
-        body="Create an agent with a name and a model. Conversation guidance lives in user memory at ~/Desk/.memory/memory.md."
+        body="Every workspace should start with a default opencode agent. If one is missing, refresh this panel; you can change its model here once it appears."
         action={
           <Button size="sm" className="gap-1.5" onClick={onAdd}>
             <Plus className="h-3.5 w-3.5" />Add agent

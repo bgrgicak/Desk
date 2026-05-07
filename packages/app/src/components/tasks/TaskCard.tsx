@@ -33,6 +33,7 @@ export function TaskCard({
       index={index}
       isSelected={isSelected}
       isDragging={isDragging}
+      className="shrink-0"
       setNodeRef={setNodeRef}
       dragStyle={style}
       dragAttributes={attributes}

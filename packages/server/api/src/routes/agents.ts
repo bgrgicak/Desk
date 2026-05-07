@@ -51,6 +51,21 @@ export async function deleteAgent(pool: Pool, userId: string, id: string) {
       "Cannot delete the last agent; create another one first.",
     );
   }
+  const soleWorkspaceAgent = await pool.query<{ id: string }>(
+    `SELECT w.id
+     FROM workspaces w
+     JOIN workspace_agents wa ON wa.workspace_id = w.id
+     WHERE w.user_id = ?
+       AND wa.agent_id = ?
+       AND (SELECT count(*) FROM workspace_agents other WHERE other.workspace_id = w.id) = 1
+     LIMIT 1`,
+    [userId, id],
+  );
+  if (soleWorkspaceAgent.rows.length > 0) {
+    throw new ValidationError(
+      "Cannot delete an agent that is the only agent in a workspace; add another agent to that workspace first.",
+    );
+  }
   const ok = await queries.agents.remove(pool, id);
   if (!ok) throw new NotFoundError(`Agent not found: ${id}`);
   return { ok: true as const };

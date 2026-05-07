@@ -556,6 +556,152 @@ describe("Routes coverage (real Postgres)", () => {
     expect((getRes.body as { agentId: string }).agentId).toBe(otherAgentId);
   });
 
+  it("PATCH /chats/:id/messages/:id — updates task title and initial text", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Task chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Original title",
+      content: "Original title\n\nOriginal details",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, {
+      title: "Edited title",
+      content: { type: "text", text: "Edited title\n\nEdited details" },
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = patchRes.body as { title: string; content: { type: string; text: string } };
+    expect(patched.title).toBe("Edited title");
+    expect(patched.content).toEqual({ type: "text", text: "Edited title\n\nEdited details" });
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    expect(listRes.status).toBe(200);
+    const items = (listRes.body as { items: Array<{ id: string; title: string; content: unknown }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.title).toBe("Edited title");
+    expect(saved?.content).toEqual({ type: "text", text: "Edited title\n\nEdited details" });
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid message content", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, {
+      content: { type: "not-a-real-content-type" },
+    });
+    expect(patchRes.status).toBe(400);
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; content: unknown }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.content).toEqual({ type: "text", text: "hello" });
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects a null patch body", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Null patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, null);
+    expect(patchRes.status).toBe(400);
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid task titles", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid title patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Original title",
+      content: "Original title",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    for (const title of [{ bad: true }, "   "]) {
+      const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, { title });
+      expect(patchRes.status).toBe(400);
+    }
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; title: string }> }).items;
+    expect(items.find((item) => item.id === message.id)?.title).toBe("Original title");
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid schedules", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid schedule patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const executeAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Scheduled task",
+      content: "Scheduled task",
+      executeAt,
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    for (const patch of [
+      { executeAt: { bad: true } },
+      { executeAt: "not-a-date" },
+      { executeAt: "2026-02-31T00:00:00.000Z" },
+      { executeAt: "Thu May 07 2026" },
+      { executeAt: "2026-05-07" },
+      { cron: { bad: true } },
+      { cron: "   " },
+      { cron: "not a cron" },
+    ]) {
+      const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, patch);
+      expect(patchRes.status).toBe(400);
+    }
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; executeAt?: string; cron?: string | null }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.executeAt).toBe(executeAt);
+    expect(saved?.cron ?? null).toBeNull();
+  });
+
   it("PATCH /chats/:id — rejects an agent not enrolled in the chat's workspace", async () => {
     // Create an agent but skip the workspace enrollment step.
     const createAgent = await request("POST", "/agents", token, {

@@ -10,13 +10,6 @@ import { cn } from "../lib/utils"
 import { Button } from "./button"
 import { Input } from "./input"
 import { Separator } from "./separator"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "./sheet"
 import { Skeleton } from "./skeleton"
 import {
   Tooltip,
@@ -28,16 +21,20 @@ import {
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 const SIDEBAR_WIDTH = "16rem"
-const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+const DESKTOP_SIDEBAR_BREAKPOINT = 768
+
+function shouldOpenSidebarByDefault(defaultOpen: boolean) {
+  if (!defaultOpen) return false
+  if (typeof window === "undefined") return true
+  return window.innerWidth >= DESKTOP_SIDEBAR_BREAKPOINT
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
   setOpen: (open: boolean) => void
-  openMobile: boolean
-  setOpenMobile: (open: boolean) => void
   isMobile: boolean
   toggleSidebar: () => void
 }
@@ -67,15 +64,16 @@ function SidebarProvider({
   onOpenChange?: (open: boolean) => void
 }) {
   const isMobile = useIsMobile()
-  const [openMobile, setOpenMobile] = React.useState(false)
+  const userToggledRef = React.useRef(false)
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  const [_open, _setOpen] = React.useState(() => shouldOpenSidebarByDefault(defaultOpen))
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value
+      userToggledRef.current = true
       if (setOpenProp) {
         setOpenProp(openState)
       } else {
@@ -88,10 +86,15 @@ function SidebarProvider({
     [setOpenProp, open]
   )
 
+  React.useEffect(() => {
+    if (userToggledRef.current || openProp !== undefined) return
+    _setOpen(!isMobile && defaultOpen)
+  }, [defaultOpen, isMobile, openProp])
+
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
-    return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
-  }, [isMobile, setOpen, setOpenMobile])
+    return setOpen((open) => !open)
+  }, [setOpen])
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
@@ -119,11 +122,9 @@ function SidebarProvider({
       open,
       setOpen,
       isMobile,
-      openMobile,
-      setOpenMobile,
       toggleSidebar,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar]
+    [state, open, setOpen, isMobile, toggleSidebar]
   )
 
   return (
@@ -139,7 +140,7 @@ function SidebarProvider({
             } as React.CSSProperties
           }
           className={cn(
-            "group/sidebar-wrapper flex h-dvh w-full overflow-hidden has-data-[variant=inset]:bg-sidebar",
+            "group/sidebar-wrapper relative flex h-dvh w-full overflow-hidden has-data-[variant=inset]:bg-sidebar",
             className
           )}
           {...props}
@@ -163,7 +164,58 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { isMobile, state, setOpen } = useSidebar()
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const isMobileDrawerOpen = isMobile && state === "expanded" && collapsible === "offcanvas"
+
+  React.useEffect(() => {
+    if (!isMobileDrawerOpen) return
+
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "textarea:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",")
+
+    const getFocusable = () =>
+      Array.from(containerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
+        .filter((element) => !element.hasAttribute("inert") && element.offsetParent !== null)
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusable = getFocusable()
+    focusable[0]?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        setOpen(false)
+        return
+      }
+
+      if (event.key !== "Tab") return
+      const items = getFocusable()
+      if (items.length === 0) return
+
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("keydown", onKeyDown)
+      if (previouslyFocused?.isConnected) previouslyFocused.focus()
+    }
+  }, [collapsible, isMobileDrawerOpen, setOpen])
 
   if (collapsible === "none") {
     return (
@@ -180,45 +232,29 @@ function Sidebar({
     )
   }
 
-  if (isMobile) {
-    return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
-        <SheetContent
-          data-sidebar="sidebar"
-          data-slot="sidebar"
-          data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
-          style={
-            {
-              "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
-            } as React.CSSProperties
-          }
-          side={side}
-        >
-          <SheetHeader className="sr-only">
-            <SheetTitle>Sidebar</SheetTitle>
-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
-          </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
-        </SheetContent>
-      </Sheet>
-    )
-  }
-
   return (
-    <div
-      className="group peer hidden text-sidebar-foreground md:block relative self-stretch"
-      data-state={state}
-      data-collapsible={state === "collapsed" ? collapsible : ""}
-      data-variant={variant}
-      data-side={side}
-      data-slot="sidebar"
-    >
+    <>
+      {isMobileDrawerOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          className="absolute inset-0 z-[45] bg-background/40 backdrop-blur-[1px] md:hidden"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <div
+        className="group peer absolute inset-y-0 left-0 z-50 block w-(--sidebar-width) text-sidebar-foreground transition-[width] duration-200 ease-linear data-[collapsible=offcanvas]:w-0 md:relative md:inset-auto md:z-auto md:w-auto md:self-stretch"
+        data-state={state}
+        data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-variant={variant}
+        data-side={side}
+        data-slot="sidebar"
+      >
       {/* This is what handles the sidebar gap on desktop */}
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          "relative w-0 bg-transparent transition-[width] duration-200 ease-linear md:w-(--sidebar-width)",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -228,8 +264,14 @@ function Sidebar({
       />
       <div
         data-slot="sidebar-container"
+        aria-hidden={state === "collapsed" && collapsible === "offcanvas" ? true : undefined}
+        inert={state === "collapsed" && collapsible === "offcanvas" ? true : undefined}
+        ref={containerRef}
+        role={isMobileDrawerOpen ? "dialog" : undefined}
+        aria-modal={isMobileDrawerOpen ? true : undefined}
+        aria-label={isMobileDrawerOpen ? "Sidebar" : undefined}
         className={cn(
-          "absolute inset-y-0 z-10 hidden w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+          "absolute inset-y-0 z-50 flex w-(--sidebar-width) bg-[linear-gradient(160deg,oklch(1_0_0/.96)_0%,oklch(.985_.018_75/.9)_44%,oklch(.965_.025_255/.88)_100%)] shadow-xl backdrop-blur-xl transition-[left,right,width] duration-200 ease-linear md:z-10 md:bg-transparent md:bg-none md:shadow-none md:backdrop-blur-none dark:bg-[linear-gradient(160deg,oklch(.19_.018_285/.96)_0%,oklch(.16_.025_255/.92)_48%,oklch(.14_.018_315/.9)_100%)] dark:md:bg-none",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -249,7 +291,8 @@ function Sidebar({
           {children}
         </div>
       </div>
-    </div>
+      </div>
+    </>
   )
 }
 
