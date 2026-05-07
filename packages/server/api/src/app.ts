@@ -49,6 +49,26 @@ import {
 
 type RunManager = ReturnType<typeof createRunManager>;
 
+const SEARCH_SCOPES = new Set(["all", "artifacts", "chats", "library", "files"]);
+const SEARCH_KINDS = new Set(["chat", "message", "summary", "library_file", "attachment", "artifact"]);
+type SearchScope = "artifacts" | "chats" | "library" | "files" | "all";
+type SearchKind = "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
+
+function parseSearchScope(raw: string | null): SearchScope {
+  const scope = raw ?? "all";
+  if (!SEARCH_SCOPES.has(scope)) throw new ValidationError(`Invalid search scope: ${scope}`);
+  return scope as SearchScope;
+}
+
+function parseSearchKinds(raw: string | null): SearchKind[] | undefined {
+  if (!raw) return undefined;
+  const kinds = raw.split(",").map((kind) => kind.trim()).filter(Boolean);
+  for (const kind of kinds) {
+    if (!SEARCH_KINDS.has(kind)) throw new ValidationError(`Invalid search kind: ${kind}`);
+  }
+  return kinds as SearchKind[];
+}
+
 export interface AppOptions {
   pool: Pool;
   storage: StorageContext;
@@ -623,6 +643,39 @@ export function createApp(opts: AppOptions): Server {
       }
 
       sendJson(res, 200, { hits });
+      return;
+    }
+
+    if (path === "/sandbox/search" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      let workspaceId: string | undefined;
+      if (workspaceParam && workspaceParam !== "*") {
+        const ws = ownedWorkspaces.find((w) => w.path === workspaceParam || w.id === workspaceParam);
+        if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        workspaceId = ws.id;
+      } else if (!workspaceParam && session.workspaceId) {
+        workspaceId = session.workspaceId;
+      }
+      const result = await searchRoutes.search(
+        pool,
+        storage,
+        agent.userId,
+        q,
+        parseSearchScope(params.get("scope")),
+        {
+          workspaceId,
+          chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
+          kinds: parseSearchKinds(params.get("kind")),
+          showHidden: params.get("showHidden") === "true",
+        },
+      );
+      sendJson(res, 200, { hits: result });
       return;
     }
 
@@ -1242,13 +1295,11 @@ export function createApp(opts: AppOptions): Server {
     // Search
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
-      const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "files" | "all";
+      const scope = parseSearchScope(query.get("scope"));
       const showHidden = query.get("showHidden") === "true";
       const workspaceId = query.get("workspaceId") ?? undefined;
       const chatId = query.get("chatId") ?? undefined;
-      const kinds = query.get("kind")?.split(",").map((kind) => kind.trim()).filter(Boolean) as
-        | Array<"chat" | "message" | "summary" | "library_file" | "attachment" | "artifact" | "app_file">
-        | undefined;
+      const kinds = parseSearchKinds(query.get("kind"));
       const result = await searchRoutes.search(pool, storage, userId, q, scope, {
         showHidden,
         workspaceId,

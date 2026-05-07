@@ -339,6 +339,13 @@ describe("API e2e (real Postgres)", () => {
     expect(res.status).toBe(200);
   });
 
+  it("GET /search rejects invalid filters", async () => {
+    const badScope = await request("GET", "/search?q=x&scope=bogus", token);
+    expect(badScope.status).toBe(400);
+    const badKind = await request("GET", "/search?q=x&kind=bogus", token);
+    expect(badKind.status).toBe(400);
+  });
+
   it("GET /openapi.json works without auth", async () => {
     const res = await request("GET", "/openapi.json");
     expect(res.status).toBe(200);

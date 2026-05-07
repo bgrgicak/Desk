@@ -252,3 +252,16 @@ describe("GET /sandbox/search/messages", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("GET /sandbox/search", () => {
+  it("uses the universal search backend scoped to the sandbox workspace by default", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search?q=${encodeURIComponent("Chat A")}&kind=chat`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ type: string; id: string; workspaceSlug: string }> };
+    expect(body.hits.some((hit) => hit.type === "chat" && hit.id === chatA && hit.workspaceSlug === workspaceASlug)).toBe(true);
+  });
+});

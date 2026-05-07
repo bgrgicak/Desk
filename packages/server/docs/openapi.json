@@ -1701,7 +1701,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "description": "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact,app_file"
+              "description": "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact"
             }
           },
           {
