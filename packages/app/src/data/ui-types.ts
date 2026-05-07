@@ -301,7 +301,6 @@ export interface SettingsAgent {
   name: string
   providerId: string
   model: string
-  instructions: string
 }
 
 export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {

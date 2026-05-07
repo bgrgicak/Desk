@@ -472,7 +472,6 @@ export function createRunManager(opts: RunManagerOptions) {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
         model: agent?.model ?? "opencode/big-pickle",
-        instructions: agent?.instructions ?? "",
         userName,
         userTimezone,
         chatId: msg.chatId,

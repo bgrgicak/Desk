@@ -76,14 +76,14 @@ done
   # shellcheck disable=SC1090
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   set +a
-  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions @agent-desk/dev --no-warnings"
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@agent-desk/dev --no-warnings"
   export PORT="${PORT:-35138}"
   export DESK_HOME="${DESK_HOME:-$DESK_HOME_DEFAULT}"
 
   MAX_SERVER_RESTARTS=3
   _restarts=0
   while true; do
-    npx tsx watch packages/server/api/src/main.ts
+    npx tsx watch --conditions=@agent-desk/dev packages/server/api/src/main.ts
     _ec=$?
     # 0 = clean shutdown; 130 = SIGINT; 143 = SIGTERM — don't retry on those.
     [ "$_ec" -eq 0 ] || [ "$_ec" -eq 130 ] || [ "$_ec" -eq 143 ] && break
@@ -101,6 +101,7 @@ SERVER_PID=$!
 # 6. Start vite (app) in the background.
 (
   cd "$REPO_ROOT"
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@agent-desk/dev --no-warnings"
   export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:35138}"
   exec npm -w @agent-desk/app run dev
 ) &

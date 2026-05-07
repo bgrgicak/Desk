@@ -9,7 +9,7 @@ export async function listAgents(pool: Pool, userId: string) {
 export async function createAgent(
   pool: Pool,
   userId: string,
-  data: { name: string; instructions?: string; model?: string },
+  data: { name: string; model?: string },
 ) {
   return queries.agents.insert(pool, {
     id: generateId("agent"),
@@ -27,7 +27,7 @@ export async function getAgent(pool: Pool, id: string) {
 export async function patchAgent(
   pool: Pool,
   id: string,
-  data: { name?: string; instructions?: string; model?: string },
+  data: { name?: string; model?: string },
 ) {
   const agent = await queries.agents.updateMeta(pool, id, data);
   if (!agent) throw new NotFoundError(`Agent not found: ${id}`);

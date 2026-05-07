@@ -4,7 +4,7 @@
  * Covers:
  *  - List: the seeded agent is visible.
  *  - Create: `+ Add custom agent` calls POST /agents and the row appears.
- *  - Edit:   pencil icon exposes name + instructions + model; Save PATCHes.
+ *  - Edit:   pencil icon exposes name + model; Save PATCHes.
  *  - Delete: trash icon + confirm popover DELETEs and the row disappears.
  *  - Per-workspace enrollment toggles round-trip through the membership API.
  *
@@ -169,15 +169,14 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
   // Editor uses the default model; no need to touch the picker (which is
   // empty in the e2e lane anyway).
   await dialog.getByPlaceholder("e.g. Copywriter").fill(initialName);
-  await dialog
-    .getByPlaceholder(/Describe how this agent should behave/i)
-    .fill("Be concise.");
   await dialog.getByRole("button", { name: /^Add agent$/i }).click();
 
   // New agent row is rendered from the invalidated GET /agents list.
   await expect(dialog.getByText(initialName)).toBeVisible({ timeout: 5_000 });
 
-  // Server row exists with the instructions we typed.
+  // Server row exists; agent-level "instructions" was collapsed into
+  // user memory in the memory-system phase 1 PR — we just check the
+  // agent landed in the list.
   {
     const res = await fetch(`${serverUrl}/agents`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -185,10 +184,9 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
     const list = (await res.json()) as Array<{
       id: string;
       name: string;
-      instructions: string;
     }>;
     const created = list.find(a => a.name === initialName);
-    expect(created?.instructions).toBe("Be concise.");
+    expect(created).toBeTruthy();
   }
 
   // Hover the row to reveal the Edit button, then rename via the Save button
