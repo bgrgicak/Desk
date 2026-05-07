@@ -196,6 +196,13 @@ export function createApp(opts: AppOptions): Server {
     }
   }
 
+  async function requireOwnedWorkspaceSlug(userId: string, slug: string): Promise<void> {
+    const owned = await queries.workspaces.listByUser(pool, userId);
+    if (!owned.some((w) => w.path === slug)) {
+      throw new NotFoundError(`Workspace not found: ${slug}`);
+    }
+  }
+
   // Pre-generate the OpenAPI spec
   const openApiSpec = generateOpenApiSpec();
 
@@ -583,6 +590,7 @@ export function createApp(opts: AppOptions): Server {
       if (workspaceParam === "*") {
         workspaceSlug = "*";
       } else if (workspaceParam) {
+        await requireOwnedWorkspaceSlug(agent.userId, workspaceParam);
         workspaceSlug = workspaceParam;
       } else if (session.workspaceId) {
         const ws = await queries.workspaces.findById(pool, session.workspaceId);
@@ -633,6 +641,7 @@ export function createApp(opts: AppOptions): Server {
       if (workspaceParam === "*") {
         workspaceSlug = "*";
       } else if (workspaceParam) {
+        await requireOwnedWorkspaceSlug(agent.userId, workspaceParam);
         workspaceSlug = workspaceParam;
       } else if (session.workspaceId) {
         const ws = await queries.workspaces.findById(pool, session.workspaceId);

@@ -173,7 +173,7 @@ export async function findArtifacts(
   }
   let tokenClause = "";
   if (tokens.length > 0) {
-    tokenClause = "AND " + tokens.map(() => "body_lc LIKE ?").join(" AND ");
+    tokenClause = "AND " + tokens.map(() => "body_lc LIKE ? ESCAPE '\\'").join(" AND ");
     for (const tok of tokens) sqlParams.push(`%${escapeLike(tok)}%`);
   }
   // Pull more than `limit` so we can rank in JS.

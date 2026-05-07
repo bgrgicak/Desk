@@ -233,7 +233,7 @@ export function parseChatAppFragmentPath(
   p: string,
 ): { chatId: string; appName: string; fragment: string } | null {
   const m =
-    /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+    /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/(?:dist\/)?fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html|desk\.fragment\.json)?)?$/.exec(
       p,
     )
   if (!m) return null
@@ -245,7 +245,7 @@ export function parseLibraryAppFragmentPath(
 ): { appName: string; fragment: string } | null {
   if (p.startsWith('.chats/')) return null
   const m =
-    /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+    /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/(?:dist\/)?fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html|desk\.fragment\.json)?)?$/.exec(
       p,
     )
   if (!m) return null

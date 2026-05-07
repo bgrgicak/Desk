@@ -92,6 +92,10 @@ describe('appAttachmentToPreview', () => {
       appAttachmentToPreview('Projects/todo.app/dist/fragments/list/index.html'),
     ).toEqual({ scope: 'library', appName: 'todo', fragment: 'list' })
   })
+  it('routes source fragment directory paths to a fragment preview', () => {
+    expect(appAttachmentToPreview('todo.app/fragments/list'))
+      .toEqual({ scope: 'library', appName: 'todo', fragment: 'list' })
+  })
   it('returns null for non-app paths', () => {
     expect(appAttachmentToPreview('notes.md')).toBeNull()
     expect(appAttachmentToPreview('.chats/cht_a/attachments/photo.png')).toBeNull()
@@ -107,6 +111,11 @@ describe('parseChatAppFragmentPath', () => {
   it('matches the bare directory form', () => {
     expect(
       parseChatAppFragmentPath('.chats/cht_a/artifacts/todo.app/dist/fragments/add-todo'),
+    ).toEqual({ chatId: 'cht_a', appName: 'todo', fragment: 'add-todo' })
+  })
+  it('matches the source fragment directory form returned by discovery', () => {
+    expect(
+      parseChatAppFragmentPath('.chats/cht_a/artifacts/todo.app/fragments/add-todo'),
     ).toEqual({ chatId: 'cht_a', appName: 'todo', fragment: 'add-todo' })
   })
   it('rejects library-shape paths', () => {
@@ -126,6 +135,12 @@ describe('parseLibraryAppFragmentPath', () => {
   })
   it('matches under a subfolder', () => {
     expect(parseLibraryAppFragmentPath('Projects/Q2/todo.app/dist/fragments/list')).toEqual({
+      appName: 'todo',
+      fragment: 'list',
+    })
+  })
+  it('matches the source fragment directory form returned by discovery', () => {
+    expect(parseLibraryAppFragmentPath('todo.app/fragments/list')).toEqual({
       appName: 'todo',
       fragment: 'list',
     })

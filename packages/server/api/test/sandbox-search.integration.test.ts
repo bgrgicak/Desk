@@ -22,6 +22,7 @@ let workspaceASlug: string;
 let workspaceBSlug: string;
 let workspaceAId: string;
 let workspaceBId: string;
+let otherUserWorkspaceSlug: string;
 let chatA: string;
 let chatB: string;
 let agentId: string;
@@ -85,6 +86,36 @@ beforeAll(async () => {
     chatId: chatB,
     role: "user",
     content: { type: "text", text: "Generate a watercolor of an owl." },
+  });
+
+  const otherUserId = generateId("user");
+  await pool.query(
+    `INSERT INTO users (id, username, password_hash, email)
+     VALUES (?, 'search-other', 'hash', 'search-other@example.com')`,
+    [otherUserId],
+  );
+  const otherWorkspaceId = generateId("workspace");
+  otherUserWorkspaceSlug = `other-${otherWorkspaceId.slice(-6)}`;
+  await pool.query(
+    `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+    [otherWorkspaceId, otherUserId, "Other WS", otherUserWorkspaceSlug],
+  );
+  await ensureWorkspaceLayout(home, otherUserWorkspaceSlug);
+  const otherAgentId = generateId("agent");
+  await pool.query(
+    `INSERT INTO agents (id, user_id, name, model) VALUES (?, ?, 'Other Agent', 'opencode/big-pickle')`,
+    [otherAgentId, otherUserId],
+  );
+  const otherChatId = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+    [otherChatId, otherWorkspaceId, otherAgentId, "Other Chat"],
+  );
+  await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId: otherChatId,
+    role: "user",
+    content: { type: "text", text: "Private lemur discussion." },
   });
 
   const runManager = createRunManager({ pool });
@@ -183,6 +214,15 @@ describe("GET /sandbox/search/messages", () => {
     const body = res.body as { hits: Array<{ workspaceSlug: string }> };
     expect(body.hits.length).toBe(1);
     expect(body.hits[0].workspaceSlug).toBe(workspaceBSlug);
+  });
+
+  it("rejects an explicit workspace slug not owned by the sandbox user", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search/messages?q=${encodeURIComponent("lemur")}&workspace=${encodeURIComponent(otherUserWorkspaceSlug)}`,
+      token,
+    );
+    expect(res.status).toBe(404);
   });
 
   it("filters by chat when chat=<id> is passed", async () => {

@@ -21,6 +21,7 @@ let home: string;
 let dbPath: string;
 let workspaceASlug: string;
 let workspaceAId: string;
+let userId: string;
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-libidx-db-"));
@@ -33,7 +34,7 @@ beforeAll(async () => {
 
   // Synthesize a user + workspace pair so chat_search_index isn't
   // referencing nonexistent rows when other queries join on it.
-  const userId = generateId("user");
+  userId = generateId("user");
   await pool.query(
     `INSERT INTO users (id, username, password_hash, email)
      VALUES (?, 'libidx', 'hash', 'libidx@example.com')`,
@@ -55,7 +56,11 @@ afterAll(async () => {
 });
 
 async function writeWorkspaceFile(rel: string, body: string): Promise<void> {
-  const abs = path.join(workspaceRootPath(home, workspaceASlug), rel);
+  await writeWorkspaceFileIn(workspaceASlug, rel, body);
+}
+
+async function writeWorkspaceFileIn(slug: string, rel: string, body: string): Promise<void> {
+  const abs = path.join(workspaceRootPath(home, slug), rel);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, body, "utf-8");
 }
@@ -91,6 +96,29 @@ describe("indexLibraryFile", () => {
 
     const hits = await searchRefIds("sentinel");
     expect(hits.find((h) => h.ref_id === "media/cover.png")).toBeUndefined();
+  });
+
+  it("keeps same-path files from different workspaces as separate rows", async () => {
+    const otherSlug = `libidx-peer-${Date.now().toString(36)}`;
+    const otherId = generateId("workspace");
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+      [otherId, userId, "Libidx Peer", otherSlug],
+    );
+    await ensureWorkspaceLayout(home, otherSlug);
+
+    await writeWorkspaceFileIn(workspaceASlug, "shared/todo.md", "Alpha workspace todo");
+    await writeWorkspaceFileIn(otherSlug, "shared/todo.md", "Beta workspace todo");
+    await indexLibraryFile(pool, home, workspaceASlug, "shared/todo.md");
+    await indexLibraryFile(pool, home, otherSlug, "shared/todo.md");
+
+    const { rows } = await pool.query<{ workspace_slug: string; body: string }>(
+      `SELECT workspace_slug, body FROM chat_search_index
+       WHERE kind = 'note' AND ref_id = 'shared/todo.md'
+       ORDER BY workspace_slug`,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.workspace_slug)).toEqual([workspaceASlug, otherSlug].sort());
   });
 });
 
@@ -194,7 +222,7 @@ describe("unindexLibraryPath", () => {
     await indexLibraryFile(pool, home, workspaceASlug, "scratch.md");
     expect((await searchRefIds("sentinel-xyz")).length).toBe(1);
 
-    await unindexLibraryPath(pool, "scratch.md");
+    await unindexLibraryPath(pool, "scratch.md", workspaceASlug);
     expect((await searchRefIds("sentinel-xyz")).length).toBe(0);
   });
 });

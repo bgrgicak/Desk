@@ -30,6 +30,7 @@ let home: string;
 let dbPath: string;
 let workspaceASlug: string;
 let workspaceAId: string;
+let otherUserWorkspaceSlug: string;
 let agentId: string;
 
 beforeAll(async () => {
@@ -82,6 +83,24 @@ beforeAll(async () => {
   await indexFragmentManifest(pool, home, workspaceASlug, "todos.app/fragments/list");
 
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
+  const otherUserId = generateId("user");
+  await pool.query(
+    `INSERT INTO users (id, username, password_hash, email)
+     VALUES (?, 'find-other', 'hash', 'find-other@example.com')`,
+    [otherUserId],
+  );
+  const otherWorkspaceId = generateId("workspace");
+  otherUserWorkspaceSlug = `other-${otherWorkspaceId.slice(-6)}`;
+  await pool.query(
+    `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+    [otherWorkspaceId, otherUserId, "Other WS", otherUserWorkspaceSlug],
+  );
+  await ensureWorkspaceLayout(home, otherUserWorkspaceSlug);
+  const otherRoot = workspaceRootPath(home, otherUserWorkspaceSlug);
+  await fs.mkdir(path.join(otherRoot, "notes"), { recursive: true });
+  await fs.writeFile(path.join(otherRoot, "notes/private.md"), "Private giraffe plans.");
+  await indexLibraryFile(pool, home, otherUserWorkspaceSlug, "notes/private.md");
+
   const runManager = createRunManager({ pool });
   server = createApp({
     pool,
@@ -188,6 +207,15 @@ describe("GET /sandbox/find/artifacts", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects an explicit workspace slug not owned by the sandbox user", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("giraffe")}&workspace=${encodeURIComponent(otherUserWorkspaceSlug)}`,
+      token,
+    );
+    expect(res.status).toBe(404);
+  });
+
   it("indexes new files written through the library route (P86.2 on-write hook)", async () => {
     // Drop a note via the library save handler and verify the search
     // index picks it up immediately, with no manual indexer call.
@@ -233,5 +261,63 @@ describe("GET /sandbox/find/artifacts", () => {
     expect(res.status).toBe(200);
     const body = res.body as { hits: Array<{ kind: string; path: string }> };
     expect(body.hits.some((h) => h.path === "notes/preboot.md")).toBe(true);
+  });
+
+  it("removes nested index rows when deleting a folder", async () => {
+    const root = workspaceRootPath(home, workspaceASlug);
+    await fs.mkdir(path.join(root, "folder-delete"), { recursive: true });
+    await fs.writeFile(path.join(root, "folder-delete/nested.md"), "Folder delete wombat note.");
+    await backfillWorkspaceLibrary(pool, home, workspaceASlug);
+
+    await libraryRoutes.remove({ pool, home }, workspaceAId, "folder-delete", () => {});
+
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("wombat")}`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ path: string }> };
+    expect(body.hits.some((h) => h.path.startsWith("folder-delete/"))).toBe(false);
+  });
+
+  it("removes app manifest rows when deleting an app directory with a trailing slash", async () => {
+    const root = workspaceRootPath(home, workspaceASlug);
+    await fs.mkdir(path.join(root, "trail.app"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "trail.app/desk.app.json"),
+      JSON.stringify({ name: "trail", description: "Trailing slash app marker." }),
+    );
+    await backfillWorkspaceLibrary(pool, home, workspaceASlug);
+
+    await libraryRoutes.remove({ pool, home }, workspaceAId, "trail.app/", () => {});
+
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("Trailing slash")}`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ path: string }> };
+    expect(body.hits.some((h) => h.path === "trail.app")).toBe(false);
+  });
+
+  it("rekeys nested index rows when moving a folder", async () => {
+    const root = workspaceRootPath(home, workspaceASlug);
+    await fs.mkdir(path.join(root, "folder-move"), { recursive: true });
+    await fs.writeFile(path.join(root, "folder-move/nested.md"), "Folder move axolotl note.");
+    await backfillWorkspaceLibrary(pool, home, workspaceASlug);
+
+    await libraryRoutes.move({ pool, home }, workspaceAId, "folder-move", "folder-moved", () => {});
+
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("axolotl")}`,
+      token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ path: string }> };
+    expect(body.hits.some((h) => h.path === "folder-moved/nested.md")).toBe(true);
+    expect(body.hits.some((h) => h.path === "folder-move/nested.md")).toBe(false);
   });
 });

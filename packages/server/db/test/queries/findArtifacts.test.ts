@@ -83,6 +83,13 @@ beforeAll(async () => {
     "{\"feature\":\"watercolor owls\"}",
     "2026-01-04T00:00:00.000Z",
   );
+  await indexLibraryRow(
+    "doc",
+    "data/percent.txt",
+    wsASlug,
+    "100% literal percent marker",
+    "2026-01-04T01:00:00.000Z",
+  );
   // A chat-message row should NEVER be returned by findArtifacts.
   await pool.query(
     `INSERT INTO chat_search_index
@@ -212,5 +219,14 @@ describe("findArtifacts", () => {
     });
     expect(hits.length).toBe(1);
     expect(hits[0].params_schema).toBeUndefined();
+  });
+
+  it("treats LIKE wildcard characters in the query as literals", async () => {
+    const hits = await findArtifacts.findArtifacts(pool, {
+      home,
+      query: "%",
+      workspaceSlug: wsASlug,
+    });
+    expect(hits.map((h) => h.path)).toEqual(["data/percent.txt"]);
   });
 });

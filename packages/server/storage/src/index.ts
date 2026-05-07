@@ -80,6 +80,7 @@ export {
   indexAppManifest,
   indexFragmentManifest,
   unindexLibraryPath,
+  unindexLibraryTree,
   backfillWorkspaceLibrary,
 } from "./libraryIndexer.js";
 export type { LibraryKind } from "./libraryIndexer.js";

@@ -17,6 +17,9 @@ import {
   indexAppManifest,
   indexFragmentManifest,
   unindexLibraryPath,
+  unindexLibraryTree,
+  backfillWorkspaceLibrary,
+  validateLibrarySubpath,
   type StorageContext,
   type FileRef,
   type FolderRef,
@@ -236,19 +239,28 @@ export async function move(
   emit: (event: WsEvent) => void,
 ): Promise<{ kind: "file" | "folder"; path: string }> {
   const slug = await resolveSlug(ctx, workspaceId);
-  const result = await moveLibraryEntry(ctx, slug, from, to);
+  const fromRel = validateLibrarySubpath(from);
+  const toRel = validateLibrarySubpath(to);
+  const result = await moveLibraryEntry(ctx, slug, fromRel, toRel);
   if (result.kind === "file") {
-    await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, from, to);
+    await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, fromRel, result.path);
     // Re-key the search index from the old path to the new one.
     try {
-      await unindexLibraryPath(ctx.pool, from);
+      await unindexLibraryPath(ctx.pool, fromRel, slug);
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("library unindex (move) failed:", from, err);
+      console.warn("library unindex (move) failed:", fromRel, err);
     }
-    await indexLibraryWrite(ctx, slug, to);
+    await indexLibraryWrite(ctx, slug, result.path);
   } else {
-    await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, from, to);
+    await queries.libraryPins.updateFolderPinPaths(ctx.pool, workspaceId, fromRel, result.path);
+    try {
+      await unindexLibraryTree(ctx.pool, slug, fromRel);
+      await backfillWorkspaceLibrary(ctx.pool, ctx.home, slug);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("library folder reindex (move) failed:", fromRel, result.path, err);
+    }
   }
   // Library paths are also embedded in `messages.attachments[].path` for
   // every chat-message that referenced this file (composer "Use in chat",
@@ -257,7 +269,7 @@ export async function move(
   // undo the move. Each touched message is broadcast as `message.updated`
   // so the existing client middleware patches its per-chat cache.
   const touched = await queries.messages
-    .retargetAttachmentPaths(ctx.pool, workspaceId, from, to)
+    .retargetAttachmentPaths(ctx.pool, workspaceId, fromRel, result.path)
     .catch(() => [] as Awaited<ReturnType<typeof queries.messages.retargetAttachmentPaths>>);
   for (const m of touched) {
     emit({ type: "message.updated", payload: m });
@@ -270,7 +282,7 @@ export async function move(
   );
   emit({
     type: "library.changed",
-    payload: { workspaceId, path: to, op: "moved", affectedChatIds },
+    payload: { workspaceId, path: result.path, op: "moved", affectedChatIds },
   });
   return result;
 }
@@ -286,27 +298,26 @@ export async function remove(
   emit: (event: WsEvent) => void,
 ): Promise<void> {
   const slug = await resolveSlug(ctx, workspaceId);
-  await deleteLibraryEntry(ctx, slug, relPath);
-  // Best-effort unindex; if relPath was a file, this drops its row. If
-  // it was a directory we also drop the parent path of any nested
-  // manifests/files (handled implicitly because manifest rows are keyed
-  // by the directory's relPath, and file rows by the file path itself).
+  const normalizedRelPath = validateLibrarySubpath(relPath);
+  await deleteLibraryEntry(ctx, slug, normalizedRelPath);
+  // Best-effort unindex. Directory deletes remove every nested index row
+  // so discovery cannot return paths that were just moved to trash.
   try {
-    const parent = path.posix.dirname(relPath);
-    await unindexLibraryPath(ctx.pool, relPath);
+    const parent = path.posix.dirname(normalizedRelPath);
+    await unindexLibraryTree(ctx.pool, slug, normalizedRelPath);
     // If a manifest's parent directory was deleted, the manifest row
     // is keyed on the parent dir — also try unindexing that.
-    const baseName = path.posix.basename(relPath);
+    const baseName = path.posix.basename(normalizedRelPath);
     if (baseName === "desk.app.json" || baseName === "desk.fragment.json") {
-      await unindexLibraryPath(ctx.pool, parent === "." ? "" : parent);
+      await unindexLibraryPath(ctx.pool, parent === "." ? "" : parent, slug);
     }
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn("library unindex (remove) failed:", relPath, err);
+    console.warn("library unindex (remove) failed:", normalizedRelPath, err);
   }
   emit({
     type: "library.changed",
-    payload: { workspaceId, path: relPath, op: "removed" },
+    payload: { workspaceId, path: normalizedRelPath, op: "removed" },
   });
 }
 

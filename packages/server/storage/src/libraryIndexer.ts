@@ -240,16 +240,48 @@ export async function indexFragmentManifest(
 export async function unindexLibraryPath(
   pool: Pool,
   relPath: string,
+  workspaceSlug?: string,
   kind?: LibraryKind,
 ): Promise<void> {
   if (kind) {
+    if (workspaceSlug) {
+      await pool.query(
+        `DELETE FROM chat_search_index WHERE kind = ? AND workspace_slug = ? AND ref_id = ?`,
+        [kind, workspaceSlug, relPath],
+      );
+      return;
+    }
     await deleteIndex(pool, kind, relPath);
+    return;
+  }
+  if (workspaceSlug) {
+    await pool.query(
+      `DELETE FROM chat_search_index
+       WHERE workspace_slug = ? AND ref_id = ? AND kind IN ('note', 'doc', 'app', 'fragment')`,
+      [workspaceSlug, relPath],
+    );
     return;
   }
   // Delete across every library kind. Cheap; one row per kind at most.
   await pool.query(
     `DELETE FROM chat_search_index WHERE ref_id = ? AND kind IN ('note', 'doc', 'app', 'fragment')`,
     [relPath],
+  );
+}
+
+/** Removes index rows for a library path and anything nested under it. */
+export async function unindexLibraryTree(
+  pool: Pool,
+  workspaceSlug: string,
+  relPath: string,
+): Promise<void> {
+  const prefix = relPath.endsWith("/") ? relPath : `${relPath}/`;
+  await pool.query(
+    `DELETE FROM chat_search_index
+     WHERE workspace_slug = ?
+       AND kind IN ('note', 'doc', 'app', 'fragment')
+       AND (ref_id = ? OR ref_id LIKE ? ESCAPE '\\')`,
+    [workspaceSlug, relPath, `${prefix.replace(/[%_\\]/g, "\\$&")}%`],
   );
 }
 
