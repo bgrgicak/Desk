@@ -377,7 +377,7 @@ authenticated.
 
 ```json
 [
-  { "id": "opencode/gpt-5-nano", "provider": "opencode" }
+  { "id": "opencode/big-pickle", "provider": "opencode" }
 ]
 ```
 

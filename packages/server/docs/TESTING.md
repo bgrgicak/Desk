@@ -8,7 +8,7 @@
 | Docker daemon | auto-detected | Sandbox integration tests run when `docker info` succeeds. Rootful and rootless Linux + macOS Docker Desktop all work |
 | `at` / `crontab` | auto-detected | Scheduler integration tests run when the commands are available |
 
-Real AI tests use the free `opencode/gpt-5-nano` model and require no API key.
+Real AI tests use the free `opencode/big-pickle` model and require no API key.
 
 ## Running tests
 
@@ -50,7 +50,7 @@ proxy at `:5179`.
 
 The runtime `opencode.test.ts` and the API `e2e.test.ts` real-stack
 block exercise a real AI invocation inside a real Docker container
-against the free `opencode/gpt-5-nano` model — no API key required.
+against the free `opencode/big-pickle` model — no API key required.
 They auto-skip when the sandbox image isn't available locally.
 
 ## Test isolation

@@ -21,7 +21,6 @@ export const AgentSchema = z.object({
   id: z.string(),
   userId: z.string(),
   name: z.string(),
-  instructions: z.string(),
   model: z.string(),
 });
 export type Agent = z.infer<typeof AgentSchema>;

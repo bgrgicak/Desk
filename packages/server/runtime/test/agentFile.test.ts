@@ -6,15 +6,14 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_123",
       agentName: "Jarvis",
-      model: "opencode/gpt-5-nano",
-      instructions: "Help me with code reviews.",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
     // Frontmatter
     expect(result).toContain("---\n");
     expect(result).toContain("description: Jarvis");
-    expect(result).toContain("model: opencode/gpt-5-nano");
+    expect(result).toContain("model: opencode/big-pickle");
     expect(result).toContain("mode: primary");
 
     // Identity framing
@@ -34,33 +33,16 @@ describe("renderAgentFile", () => {
     expect(result).toContain("desk-cli-file-to-markdown");
     expect(result).toContain("desk-agent task schedule");
     expect(result).not.toContain("# Desk CLI");
-    expect(result.indexOf("## Desk native skills")).toBeLessThan(result.indexOf("## User instructions"));
 
-    // User instructions
-    expect(result).toContain("## User instructions");
-    expect(result).toContain("Help me with code reviews.");
-  });
-
-  it("handles empty instructions", () => {
-    const result = renderAgentFile({
-      agentId: "agt_empty",
-      agentName: "Assistant",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
-      userName: "Alice",
-    });
-
-    expect(result).toContain("You are Assistant, a coworker of Alice.");
-    expect(result).toContain("## User instructions");
-    expect(result).toContain("(none)");
+    // Memory rules section is present (P1.3/P1.4).
+    expect(result).toContain("## Memory and recall");
   });
 
   it("renders the user's timezone in the scheduling section", () => {
     const result = renderAgentFile({
       agentId: "agt_tz",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
       userTimezone: "America/Los_Angeles",
     });
@@ -73,8 +55,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_no_tz",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
@@ -86,8 +67,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
@@ -101,8 +81,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "cht_abc",
     });
@@ -116,8 +95,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_summary",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "cht_abc",
       runMode: "summary",
@@ -128,14 +106,14 @@ describe("renderAgentFile", () => {
     expect(result).toContain("Chat summaries: ~/.chats/cht_abc/notes/");
     expect(result).not.toContain("## Your workspace");
     expect(result).not.toContain("desk-agent chat attach-artifact");
+    expect(result).not.toContain("## Memory and recall");
   });
 
   it("omits the goal fragment when no goal is provided", () => {
     const result = renderAgentFile({
       agentId: "agt_nogoal",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
     expect(result).not.toContain("## User's goal:");
@@ -156,8 +134,7 @@ describe("renderAgentFile", () => {
       const result = renderAgentFile({
         agentId: `agt_${goal}`,
         agentName: "Helper",
-        model: "opencode/gpt-5-nano",
-        instructions: "",
+        model: "opencode/big-pickle",
         userName: "Desk",
         goal,
       });
@@ -169,8 +146,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_baseline",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "Stay focused.",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
@@ -178,8 +154,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("## Scheduling — act first, ask never");
     expect(result).toContain("## Goal autodetection");
     expect(result).toContain("## Desk native skills");
-    expect(result).toContain("## User instructions");
-    expect(result).toContain("Stay focused.");
+    expect(result).toContain("## Memory and recall");
     expect(result).not.toContain("# Desk CLI");
     expect(result).not.toContain("### Cron quick reference");
     expect(result).not.toContain("NO_TOKEN");
@@ -189,8 +164,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_doc",
       agentName: "Helper",
-      model: "opencode/gpt-5-nano",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
       chatId: "chat-x",
       goal: "document",

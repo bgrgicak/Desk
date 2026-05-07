@@ -228,7 +228,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"opencode/gpt-5-nano\"\n}"
+              "raw": "{\n  \"name\": \"Sidekick\",\n  \"model\": \"opencode/big-pickle\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
           }
@@ -251,7 +251,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My agent\",\n  \"instructions\": \"Be helpful\",\n  \"model\": \"claude-opus-4-7\"\n}"
+              "raw": "{\n  \"name\": \"My agent\",\n  \"model\": \"claude-opus-4-7\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/agents/{{agentId}}",

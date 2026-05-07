@@ -1,6 +1,6 @@
 /**
  * Integration test: executes a trivial OpenCode prompt end-to-end using the
- * free opencode/gpt-5-nano model inside a real Docker sandbox.
+ * free opencode/big-pickle model inside a real Docker sandbox.
  *
  * Runs automatically when Docker is available and the desk/sandbox:v1 image
  * is present. No API key required — uses the free opencode provider.
@@ -26,7 +26,7 @@ try {
 const describeIf = SKIP ? describe.skip : describe;
 
 // Free model — no API key required.
-const FREE_MODEL = "opencode/gpt-5-nano";
+const FREE_MODEL = "opencode/big-pickle";
 
 let home: string;
 const testAgentId = "agt_opencode_int_test";
