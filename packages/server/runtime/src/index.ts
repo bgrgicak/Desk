@@ -7,7 +7,7 @@ export {
   providerKeyEnv,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift } from "./docker.js";
-export { detectEngine } from "./engine.js";
+export { detectEngine, ContainerRuntimeUnavailableError } from "./engine.js";
 export type {
   Engine,
   EngineName,
@@ -48,3 +48,9 @@ export { execInSandbox } from "./sandboxExec.js";
 export type { ExecInSandboxOptions, ExecInSandboxResult } from "./sandboxExec.js";
 export { listModels, parseModelsOutput, SandboxExecError } from "./models.js";
 export type { ModelRef, ListModelsOptions } from "./models.js";
+export {
+  estimateStringTokens,
+  estimateMessagesTokens,
+  transcriptExceedsBudget,
+} from "./tokenize.js";
+export type { TokenizableMessage } from "./tokenize.js";

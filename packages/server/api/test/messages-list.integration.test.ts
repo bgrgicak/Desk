@@ -102,8 +102,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
-    model: "opencode/gpt-5-nano",
+    model: "opencode/big-pickle",
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(

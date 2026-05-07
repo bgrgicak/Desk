@@ -21,7 +21,7 @@ test("search palette returns server results", async ({
   ).json()) as Array<{ id: string }>;
 
   const title = "ZZZ searchableMoose chat";
-  await fetch(`${serverUrl}/chats`, {
+  const chatRes = await fetch(`${serverUrl}/chats`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -32,6 +32,16 @@ test("search palette returns server results", async ({
       agentId: agents[0].id,
       title,
     }),
+  });
+  const chat = (await chatRes.json()) as { id: string };
+
+  await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ content: "searchableMoose indexed body" }),
   });
 
   await loggedInPage.reload();

@@ -1,5 +1,9 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
-import type { ServerAgent, ServerMessage } from "../types";
+import type { ServerAgent, ServerChat, ServerMessage } from "../types";
+
+export function taskMessageKindsForDeveloperMode(developerMode: boolean): Array<"task" | "summary"> {
+  return developerMode ? ["task", "summary"] : ["task"];
+}
 
 const COLOR_PALETTE: Task["color"][] = [
   "blue",
@@ -17,7 +21,11 @@ function colorFor(id: string): Task["color"] {
   return COLOR_PALETTE[Math.abs(h) % COLOR_PALETTE.length];
 }
 
-function nameFor(m: ServerMessage): string {
+function nameFor(m: ServerMessage, chats: ServerChat[]): string {
+  if (m.content.type === "summary_request") {
+    const chatTitle = chats.find((chat) => chat.id === m.chatId)?.title.trim();
+    return chatTitle ? `Summarize - ${chatTitle}` : "Summarize";
+  }
   if (m.title && m.title.trim().length > 0) return m.title;
   if (m.content.type === "text") {
     const first = m.content.text.split("\n")[0].trim();
@@ -25,6 +33,20 @@ function nameFor(m: ServerMessage): string {
   }
   if (m.content.type === "summary") return m.content.body.split("\n")[0].trim();
   return m.content.type;
+}
+
+function descriptionFor(m: ServerMessage): string | undefined {
+  if (m.content.type !== "text") return undefined;
+  const text = m.content.text.trim();
+  if (!text) return undefined;
+  if (m.title && text === m.title) return undefined;
+  if (m.title && text.startsWith(`${m.title}\n`)) {
+    const withoutTitle = text.slice(m.title.length).trim();
+    return withoutTitle.length > 0 ? withoutTitle : undefined;
+  }
+  const [, ...rest] = text.split("\n");
+  const description = rest.join("\n").trim();
+  return description.length > 0 ? description : undefined;
 }
 
 function statusFor(m: ServerMessage): Task["status"] {
@@ -59,7 +81,7 @@ function statusTextFor(m: ServerMessage): string {
  * `color`, free-form `schedule`, and `history` per-occurrence are
  * client-derived — the server doesn't carry them yet.
  */
-export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
+export function toUiTask(m: ServerMessage, agents: ServerAgent[], chats: ServerChat[] = []): Task {
   const agent = agents.find((a) => a.id === m.agentId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
@@ -95,7 +117,8 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
 
   return {
     id: m.id,
-    name: nameFor(m),
+    name: nameFor(m, chats),
+    description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,
     statusText: statusTextFor(m),
@@ -103,6 +126,8 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,
+    messageKind: m.kind,
+    messageContentType: m.content.type,
     chatId: m.chatId,
     messageId: m.id,
     artifactIds: [],

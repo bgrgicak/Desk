@@ -171,6 +171,9 @@ export interface Task {
   /** Server message id for lifecycle PATCHes (pause/resume/cancel) and
    * for scrolling the chat view to the originating message. */
   messageId?: string
+  /** Backing message kind/content type. Used to avoid editing system rows as user task text. */
+  messageKind?: 'chat' | 'task' | 'task_run' | 'summary'
+  messageContentType?: string
   /** Chat the backing message lives in. */
   chatId?: string
   /** True when the task has actually fired at least once. */
@@ -301,7 +304,6 @@ export interface SettingsAgent {
   name: string
   providerId: string
   model: string
-  instructions: string
 }
 
 export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {

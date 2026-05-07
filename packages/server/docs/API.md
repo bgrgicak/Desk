@@ -377,12 +377,15 @@ authenticated.
 
 ```json
 [
-  { "id": "opencode/gpt-5-nano", "provider": "opencode" }
+  { "id": "opencode/big-pickle", "provider": "opencode" }
 ]
 ```
 
 `id` is opencode's canonical model id — pass it straight to `opencode run --model`.
 `provider` is denormalised so UIs can group or filter without splitting the id.
+
+If no container runtime is reachable, the endpoint returns `503` with
+`code: "RUNTIME_UNAVAILABLE"` and an actionable message from runtime detection.
 
 ## Search
 

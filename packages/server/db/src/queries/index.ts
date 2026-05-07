@@ -1,3 +1,4 @@
+export * as search from "./search.js";
 export * as users from "./users.js";
 export * as agents from "./agents.js";
 export * as workspaces from "./workspaces.js";

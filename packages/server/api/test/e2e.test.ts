@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@agent-desk/db";
 import { runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout, materializeSummary } from "@agent-desk/storage";
@@ -60,11 +61,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await clearSessions(pool);
   clearConnections();
-  server?.close();
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 
   if (pool) await pool.end();
-  if (home) await fs.rm(home, { recursive: true, force: true });
-  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+  if (home) await rmTempTreeWithRetry(home);
+  if (dbPath) await rmTempTreeWithRetry(path.dirname(dbPath));
 });
 
 function request(
@@ -336,6 +337,13 @@ describe("API e2e (real Postgres)", () => {
   it("GET /search searches across real data", async () => {
     const res = await request("GET", "/search?q=E2E&scope=chats", token);
     expect(res.status).toBe(200);
+  });
+
+  it("GET /search rejects invalid filters", async () => {
+    const badScope = await request("GET", "/search?q=x&scope=bogus", token);
+    expect(badScope.status).toBe(400);
+    const badKind = await request("GET", "/search?q=x&kind=bogus", token);
+    expect(badKind.status).toBe(400);
   });
 
   it("GET /openapi.json works without auth", async () => {
@@ -752,8 +760,8 @@ describe("API e2e (real Postgres)", () => {
     expect(body.every((f) => f.kind === "attachment")).toBe(true);
   });
 
-  // Gap 6: Fuzzy search returns uploaded artifact and chat
-  it("fuzzy search returns known artifact and chat IDs", async () => {
+  // Gap 6: Search returns uploaded artifacts and indexed chat messages.
+  it("search returns known artifact and message-backed chat IDs", async () => {
     const wsRes = await request("GET", "/workspaces", token);
     const workspaces = wsRes.body as Array<{ id: string }>;
     const agentsRes = await request("GET", "/agents", token);
@@ -762,9 +770,14 @@ describe("API e2e (real Postgres)", () => {
     const chatRes = await request("POST", "/chats", token, {
       workspaceId: workspaces[0].id,
       agentId: agents[0].id,
-      title: "SearchableUniqueTitle",
+      title: "Indexed Search Chat",
     });
     const chat = chatRes.body as { id: string };
+
+    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "SearchableUnique message body",
+    });
+    expect(msgRes.status).toBe(201);
 
     const uploadRes = await requestMultipart(
       "POST",
@@ -788,11 +801,38 @@ describe("API e2e (real Postgres)", () => {
     const artResults = artRes.body as Array<{ type: string; id: string }>;
     expect(artResults.some((r) => r.type === "file" && r.id === file.path)).toBe(true);
 
-    // Search chats
+    const libraryUploadRes = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${workspaces[0].id}`,
+      token,
+      [
+        {
+          name: "file",
+          filename: "universal-search-note.md",
+          contentType: "text/markdown",
+          body: Buffer.from("UniversalNeedle appears only inside this file body"),
+        },
+      ],
+    );
+    expect(libraryUploadRes.status).toBe(201);
+    const libraryFile = libraryUploadRes.body as { path: string };
+
+    const libraryContentRes = await request("GET", "/search?q=UniversalNeedle&scope=library", token);
+    expect(libraryContentRes.status).toBe(200);
+    const libraryContentResults = libraryContentRes.body as Array<{ type: string; id: string; kind?: string }>;
+    expect(libraryContentResults.some((r) => r.type === "file" && r.kind === "library_file" && r.id === libraryFile.path)).toBe(true);
+
+    // Search chats through the shared chat_search_index-backed search.
     const chatSearchRes = await request("GET", "/search?q=SearchableUnique&scope=chats", token);
     expect(chatSearchRes.status).toBe(200);
-    const chatResults = chatSearchRes.body as Array<{ id: string }>;
-    expect(chatResults.some((r) => r.id === chat.id)).toBe(true);
+    const chatResults = chatSearchRes.body as Array<{ type: string; id: string; snippet?: string }>;
+    expect(chatResults.some((r) => r.type === "message" && r.id === chat.id)).toBe(true);
+    expect(chatResults.some((r) => r.snippet?.includes("<mark>SearchableUnique</mark>"))).toBe(true);
+
+    const titleSearchRes = await request("GET", "/search?q=Indexed%20Search%20Chat&scope=chats", token);
+    expect(titleSearchRes.status).toBe(200);
+    const titleResults = titleSearchRes.body as Array<{ type: string; id: string; snippet?: string }>;
+    expect(titleResults.some((r) => r.type === "chat" && r.id === chat.id)).toBe(true);
 
     // Search all
     const allRes = await request("GET", "/search?q=Searchable&scope=all", token);
@@ -872,27 +912,6 @@ describe("API e2e (real Postgres)", () => {
     throw new Error("no trigger message reached succeeded in time");
   });
 
-  // Gap 10: Agent instruction PATCH reflected in next run
-  it("PATCH /agents/:id instructions reflected in subsequent run prompt wiring", async () => {
-    const agentsRes = await request("GET", "/agents", token);
-    const agents = agentsRes.body as Array<{ id: string; instructions: string }>;
-    const agentId = agents[0].id;
-
-    // Patch instructions
-    const patchRes = await request("PATCH", `/agents/${agentId}`, token, {
-      instructions: "You are a test assistant with updated instructions XYZ123.",
-    });
-    expect(patchRes.status).toBe(200);
-    const patched = patchRes.body as { id: string; instructions: string };
-    expect(patched.instructions).toContain("XYZ123");
-
-    // Verify GET returns updated instructions
-    const getRes = await request("GET", `/agents/${agentId}`, token);
-    expect(getRes.status).toBe(200);
-    const agent = getRes.body as { instructions: string };
-    expect(agent.instructions).toContain("XYZ123");
-  });
-
   it("invalid login returns 401", async () => {
     const res = await request("POST", "/auth/login", undefined, {
       username: "testuser",
@@ -909,7 +928,7 @@ describe("API e2e (real Postgres)", () => {
 
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
- * opencode CLI → free opencode/gpt-5-nano model → assistant message persisted
+ * opencode CLI → free opencode/big-pickle model → assistant message persisted
  * → WS event. Auto-skips when no usable container engine + sandbox image is
  * available locally. No API keys required.
  */
@@ -923,7 +942,7 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-const FREE_MODEL = "opencode/gpt-5-nano";
+const FREE_MODEL = "opencode/big-pickle";
 
 describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   "real-stack e2e (real Docker + free opencode model)",
@@ -934,6 +953,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   let realHome: string;
   let realToken: string;
   let realDbPath: string;
+  let realWorkspaceIds: string[] = [];
 
   function realRequest(
     method: string,
@@ -975,23 +995,29 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     process.env.DESK_SEED_USERNAME = "testuser";
     process.env.DESK_SEED_PASSWORD = "testpass";
     await seedIfEmpty(realPool);
+    const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
+    realWorkspaceIds = workspaceRows.map((row) => row.id as string);
 
     realHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-"));
     await ensureLayout(realHome);
+    // The runtime resolves its on-disk home via `resolveDeskHome()`,
+    // which falls back to process.env.DESK_HOME. Pin it so the agent
+    // file (and any test reading it back) hit the same tree the
+    // storage context above uses.
+    process.env.DESK_HOME = realHome;
 
     const storage = { pool: realPool, home: realHome };
 
     // No execRunFn — let the scheduler invoke the real opencode driver in a
     // real Docker sandbox. The seeded agent's model is patched to the free
-    // opencode/gpt-5-nano below so this runs without paid provider keys.
+    // opencode/big-pickle below so this runs without paid provider keys.
     const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
     const broadcastUserId = userRows[0].id as string;
 
-    // The seeded agent defaults to opencode/big-pickle. Switch it to the
-    // smaller, faster free model the suite uses so each spec finishes in a
-    // bearable time.
+    // Keep the suite pinned to a known free model so each spec runs without
+    // paid provider keys.
     await realPool.query("UPDATE agents SET model = ?", [FREE_MODEL]);
 
     realServer = createApp({ pool: realPool, storage, runManager, broadcastUserId });
@@ -1002,22 +1028,29 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
   afterAll(async () => {
     if (realPool) await clearSessions(realPool);
     clearConnections();
-    realServer?.close();
+    if (realServer) await new Promise<void>((resolve) => realServer.close(() => resolve()));
     if (realPool) await realPool.end();
 
-    // The scheduler spawned a real desk-sandbox-* container during the run.
-    // Best-effort remove so test runs don't leave detritus on the host.
+    // The scheduler spawned real desk-sandbox-* containers during the run.
+    // Remove only sandboxes that bind this test's temp home so parallel suites
+    // keep their own containers.
     try {
       const { detectEngine } = await import("@agent-desk/runtime");
       const engine = await detectEngine();
-      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      for (const workspaceId of realWorkspaceIds) {
+        await engine.remove(`desk-sandbox-${workspaceId}`, true).catch(() => {});
+      }
+      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-" });
       for (const c of containers) {
-        await engine.remove(c.id, true).catch(() => {});
+        const info = await engine.inspect(c.id).catch(() => null);
+        if (info?.binds.some((bind) => bind.startsWith(`${realHome}:`) || bind.startsWith(`${realHome}/`))) {
+          await engine.remove(c.id, true).catch(() => {});
+        }
       }
     } catch { /* engine may not be available; nothing to clean */ }
 
-    if (realHome) await fs.rm(realHome, { recursive: true, force: true });
-    if (realDbPath) await fs.rm(path.dirname(realDbPath), { recursive: true, force: true });
+    if (realHome) await rmTempTreeWithRetry(realHome);
+    if (realDbPath) await rmTempTreeWithRetry(path.dirname(realDbPath));
   });
 
   it("sends a message through the full real stack and gets an assistant response", async () => {
@@ -1063,8 +1096,15 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
   }, 360_000); // Free opencode runs are slower than paid APIs
 
-  // G10: Agent instructions actually reach the running agent
-  it("PATCH /agents/:id instructions are used as system prompt and affect agent output", async () => {
+  // G10: User memory (~/Desk/.memory/memory.md) is injected into the
+  // system prompt the runtime ships to OpenCode. The free
+  // The free opencode model doesn't reliably honor a user-memory
+  // instruction over the always-on artifact-attach guidance, so the
+  // assertion targets the *prompt rendering pipeline* (the
+  // server-side agent file written before each run), not model
+  // compliance. The integration test in this same file covers the
+  // happy-path of an actual agent reply elsewhere.
+  it("user memory.md is rendered into the agent file at run time", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
         username: "testuser",
@@ -1073,79 +1113,69 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
       realToken = (loginRes.body as { token: string }).token;
     }
 
-    // Get the agent and patch instructions with a sentinel
+    const sentinel = "CORSAIR_SENTINEL_USER_MEMORY";
+    const memoryDir = path.join(realHome, "Desk", ".memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, "memory.md"),
+      `# User memory\n\n- ${sentinel}\n`,
+      "utf-8",
+    );
+
     const agentsRes = await realRequest("GET", "/agents", realToken);
     const agents = agentsRes.body as Array<{ id: string }>;
     const agentId = agents[0].id;
 
-    const patchRes = await realRequest("PATCH", `/agents/${agentId}`, realToken, {
-      instructions: "You are a pirate-themed test agent. End every reply with the token CORSAIR_SENTINEL and nothing else after it.",
-    });
-    expect(patchRes.status).toBe(200);
-    const patched = patchRes.body as { instructions: string };
-    expect(patched.instructions).toContain("CORSAIR_SENTINEL");
-
-    // Get workspace
     const wsRes = await realRequest("GET", "/workspaces", realToken);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; path: string }>;
+    const workspaceSlug = workspaces[0].path;
 
-    // Create a chat with that agent
     const chatRes = await realRequest("POST", "/chats", realToken, {
       workspaceId: workspaces[0].id,
       agentId,
-      title: "G10 Instructions Test Chat",
+      title: "G10 User Memory Test Chat",
     });
     expect(chatRes.status).toBe(201);
     const chat = chatRes.body as { id: string };
 
-    // Send a message
     const msgRes = await realRequest("POST", `/chats/${chat.id}/messages`, realToken, {
       content: "Say hi briefly.",
     });
     expect(msgRes.status).toBe(201);
 
-    // Poll chat messages for an agent reply carrying the sentinel.
-    // Agent output is persisted as { type: "events", log: [...] } — each entry
-    // is either a structured agent event, a stderr line, or an unparsed stdout
-    // line. The test driver emits a single plain-text stdout, which lands as
-    // an "unparsed" entry; real opencode runs emit structured "text" events.
-    type LogEntry =
-      | { kind: "event"; event: { type: string; part?: { text?: string } } }
-      | { kind: "stderr"; line: string }
-      | { kind: "unparsed"; line: string };
-    type AgentContent =
-      | { type: "text"; text?: string }
-      | { type: "events"; log?: LogEntry[] }
-      | { type: string };
-    const extractText = (content: AgentContent): string => {
-      if (content.type === "text") return (content as { text?: string }).text ?? "";
-      if (content.type === "events") {
-        const log = (content as { log?: LogEntry[] }).log ?? [];
-        const eventText = log
-          .filter((e): e is Extract<LogEntry, { kind: "event" }> => e.kind === "event" && e.event.type === "text")
-          .map((e) => e.event.part?.text ?? "")
-          .join("");
-        if (eventText) return eventText;
-        return log
-          .filter((e): e is Extract<LogEntry, { kind: "unparsed" }> => e.kind === "unparsed")
-          .map((e) => e.line)
-          .join("\n");
-      }
-      return "";
-    };
-
-    let agentText = "";
-    for (let i = 0; i < 150; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const msgsRes = await realRequest("GET", `/chats/${chat.id}/messages`, realToken);
-      if (msgsRes.status !== 200) continue;
-      const messages = msgsRes.body as { items: Array<{ role: string; content: AgentContent }> };
-      const agentMsgs = messages.items.filter((m) => m.role === "agent");
-      if (agentMsgs.length === 0) continue;
-      const last = agentMsgs[agentMsgs.length - 1];
-      agentText = extractText(last.content);
-      if (agentText.includes("CORSAIR_SENTINEL")) break;
+    // Wait until the runtime writes the agent file (lands at
+    // <workspace>/.opencode/agents/<agentId>.md).
+    const agentFile = path.join(
+      realHome,
+      "Desk",
+      "workspaces",
+      workspaceSlug,
+      ".opencode",
+      "agents",
+      `${agentId}.md`,
+    );
+    let body = "";
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      body = await fs.readFile(agentFile, "utf-8").catch(() => "");
+      if (body.includes(sentinel)) break;
     }
-    expect(agentText).toContain("CORSAIR_SENTINEL");
-  }, 360_000);
+    expect(body).toContain(sentinel);
+    expect(body).toContain("<!-- Desk user memory index -->");
+  }, 120_000);
 });
+
+async function rmTempTreeWithRetry(targetPath: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try {
+      await fs.rm(targetPath, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM" && code !== "EBUSY") throw err;
+      await delay(500);
+    }
+  }
+
+  await fs.rm(targetPath, { recursive: true, force: true });
+}

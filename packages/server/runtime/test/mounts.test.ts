@@ -11,7 +11,7 @@ import {
   buildDefaultMountPlan,
   bindsFromPlan,
   SANDBOX_HOME,
-  SKILLS_SANDBOX_DIR,
+  SKILLS_SANDBOX_MOUNT_DIR,
   skillsHostDir,
 } from "../src/mounts.js";
 import type { SandboxHandle } from "../src/docker.js";
@@ -65,7 +65,7 @@ describe("mounts", () => {
     const binds = containerBinds(home, TEST_SLUG);
     expect(binds).toEqual([
       `${workspaceRootPath(home, TEST_SLUG)}:${SANDBOX_HOME}:rw`,
-      `${skillsHostDir(home)}:${SKILLS_SANDBOX_DIR}:ro`,
+      `${skillsHostDir(home)}:${SKILLS_SANDBOX_MOUNT_DIR}:ro`,
     ]);
   });
 
@@ -77,7 +77,7 @@ describe("mounts", () => {
     expect(plan[0].targetPath).toBe(SANDBOX_HOME);
     expect(plan[0].sourcePath).toBe(workspaceRootPath(home, TEST_SLUG));
     expect(plan[1].mode).toBe("ro");
-    expect(plan[1].targetPath).toBe(SKILLS_SANDBOX_DIR);
+    expect(plan[1].targetPath).toBe(SKILLS_SANDBOX_MOUNT_DIR);
     expect(plan[1].sourcePath).toBe(skillsHostDir(home));
     expect(bindsFromPlan(plan)).toEqual(containerBinds(home, TEST_SLUG));
   });

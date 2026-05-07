@@ -99,7 +99,7 @@ export function GlobalPaletteSearch({
     return workspaces.filter(w => w.name.toLowerCase().includes(needle))
   }, [isSearching, workspaces, trimmed])
 
-  const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat'), [searchResults])
+  const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat' || r.type === 'message'), [searchResults])
   const fileResults = useMemo(() => searchResults.filter(r => r.type === 'file'), [searchResults])
 
   const hasAnyResults =
@@ -199,15 +199,20 @@ export function GlobalPaletteSearch({
         {isSearching && chatResults.length > 0 && (
           <CommandGroup heading="Chats">
             {chatResults.map(r => {
-              const ws = activeWorkspaceId ?? ''
+              const ws = r.workspaceId ?? activeWorkspaceId ?? ''
               return (
                 <CommandItem
-                  key={`s-chat:${r.id}`}
-                  value={`s-chat:${r.id}`}
+                  key={`s-chat:${r.messageId ?? r.id}`}
+                  value={`s-chat:${r.messageId ?? r.id}`}
                   onSelect={() => onSelectChat({ id: r.id, workspaceId: ws })}
                 >
                   <MessageSquare className="text-muted-foreground" />
-                  <span className="truncate">{r.title}</span>
+                  <span className="min-w-0 truncate">
+                    <span className="block truncate">{r.title}</span>
+                    {r.snippet && (
+                      <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
+                    )}
+                  </span>
                 </CommandItem>
               )
             })}
@@ -216,11 +221,11 @@ export function GlobalPaletteSearch({
         {isSearching && fileResults.length > 0 && (
           <CommandGroup heading="Files">
             {fileResults.map(r => {
-              const ws = activeWorkspaceId ?? ''
+              const ws = r.workspaceId ?? activeWorkspaceId ?? ''
               return (
                 <CommandItem
-                  key={`s-file:${r.id}`}
-                  value={`s-file:${r.id}`}
+                  key={`s-file:${r.workspaceId ?? ''}:${r.id}`}
+                  value={`s-file:${r.workspaceId ?? ''}:${r.id}`}
                   onSelect={() => onSelectFile({ path: r.id, workspaceId: ws })}
                 >
                   <FileText className="text-muted-foreground" />

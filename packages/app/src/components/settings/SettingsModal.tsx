@@ -487,7 +487,7 @@ function AgentsList({
     return (
       <EmptyState
         title="No agents yet"
-        body="Create an agent with a name, a model, and the default instructions it should follow."
+        body="Every workspace should start with a default opencode agent. If one is missing, refresh this panel; you can change its model here once it appears."
         action={
           <Button size="sm" className="gap-1.5" onClick={onAdd}>
             <Plus className="h-3.5 w-3.5" />Add agent
@@ -577,7 +577,7 @@ function AgentDetail({
   modelIndex: Map<string, ModelRef[]>
   focus: Exclude<AgentsFocus, null>
   busy: boolean
-  onSave: (v: { id?: string; name: string; model: string; instructions: string }) => void
+  onSave: (v: { id?: string; name: string; model: string }) => void
   onCancel: () => void
   onDelete: (id: string) => void
 }) {
@@ -590,9 +590,8 @@ function AgentDetail({
 
   const initialModel = existing?.model ?? flatModels[0]?.id ?? ''
 
-  const [name, setName]                 = useState(existing?.name ?? '')
-  const [model, setModel]               = useState(initialModel)
-  const [instructions, setInstructions] = useState(existing?.instructions ?? '')
+  const [name, setName] = useState(existing?.name ?? '')
+  const [model, setModel] = useState(initialModel)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
 
   const canSave = name.trim().length > 0 && model.trim().length > 0
@@ -602,7 +601,6 @@ function AgentDetail({
       id: existing?.id,
       name: name.trim(),
       model: model.trim(),
-      instructions: instructions.trim(),
     })
   }
 
@@ -657,16 +655,6 @@ function AgentDetail({
               </Command>
             </PopoverContent>
           </Popover>
-        </Field>
-
-        <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
-          <Textarea
-            value={instructions}
-            onChange={e => setInstructions(e.target.value)}
-            placeholder="Describe how this agent should behave, what tone to use, what to avoid…"
-            rows={8}
-            className="resize-y min-h-40"
-          />
         </Field>
       </div>
 
@@ -1220,12 +1208,12 @@ export function SettingsModal({
     setAgentsSearch('')
   }
 
-  const handleSaveAgent = async (v: { id?: string; name: string; model: string; instructions: string }) => {
+  const handleSaveAgent = async (v: { id?: string; name: string; model: string }) => {
     try {
       if (v.id) {
-        await patchAgent({ id: v.id, patch: { name: v.name, model: v.model, instructions: v.instructions } }).unwrap()
+        await patchAgent({ id: v.id, patch: { name: v.name, model: v.model } }).unwrap()
       } else {
-        const created = await createAgent({ name: v.name, model: v.model, instructions: v.instructions }).unwrap()
+        const created = await createAgent({ name: v.name, model: v.model }).unwrap()
         // Auto-enroll in the current workspace so the agent is active immediately.
         await addWorkspaceAgent({ workspaceId: workspace.id, agentId: created.id }).unwrap()
       }
@@ -1251,7 +1239,6 @@ export function SettingsModal({
       await createAgent({
         name: `${source.name} (copy)`,
         model: source.model,
-        instructions: source.instructions,
       }).unwrap()
     } catch (err) {
       toast.error('Could not duplicate agent', { description: describeApiError(err) })

@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
@@ -44,7 +45,10 @@ const SANDBOX_PIDS_LIMIT = 1024;
 const SANDBOX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
 const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=1g" };
 const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
-const SANDBOX_RESOURCE_PROFILE = "pids=1024,memory=4g,tmpfs=/tmp:size=1g";
+const SANDBOX_AGENT_USER_LABEL = "agent-desk.sandbox-agent-user";
+const SANDBOX_RESOURCE_PROFILE = "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo";
+const SANDBOX_CONTAINER_USER = "0:0";
+const SANDBOX_READY_TIMEOUT_MS = 300_000;
 
 /**
  * Ensures the sandbox image exists locally. If absent, attempts a pull —
@@ -99,11 +103,12 @@ export async function createOrReuse(
   const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
   const expectedBindStrings = bindsFromPlan(plan);
   const expectedBinds = parseBindStrings(expectedBindStrings);
-  const expectedUser = await sandboxUser(engine);
+  const expectedUser = SANDBOX_CONTAINER_USER;
+  const agentUser = await sandboxUser(engine);
 
-  // Reuse the container only if its image, binds, and runtime user still
-  // match the current expectation; otherwise tear it down and fall through
-  // to the create path. Bind order isn't meaningful, compare as sets.
+  // Reuse the container only if its image, binds, container user, and agent
+  // user still match the current expectation; otherwise tear it down and fall
+  // through to the create path. Bind order isn't meaningful, compare as sets.
   const existing = await engine.inspect(containerName);
   if (existing) {
     const currentImageId = await engine.imageId(sandboxImage());
@@ -111,8 +116,10 @@ export async function createOrReuse(
     const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === SANDBOX_RESOURCE_PROFILE;
-    if (imageMatches && mountsMatch && userMatches && resourcesMatch) {
+    const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
+      await waitForEntrypointReady(engine, existing.id);
       return { containerId: existing.id, workspaceId };
     }
     await engine.remove(containerName, true);
@@ -129,14 +136,19 @@ export async function createOrReuse(
     const containerId = await engine.create({
       name: containerName,
       image: sandboxImage(),
-      // Run as the host user that owns the workspace bind. The image bakes
-      // an `agent` user at UID 2000, but the workspace dir on disk is owned
-      // by whoever runs desk-server; using their uid:gid keeps writes both
-      // ways (host → sandbox and sandbox → host) without any chown dance.
+      // Start the long-lived container as root so the entrypoint can wire up
+      // the per-host `agent` user and passwordless sudo. Individual agent
+      // execs still run as `sandboxUser()` below, keeping normal workspace
+      // writes owned by the host user on rootful Docker.
       user: expectedUser,
-      env: providerKeyEnv(providerKeys),
-      labels: { [SANDBOX_RESOURCE_PROFILE_LABEL]: SANDBOX_RESOURCE_PROFILE },
-      capDrop: ["ALL"],
+      env: [
+        ...providerKeyEnv(providerKeys),
+        `DESK_SANDBOX_AGENT_USER=${agentUser}`,
+      ],
+      labels: {
+        [SANDBOX_RESOURCE_PROFILE_LABEL]: SANDBOX_RESOURCE_PROFILE,
+        [SANDBOX_AGENT_USER_LABEL]: agentUser,
+      },
       network: "bridge",
       // host-gateway lets the in-sandbox `desk` CLI reach the host-side
       // desk-server REST API as `host.docker.internal`. Without it the
@@ -152,6 +164,7 @@ export async function createOrReuse(
       tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
     });
+    await waitForEntrypointReady(engine, containerId);
     return { containerId, workspaceId };
   } catch (err) {
     // Race: two startSandbox() calls for the same workspace can both pass
@@ -163,11 +176,34 @@ export async function createOrReuse(
       const winner = await engine.inspect(containerName);
       if (winner) {
         if (!winner.running) await engine.start(containerName);
+        await waitForEntrypointReady(engine, winner.id);
         return { containerId: winner.id, workspaceId };
       }
     }
     throw err;
   }
+}
+
+async function waitForEntrypointReady(engine: Engine, containerId: string): Promise<void> {
+  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
+  let lastStderr = "";
+  while (Date.now() < deadline) {
+    const handle = await engine.exec({
+      containerId,
+      cmd: ["test", "-f", "/tmp/desk-entrypoint-ready"],
+      user: SANDBOX_CONTAINER_USER,
+    });
+    const stderr: Buffer[] = [];
+    handle.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const exitCode = await handle.wait();
+    if (exitCode === 0) return;
+    lastStderr = Buffer.concat(stderr).toString("utf8");
+    await delay(250);
+  }
+
+  throw new Error(
+    `Sandbox entrypoint did not become ready within ${SANDBOX_READY_TIMEOUT_MS}ms${lastStderr ? `: ${lastStderr}` : ""}`,
+  );
 }
 
 async function ensureNestedMountTargets(plan: MountPlan): Promise<void> {
@@ -183,15 +219,15 @@ async function ensureNestedMountTargets(plan: MountPlan): Promise<void> {
 }
 
 /**
- * Returns `<uid>:<gid>` that the sandbox should run as.
+ * Returns `<uid>:<gid>` that agent commands should run as.
  *
  * Rootful runtime: the workspace bind-mount is owned by whoever runs
- * desk-server; running the sandbox as the same uid keeps reads/writes
+ * desk-server; running agent execs as the same uid keeps reads/writes
  * symmetric without any chown dance. → use process uid/gid.
  *
  * Rootless runtime: host uid N → container uid 0 (the daemon runner is
  * the user-namespace root). Files owned by the host user appear as
- * root:root inside the container, so the sandbox must run as 0:0 to
+ * root:root inside the container, so agent execs must run as 0:0 to
  * write through the bind. → use 0:0.
  *
  * Override via DESK_SANDBOX_USER for the rare case where neither rule

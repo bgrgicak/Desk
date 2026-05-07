@@ -7,6 +7,9 @@ load a Desk skill only when you need the detailed reference:
 - `desk-cli-task-schedule` — scheduling syntax, cron examples, `--at` format,
   and failure modes.
 - `desk-cli-chat-attach-artifact` — artifact attachment syntax and examples.
+- `desk-cli-chat-search-messages` — full-text recall over the user's chat
+  history (messages + chat summaries). Use when the user references something
+  from "another chat", "before", or "earlier in this chat".
 - `desk-cli-file-to-markdown` — document conversion syntax, supported formats,
   and examples.
 - `desk-app-scaffold` — directory layout, fragment shape, build workflow,
@@ -14,12 +17,20 @@ load a Desk skill only when you need the detailed reference:
 - `desk-app-storage` — how to inspect an app's own skill files and safely
   list, read, create, update, delete, import, export, migrate, or repair
   records in an existing Desk app's storage.
+- `desk-persistence` — idempotent `~/.deskrc` patterns for setup that must
+  survive sandbox restarts.
 
 When the user asks you to inspect, import, export, migrate, repair, or CRUD
 records for an existing `.app/`, load `desk-app-storage` before touching
 `.storage/`. Then read the matching app or fragment `skill.md` storage
 contract; if the request names a collection such as `habits`, prefer the
 matching fragment skill over the first skill file returned by search.
+
+Show the smallest useful scope. When the user asks to see, open, inspect, or
+work on a named fragment, component, file, or storage record, show that target
+inline and do not attach the full `.app/` unless you changed and rebuilt the
+app for the user to load or test. Attach a full app only for deliverable app
+updates, not for read-only exploration or storage-only operations.
 
 The sandbox has Firefox, Playwright, Xvfb, the `playwright` MCP server,
 `pandoc`, `pdftotext`, `jq`, `git`, Python 3/pip, and ImageMagick

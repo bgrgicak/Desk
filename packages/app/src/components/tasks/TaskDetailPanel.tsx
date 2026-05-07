@@ -41,6 +41,8 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  Input,
+  Textarea,
 } from '@agent-desk/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
@@ -88,9 +90,10 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
 }
 
 // Task-panel chat shows only follow-up conversation messages, not the task
-// definition row itself. This filter is stable (module-level) so useMemo
-// inside ChatThread does not recompute on every render.
-const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task'
+// definition or per-fire execution prompt. This filter is stable
+// (module-level) so useMemo inside ChatThread does not recompute on every
+// render.
+const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task' && m.kind !== 'task_run'
 
 function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
   const { wsId } = useParams<{ wsId: string }>()
@@ -154,6 +157,10 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const [instructionsOpen, setInstructionsOpen] = useState(true)
   const [showFullInstructions, setShowFullInstructions] = useState(false)
   const [isDescClamped, setIsDescClamped]     = useState(false)
+  const [draftTitle, setDraftTitle]           = useState(task.name)
+  const [draftDescription, setDraftDescription] = useState(task.description ?? '')
+  const detailsDirty = draftTitle !== task.name || draftDescription !== (task.description ?? '')
+  const lastTaskDetailsRef = useRef({ name: task.name, description: task.description ?? '' })
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
@@ -166,7 +173,21 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     setShowAllHistory(false)
     setShowFullInstructions(false)
     setIsDescClamped(false)
+    setDraftTitle(task.name)
+    setDraftDescription(task.description ?? '')
+    lastTaskDetailsRef.current = { name: task.name, description: task.description ?? '' }
   }, [task.id])
+
+  useEffect(() => {
+    const previous = lastTaskDetailsRef.current
+    const draftWasClean = draftTitle === previous.name && draftDescription === previous.description
+    const next = { name: task.name, description: task.description ?? '' }
+    if (draftWasClean) {
+      setDraftTitle(next.name)
+      setDraftDescription(next.description)
+    }
+    lastTaskDetailsRef.current = next
+  }, [task.name, task.description, draftTitle, draftDescription])
 
   useEffect(() => {
     if (!instructionsOpen || !descRef.current) return
@@ -217,6 +238,19 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     if (next === 'scheduled') void transition('pending')
   }
 
+  async function runNow() {
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await runMessage({ chatId: task.chatId, messageId: task.messageId }).unwrap()
+      toast.success('Task run started')
+    } catch (err) {
+      toast.error('Action failed', { description: describeApiError(err) })
+    }
+  }
+
   const busy = patchState.isLoading || runState.isLoading
   const assigneeAgent = agents?.find(a => a.id === task.assigneeId)
   const assigneeLabel = !task.assigneeId || task.assigneeId === 'user'
@@ -262,6 +296,33 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     }
   }
 
+  async function saveDetails() {
+    const title = draftTitle.trim()
+    const description = draftDescription.trim()
+    if (!title) {
+      toast.error('Task title is required')
+      return
+    }
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: {
+          title,
+          content: { type: 'text', text: description ? `${title}\n\n${description}` : title },
+        },
+      }).unwrap()
+      setDraftTitle(title)
+      setDraftDescription(description)
+    } catch (err) {
+      toast.error('Could not update task details', { description: describeApiError(err) })
+    }
+  }
+
   // What the Schedule row shows when not editing.
   const scheduleLabel = task.schedule
     ? describeCron(task.schedule)
@@ -275,6 +336,8 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const canPause  = !isPaused && (task.status === 'active' || task.status === 'scheduled')
   const canResume = isPaused
   const canCancel = task.status !== 'complete'
+  const canRunNow = task.status === 'scheduled'
+  const canEditDetails = task.messageKind === 'task' && task.messageContentType === 'text'
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-background">
@@ -296,6 +359,19 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
           ))}
         </div>
         <div className="flex items-center gap-0.5">
+          {canRunNow && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              data-testid="task-run-now"
+              title="Run now"
+              disabled={busy}
+              onClick={() => void runNow()}
+            >
+              <Play className="h-4 w-4" />
+            </Button>
+          )}
           {canPause && (
             <Button
               variant="ghost"
@@ -361,11 +437,38 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
       {/* Details tab */}
       {activeTab === 'details' && (
+        <div className="flex flex-1 min-h-0 flex-col">
         <div className="flex-1 overflow-y-auto">
 
           {/* Name + meta block */}
           <div className="px-4 py-4 border-b">
-            <h2 className="text-sm font-semibold text-foreground">{task.name}</h2>
+            {canEditDetails ? (
+              <div className="space-y-2.5">
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-muted-foreground">Title</span>
+                <Input
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  placeholder="Task title"
+                  disabled={busy}
+                  data-testid="task-title-input"
+                />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-muted-foreground">Description</span>
+                <Textarea
+                  value={draftDescription}
+                  onChange={(event) => setDraftDescription(event.target.value)}
+                  placeholder="Description"
+                  className="min-h-24 resize-none text-sm"
+                  disabled={busy}
+                  data-testid="task-description-input"
+                />
+                </label>
+              </div>
+            ) : (
+              <h2 className="text-sm font-semibold text-foreground break-words">{task.name}</h2>
+            )}
             <div className="mt-4 space-y-2.5">
 
               {/* Status */}
@@ -504,7 +607,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
           </div>{/* end name + meta block */}
 
           {/* Instructions collapsible */}
-          {task.description && (
+          {!canEditDetails && task.description && (
             <div className="border-b">
               <button
                 onClick={() => setInstructionsOpen(v => !v)}
@@ -520,6 +623,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
                   <p
                     ref={descRef}
                     className={`text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap ${!showFullInstructions ? 'line-clamp-[10]' : ''}`}
+                    data-testid="task-description"
                   >
                     {task.description}
                   </p>
@@ -588,6 +692,20 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               </div>
             )}
           </div>
+        </div>
+        {canEditDetails && detailsDirty && (
+          <div className="shrink-0 border-t bg-background/95 p-3">
+            <Button
+              type="button"
+              className="w-full"
+              disabled={busy || !draftTitle.trim()}
+              onClick={() => void saveDetails()}
+              data-testid="task-details-save"
+            >
+              Save changes
+            </Button>
+          </div>
+        )}
         </div>
       )}
 

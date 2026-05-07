@@ -202,16 +202,16 @@ export function generateOpenApiSpec(): OpenApiSpec {
         get: { summary: "List the current user's agents", responses: { "200": { description: "Agent array" } } },
         post: {
           summary: "Create an agent",
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, instructions: { type: "string" }, model: { type: "string" } }, required: ["name"] } } } },
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } }, required: ["name"] } } } },
           responses: { "201": { description: "Created agent" } },
         },
       },
       "/agents/{id}": {
         get: { summary: "Get agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Agent" } } },
         patch: {
-          summary: "Update agent (name, instructions, model)",
+          summary: "Update agent (name, model)",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, instructions: { type: "string" }, model: { type: "string" } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } } } } } },
           responses: { "200": { description: "Updated agent" } },
         },
         delete: {
@@ -244,7 +244,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
         get: { summary: "Get chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Chat" } } },
         patch: {
           summary: "Update chat",
-          description: "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and instructions.",
+          description: "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and the user's memory.",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: {
             content: {
@@ -318,8 +318,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/chats/{id}/messages/{messageId}": {
         patch: {
-          summary: "Edit a message (content, cancel, reschedule)",
-          description: "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          summary: "Edit a message (title, content, cancel, reschedule)",
+          description: "Update title/content (e.g. user edits a task or summary), transition state (only 'cancelled', 'paused', or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -331,7 +331,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "object" },
-                    state: { type: "string", enum: ["cancelled", "pending"] },
+                    title: { type: ["string", "null"] },
+                    state: { type: "string", enum: ["cancelled", "paused", "pending"] },
                     executeAt: { type: ["string", "null"] },
                     cron: { type: ["string", "null"] },
                   },
@@ -621,7 +622,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/tools/models": {
         get: {
           summary: "List AI models that are ready to use",
-          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/gpt-5-nano, opencode/big-pickle) are always present. Paid-provider models appear only when the user has configured the matching API key via /me/providers. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid-provider models appear only when the user has configured the matching API key via /me/providers. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
           parameters: [
             { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"opencode\"." },
           ],
@@ -646,6 +647,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             },
             "400": { description: "Sandbox rejected the listing" },
             "404": { description: "No sandbox available" },
+            "503": { description: "No container runtime is available to query the sandbox" },
           },
         },
       },
@@ -654,9 +656,17 @@ export function generateOpenApiSpec(): OpenApiSpec {
           summary: "Search across artifacts, chats, and library",
           parameters: [
             { name: "q", in: "query", required: true, schema: { type: "string" } },
-            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library"] } },
+            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library", "files"] } },
+            { name: "kind", in: "query", schema: { type: "string", description: "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact" } },
+            { name: "workspaceId", in: "query", schema: { type: "string" } },
+            { name: "chatId", in: "query", schema: { type: "string" } },
+            { name: "showHidden", in: "query", schema: { type: "boolean" } },
           ],
-          responses: { "200": { description: "Search result array" } },
+          responses: {
+            "200": {
+              description: "Search result array. Chat results are indexed message or summary hits from chat_search_index.",
+            },
+          },
         },
       },
       "/ws": {

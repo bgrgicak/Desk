@@ -63,13 +63,16 @@ Workflow:
    WebGL. Cover the storage bridge itself with integration or end-to-end tests
    against the documented adapter shape.
 
-6. Surface visible updates with:
+6. Surface built app updates with:
 
    ```sh
    desk-agent chat attach-artifact --chat <chatId> <name>.app
    ```
 
-   Pass the app directory, not a file inside it.
+   Pass the app directory, not a file inside it. Only attach the full `.app/`
+   after you changed and rebuilt app code that the user should load or test. If
+   the user is only exploring a named fragment, component, file, or storage
+   record, show that narrower target inline instead.
 
 Desk apps are static client-side bundles. They must not embed servers, auth,
 background jobs, or direct Desk API calls. If the user asks for something that

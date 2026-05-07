@@ -96,7 +96,7 @@ covers every route in [`api/src/app.ts`](api/src/app.ts).
   running (the runtime will pick it up automatically), stop the other
   one, or run rootful Docker (`sudo systemctl start docker`).
 - **Sandbox bind-mount writes fail under a rootless runtime**: the
-  runtime detects rootless mode and runs the container as UID 0 (which
+  runtime detects rootless mode and runs agent commands as UID 0 (which
   maps to the daemon's host uid). If it ever doesn't, set
   `DESK_SANDBOX_USER=0:0` to pin the override.
 

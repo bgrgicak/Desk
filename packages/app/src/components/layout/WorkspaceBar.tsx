@@ -193,7 +193,7 @@ export function WorkspaceBar({
       <div className="h-[51px] shrink-0 flex items-center relative z-50 overflow-x-auto pr-4" style={{ paddingLeft: 'calc(var(--spacing) * 2)' }}>
 
         {/* ── Centered logo ── */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center -mt-0.5">
+        <div className="pointer-events-none absolute inset-0 hidden items-center justify-center -mt-0.5 md:flex">
           <DeskLogo className="h-[20px] w-auto text-foreground" />
         </div>
 

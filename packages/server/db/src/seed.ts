@@ -27,13 +27,12 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
     );
 
     client.querySync(
-      `INSERT INTO agents (id, user_id, name, instructions, model)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (id, user_id, name, model)
+       VALUES (?, ?, ?, ?)`,
       [
         agentId,
         userId,
         "Desk",
-        "You are Desk, a helpful AI assistant.",
         "opencode/big-pickle",
       ],
     );

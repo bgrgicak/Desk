@@ -95,6 +95,11 @@ export interface SearchResult {
   id: string;
   title: string;
   snippet?: string;
+  workspaceId?: string;
+  workspaceSlug?: string;
+  messageId?: string;
+  kind?: "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
+  score?: number;
 }
 
 export interface ModelRef {
@@ -235,7 +240,6 @@ export const api = createApi({
       ServerAgent,
       {
         name: string;
-        instructions?: string;
         model?: string;
       }
     >({
@@ -246,7 +250,7 @@ export const api = createApi({
       ServerAgent,
       {
         id: string;
-        patch: Partial<Pick<ServerAgent, "name" | "instructions" | "model">>;
+        patch: Partial<Pick<ServerAgent, "name" | "model">>;
       }
     >({
       query: ({ id, patch }) => ({
@@ -471,6 +475,24 @@ export const api = createApi({
         { type: "Message", id: "CROSS" },
       ],
     }),
+    /**
+     * Snapshot history for a `summary`-content message. Each PATCH and
+     * each AI-driven refresh writes the prior body into
+     * `.chats/{chatId}/notes/.history/`. Used by the dev UI to show a
+     * red/green diff against the most recent snapshot whenever a summary
+     * is regenerated (memory-system spec, P2.5).
+     */
+    getSummaryHistory: build.query<
+      { versions: Array<{ timestamp: string; body: string }> },
+      { chatId: string; messageId: string }
+    >({
+      query: ({ chatId, messageId }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/summary-history`,
+      }),
+      providesTags: (_r, _e, { messageId }) => [
+        { type: "Message", id: `SUMMARY_HISTORY_${messageId}` },
+      ],
+    }),
 
     // ── Cross-chat messages (runs, today) ─────────────────────────────
     getMessages: build.query<ListMessagesResponse, MessagesFilter>({
@@ -676,11 +698,14 @@ export const api = createApi({
     // ── Search ────────────────────────────────────────────────────────
     search: build.query<
       SearchResult[],
-      { q: string; scope?: "chats" | "artifacts" | "library" | "all" }
+      { q: string; scope?: "chats" | "artifacts" | "library" | "files" | "all"; workspaceId?: string; chatId?: string; kind?: string }
     >({
-      query: ({ q, scope }) => {
+      query: ({ q, scope, workspaceId, chatId, kind }) => {
         const p = new URLSearchParams({ q });
         if (scope) p.set("scope", scope);
+        if (workspaceId) p.set("workspaceId", workspaceId);
+        if (chatId) p.set("chatId", chatId);
+        if (kind) p.set("kind", kind);
         return `/search?${p.toString()}`;
       },
     }),
@@ -726,6 +751,7 @@ export const {
   usePatchMessageMutation,
   useDeleteMessageMutation,
   useRunMessageMutation,
+  useGetSummaryHistoryQuery,
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
