@@ -229,7 +229,7 @@ export function AppShell({
   // Server-side search — live query when the palette has ≥2 chars.
   const searchEnabled = chatSearchQuery.trim().length >= 2
   const { data: searchResults } = useSearchQuery(
-    { q: chatSearchQuery.trim(), scope: 'all' },
+    { q: chatSearchQuery.trim(), scope: 'all', workspaceId: activeWorkspaceId },
     { skip: !searchEnabled },
   )
 
@@ -778,14 +778,14 @@ export function AppShell({
             <>
               <CommandGroup heading="Chats">
                 {(searchResults ?? [])
-                  .filter(r => r.type === 'chat')
+                  .filter(r => r.type === 'chat' || r.type === 'message')
                   .map(r => {
                     const chat = allChats.find(c => c.id === r.id)
                     const ChatIcon = chat ? getChatIcon(chat) : MessageSquare
                     return (
                       <CommandItem
-                        key={r.id}
-                        value={r.id}
+                        key={r.messageId ?? r.id}
+                        value={r.messageId ?? r.id}
                         keywords={[r.title]}
                         onSelect={() => {
                           if (chat) onChatClick(chat)
@@ -795,7 +795,12 @@ export function AppShell({
                         }}
                       >
                         <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                        <span className="truncate">{r.title}</span>
+                        <span className="min-w-0 truncate">
+                          <span className="block truncate">{r.title}</span>
+                          {r.snippet && (
+                            <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
+                          )}
+                        </span>
                       </CommandItem>
                     )
                   })}

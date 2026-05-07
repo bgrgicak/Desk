@@ -102,6 +102,8 @@ async function binaryWorks(name: EngineName): Promise<boolean> {
             ? { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}` }
             : process.env,
         stdio: "ignore",
+        timeout: 3000,
+        killSignal: "SIGKILL",
       },
     );
     let settled = false;

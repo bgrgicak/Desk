@@ -25,7 +25,7 @@ CREATE TABLE chat_search_index (
   body_lc         TEXT NOT NULL,           -- lowercased copy for case-insensitive LIKE
   chat_id         TEXT,                    -- NULL for library content
   workspace_slug  TEXT,
-  -- 'message' | 'summary' | (Phase 4) 'note' | 'doc' | 'app' | 'fragment'
+  -- 'chat' | 'message' | 'summary' | (Phase 4) 'note' | 'doc' | 'app' | 'fragment'
   kind            TEXT NOT NULL,
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (kind, ref_id)
@@ -34,6 +34,45 @@ CREATE TABLE chat_search_index (
 CREATE INDEX chat_search_workspace_idx ON chat_search_index (workspace_slug);
 CREATE INDEX chat_search_chat_idx      ON chat_search_index (chat_id);
 CREATE INDEX chat_search_kind_idx      ON chat_search_index (kind);
+
+-- Chat title rows let the same indexed search implementation power both
+-- title search and message/summary body recall.
+CREATE TRIGGER chats_ai_chat_search_title
+AFTER INSERT ON chats
+BEGIN
+  INSERT OR REPLACE INTO chat_search_index
+    (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
+  SELECT
+    NEW.id,
+    NEW.title,
+    LOWER(NEW.title),
+    NEW.id,
+    (SELECT w.path FROM workspaces w WHERE w.id = NEW.workspace_id),
+    'chat',
+    NEW.updated_at;
+END;
+
+CREATE TRIGGER chats_au_chat_search_title
+AFTER UPDATE OF title, workspace_id, updated_at ON chats
+BEGIN
+  INSERT OR REPLACE INTO chat_search_index
+    (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
+  SELECT
+    NEW.id,
+    NEW.title,
+    LOWER(NEW.title),
+    NEW.id,
+    (SELECT w.path FROM workspaces w WHERE w.id = NEW.workspace_id),
+    'chat',
+    NEW.updated_at;
+END;
+
+CREATE TRIGGER chats_ad_chat_search_title
+AFTER DELETE ON chats
+BEGIN
+  DELETE FROM chat_search_index
+  WHERE kind = 'chat' AND ref_id = OLD.id;
+END;
 
 -- INSERT trigger: index new chat-message rows whose JSON content is
 -- type='text' or type='summary'. Other types (events, toolCall,
@@ -121,6 +160,19 @@ END;
 -- P3.3 — Backfill all eligible message rows into the index. Runs once
 -- during this migration; future inserts/updates/deletes flow through
 -- the triggers above.
+INSERT OR REPLACE INTO chat_search_index
+  (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
+SELECT
+  c.id,
+  c.title,
+  LOWER(c.title),
+  c.id,
+  w.path,
+  'chat',
+  c.updated_at
+FROM chats c
+JOIN workspaces w ON w.id = c.workspace_id;
+
 INSERT OR REPLACE INTO chat_search_index
   (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
 SELECT

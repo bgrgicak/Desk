@@ -20,17 +20,22 @@ export interface SearchChatMessagesParams {
   workspaceSlug?: string;
   /** Restrict to any of these workspace slugs, used for authorized cross-workspace search. */
   workspaceSlugs?: string[];
-  /** Filter by content kind. `'any'` means message OR summary. */
-  kind?: "message" | "summary" | "any";
+  /** Filter by content kind. `'any'` searches every indexed kind unless `kinds` is supplied. */
+  kind?: SearchDocumentKind | "any";
+  /** Filter to a set of indexed kinds. Takes precedence over `kind`. */
+  kinds?: SearchDocumentKind[];
+  /** Include indexed chat title rows alongside message/summary body rows. */
+  includeTitles?: boolean;
   /** Max rows returned. Defaults to 25. */
   limit?: number;
 }
 
 export interface SearchChatMessagesHit {
   chatId: string | null;
+  refId: string;
   messageId: string;
   workspaceSlug: string | null;
-  kind: "message" | "summary";
+  kind: SearchDocumentKind;
   /** Truncated body excerpt around the first match, with `<mark>…</mark>` highlights. */
   snippet: string;
   /** ISO8601 timestamp of the indexed row. */
@@ -40,6 +45,24 @@ export interface SearchChatMessagesHit {
    * body. Used as the order key — surfaced for UI / debugging.
    */
   score: number;
+}
+
+export type SearchDocumentKind =
+  | "chat"
+  | "message"
+  | "summary"
+  | "library_file"
+  | "attachment"
+  | "artifact"
+  | "app_file";
+
+export interface UpsertSearchDocumentParams {
+  refId: string;
+  body: string;
+  chatId?: string | null;
+  workspaceSlug?: string | null;
+  kind: SearchDocumentKind;
+  createdAt?: string;
 }
 
 const SNIPPET_RADIUS = 60;
@@ -117,12 +140,14 @@ export async function searchChatMessages(
   if (params.workspaceSlugs && params.workspaceSlugs.length === 0) return [];
 
   const limit = params.limit ?? 25;
-  const kindClause =
-    params.kind === "summary"
-      ? "AND kind = 'summary'"
-      : params.kind === "message"
-        ? "AND kind = 'message'"
-        : "AND kind IN ('message', 'summary')";
+  const kinds = params.kinds && params.kinds.length > 0
+    ? params.kinds
+    : params.kind && params.kind !== "any"
+      ? [params.kind]
+      : params.includeTitles
+        ? ["chat", "message", "summary"] satisfies SearchDocumentKind[]
+        : ["message", "summary"] satisfies SearchDocumentKind[];
+  const kindClause = `AND kind IN (${kinds.map(() => "?").join(", ")})`;
   const chatClause = params.chatId ? "AND chat_id = ?" : "";
   let workspaceClause = "";
   if (params.workspaceSlugs) {
@@ -144,6 +169,7 @@ export async function searchChatMessages(
   } else if (params.workspaceSlug && params.workspaceSlug !== "*") {
     sqlParams.push(params.workspaceSlug);
   }
+  sqlParams.push(...kinds);
   for (const tok of tokens) sqlParams.push(tok, tok);
   sqlParams.push(limit);
   const { rows } = await db.query(
@@ -175,9 +201,10 @@ export async function searchChatMessages(
     }
     return {
       chatId: (row.chat_id as string | null) ?? null,
+      refId: row.ref_id as string,
       messageId: row.ref_id as string,
       workspaceSlug: (row.workspace_slug as string | null) ?? null,
-      kind: row.kind as "message" | "summary",
+      kind: row.kind as SearchDocumentKind,
       snippet: buildSnippet(body, tokens),
       createdAt: row.created_at as string,
       score,
@@ -186,4 +213,37 @@ export async function searchChatMessages(
 
   hits.sort((a, b) => b.score - a.score || (a.createdAt < b.createdAt ? 1 : -1));
   return hits.slice(0, limit);
+}
+
+export async function upsertSearchDocument(
+  db: Pool,
+  params: UpsertSearchDocumentParams,
+): Promise<void> {
+  await db.query(
+    `INSERT OR REPLACE INTO chat_search_index
+      (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
+     VALUES (?, ?, LOWER(?), ?, ?, ?, ?)`,
+    [
+      params.refId,
+      params.body,
+      params.body,
+      params.chatId ?? null,
+      params.workspaceSlug ?? null,
+      params.kind,
+      params.createdAt ?? new Date().toISOString(),
+    ],
+  );
+}
+
+export async function deleteSearchDocumentsForWorkspace(
+  db: Pool,
+  workspaceSlug: string,
+  kinds: SearchDocumentKind[],
+): Promise<void> {
+  if (kinds.length === 0) return;
+  await db.query(
+    `DELETE FROM chat_search_index
+     WHERE workspace_slug = ? AND kind IN (${kinds.map(() => "?").join(", ")})`,
+    [workspaceSlug, ...kinds],
+  );
 }

@@ -122,6 +122,19 @@ describe("searchChatMessages", () => {
     }
   });
 
+  it("can include indexed chat title hits", async () => {
+    const hits = await search.searchChatMessages(pool, {
+      query: "Chat A",
+      includeTitles: true,
+    });
+    expect(hits.some((h) => h.kind === "chat" && h.chatId === chatA && h.messageId === chatA)).toBe(true);
+  });
+
+  it("does not include chat titles unless requested", async () => {
+    const hits = await search.searchChatMessages(pool, { query: "Chat A" });
+    expect(hits.some((h) => h.kind === "chat")).toBe(false);
+  });
+
   it("scopes to a single chat when chatId is provided", async () => {
     const hits = await search.searchChatMessages(pool, {
       query: "kanban",

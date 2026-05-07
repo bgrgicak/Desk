@@ -1242,12 +1242,18 @@ export function createApp(opts: AppOptions): Server {
     // Search
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
-      const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
+      const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "files" | "all";
       const showHidden = query.get("showHidden") === "true";
       const workspaceId = query.get("workspaceId") ?? undefined;
-      const result = await searchRoutes.search(pool, storage, q, scope, {
+      const chatId = query.get("chatId") ?? undefined;
+      const kinds = query.get("kind")?.split(",").map((kind) => kind.trim()).filter(Boolean) as
+        | Array<"chat" | "message" | "summary" | "library_file" | "attachment" | "artifact" | "app_file">
+        | undefined;
+      const result = await searchRoutes.search(pool, storage, userId, q, scope, {
         showHidden,
         workspaceId,
+        chatId,
+        kinds,
       });
       sendJson(res, 200, result);
       return;

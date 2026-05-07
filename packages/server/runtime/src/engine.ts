@@ -30,6 +30,10 @@ import { PassThrough, type Readable } from "node:stream";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
+  process.env.DESK_CONTAINER_ENGINE_TIMEOUT_MS ?? "10000",
+  10,
+);
 
 export type EngineName = "docker" | "nerdctl";
 
@@ -153,6 +157,8 @@ class CliEngine implements Engine {
     const { stdout, stderr } = await execFileAsync(this.name, args, {
       env: engineEnv(this.name),
       maxBuffer: 8 * 1024 * 1024,
+      timeout: ENGINE_COMMAND_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return { stdout, stderr };
   }
@@ -463,6 +469,8 @@ async function probe(binary: EngineName): Promise<boolean> {
     const child = spawn(binary, ["info", "--format", "{{.ID}}"], {
       env: engineEnv(binary),
       stdio: "ignore",
+      timeout: 5000,
+      killSignal: "SIGKILL",
     });
     let settled = false;
     const done = (ok: boolean) => {
