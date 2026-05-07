@@ -119,7 +119,8 @@ export async function snapshotSummary(
   validateMessageId(messageId);
   const dir = summaryHistoryDir(home, slug, chatId);
   const iso = new Date().toISOString().replace(/:/g, "-");
-  const file = path.join(dir, `${iso}-${messageId}.md`);
+  const nonce = crypto.randomBytes(3).toString("hex");
+  const file = path.join(dir, `${iso}-${nonce}-${messageId}.md`);
   await atomicWriteFile(file, previousBody);
   return file;
 }
@@ -195,7 +196,7 @@ export async function listSummaryHistory(
       const body = await fs.readFile(path.join(dir, name), "utf-8");
       const isoPart = name.slice(0, -`-${messageId}.md`.length);
       // Restore the colons we stripped for filesystem safety.
-      const restored = restoreIsoColons(isoPart);
+      const restored = restoreIsoColons(extractSnapshotTimestamp(isoPart));
       versions.push({ timestamp: restored, body });
     }
   }
@@ -210,6 +211,13 @@ function legacySummaryHistoryDirs(home: string, slug: string, chatId: string): s
     path.join(chatDir, "note-history"),
     path.join(chatDir, "summary-history"),
   ];
+}
+
+function extractSnapshotTimestamp(isoPart: string): string {
+  // Current files add a random suffix after the millisecond ISO timestamp to
+  // avoid same-millisecond history overwrites. Older files are just the ISO.
+  const strippedIsoLength = "2000-01-01T00-00-00.000Z".length;
+  return isoPart.length > strippedIsoLength ? isoPart.slice(0, strippedIsoLength) : isoPart;
 }
 
 function restoreIsoColons(stripped: string): string {

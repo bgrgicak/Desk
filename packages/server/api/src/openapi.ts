@@ -318,8 +318,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/chats/{id}/messages/{messageId}": {
         patch: {
-          summary: "Edit a message (content, cancel, reschedule)",
-          description: "Update content (e.g. user edits a summary), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          summary: "Edit a message (title, content, cancel, reschedule)",
+          description: "Update title/content (e.g. user edits a task or summary), transition state (only 'cancelled', 'paused', or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -331,7 +331,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "object" },
-                    state: { type: "string", enum: ["cancelled", "pending"] },
+                    title: { type: ["string", "null"] },
+                    state: { type: "string", enum: ["cancelled", "paused", "pending"] },
                     executeAt: { type: ["string", "null"] },
                     cron: { type: ["string", "null"] },
                   },

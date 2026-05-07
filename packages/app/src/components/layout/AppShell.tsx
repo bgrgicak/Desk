@@ -29,6 +29,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -85,6 +87,40 @@ const CHATS_PER_PAGE = 10
 const PINNED_PER_PAGE = 5
 
 const EMPTY_FILTER: ChatFilterValues = { goal: null, agentId: null, updatesOnly: false, artifactsOnly: false }
+
+function MobileDismissSidebarMenuButton({
+  onClick,
+  ...props
+}: React.ComponentProps<typeof SidebarMenuButton>) {
+  const { isMobile, setOpen } = useSidebar()
+
+  return (
+    <SidebarMenuButton
+      onClick={(event) => {
+        onClick?.(event)
+        if (isMobile && !event.defaultPrevented) setOpen(false)
+      }}
+      {...props}
+    />
+  )
+}
+
+function MobileDismissButton({
+  onClick,
+  ...props
+}: React.ComponentProps<'button'>) {
+  const { isMobile, setOpen } = useSidebar()
+
+  return (
+    <button
+      onClick={(event) => {
+        onClick?.(event)
+        if (isMobile && !event.defaultPrevented) setOpen(false)
+      }}
+      {...props}
+    />
+  )
+}
 
 function sortedChats(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
@@ -396,21 +432,22 @@ export function AppShell({
 
       {/* ── Sidebar + content ── */}
       <SidebarProvider style={{ height: 'auto' } as React.CSSProperties} className="flex-1 min-h-0">
-        <Sidebar className="hidden md:flex">
+        <Sidebar>
 
           {/* ── Header: nav items ── */}
           <SidebarHeader style={{ paddingTop: 'calc(var(--spacing) * 2.5)' }}>
+            <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
             {/* Nav items: Library / Tasks */}
             <SidebarMenu>
               {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
                 <SidebarMenuItem key={view}>
-                  <SidebarMenuButton
+                  <MobileDismissSidebarMenuButton
                     isActive={activeView === view && !selectedChatId && !isDetailOpen}
                     onClick={() => onViewChange(view)}
                   >
                     <Icon className="h-4 w-4" />
                     <span>{label}</span>
-                  </SidebarMenuButton>
+                  </MobileDismissSidebarMenuButton>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -454,7 +491,7 @@ export function AppShell({
                       const ItemIcon = iconForItem(item)
                       return (
                         <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
+                          <MobileDismissSidebarMenuButton
                             isActive={item.id === selectedItemId}
                             onClick={() => onPinnedItemClick?.(item)}
                             className="text-foreground/70"
@@ -466,7 +503,7 @@ export function AppShell({
                           >
                             <ItemIcon className="h-4 w-4 shrink-0" />
                             <span className="truncate">{item.name}</span>
-                          </SidebarMenuButton>
+                          </MobileDismissSidebarMenuButton>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <SidebarMenuAction showOnHover onClick={e => e.stopPropagation()} className="!right-2">
@@ -539,14 +576,14 @@ export function AppShell({
                     />
                   </PopoverContent>
                 </Popover>
-                <button
+                <MobileDismissButton
                   onClick={onCompose}
                   title="New chat"
                   className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   <span className="sr-only">New chat</span>
-                </button>
+                </MobileDismissButton>
               </div>
             </div>
           </SidebarHeader>
@@ -569,7 +606,7 @@ export function AppShell({
                       </p>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        <button onClick={onCompose} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors">Start a chat</button>
+                        <MobileDismissButton onClick={onCompose} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors">Start a chat</MobileDismissButton>
                         {' '}with an AI agent to see it here.
                       </p>
                     )}
@@ -580,7 +617,7 @@ export function AppShell({
                     const ChatIcon = getChatIcon(chat)
                     return (
                       <SidebarMenuItem key={chat.id}>
-                        <SidebarMenuButton
+                        <MobileDismissSidebarMenuButton
                           isActive={chat.id === selectedChatId && !isDetailOpen}
                           onClick={() => onChatClick(chat)}
                           className="pr-7 text-foreground/70"
@@ -592,7 +629,7 @@ export function AppShell({
                             )}
                           </div>
                           <span className="truncate">{chat.title}</span>
-                        </SidebarMenuButton>
+                        </MobileDismissSidebarMenuButton>
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -632,10 +669,10 @@ export function AppShell({
           <SidebarFooter className={cn('border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={() => setSettingsOpen(true)}>
+                <MobileDismissSidebarMenuButton onClick={() => setSettingsOpen(true)}>
                   <SlidersHorizontal className="h-4 w-4" />
                   <span>Customize</span>
-                </SidebarMenuButton>
+                </MobileDismissSidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarFooter>
@@ -643,13 +680,13 @@ export function AppShell({
 
         {/* Main content */}
         <SidebarInset
-          className="rounded-xl overflow-hidden shadow-xs mr-2 mb-2 md:peer-data-[state=collapsed]:ml-2"
+          className="min-h-0 rounded-xl overflow-hidden shadow-xs mr-2 mb-2 peer-data-[state=collapsed]:ml-2"
           onDragEnter={handleInsetDragEnter}
           onDragOver={handleInsetDragOver}
           onDragLeave={handleInsetDragLeave}
           onDrop={handleInsetDrop}
         >
-          <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden pb-16 md:pb-0">
+          <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
             {children}
             {isInsetDropOver && (
               <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 backdrop-blur-[1px]">
@@ -661,29 +698,6 @@ export function AppShell({
           </main>
         </SidebarInset>
 
-        {/* Mobile bottom nav */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around border-t bg-background/95 backdrop-blur-sm px-2 py-1 safe-area-pb">
-          {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
-            <button
-              key={view}
-              onClick={() => onViewChange(view)}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors ${
-                activeView === view ? 'text-primary' : 'text-muted-foreground'
-              }`}
-            >
-              <div className="relative">
-                <Icon className="h-5 w-5" />
-              </div>
-              <span className="text-[10px] font-medium">{label}</span>
-            </button>
-          ))}
-          <button onClick={onCompose} className="flex flex-col items-center gap-0.5 px-3 py-1.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
-              <Plus className="h-4 w-4 text-primary-foreground" />
-            </div>
-            <span className="text-[10px] font-medium text-primary">New</span>
-          </button>
-        </nav>
       </SidebarProvider>
 
       </div>{/* end card inner */}

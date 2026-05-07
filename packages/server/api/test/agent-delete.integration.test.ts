@@ -142,8 +142,8 @@ describe("DELETE /agents/:id", () => {
     const agentId  = await insertAgent(alphaUserId, "disposable");
     await pool.query(
       `INSERT INTO workspace_agents (workspace_id, agent_id)
-       VALUES (?, ?)`,
-      [alphaWorkspaceId, agentId],
+       VALUES (?, ?), (?, ?)`,
+      [alphaWorkspaceId, keeperId, alphaWorkspaceId, agentId],
     );
 
     // Create a chat owned by this agent so we can prove the cascade fires.

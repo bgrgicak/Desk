@@ -585,6 +585,132 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     expect(runs[0].state).toBe("succeeded");
   });
 
+  it("manual one-shot task run preserves the schedule and pending parent state", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual one-shot" },
+      executeAt,
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.executeAt).toBe(executeAt);
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("manual paused scheduled task run preserves the paused parent state", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual paused" },
+      executeAt,
+    });
+    await queries.messages.updateMessage(pool, taskId, { state: "paused" });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("paused");
+    expect(parent?.executeAt).toBe(executeAt);
+  });
+
+  it("manual scheduled task completion does not overwrite user changes made during the run", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "started" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual race" },
+      executeAt,
+    });
+
+    const fire = mgr.fireMessage(taskId, { manual: true });
+    await runStarted;
+
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+
+    await queries.messages.updateMessage(pool, taskId, { state: "cancelled" });
+    allowFinish();
+    await fire;
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("cancelled");
+    expect(parent?.executeAt).toBe(executeAt);
+  });
+
+  it("manual scheduled task completion reconciles cron edits made during the run", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "started" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual cron edit" },
+      executeAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const fire = mgr.fireMessage(taskId, { manual: true });
+    await runStarted;
+
+    await queries.messages.updateMessage(pool, taskId, { cron: "*/5 * * * *", executeAt: null });
+    await mgr.rescheduleMessage(taskId);
+
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.executeAt).toBeUndefined();
+
+    allowFinish();
+    await fire;
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.cron).toBe("*/5 * * * *");
+    expect(parent?.executeAt).toBeDefined();
+  });
+
   it("task run failure marks the run failed and the one-shot parent failed", async () => {
     const mgr = createRunManager({
       pool,

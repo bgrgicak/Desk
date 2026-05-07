@@ -51,7 +51,7 @@ import {
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
-import { toUiTask } from '@/store/selectors/tasks'
+import { taskMessageKindsForDeveloperMode, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
@@ -128,7 +128,7 @@ function AppInner() {
 
   const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
   const activeWorkspaceId = wsId
-  const { defaultView } = usePrefs()
+  const { defaultView, developerMode } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
@@ -181,10 +181,10 @@ function AppInner() {
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
   const { data: tasksResp } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, kind: ['task'] },
+    { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
     { skip: !activeWorkspaceId },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? []))
+  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()

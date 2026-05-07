@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -33,6 +33,9 @@ import {
 } from "@agent-desk/storage";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
+const IsoUtcDateTimeSchema = z.string().datetime({ offset: true }).refine((value) => value.endsWith("Z"), {
+  message: "datetime must be UTC and end with Z",
+});
 
 function normalizeAppNameForDelete(appName: string): { appName: string; dirName: string } {
   const baseName = appName.endsWith(".app") ? appName.slice(0, -".app".length) : appName;
@@ -57,7 +60,7 @@ export interface MessageLifecycleOps {
    * croner to get the next occurrence. */
   rescheduleMessage(messageId: string): Promise<Message | null>;
   /** Claims the row and runs the agent in-process. */
-  fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }>;
+  fireMessage(messageId: string, options?: { manual?: boolean }): Promise<{ fired: boolean; childIds: string[] }>;
 }
 
 /**
@@ -409,10 +412,16 @@ export async function patchMessage(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
+  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; title?: string | null },
   emit: (event: WsEvent) => void,
   lifecycleOps: MessageLifecycleOps | null = null,
 ): Promise<Message> {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new ValidationError("Message patch body must be an object");
+  }
+  if (Object.keys(data).length === 0) {
+    throw new ValidationError("Message patch body cannot be empty");
+  }
   const current = await queries.messages.findById(pool, messageId);
   if (!current || current.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
@@ -421,6 +430,62 @@ export async function patchMessage(
     throw new ValidationError(
       `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
     );
+  }
+  if (data.title !== undefined) {
+    if (data.title !== null && typeof data.title !== "string") {
+      throw new ValidationError("title must be a string or null");
+    }
+    if (typeof data.title === "string") {
+      const title = data.title.trim();
+      if (!title) throw new ValidationError("title cannot be empty");
+      data.title = title;
+    }
+  }
+  if (data.executeAt !== undefined) {
+    if (data.executeAt !== null && typeof data.executeAt !== "string") {
+      throw new ValidationError("executeAt must be an ISO datetime string or null");
+    }
+    if (typeof data.executeAt === "string") {
+      const parsed = IsoUtcDateTimeSchema.safeParse(data.executeAt);
+      if (!parsed.success) {
+        throw new ValidationError(`executeAt must be a valid ISO UTC datetime string: ${parsed.error.message}`);
+      }
+      const match = parsed.data.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/);
+      const date = new Date(parsed.data);
+      if (
+        !match ||
+        date.getUTCFullYear() !== Number(match[1]) ||
+        date.getUTCMonth() + 1 !== Number(match[2]) ||
+        date.getUTCDate() !== Number(match[3]) ||
+        date.getUTCHours() !== Number(match[4]) ||
+        date.getUTCMinutes() !== Number(match[5]) ||
+        date.getUTCSeconds() !== Number(match[6])
+      ) {
+        throw new ValidationError("executeAt must be a valid ISO UTC datetime string");
+      }
+    }
+  }
+  if (data.cron !== undefined) {
+    if (data.cron !== null && typeof data.cron !== "string") {
+      throw new ValidationError("cron must be a string or null");
+    }
+    if (typeof data.cron === "string") {
+      const cron = data.cron.trim();
+      if (!cron) throw new ValidationError("cron cannot be empty");
+      try {
+        new Cron(cron);
+      } catch (err) {
+        throw new ValidationError(err instanceof Error ? err.message : "Invalid cron expression");
+      }
+      data.cron = cron;
+    }
+  }
+  if (data.content !== undefined) {
+    const parsedContent = MessageContentSchema.safeParse(data.content);
+    if (!parsedContent.success) {
+      throw new ValidationError(`Invalid message content: ${parsedContent.error.message}`);
+    }
+    data.content = parsedContent.data;
   }
   // A no-op state patch (e.g. `state: 'pending'` on an already-pending row)
   // is allowed and falls through to the field-only path below — the kanban
@@ -495,8 +560,8 @@ export async function patchMessage(
 }
 
 /**
- * Runs a task message on demand. Used by the kanban "drag to Active"
- * gesture: forces the row back to `pending` then dispatches the agent.
+ * Runs a message on demand. Used by the kanban "drag to Active"
+ * gesture and task detail manual-run action.
  * Re-fires terminal rows (succeeded/failed/cancelled) too — the column
  * drop is the user's "do it again, now" intent. Idempotent if the row
  * is already running: returns the current row without firing twice.
@@ -514,21 +579,26 @@ export async function runMessage(
   }
   if (current.state === "running") return current;
 
-  // Reset to pending so fireMessage can claim it.
-  const reset = await queries.messages.updateMessage(pool, messageId, { state: "pending" });
-  if (!reset) throw new NotFoundError(`Message not found: ${messageId}`);
-  emit({ type: "message.updated", payload: reset });
+  // Non-task messages are claimed in-place by fireMessage and must be reset
+  // to pending before a manual re-fire. Task executions happen on a fresh
+  // task_run child, so preserving the parent state lets manual scheduled runs
+  // return to Scheduled/Paused instead of consuming the schedule.
+  const rowToReturn = current.kind === "task"
+    ? current
+    : await queries.messages.updateMessage(pool, messageId, { state: "pending" });
+  if (!rowToReturn) throw new NotFoundError(`Message not found: ${messageId}`);
+  if (current.kind !== "task") emit({ type: "message.updated", payload: rowToReturn });
 
   // Fire-and-forget. fireMessage's claimPending flips the row to
   // 'running' and broadcasts message.updated; the kanban picks that up
   // over WS and moves the card to the Active column. The full agent
   // run continues in the background.
-  ops.fireMessage(messageId).catch((err) => {
+  ops.fireMessage(messageId, { manual: true }).catch((err) => {
     // eslint-disable-next-line no-console
     console.error(`runMessage fireMessage failed for ${messageId}:`, err);
   });
 
-  return reset;
+  return rowToReturn;
 }
 
 /**

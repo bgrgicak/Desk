@@ -40,6 +40,11 @@ export interface RunManagerOptions {
   ) => Promise<{ exitCode: number }>;
 }
 
+export interface FireMessageOptions {
+  /** Manual task fires create a run now without consuming the task's schedule. */
+  manual?: boolean;
+}
+
 function computeNextRun(cronExpr: string): string {
   const next = new Cron(cronExpr).nextRun();
   if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
@@ -358,7 +363,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * Returns `fired: false` if the row is missing, the kind doesn't fire,
    * or another fire is already in flight (the task lock declined us).
    */
-  async function fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }> {
+  async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
 
@@ -513,7 +518,7 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await afterTaskRun(msg, terminal);
+      await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);
@@ -572,7 +577,7 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await afterTaskRun(msg, "failed");
+      await afterTaskRun(msg, "failed", fireOptions);
       return { fired: true, childIds: [] };
     }
   }
@@ -585,8 +590,29 @@ export function createRunManager(opts: RunManagerOptions) {
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
+    fireOptions: FireMessageOptions = {},
   ): Promise<void> {
     if (task.kind !== "task") return;
+    if (fireOptions.manual && (task.executeAt || task.cron)) {
+      const result = await pool.query(
+        `UPDATE messages
+         SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND state = 'running'`,
+        [task.state, task.id],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        const updated = await queries.messages.findById(pool, task.id);
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      const latest = await queries.messages.findById(pool, task.id);
+      if (latest?.state === "pending" && latest.cron && !latest.executeAt) {
+        const updated = await queries.messages.updateMessage(pool, task.id, {
+          executeAt: computeNextRun(latest.cron),
+        });
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      return;
+    }
     if (task.cron) {
       const nextRun = computeNextRun(task.cron);
       const updated = await queries.messages.updateMessage(pool, task.id, { state: "pending", executeAt: nextRun });
