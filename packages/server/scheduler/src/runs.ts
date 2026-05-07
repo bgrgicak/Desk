@@ -18,6 +18,7 @@ import {
   createOrReuse,
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
+  estimateMessagesTokens,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
@@ -37,6 +38,11 @@ export interface RunManagerOptions {
     onLog: (evt: LogEvent) => void | Promise<void>,
     opts?: { agentFileInput: AgentFileInput; attachments?: string[] },
   ) => Promise<{ exitCode: number }>;
+}
+
+export interface FireMessageOptions {
+  /** Manual task fires create a run now without consuming the task's schedule. */
+  manual?: boolean;
 }
 
 function computeNextRun(cronExpr: string): string {
@@ -357,7 +363,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * Returns `fired: false` if the row is missing, the kind doesn't fire,
    * or another fire is already in flight (the task lock declined us).
    */
-  async function fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }> {
+  async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
 
@@ -471,7 +477,6 @@ export function createRunManager(opts: RunManagerOptions) {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
         model: agent?.model ?? "opencode/big-pickle",
-        instructions: agent?.instructions ?? "",
         userName,
         userTimezone,
         chatId: msg.chatId,
@@ -513,7 +518,7 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await afterTaskRun(msg, terminal);
+      await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);
@@ -572,7 +577,7 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await afterTaskRun(msg, "failed");
+      await afterTaskRun(msg, "failed", fireOptions);
       return { fired: true, childIds: [] };
     }
   }
@@ -585,8 +590,29 @@ export function createRunManager(opts: RunManagerOptions) {
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
+    fireOptions: FireMessageOptions = {},
   ): Promise<void> {
     if (task.kind !== "task") return;
+    if (fireOptions.manual && (task.executeAt || task.cron)) {
+      const result = await pool.query(
+        `UPDATE messages
+         SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND state = 'running'`,
+        [task.state, task.id],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        const updated = await queries.messages.findById(pool, task.id);
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      const latest = await queries.messages.findById(pool, task.id);
+      if (latest?.state === "pending" && latest.cron && !latest.executeAt) {
+        const updated = await queries.messages.updateMessage(pool, task.id, {
+          executeAt: computeNextRun(latest.cron),
+        });
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      return;
+    }
     if (task.cron) {
       const nextRun = computeNextRun(task.cron);
       const updated = await queries.messages.updateMessage(pool, task.id, { state: "pending", executeAt: nextRun });
@@ -644,9 +670,25 @@ export function createRunManager(opts: RunManagerOptions) {
     await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
-  /** Schedules a summary refresh for the chat, replacing any still-pending refresh. */
+  /**
+   * Hybrid summary trigger (memory-system spec, P2.2).
+   *
+   * Counts tokens in the transcript-since-last-summary; if the token
+   * budget breaches `SUMMARY_TRIGGER_FRACTION` of the model context
+   * window, fire the summary immediately (executeAt = now). Otherwise
+   * the existing time-based 30-minute fallback applies.
+   *
+   * The model context window defaults to 200_000 tokens (Claude
+   * Sonnet/Opus and most modern frontier models) and can be overridden
+   * via `DESK_SUMMARY_MODEL_CONTEXT_WINDOW`. The fraction can be
+   * overridden via `DESK_SUMMARY_TRIGGER_FRACTION` (default `0.6`).
+   */
   async function scheduleSummary(chatId: string): Promise<void> {
     await cancelSummaryForChat(chatId);
+    const urgent = await isSummaryBudgetExceeded(chatId);
+    const executeAt = urgent
+      ? new Date().toISOString()
+      : new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const messageId = generateId("message");
     await queries.messages.insert(pool, {
       id: messageId,
@@ -655,8 +697,35 @@ export function createRunManager(opts: RunManagerOptions) {
       content: { type: "summary_request" },
       state: "pending",
       kind: "summary",
-      executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      executeAt,
     });
+  }
+
+  function summaryModelContextWindow(): number {
+    const fromEnv = Number.parseInt(
+      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW ?? "",
+      10,
+    );
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 200_000;
+  }
+
+  function summaryTriggerFraction(): number {
+    const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
+    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.6;
+  }
+
+  async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
+    const items = await queries.messages.listAgentContextByChat(pool, chatId);
+    const tokenized = items
+      .filter(shouldIncludeInPromptContext)
+      .map((m) => {
+        const formatted = formatMessageForPrompt(m);
+        return formatted ? { role: formatted.role, text: formatted.text } : null;
+      })
+      .filter((m): m is { role: string; text: string } => m !== null);
+    const used = estimateMessagesTokens(tokenized);
+    const budget = Math.floor(summaryModelContextWindow() * summaryTriggerFraction());
+    return used >= budget;
   }
 
   async function cancelSummaryForChat(chatId: string): Promise<void> {

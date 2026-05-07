@@ -459,13 +459,23 @@ export async function detectEngine(): Promise<Engine> {
 
 /** True if `<binary> info` exits 0. Quick — no caching, called once. */
 async function probe(binary: EngineName): Promise<boolean> {
-  try {
-    await execFileAsync(binary, ["info", "--format", "{{.ID}}"], {
+  return new Promise((resolve) => {
+    const child = spawn(binary, ["info", "--format", "{{.ID}}"], {
       env: engineEnv(binary),
-      timeout: 5000,
+      stdio: "ignore",
     });
-    return true;
-  } catch {
-    return false;
-  }
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(false);
+    }, 5000);
+    child.on("error", () => done(false));
+    child.on("exit", (code) => done(code === 0));
+  });
 }

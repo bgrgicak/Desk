@@ -163,8 +163,7 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
-    model: "opencode/gpt-5-nano",
+    model: "opencode/big-pickle",
   });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,

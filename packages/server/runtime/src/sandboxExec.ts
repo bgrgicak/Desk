@@ -9,7 +9,7 @@
  * sandbox-scoped read operations will flow.
  */
 
-import { createOrReuse, providerKeyEnv } from "./docker.js";
+import { createOrReuse, providerKeyEnv, sandboxUser } from "./docker.js";
 import { detectEngine } from "./engine.js";
 
 export interface ExecInSandboxOptions {
@@ -48,6 +48,7 @@ export async function execInSandbox(
 ): Promise<ExecInSandboxResult> {
   const handle = await createOrReuse(workspaceId, workspaceSlug, undefined, opts.providerKeys);
   const engine = await detectEngine();
+  const user = opts.user ?? (await sandboxUser(engine));
 
   const keyEnv = providerKeyEnv(opts.providerKeys);
   const extraEnv = opts.env ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`) : [];
@@ -56,7 +57,7 @@ export async function execInSandbox(
   const handle$ = await engine.exec({
     containerId: handle.containerId,
     cmd: opts.argv,
-    user: opts.user,
+    user,
     env: execEnv.length > 0 ? execEnv : undefined,
   });
 

@@ -14,12 +14,12 @@ afterEach(() => {
 describe("parseModelsOutput", () => {
   it("parses provider/model lines", () => {
     const out = parseModelsOutput(
-      "opencode/gpt-5-nano\nopenai/gpt-5\n  \nopencode/big-pickle\n",
+      "opencode/big-pickle\nopenai/gpt-5\n  \nopencode/hy3-preview-free\n",
     );
     expect(out).toEqual([
-      { id: "opencode/gpt-5-nano", provider: "opencode" },
-      { id: "openai/gpt-5", provider: "openai" },
       { id: "opencode/big-pickle", provider: "opencode" },
+      { id: "openai/gpt-5", provider: "openai" },
+      { id: "opencode/hy3-preview-free", provider: "opencode" },
     ]);
   });
 

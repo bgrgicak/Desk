@@ -91,9 +91,9 @@ describe("exec handle stream lifecycle", () => {
 
 /** True if `<bin> info` exits 0 — same probe detectEngine uses. */
 async function binaryWorks(name: EngineName): Promise<boolean> {
-  const { execFile } = await import("node:child_process");
+  const { spawn } = await import("node:child_process");
   return new Promise((resolve) => {
-    execFile(
+    const child = spawn(
       name,
       ["info", "--format", "{{.ID}}"],
       {
@@ -101,9 +101,21 @@ async function binaryWorks(name: EngineName): Promise<boolean> {
           name === "nerdctl"
             ? { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}` }
             : process.env,
-        timeout: 3000,
+        stdio: "ignore",
       },
-      (err) => resolve(!err),
     );
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(false);
+    }, 3000);
+    child.on("error", () => done(false));
+    child.on("exit", (code) => done(code === 0));
   });
 }

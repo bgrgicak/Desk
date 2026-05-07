@@ -30,6 +30,8 @@ When a task has a `cron` expression, `execute_at` is computed at insert time usi
 
 One-shot tasks (no `cron`) transition to their terminal state (`succeeded`/`failed`) after their single run, and `execute_at` is cleared.
 
+Manual task runs use the same executor but pass `manual: true` to `fireMessage()`. For scheduled task definitions this creates a `task_run` child immediately without consuming the schedule: one-shot tasks keep `execute_at` and return to their prior scheduled state, while cron tasks do not advance to the next occurrence until the scheduler fires them naturally.
+
 ## Overdue tasks
 
 Tasks with a past `execute_at` fire naturally on the next tick — no special handling needed. The UI labels them "Overdue since …" client-side in `packages/app/src/store/selectors/runs.ts`.

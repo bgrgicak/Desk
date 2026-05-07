@@ -836,7 +836,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/agents" && method === "POST") {
-      const body = await parseBody(req) as { name: string; instructions?: string; model?: string };
+      const body = await parseBody(req) as { name: string; model?: string };
       const result = await agentRoutes.createAgent(pool, userId, body);
       sendJson(res, 201, result);
       return;
@@ -849,7 +849,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
       await requireOwnedAgent(pool, segments[1], userId);
-      const body = await parseBody(req) as { name?: string; instructions?: string; model?: string };
+      const body = await parseBody(req) as { name?: string; model?: string };
       const result = await agentRoutes.patchAgent(pool, segments[1], body);
       sendJson(res, 200, result);
       return;
@@ -938,7 +938,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; title?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
       sendJson(res, 200, result);
       return;

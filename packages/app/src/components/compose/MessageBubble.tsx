@@ -6,6 +6,8 @@ import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
+import { useGetSummaryHistoryQuery } from '@/store/api'
+import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -93,6 +95,8 @@ export function MessageBubble({
       )}
       <MessageContentView
         content={message.content}
+        chatId={message.chatId}
+        messageId={message.id}
         workspaceId={workspaceId}
         developerMode={developerMode}
         onAttachmentClick={onAttachmentClick}
@@ -103,11 +107,15 @@ export function MessageBubble({
 
 function MessageContentView({
   content,
+  chatId,
+  messageId,
   workspaceId,
   developerMode,
   onAttachmentClick,
 }: {
   content: MessageContent
+  chatId: string
+  messageId: string
   workspaceId?: string
   developerMode: boolean
   onAttachmentClick?: (attachment: AttachmentRef) => void
@@ -139,7 +147,7 @@ function MessageContentView({
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'summary':
       if (!developerMode) return null
-      return <SummaryView body={content.body} />
+      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} />
     case 'summary_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
@@ -149,15 +157,81 @@ function MessageContentView({
   }
 }
 
-function SummaryView({ body }: { body: string }) {
+function SummaryView({ chatId, messageId, body }: { chatId: string; messageId: string; body: string }) {
+  const [showDiff, setShowDiff] = useState(false)
+  // Lazy-load history only when the diff toggle is on so a chat with
+  // many summaries doesn't hammer the API on render.
+  const { data: history } = useGetSummaryHistoryQuery(
+    { chatId, messageId },
+    { skip: !showDiff },
+  )
+  const previousBody = history?.versions[0]?.body
+  const segments: DiffSegment[] | null = showDiff && typeof previousBody === 'string'
+    ? diffLines(previousBody, body)
+    : null
+
   return (
     <div className="rounded-lg border border-dashed bg-muted/20 p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <FileText className="h-3.5 w-3.5" />
-        Chat summary
+      <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+        <div className="flex items-center gap-1.5">
+          <FileText className="h-3.5 w-3.5" />
+          Chat summary
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowDiff(v => !v)}
+          className="text-xs underline-offset-2 hover:underline"
+          data-testid="summary-diff-toggle"
+        >
+          {showDiff ? 'Show summary' : 'Show diff vs previous'}
+        </button>
       </div>
-      <MarkdownContent text={body} />
+      {segments ? (
+        <SummaryDiffView segments={segments} />
+      ) : showDiff && history && history.versions.length === 0 ? (
+        <div className="text-xs italic text-muted-foreground" data-testid="summary-diff-empty">
+          No prior version to diff against — this is the first materialized summary.
+        </div>
+      ) : (
+        <MarkdownContent text={body} />
+      )}
     </div>
+  )
+}
+
+/**
+ * Renders summary diff segments inline. Whole-line removes get a red
+ * background, adds get green, equal context stays neutral. The
+ * monospace font keeps line breaks aligned with the source markdown.
+ */
+function SummaryDiffView({ segments }: { segments: DiffSegment[] }) {
+  return (
+    <pre
+      className="whitespace-pre-wrap rounded border bg-background/60 p-2 font-mono text-xs leading-snug"
+      data-testid="summary-diff"
+    >
+      {segments.map((seg, i) => {
+        const cls =
+          seg.kind === 'remove'
+            ? 'bg-red-100/80 text-red-900 dark:bg-red-900/40 dark:text-red-100'
+            : seg.kind === 'add'
+              ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100'
+              : ''
+        const prefix = seg.kind === 'remove' ? '- ' : seg.kind === 'add' ? '+ ' : '  '
+        return (
+          <span
+            key={i}
+            className={`block ${cls}`}
+            data-testid={`summary-diff-${seg.kind}`}
+          >
+            {seg.text
+              .split('\n')
+              .map(line => prefix + line)
+              .join('\n')}
+          </span>
+        )
+      })}
+    </pre>
   )
 }
 

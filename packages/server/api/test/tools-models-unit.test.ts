@@ -41,7 +41,7 @@ const fakeWorkspace = { id: "wks_test", path: "desk", user_id: "usr_1", name: "D
 
 const FREE_MODELS = [
   { id: "opencode/big-pickle", provider: "opencode" },
-  { id: "opencode/gpt-5-nano", provider: "opencode" },
+  { id: "opencode/big-pickle", provider: "opencode" },
 ];
 const ALL_MODELS = [
   ...FREE_MODELS,

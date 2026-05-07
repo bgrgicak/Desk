@@ -22,8 +22,8 @@ export interface RunOptions {
    */
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
-   * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle" or
-   * "opencode/gpt-5-nano". When omitted, opencode picks its default.
+   * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle".
+   * When omitted, opencode picks its default.
    */
   model?: string;
   /**
@@ -145,7 +145,7 @@ const activeExecs = new Map<string, { containerId: string }>();
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, providerKeyEnv } = await import("./docker.js");
+      const { createOrReuse, providerKeyEnv, sandboxUser } = await import("./docker.js");
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
@@ -166,6 +166,7 @@ function createRealDriver(): SandboxDriver {
       const handle$ = await engine.exec({
         containerId: handle.containerId,
         cmd,
+        user: await sandboxUser(engine),
         env: [
           `DESK_PROMPT=${fullPrompt}`,
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
