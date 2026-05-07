@@ -22,6 +22,7 @@ import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent
 
 export const SANDBOX_HOME = "/home/agent";
 export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.config/opencode/skills`;
+export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
 
 /** Host-side global skills directory. Mounted read-only into each sandbox. */
 export function skillsHostDir(home: string): string {
@@ -117,7 +118,8 @@ export type MountPlan = MountPlanEntry[];
 
 /**
  * Default mount plan — one rw bind of the workspace root onto the
- * container's $HOME, plus global Desk skills mounted read-only. Custom
+ * container's $HOME, plus global Desk skills mounted read-only outside
+ * $HOME and symlinked into OpenCode's skills path by the entrypoint. Custom
  * plans can be built by callers that need to expose additional directories
  * (e.g. ~/Projects) alongside.
  */
@@ -131,7 +133,7 @@ export function buildDefaultMountPlan(home: string, workspaceSlug: string): Moun
     },
     {
       sourcePath: skillsHostDir(home),
-      targetPath: SKILLS_SANDBOX_DIR,
+      targetPath: SKILLS_SANDBOX_MOUNT_DIR,
       mode: "ro",
       category: "external",
     },

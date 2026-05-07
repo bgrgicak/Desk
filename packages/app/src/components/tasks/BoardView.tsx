@@ -148,8 +148,9 @@ function Column({
       {/* Column body */}
       <div
         ref={setNodeRef}
+        data-testid={`tasks-column-${column.id}-list`}
         className={[
-          'flex-1 overflow-y-auto pt-3 flex flex-col gap-2 transition-colors min-h-[120px]',
+          'flex-1 min-h-0 overflow-y-auto overscroll-contain pt-3 flex flex-col gap-2 transition-colors',
           edgePx,
           isOver ? 'bg-muted/20' : '',
         ].join(' ')}
@@ -301,7 +302,7 @@ export function BoardView({
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
-      <div className="flex h-full overflow-x-auto">
+      <div className="flex flex-1 min-h-0 overflow-x-auto">
         {COLUMNS.map((col, i) => (
           <Column
             key={col.id}

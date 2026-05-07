@@ -1,5 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
 import { GOAL_KEYS } from "@agent-desk/shared";
+import {
+  ensureLayout,
+  ensureWorkspaceLayout,
+  userMemoryIndexPath,
+  workspaceMemoryIndexPath,
+} from "@agent-desk/storage";
 import { loadAndSub, renderPromptBody } from "../src/prompt.js";
 import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
 
@@ -40,10 +49,9 @@ describe("renderPromptBody", () => {
   const baseInput = {
     agentName: "Jarvis",
     userName: "Desk",
-    instructions: "",
   };
 
-  it("orders mandate → artifacts → context → scheduling → goal autodetect → goal → Desk skill router → user instructions", () => {
+  it("orders mandate → artifacts → task context → scheduling → goal autodetect → persistence → memory rules → goal → Desk skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -53,21 +61,41 @@ describe("renderPromptBody", () => {
 
     const idxMandate = body.indexOf("Your mandate is to help");
     const idxArtifacts = body.indexOf("## Your workspace");
-    const idxContext = body.indexOf("## Building task context");
+    const idxTaskContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
     const idxGoalAutodetect = body.indexOf("## Goal autodetection");
+    const idxPersistence = body.indexOf("## Persistence (~/.deskrc)");
+    const idxMemoryRules = body.indexOf("## Memory and recall");
     const idxGoal = body.indexOf("## User's goal: write a document");
     const idxSkills = body.indexOf("## Desk native skills");
-    const idxUserInstructions = body.indexOf("## User instructions");
 
     expect(idxMandate).toBeGreaterThanOrEqual(0);
     expect(idxArtifacts).toBeGreaterThan(idxMandate);
-    expect(idxContext).toBeGreaterThan(idxArtifacts);
-    expect(idxScheduling).toBeGreaterThan(idxContext);
+    expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
+    expect(idxScheduling).toBeGreaterThan(idxTaskContext);
     expect(idxGoalAutodetect).toBeGreaterThan(idxScheduling);
-    expect(idxGoal).toBeGreaterThan(idxGoalAutodetect);
+    expect(idxPersistence).toBeGreaterThan(idxGoalAutodetect);
+    expect(idxMemoryRules).toBeGreaterThan(idxPersistence);
+    expect(idxGoal).toBeGreaterThan(idxMemoryRules);
     expect(idxSkills).toBeGreaterThan(idxGoal);
-    expect(idxUserInstructions).toBeGreaterThan(idxSkills);
+  });
+
+  it("includes persistence guidance in chat-mode prompts", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+    expect(body).toContain("## Persistence (~/.deskrc)");
+    expect(body).toContain("There are no ephemeral package installs");
+    expect(body).toContain("always add the idempotent install command to");
+    expect(body).toContain("`~/.deskrc` immediately");
+    expect(body).toContain("`npm install -g`");
+    expect(body).toContain("Installing a package without persisting it in `~/.deskrc` is an incomplete");
+    expect(body).toContain("sudo apt-get update && sudo apt-get install -y --no-install-recommends");
+    expect(body).toContain("Every line must be idempotent");
+    expect(body).toContain("desk-persistence");
+  });
+
+  it("omits persistence guidance from summary-mode prompts", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "summary" });
+    expect(body).not.toContain("## Persistence (~/.deskrc)");
   });
 
   it("does not inline the long Desk CLI manual", () => {
@@ -76,6 +104,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("desk-cli-task-schedule");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("desk-cli-file-to-markdown");
+    expect(body).toContain("desk-persistence");
     expect(body).toContain("the `playwright` MCP server");
     expect(body).toContain("assume Firefox");
     expect(body).toContain("desk-app-storage");
@@ -144,8 +173,14 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Chat summary");
     expect(body).toContain("Do not write `chat-summary.md`");
     expect(body).toContain("# Chat Summary — <short descriptive title>");
-    expect(body).toContain("## Conversation arc");
-    expect(body).toContain("## Open threads");
+    // Thread-based format (P2.3): active / closed / open-threads sections.
+    expect(body).toContain("## Active threads");
+    expect(body).toContain("## Closed threads");
+    expect(body).toContain("## Open threads / next steps");
+    expect(body).toContain("Preserve every fact from the prior summary");
+    // Old chronology-based "Conversation arc" + "Artifacts" table are gone.
+    expect(body).not.toContain("## Conversation arc");
+    expect(body).not.toContain("| File | Description |");
     expect(body).toContain("Chat summaries: ~/.chats/chat-abc/notes/");
     expect(body).toContain("Chat artifacts:  ~/.chats/chat-abc/artifacts/");
     expect(body).not.toContain("## Your workspace");
@@ -155,6 +190,7 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("## Goal autodetection");
     expect(body).not.toContain("## User's goal:");
     expect(body).not.toContain("## Desk native skills");
+    expect(body).not.toContain("## Persistence (~/.deskrc)");
   });
 
   it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
@@ -263,19 +299,133 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("self-contained HTML file");
   });
 
-  it("renders user instructions when provided", () => {
-    const body = renderPromptBody({ ...baseInput, instructions: "Be terse." });
-    expect(body).toContain("## User instructions");
-    expect(body).toContain("Be terse.");
+});
+
+describe("memory injection", () => {
+  let home: string;
+
+  beforeAll(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-"));
+    await ensureLayout(home);
+    await ensureWorkspaceLayout(home, "alpha");
   });
 
-  it("renders (none) when instructions are empty", () => {
+  afterAll(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const baseInput = {
+    agentName: "Jarvis",
+    userName: "Desk",
+  };
+
+  it("injects context.md (memory rules) followed by user and workspace memory indexes in order", async () => {
+    await fs.writeFile(
+      userMemoryIndexPath(home),
+      "# User memory\n\n- prefers terse replies\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      workspaceMemoryIndexPath(home, "alpha"),
+      "# Workspace memory\n\n- this workspace ships SQLite\n",
+      "utf-8",
+    );
+
+    const body = renderPromptBody({
+      ...baseInput,
+      home,
+      workspaceSlug: "alpha",
+      goal: "document",
+    });
+
+    const idxRules = body.indexOf("## Memory and recall");
+    const idxUserIndex = body.indexOf("prefers terse replies");
+    const idxWorkspaceIndex = body.indexOf("this workspace ships SQLite");
+    const idxGoal = body.indexOf("## User's goal: write a document");
+
+    expect(idxRules).toBeGreaterThanOrEqual(0);
+    expect(idxUserIndex).toBeGreaterThan(idxRules);
+    expect(idxWorkspaceIndex).toBeGreaterThan(idxUserIndex);
+    expect(idxGoal).toBeGreaterThan(idxWorkspaceIndex);
+
+    expect(body).toContain("<!-- Desk user memory index -->");
+    expect(body).toContain("<!-- Desk workspace memory index -->");
+    expect(body).toContain("Workspace memory is writable from the sandbox");
+    expect(body).toContain("~/.memory/workspace.md");
+    expect(body).not.toContain("~/Desk/.memory/memory.md");
+    expect(body).not.toContain("~/Desk/workspaces/alpha/.memory/workspace.md");
+  });
+
+  it("injects empty stubs when memory indexes are missing", async () => {
+    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-fresh-"));
+    try {
+      const body = renderPromptBody({
+        ...baseInput,
+        home: fresh,
+        workspaceSlug: "alpha",
+      });
+      expect(body).toContain("## Memory and recall");
+      expect(body).toContain("# User memory");
+      expect(body).toContain("# Workspace memory");
+      expect(body).toContain("nothing remembered yet");
+    } finally {
+      await fs.rm(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces unexpected memory read failures instead of injecting empty stubs", async () => {
+    const broken = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-broken-"));
+    try {
+      await fs.mkdir(path.dirname(userMemoryIndexPath(broken)), { recursive: true });
+      await fs.mkdir(userMemoryIndexPath(broken));
+
+      const body = renderPromptBody({
+        ...baseInput,
+        home: broken,
+        workspaceSlug: "alpha",
+      });
+
+      expect(body).toContain("# User memory");
+      expect(body).toContain("memory unavailable:");
+      expect(body).not.toContain("# User memory\n\n_(empty — nothing remembered yet)_");
+    } finally {
+      await fs.rm(broken, { recursive: true, force: true });
+    }
+  });
+
+  it("skips memory injection when home/workspaceSlug are not provided", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).toContain("(none)");
+    expect(body).not.toContain("<!-- Desk user memory index -->");
+    expect(body).not.toContain("<!-- Desk workspace memory index -->");
+  });
+
+  it("does not inject memory indexes during summary mode", () => {
+    const body = renderPromptBody({
+      ...baseInput,
+      runMode: "summary",
+      home,
+      workspaceSlug: "alpha",
+      chatId: "chat-x",
+    });
+    expect(body).not.toContain("## Memory and recall");
+    expect(body).not.toContain("<!-- Desk user memory index -->");
   });
 });
 
 describe("Desk reference skills", () => {
+  it("publishes a persistence playbook", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-persistence");
+
+    expect(skill).toBeTruthy();
+    expect(skill?.description).toMatch(/persist/);
+    expect(skill?.body()).toContain("# Desk persistence playbook");
+    expect(skill?.body()).toContain("sudo apt-get update && sudo apt-get install");
+    expect(skill?.body()).toContain("grep -qxF");
+    expect(skill?.body()).toContain("MCP server registrations");
+    expect(skill?.body()).toContain("Recovery flow");
+    expect(skill?.body()).toContain("Incorrect entries");
+  });
+
   it("publishes a general app storage CRUD guide", () => {
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-storage");
 

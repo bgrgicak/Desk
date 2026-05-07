@@ -10,6 +10,7 @@
  * catches regressions more reliably.
  */
 import { test, expect } from "../fixtures";
+import type { Page } from "@playwright/test";
 
 async function getFirstWorkspaceId(
   serverUrl: string,
@@ -20,6 +21,24 @@ async function getFirstWorkspaceId(
   });
   const list = (await res.json()) as Array<{ id: string }>;
   return list[0].id;
+}
+
+async function fillComposer(page: Page, text: string) {
+  const chatInput = page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first();
+  await expect(chatInput).toBeEditable();
+
+  // The new-chat stub can remount once after a library item is staged via
+  // "Use in chat". Retry the fill until React's controlled value sticks.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await chatInput.fill(text);
+    await page.waitForTimeout(100);
+    if ((await chatInput.inputValue()) === text) return chatInput;
+  }
+
+  await expect(chatInput).toHaveValue(text);
+  return chatInput;
 }
 
 test("library upload via 'Choose file' button uploads to the server", async ({
@@ -514,11 +533,7 @@ test("library detail's 'Use in chat' pins the file to chat attachments without a
     page.getByRole("button", { name: `Remove ${fileName}` }),
   ).not.toBeVisible();
 
-  const chatInput = page
-    .getByPlaceholder(/ask anything|continue the conversation/i)
-    .first();
-  await chatInput.fill("look at the summary I just opened");
-  await expect(chatInput).toHaveValue("look at the summary I just opened");
+  const chatInput = await fillComposer(page, "look at the summary I just opened");
   // Use locator.press rather than page.keyboard.press so the Enter event
   // is always dispatched to the textarea even if focus shifted during the
   // preceding animation or re-render.

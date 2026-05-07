@@ -585,6 +585,132 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     expect(runs[0].state).toBe("succeeded");
   });
 
+  it("manual one-shot task run preserves the schedule and pending parent state", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual one-shot" },
+      executeAt,
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.executeAt).toBe(executeAt);
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("manual paused scheduled task run preserves the paused parent state", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "done" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual paused" },
+      executeAt,
+    });
+    await queries.messages.updateMessage(pool, taskId, { state: "paused" });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("paused");
+    expect(parent?.executeAt).toBe(executeAt);
+  });
+
+  it("manual scheduled task completion does not overwrite user changes made during the run", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "started" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual race" },
+      executeAt,
+    });
+
+    const fire = mgr.fireMessage(taskId, { manual: true });
+    await runStarted;
+
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+
+    await queries.messages.updateMessage(pool, taskId, { state: "cancelled" });
+    allowFinish();
+    await fire;
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("cancelled");
+    expect(parent?.executeAt).toBe(executeAt);
+  });
+
+  it("manual scheduled task completion reconciles cron edits made during the run", async () => {
+    let resolveRun!: () => void;
+    const runStarted = new Promise<void>((r) => { resolveRun = r; });
+    let allowFinish!: () => void;
+    const runBlocked = new Promise<void>((r) => { allowFinish = r; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "started" });
+        resolveRun();
+        await runBlocked;
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual cron edit" },
+      executeAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const fire = mgr.fireMessage(taskId, { manual: true });
+    await runStarted;
+
+    await queries.messages.updateMessage(pool, taskId, { cron: "*/5 * * * *", executeAt: null });
+    await mgr.rescheduleMessage(taskId);
+
+    const duringRun = await queries.messages.findById(pool, taskId);
+    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.executeAt).toBeUndefined();
+
+    allowFinish();
+    await fire;
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.cron).toBe("*/5 * * * *");
+    expect(parent?.executeAt).toBeDefined();
+  });
+
   it("task run failure marks the run failed and the one-shot parent failed", async () => {
     const mgr = createRunManager({
       pool,
@@ -769,6 +895,77 @@ describe("scheduleSummary", () => {
     )).rows;
     expect(after).toHaveLength(1);
     expect(after[0].id).not.toBe(first);
+  });
+
+  describe("hybrid trigger (P2.2 token-budget)", () => {
+    /**
+     * The transcript-since-last-summary is what scheduleSummary tokenizes.
+     * Each call sets `DESK_SUMMARY_MODEL_CONTEXT_WINDOW` to a small value
+     * so we don't have to manufacture millions of tokens to trip the
+     * budget. With window=1000 and fraction=0.6, the budget is 600 tokens
+     * — a few user messages get us across.
+     */
+    async function clearChatTranscript(): Promise<void> {
+      await pool.query(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
+    }
+
+    async function insertUserMessageBody(text: string): Promise<void> {
+      await pool.query(
+        `INSERT INTO messages (id, chat_id, role, content, kind, state)
+         VALUES (?, ?, 'user', ?, 'chat', NULL)`,
+        [generateId("message"), chatId, JSON.stringify({ type: "text", text })],
+      );
+    }
+
+    it("schedules far-future executeAt when the transcript is well under the token budget", async () => {
+      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW = "200000";
+      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+
+      const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
+      await clearChatTranscript();
+      await insertUserMessageBody("hi there");
+
+      await mgr.scheduleSummary(chatId);
+
+      const { rows } = await pool.query(
+        `SELECT execute_at FROM messages
+         WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+        [chatId],
+      );
+      const executeAt = new Date(rows[0].execute_at as string).getTime();
+      const delta = executeAt - Date.now();
+      // Time-fallback path: ~30 minutes from now (allow some slack).
+      expect(delta).toBeGreaterThan(20 * 60 * 1000);
+    });
+
+    it("fires the summary immediately (executeAt = now) when the transcript exceeds the token budget", async () => {
+      // Tiny window so a single long message trips it.
+      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW = "1000";
+      process.env.DESK_SUMMARY_TRIGGER_FRACTION = "0.6";
+
+      const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
+      await clearChatTranscript();
+
+      // ~10000 chars / 4 = 2500 tokens — well over 600 (60% of 1000).
+      const longText = "the quick brown fox jumps over the lazy dog. ".repeat(220);
+      await insertUserMessageBody(longText);
+
+      const before = Date.now();
+      await mgr.scheduleSummary(chatId);
+
+      const { rows } = await pool.query(
+        `SELECT execute_at FROM messages
+         WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+        [chatId],
+      );
+      const executeAt = new Date(rows[0].execute_at as string).getTime();
+      // Urgent path: executeAt should be at or just after `before`,
+      // certainly not 30 min in the future.
+      expect(executeAt - before).toBeLessThan(60 * 1000);
+
+      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+    });
   });
 });
 

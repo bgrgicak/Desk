@@ -66,6 +66,42 @@ const STARTER_CHIPS = [
   'Design a color palette',
 ]
 
+const DESKTOP_SIDEBAR_BREAKPOINT = 768
+
+export function shouldOpenChatSidebarsByDefault(viewportWidth?: number) {
+  const width = viewportWidth ?? (typeof window === 'undefined' ? DESKTOP_SIDEBAR_BREAKPOINT : window.innerWidth)
+  return width >= DESKTOP_SIDEBAR_BREAKPOINT
+}
+
+export function chatRightPanelClassName(panelOpen: boolean, isSmallScreen: boolean) {
+  const base = 'shrink-0 flex flex-col border-l overflow-hidden transition-all duration-300 bg-background'
+
+  if (!panelOpen) return `${base} w-0 border-l-0`
+  if (isSmallScreen) return `${base} absolute inset-y-0 right-0 z-40 w-full max-w-[320px] shadow-xl`
+  return `${base} w-[280px]`
+}
+
+function isSmallScreen() {
+  return !shouldOpenChatSidebarsByDefault()
+}
+
+function useIsSmallScreen() {
+  const [smallScreen, setSmallScreen] = useState(isSmallScreen)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const query = window.matchMedia(`(max-width: ${DESKTOP_SIDEBAR_BREAKPOINT - 1}px)`)
+    const update = () => setSmallScreen(isSmallScreen())
+
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  return smallScreen
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type RightTab = 'artifacts' | 'files'
@@ -662,8 +698,19 @@ export function ChatView({
   const focusInputRef = useRef<(() => void) | null>(null)
   const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
   const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
-  const [panelOpen, setPanelOpen] = useState(true)
+  const [panelOpen, setPanelOpen] = useState(shouldOpenChatSidebarsByDefault)
+  const isSmallViewport = useIsSmallScreen()
+  const panelInteractedRef = useRef(false)
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
+
+  const setPanelOpenFromUser = useCallback((open: boolean) => {
+    panelInteractedRef.current = true
+    setPanelOpen(open)
+  }, [])
+
+  useEffect(() => {
+    if (!panelInteractedRef.current) setPanelOpen(!isSmallViewport)
+  }, [isSmallViewport])
 
   const isNewChat = chat.id === NEW_CHAT_ID
 
@@ -858,7 +905,7 @@ export function ChatView({
     agents?.find(a => a.id === chat.agentId)?.name ?? 'Agent'
 
   return (
-    <div className="flex flex-1 min-h-0 overflow-hidden">
+    <div className="relative flex flex-1 min-h-0 overflow-hidden">
 
       {/* ── Left column: header + messages + input ──
           Dropzone stays enabled even before the first message is
@@ -897,7 +944,7 @@ export function ChatView({
               </DropdownMenu>
 
               {!panelOpen && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPanelOpen(true)}>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPanelOpenFromUser(true)}>
                   <PanelRight className="h-4 w-4" />
                 </Button>
               )}
@@ -1057,7 +1104,9 @@ export function ChatView({
       </FileDropZone>
 
       {/* ── Right panel: full-height, parallel to the entire left column ── */}
-      <div className={`shrink-0 flex flex-col border-l overflow-hidden transition-all duration-300 ${panelOpen ? 'w-[280px]' : 'w-0 border-l-0'}`}>
+      <div className={chatRightPanelClassName(panelOpen, isSmallViewport)}>
+        {panelOpen && (
+          <>
           {/* Panel header — same height as the main header */}
           <div className="h-[52px] flex items-center justify-between px-3 border-b shrink-0">
             <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
@@ -1075,7 +1124,7 @@ export function ChatView({
                 </button>
               ))}
             </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setPanelOpen(false)}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setPanelOpenFromUser(false)}>
               <PanelRightClose className="h-4 w-4" />
             </Button>
           </div>
@@ -1139,6 +1188,8 @@ export function ChatView({
               />
             )}
           </div>
+          </>
+        )}
         </div>
 
     </div>

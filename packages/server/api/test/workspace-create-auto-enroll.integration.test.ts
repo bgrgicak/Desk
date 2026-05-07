@@ -4,8 +4,8 @@
  * A freshly-created workspace has no agents until one is enrolled, which
  * means chat creation rejects every agentId. To keep new workspaces
  * chat-ready by default, `createWorkspace` auto-enrolls the caller's
- * first agent (from `listByUser`) and marks it default. Users can override
- * the enrollment via the settings modal afterwards.
+ * first agent or creates a default opencode-backed agent when none exists.
+ * Users can change the agent model via the settings modal afterwards.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -108,13 +108,12 @@ async function insertAgent(name: string): Promise<string> {
     id,
     userId,
     name,
-    instructions: "",
-    model: "opencode/gpt-5-nano",
+    model: "opencode/big-pickle",
   });
   return id;
 }
 
-describe("POST /workspaces — auto-enroll caller's first agent", () => {
+describe("POST /workspaces — ensure a default workspace agent", () => {
   it("enrolls the first agent from listByUser and marks it default", async () => {
     // Insert two agents; `listByUser` orders by name, so "alpha" is first.
     const alphaId = await insertAgent("alpha");
@@ -129,12 +128,16 @@ describe("POST /workspaces — auto-enroll caller's first agent", () => {
     const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
     expect(memberships).toHaveLength(1);
     expect(memberships[0].agentId).toBe(alphaId);
+
+    const deleteRes = await request("DELETE", `/agents/${alphaId}`, token);
+    expect(deleteRes.status).toBe(400);
+
+    const stillEnrolled = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(stillEnrolled).toHaveLength(1);
+    expect(stillEnrolled[0].agentId).toBe(alphaId);
   });
 
-  it("skips enrollment for a user with no agents (does not crash)", async () => {
-    // Build a second user with zero agents and confirm workspace creation
-    // still succeeds — no agent gets enrolled, and chat creation would
-    // require the user to enroll one manually.
+  it("creates and enrolls a default opencode agent for a user with no agents", async () => {
     const otherUserId = generateId("user");
     await queries.users.insert(pool, {
       id: otherUserId,
@@ -149,12 +152,77 @@ describe("POST /workspaces — auto-enroll caller's first agent", () => {
     const otherToken = (login.body as { token: string }).token;
 
     const res = await request("POST", "/workspaces", otherToken, {
-      name: "empty",
+      name: "test-memory",
     });
     expect(res.status).toBe(201);
     const ws = res.body as { id: string };
 
     const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
-    expect(memberships).toHaveLength(0);
+    expect(memberships).toHaveLength(1);
+
+    const agent = await queries.agents.findById(pool, memberships[0].agentId);
+    expect(agent).toMatchObject({
+      userId: otherUserId,
+      name: "Desk",
+      model: "opencode/big-pickle",
+    });
+
+    const listRes = await request("GET", `/workspaces/${ws.id}/agents`, otherToken);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body).toMatchObject([
+      { id: memberships[0].agentId, model: "opencode/big-pickle" },
+    ]);
+
+    const patchRes = await request("PATCH", `/agents/${memberships[0].agentId}`, otherToken, {
+      model: "opencode/hy3-preview-free",
+    });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body).toMatchObject({
+      id: memberships[0].agentId,
+      model: "opencode/hy3-preview-free",
+    });
+
+    const removeRes = await request(
+      "DELETE",
+      `/workspaces/${ws.id}/agents/${memberships[0].agentId}`,
+      otherToken,
+    );
+    expect(removeRes.status).toBe(400);
+
+    const stillEnrolled = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(stillEnrolled).toHaveLength(1);
+  });
+
+  it("repairs an existing workspace that has no enrolled agent", async () => {
+    const repairUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: repairUserId,
+      username: "repair-noagents",
+      passwordHash: await hashPassword("pw"),
+      email: "repair-noagents@example.com",
+    });
+    const login = await request("POST", "/auth/login", null, {
+      username: "repair-noagents",
+      password: "pw",
+    });
+    const repairToken = (login.body as { token: string }).token;
+    const ws = await queries.workspaces.insert(pool, {
+      id: generateId("workspace"),
+      userId: repairUserId,
+      name: "legacy-empty",
+      path: "legacy-empty",
+    });
+
+    const before = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(before).toHaveLength(0);
+
+    const listRes = await request("GET", `/workspaces/${ws.id}/agents`, repairToken);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body).toMatchObject([
+      { name: "Desk", model: "opencode/big-pickle" },
+    ]);
+
+    const after = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+    expect(after).toHaveLength(1);
   });
 });
