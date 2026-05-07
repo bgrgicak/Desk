@@ -299,6 +299,32 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("self-contained HTML file");
   });
 
+  it("requires artifact discovery before answering library availability", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Before answering whether the user's library already has");
+    expect(body).toContain("run\n`desk-agent find artifacts`");
+    expect(body).toContain("Never say that no matching\nartifact exists unless you ran `desk-agent find artifacts`");
+    expect(body).toContain("Do not say \"I checked\", \"I found\", or \"there is no app\"");
+    expect(body).toContain("Filesystem/search tools may supplement artifact discovery but\ndo not replace it");
+  });
+
+  it("requires broad artifact fallback when targeted discovery is incomplete", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Use the requested artifact kind\nwhen it is clear; otherwise use `--kind any`");
+    expect(body).toContain("desk-agent find artifacts --kind <app|fragment|note|doc|any> --workspace \"*\" --limit 100");
+    expect(body).toContain("assume the search\nquery was too narrow");
+  });
+
+  it("the `app` goal searches existing library artifacts before scaffolding", () => {
+    const body = renderPromptBody({ ...baseInput, goal: "app" });
+
+    expect(body).toContain("Before scaffolding, offering to build, or saying an app does not exist");
+    expect(body).toContain("search the user's library with `desk-agent find artifacts`");
+    expect(body).toContain("Prefer reusing\n   or attaching an existing app/fragment");
+  });
+
 });
 
 describe("memory injection", () => {

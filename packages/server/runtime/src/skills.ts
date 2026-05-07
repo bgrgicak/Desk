@@ -141,7 +141,7 @@ export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
   {
     name: DESK_FIND_ARTIFACTS_SKILL_NAME,
     description:
-      "Use before building a new app, fragment, note, or doc to discover reusable library artifacts and their params_schema.",
+      "Use before answering whether a library artifact exists, or before building a new app, fragment, note, or doc, to discover reusable artifacts and their params_schema.",
     body: findArtifactsReference,
   },
   {

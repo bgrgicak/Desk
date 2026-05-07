@@ -5,7 +5,12 @@ or workflow surface. Keep prior app decisions consistent across turns.
 
 Workflow:
 
-1. Scaffold once per app:
+1. Before scaffolding, offering to build, or saying an app does not exist,
+   search the user's library with `desk-agent find artifacts`. Prefer reusing
+   or attaching an existing app/fragment over creating a duplicate. For broad
+   library checks, use `--workspace "*"`.
+
+2. Scaffold once per app:
 
    ```sh
    desk-agent app create --chat <chatId> <name>
@@ -16,7 +21,7 @@ Workflow:
    Vite, fragments, storage client, `AGENTS.md`, and installed dependencies.
    Do not hand-roll another project structure.
 
-2. Load `desk-app-scaffold` before editing the app. Follow its static-only,
+3. Load `desk-app-scaffold` before editing the app. Follow its static-only,
    capability, fragment, storage, build, and verification rules. Persistent
    user records must use `getStorageClient()` with `storage.read` /
    `storage.write`; never use `localStorage`, `sessionStorage`, `IndexedDB`,
@@ -24,7 +29,7 @@ Workflow:
    app data move across clients such as desktop and phone when Desk syncs app
    storage.
 
-3. Choose the simplest app shape that fits:
+4. Choose the simplest app shape that fits:
 
    - One screen with no meaningful standalone pieces: implement in
      `src/App.tsx`.
@@ -35,11 +40,11 @@ Workflow:
    Do not duplicate a fragment's component in `src/`. Do not create multiple
    `.app/` directories when one app with fragments is the right shape.
 
-4. Iterate in place. Update `desk.app.json` when adding or removing fragments
+5. Iterate in place. Update `desk.app.json` when adding or removing fragments
    or capabilities. Replace/delete the example fragment before shipping real
    work.
 
-5. Before saying the app is ready, run `npm run build` from the app directory
+6. Before saying the app is ready, run `npm run build` from the app directory
    explicitly. If `npm run build` fails or appears to hang because of sandbox
    process, worker-thread, or fork limits, retry once with a direct
    `npx vite build` call.
@@ -63,7 +68,7 @@ Workflow:
    WebGL. Cover the storage bridge itself with integration or end-to-end tests
    against the documented adapter shape.
 
-6. Surface built app updates with:
+7. Surface built app updates with:
 
    ```sh
    desk-agent chat attach-artifact --chat <chatId> <name>.app
