@@ -85,7 +85,7 @@ export function renderAgentFile(input: AgentFileInput): string {
  * existing file contents.
  *
  * The `home` argument is the DESK_HOME root (contains
- * `Desk/workspaces/desk/`). We no longer need the container id because
+ * `workspaces/desk/`). We no longer need the container id because
  * the file lands on the host filesystem.
  */
 export async function writeAgentFile(
