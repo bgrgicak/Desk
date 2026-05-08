@@ -742,8 +742,9 @@ export function createRunManager(opts: RunManagerOptions) {
       10,
     );
     // Default: 60 000 tokens. At the 0.6 trigger fraction this fires a
-    // summary when the transcript reaches ~36 000 tokens (~144 KB), well
-    // below the 1 MB ARG_MAX that caps DESK_PROMPT on macOS.
+    // summary when the transcript reaches ~36 000 tokens. Kept well below
+    // the frontier model maximum (200 K) so context stays focused and the
+    // agent doesn't get confused by very long transcripts.
     return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
   }
 

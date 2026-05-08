@@ -243,7 +243,7 @@ describe("modify-as-version flow", () => {
     await expect(fs.stat(chatAppDir)).rejects.toMatchObject({ code: "ENOENT" });
 
     // Prior version preserved under .trash/.app-versions
-    const versionsRoot = path.join(home, "Desk", ".trash", ".app-versions");
+    const versionsRoot = path.join(home, ".trash", ".app-versions");
     const versions = await fs.readdir(versionsRoot);
     expect(versions.length).toBeGreaterThan(0);
     const backupDir = versions.find((v) => v.startsWith(`${APP_NAME}.app-`));
@@ -322,7 +322,7 @@ describe("modify-as-version flow", () => {
   it("prunes .app-versions older than 30 days when a replace runs", async () => {
     // Stage an old backup directly under Desk/.trash/.app-versions/.
     // (The trashDir helper is `${home}/Desk/.trash`, not `${home}/.trash`.)
-    const versionsRoot = path.join(home, "Desk", ".trash", ".app-versions");
+    const versionsRoot = path.join(home, ".trash", ".app-versions");
     await fs.mkdir(versionsRoot, { recursive: true });
     const oldBackup = path.join(versionsRoot, "old-version.app-2025-12-01");
     await fs.mkdir(oldBackup, { recursive: true });
