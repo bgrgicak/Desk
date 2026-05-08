@@ -1,5 +1,6 @@
 {
   "name": "example",
   "description": "Placeholder fragment — replace with the real UI.",
-  "capabilities": []
+  "capabilities": [],
+  "params": {}
 }

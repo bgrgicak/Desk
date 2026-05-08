@@ -74,6 +74,20 @@ function extractApiError(err: unknown): string | undefined {
   return undefined
 }
 
+function parseArtifactParams(raw: string | null): Record<string, string> | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const entries = Object.entries(parsed).filter((entry): entry is [string, string] => (
+      typeof entry[0] === 'string' && typeof entry[1] === 'string'
+    ))
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const NEW_CHAT_STUB: Chat = {
   id: NEW_CHAT_ID,
   title: 'New chat',
@@ -133,6 +147,7 @@ function AppInner() {
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
   const selectedMessageId = searchParams.get('message')
+  const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
@@ -260,6 +275,7 @@ function AppInner() {
       item?: string | null
       folder?: string | null
       message?: string | null
+      artifactParams?: string | null
     } = {},
   ) => {
     const ws = opts.wsId ?? activeWorkspaceId
@@ -547,6 +563,7 @@ function AppInner() {
             }}
             onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
             onRenameItem={(newPath) => goTo({ item: newPath })}
+            previewParams={selectedArtifactParams}
           />
         )}
 
@@ -564,8 +581,13 @@ function AppInner() {
             highlightMessageId={selectedMessageId ?? undefined}
             onAttachmentClick={(att) =>
               att.kind === 'directory'
-                ? goTo({ view: 'context', item: null, folder: att.path })
-                : goTo({ view: 'context', item: att.path })
+                ? goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
+                : goTo({
+                    wsId: att.workspaceId,
+                    view: 'context',
+                    item: att.path,
+                    artifactParams: att.params ? JSON.stringify(att.params) : null,
+                  })
             }
             initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />

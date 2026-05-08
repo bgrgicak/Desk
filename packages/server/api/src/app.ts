@@ -526,6 +526,10 @@ export function createApp(opts: AppOptions): Server {
           storage,
           issuerId,
           appName,
+          {
+            workspaceId: query.get("workspaceId") ?? undefined,
+            appPath: query.get("path") ?? undefined,
+          },
         );
         sendJson(res, 201, result);
         return;
@@ -542,12 +546,7 @@ export function createApp(opts: AppOptions): Server {
         sendJson(res, 200, { ok: true });
         return;
       }
-      if (
-        method === "GET" &&
-        ((segments.length >= 4 && segments[3] === "dist") ||
-          (segments.length >= 5 && segments[4] === "dist") ||
-          (segments.length >= 6 && segments[5] === "dist"))
-      ) {
+      if (method === "GET") {
         const handled = await appsRoutes.handleStaticLibraryAppRequest(
           pool,
           storage,
@@ -640,13 +639,20 @@ export function createApp(opts: AppOptions): Server {
       const q = params.get("q") ?? params.get("query") ?? "";
       const workspaceParam = params.get("workspace") ?? undefined;
       const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
-      let workspaceId: string | undefined;
-      if (workspaceParam && workspaceParam !== "*") {
-        const ws = ownedWorkspaces.find((w) => w.path === workspaceParam || w.id === workspaceParam);
-        if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-        workspaceId = ws.id;
-      } else if (!workspaceParam && session.workspaceId) {
-        workspaceId = session.workspaceId;
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
+      if (!sessionWorkspace) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (
+        workspaceParam &&
+        workspaceParam !== "*" &&
+        workspaceParam !== sessionWorkspace.path &&
+        workspaceParam !== sessionWorkspace.id
+      ) {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
       }
       const result = await searchRoutes.search(
         pool,
@@ -655,12 +661,49 @@ export function createApp(opts: AppOptions): Server {
         q,
         parseSearchScope(params.get("scope")),
         {
-          workspaceId,
+          workspaceId: sessionWorkspace.id,
           chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
           kinds: parseSearchKinds(params.get("kind")),
           showHidden: params.get("showHidden") === "true",
         },
       );
+      sendJson(res, 200, { hits: result });
+      return;
+    }
+
+    if ((path === "/sandbox/find/library" || path === "/sandbox/find/artifacts") && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
+      if (!sessionWorkspace) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (
+        workspaceParam &&
+        workspaceParam !== "*" &&
+        workspaceParam !== sessionWorkspace.path &&
+        workspaceParam !== sessionWorkspace.id
+      ) {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+      const result = await searchRoutes.findLibraryItems(pool, storage, agent.userId, {
+        query: params.get("q") ?? params.get("query") ?? undefined,
+        kind:
+          kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"
+            ? kindParam
+            : "any",
+        workspaceId: sessionWorkspace.id,
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
       sendJson(res, 200, { hits: result });
       return;
     }

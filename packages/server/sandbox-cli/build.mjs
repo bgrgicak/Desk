@@ -6,10 +6,8 @@ await build({
   outfile: "dist/desk.js",
   bundle: true,
   platform: "node",
-  // CJS, not ESM: the sandbox base image ships Node 18, which requires
-  // `.mjs` (or a "type":"module" package.json) to load ESM `.js`. esbuild
-  // rewrites our ESM source imports into requires, producing a single
-  // self-contained script that runs on any Node version with `.js`.
+  // CJS because the sandbox image copies only this file to a standalone
+  // `/usr/local/lib/.../*.js` path without package.json type metadata.
   format: "cjs",
   target: "node18",
   conditions: ["@agent-desk/dev"],

@@ -153,9 +153,12 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
     expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
     expect(body).toContain("as the last step of any turn");
+    expect(body).toContain("create, significantly update, or retrieve from the current chat/workspace library");
     expect(body).toContain("no exceptions for type");
+    expect(body).toContain("library item");
+    expect(body).toContain("Library search is scoped to the current chat/workspace");
     expect(body).toContain("pass the directory path");
-    expect(body).toContain("Do not reply to the user until the attach command has been executed");
+    expect(body).toContain("Do not reply to the user until the attach command has been executed or you have determined no attachable current-workspace path exists");
     expect(body).toContain("If the command fails, report the error inline instead of silently skipping");
     expect(body).toContain("Quote the path.");
     expect(body).toContain("desk-cli-chat-attach-artifact");
@@ -299,6 +302,49 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("self-contained HTML file");
   });
 
+  it("requires library discovery before answering library availability", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Before answering whether the user's library already has");
+    expect(body).toContain("run\n`desk-agent find library`");
+    expect(body).toContain("Also run `desk-agent find library` before answering a\nrequest that looks like it could be satisfied by a reusable tool");
+    expect(body).toContain("even\nwhen the request could also be answered inline with a quick calculation");
+    expect(body).toContain("Never say that no matching library item exists\nunless you ran `desk-agent find library`");
+    expect(body).toContain("Do not say \"I checked\", \"I found\", or \"there is no app\"");
+    expect(body).toContain("Filesystem/search tools may supplement library discovery but do not\nreplace it for availability claims or tool-like request handling");
+  });
+
+  it("requires current-workspace library fallback when targeted discovery is incomplete", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("Use the requested library item kind\nwhen it is clear; otherwise use `--kind any`");
+    expect(body).toContain("desk-agent find library --kind <app|fragment|note|doc|any> --limit 100");
+    expect(body).toContain("assume the search\nquery was too narrow");
+  });
+
+  it("requires matching library items to be reused and attached immediately", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("When `desk-agent find library` returns a library item that satisfies the user's\nrequest, reuse it");
+    expect(body).toContain("Do not scaffold, rebuild, or create a duplicate app");
+    expect(body).toContain("Library discovery is scoped to the current\nchat/workspace; do not expect results from other workspaces");
+    expect(body).toContain("When returning a matching library item to the user, attach it in the same turn\nwith `desk-agent chat attach-artifact` before replying");
+    expect(body).toContain("Only pass a hit's `path` directly to `attach-artifact`\nwhen it is in the current chat/workspace");
+    expect(body).toContain("Do not merely describe a matching item\nor ask whether the user wants to see it");
+  });
+
+  it("the `app` goal searches existing library items before scaffolding", () => {
+    const body = renderPromptBody({ ...baseInput, goal: "app" });
+
+    expect(body).toContain("Before scaffolding, offering to build, or saying an app does not exist");
+    expect(body).toContain("search the current workspace library with `desk-agent find library`");
+    expect(body).toContain("If a matching app or fragment satisfies the request, reuse it and attach it");
+    expect(body).toContain("do not scaffold, rebuild,\n   or duplicate it");
+    expect(body).toContain("Only build a new app when no suitable app/fragment exists or\n   the user explicitly asks for a new one");
+    expect(body).toContain("library discovery does not return other workspaces");
+    expect(body).toContain("immediately when it satisfies the request and has a current-workspace\n   attachable path");
+  });
+
 });
 
 describe("memory injection", () => {
@@ -413,6 +459,16 @@ describe("memory injection", () => {
 });
 
 describe("Desk reference skills", () => {
+  it("publishes current-workspace artifact attachment guidance", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-attach-artifact");
+    const body = skill?.body() ?? "";
+
+    expect(skill).toBeTruthy();
+    expect(body).toContain("Only pass paths that exist in the current chat/workspace");
+    expect(body).toContain("library hit should already be scoped there");
+    expect(body).toContain("no attachable\ncurrent-workspace path exists");
+  });
+
   it("publishes a persistence playbook", () => {
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-persistence");
 
@@ -449,6 +505,17 @@ describe("Desk reference skills", () => {
     expect(body).toContain("desk-agent chat search-messages");
     expect(body).toContain("--query");
     expect(body).toContain("--workspace");
+  });
+
+  it("publishes hard reuse rules in the library discovery reference", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-find-library");
+    const body = skill?.body() ?? "";
+
+    expect(skill).toBeTruthy();
+    expect(body).toContain("attach it with `desk-agent chat\nattach-artifact` in the same turn");
+    expect(body).toContain("Do not\nscaffold or rebuild an app, fragment, note, doc");
+    expect(body).toContain("unless the user explicitly asks for a new one");
+    expect(body).toContain("Discovery is scoped to the current\nchat/workspace; cross-workspace library search is not available yet");
   });
 
   it("keeps scaffold guidance explicit about app storage contracts", () => {
