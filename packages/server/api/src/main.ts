@@ -27,12 +27,12 @@ import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const DESK_HOME = resolveDeskHome();
-// Default to ~/Desk/.database/desk.sqlite3. Dotfile parent so the DB
-// stays out of any in-app library listing of ~/Desk; tests override
+// Default to $DESK_HOME/.database/desk.sqlite3. Dotfile parent so the DB
+// stays out of any in-app library listing; tests override
 // DESK_DB_PATH to a per-run mkdtemp path.
 const DESK_DB_PATH =
   process.env.DESK_DB_PATH
-  ?? path.join(DESK_HOME, "Desk", ".database", "desk.sqlite3");
+  ?? path.join(DESK_HOME, ".database", "desk.sqlite3");
 
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the

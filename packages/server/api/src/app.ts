@@ -169,13 +169,13 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Default destination for `/internal/backup`. Lands next to the live DB
- * inside `~/Desk/backups/` so file ownership matches the DB and the
- * directory is included in any host-level backup of `~/Desk`. Uses
+ * inside `$DESK_HOME/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of the data root. Uses
  * UTC date so multi-region rsync targets don't fight over filenames.
  */
 function defaultBackupPath(deskHome: string): string {
   const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
+  return pathJoin(deskHome, "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -951,7 +951,8 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor });
+      const before = query.get("before") ?? undefined;
+      const result = await chatRoutes.listMessages(pool, segments[1], { cursor, before });
       sendJson(res, 200, result);
       return;
     }

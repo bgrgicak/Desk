@@ -24,6 +24,7 @@ import {
   snapshotSummary,
   snapshotAndReplaceSummary,
   trashChatDirectories,
+  trashDir,
   uploadArtifact,
   validateLibrarySubpath,
   workspaceRootPath,
@@ -126,7 +127,7 @@ export async function patchChat(
 export async function listMessages(
   pool: Pool,
   chatId: string,
-  opts?: { cursor?: string },
+  opts?: { cursor?: string; before?: string },
 ) {
   return queries.messages.listByChat(pool, chatId, opts);
 }
@@ -659,9 +660,9 @@ export async function deleteMessage(
     `${messageId}.log`,
   );
   await fs.access(logPath).then(async () => {
-    const trashDir = path.join(storage.home, "Desk", ".trash");
-    await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(logPath, path.join(trashDir, `${Date.now()}-${messageId}.log`));
+    const trash = trashDir(storage.home);
+    await fs.mkdir(trash, { recursive: true });
+    await fs.rename(logPath, path.join(trash, `${Date.now()}-${messageId}.log`));
   }).catch(() => { /* no log file, fine */ });
 }
 

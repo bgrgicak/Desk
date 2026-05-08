@@ -72,7 +72,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
     const home = resolveDeskHome();
-    const dir = path.join(home, "Desk", "workspaces", workspaceSlug, ".chats", chatId, "logs");
+    const dir = path.join(home, "workspaces", workspaceSlug, ".chats", chatId, "logs");
     await fsp.mkdir(dir, { recursive: true });
     return dir;
   }

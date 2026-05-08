@@ -52,7 +52,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
 
-    const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", file.path);
+    const hostPath = path.join(ctx.home, "workspaces", "desk", file.path);
     const content = await fs.readFile(hostPath, "utf-8");
     expect(content).toBe("library content");
   });
@@ -179,7 +179,7 @@ describe("deleteFile (moves to trash)", () => {
       stream: makeStream("bye"),
     });
 
-    const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
+    const hostPath = path.join(ctx.home, "workspaces", "desk", uploaded.path);
     await fs.access(hostPath);
 
     await deleteFile(ctx, ctx.workspaceSlug,uploaded.path);
@@ -188,11 +188,11 @@ describe("deleteFile (moves to trash)", () => {
     await expect(fs.access(hostPath)).rejects.toThrow();
 
     // But the trash dir holds a file of the same content.
-    const trashEntries = await fs.readdir(path.join(ctx.home, "Desk", ".trash"));
+    const trashEntries = await fs.readdir(path.join(ctx.home, ".trash"));
     const trashed = trashEntries.find((n) => n.endsWith("delete-me.txt"));
     expect(trashed).toBeDefined();
     const content = await fs.readFile(
-      path.join(ctx.home, "Desk", ".trash", trashed!),
+      path.join(ctx.home, ".trash", trashed!),
       "utf-8",
     );
     expect(content).toBe("bye");
@@ -301,7 +301,7 @@ describe("moveFile (symlink-on-move)", () => {
     const moved = await moveFile(ctx, ctx.workspaceSlug,uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
-    const oldAbs = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
+    const oldAbs = path.join(ctx.home, "workspaces", "desk", uploaded.path);
     const lstat = await fs.lstat(oldAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
 

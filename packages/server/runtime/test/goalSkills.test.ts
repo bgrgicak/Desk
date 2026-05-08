@@ -28,7 +28,7 @@ describe("Desk skills", () => {
   it("materializes Desk reference and goal prompts into the global skills directory", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-skills-"));
     try {
-      const skillsDir = path.join(home, "Desk", ".skills");
+      const skillsDir = path.join(home, ".skills");
       const customSkillDir = path.join(skillsDir, "custom-skill");
       await fs.mkdir(customSkillDir, { recursive: true });
       await fs.writeFile(path.join(customSkillDir, "SKILL.md"), "# User Skill\n", "utf-8");
@@ -65,7 +65,7 @@ describe("Desk skills", () => {
     try {
       await writeDeskSkillFiles(home);
 
-      const skillsDir = path.join(home, "Desk", ".skills");
+      const skillsDir = path.join(home, ".skills");
       const cli = await fs.readFile(path.join(skillsDir, DESK_CLI_SKILL_NAME, "SKILL.md"), "utf-8");
       const schedule = await fs.readFile(path.join(skillsDir, DESK_TASK_SCHEDULE_SKILL_NAME, "SKILL.md"), "utf-8");
       const attach = await fs.readFile(path.join(skillsDir, DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME, "SKILL.md"), "utf-8");
@@ -105,7 +105,7 @@ describe("Desk skills", () => {
   it("only cleans directories listed in the Desk manifest", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-skills-"));
     try {
-      const skillsDir = path.join(home, "Desk", ".skills");
+      const skillsDir = path.join(home, ".skills");
       await fs.mkdir(path.join(skillsDir, "desk-old-generated"), { recursive: true });
       await fs.mkdir(path.join(skillsDir, "custom-skill"), { recursive: true });
       await fs.writeFile(path.join(skillsDir, "desk-old-generated", "SKILL.md"), "old generated\n", "utf-8");

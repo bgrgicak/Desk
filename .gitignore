@@ -11,3 +11,7 @@ NvVars
 .claude/scheduled_tasks.lock
 .playwright-mcp
 workspaces/
+.database/
+.memory/
+.skills/
+.gstack/

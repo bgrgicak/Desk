@@ -26,7 +26,7 @@ export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
 
 /** Host-side global skills directory. Mounted read-only into each sandbox. */
 export function skillsHostDir(home: string): string {
-  return path.join(home, "Desk", ".skills");
+  return path.join(home, ".skills");
 }
 
 const activeMounts = new Map<string, Map<string, MountSet>>();

@@ -54,8 +54,8 @@ fi
 
 # 3. Ensure ~/Desk/ exists. desk-server's main.ts mkdirs the rest of the
 #    layout (.database, workspaces, .trash, .tmp, backups) on boot.
-DESK_HOME_DEFAULT="${HOME}"
-mkdir -p "${DESK_HOME_DEFAULT}/Desk"
+DESK_HOME_DEFAULT="${HOME}/Desk"
+mkdir -p "${DESK_HOME_DEFAULT}"
 
 # 3b. Rebuild the sandbox docker image when its inputs (sandbox-cli source,
 #     Dockerfile, app-scaffold manifests) have changed. Skipped silently
