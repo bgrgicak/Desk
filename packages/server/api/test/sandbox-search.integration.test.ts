@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { Pool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
 import { generateId } from "@agent-desk/shared";
-import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -48,6 +48,12 @@ beforeAll(async () => {
   workspaceAId = wsRows[0].id;
   workspaceASlug = wsRows[0].path;
   await ensureWorkspaceLayout(home, workspaceASlug);
+  await fs.mkdir(path.join(workspaceRootPath(home, workspaceASlug), "tools"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceRootPath(home, workspaceASlug), "tools", "volume-converter.md"),
+    "Volume converter for cubic meter to cubic inch calculations.",
+    "utf-8",
+  );
 
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
@@ -60,6 +66,12 @@ beforeAll(async () => {
     [workspaceBId, userId, "WS B", workspaceBSlug],
   );
   await ensureWorkspaceLayout(home, workspaceBSlug);
+  await fs.mkdir(path.join(workspaceRootPath(home, workspaceBSlug), "tools"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceRootPath(home, workspaceBSlug), "tools", "watercolor-reference.md"),
+    "Watercolor owl reference library item.",
+    "utf-8",
+  );
 
   const { rows: agentRows } = await pool.query<{ id: string }>("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id;
@@ -279,5 +291,101 @@ describe("GET /sandbox/search", () => {
     expect(res.status).toBe(200);
     const body = res.body as { hits: Array<{ type: string; id: string; workspaceSlug: string }> };
     expect(body.hits.some((hit) => hit.type === "chat" && hit.id === chatA && hit.workspaceSlug === workspaceASlug)).toBe(true);
+  });
+
+  it("does not surface chat hits from a different workspace by default", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search?q=${encodeURIComponent("watercolor")}&scope=chats&kind=message`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { hits: unknown[] }).hits).toEqual([]);
+  });
+
+  it("does not widen universal search when workspace=* is passed", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search?q=${encodeURIComponent("watercolor")}&workspace=*&scope=chats&kind=message`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { hits: unknown[] }).hits).toEqual([]);
+  });
+
+  it("does not widen universal library search when workspace=* is passed", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search?q=${encodeURIComponent("watercolor reference")}&workspace=*&scope=library`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { hits: unknown[] }).hits).toEqual([]);
+  });
+
+  it("rejects an explicit owned workspace slug outside the sandbox session workspace", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/search?q=${encodeURIComponent("watercolor")}&workspace=${workspaceBSlug}`,
+      token,
+    );
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /sandbox/find/library", () => {
+  it("defaults library discovery to the sandbox session workspace", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/library?q=${encodeURIComponent("volume converter")}&kind=note`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ path: string; workspaceSlug: string }> };
+    expect(body.hits.some((hit) => hit.path === "tools/volume-converter.md" && hit.workspaceSlug === workspaceASlug)).toBe(true);
+    expect(body.hits.every((hit) => hit.workspaceSlug === workspaceASlug)).toBe(true);
+  });
+
+  it("does not widen library discovery when workspace=* is passed", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/library?q=${encodeURIComponent("watercolor reference")}&workspace=*&kind=note`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { hits: unknown[] }).hits).toEqual([]);
+  });
+
+  it("rejects an explicit owned workspace slug outside the sandbox session workspace", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/library?q=${encodeURIComponent("watercolor reference")}&workspace=${workspaceBSlug}&kind=note`,
+      token,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("keeps /sandbox/find/artifacts as a compatibility alias", async () => {
+    const token = await issueSandboxToken(workspaceAId);
+    const res = await sandboxGet(
+      `/sandbox/find/artifacts?q=${encodeURIComponent("volume converter")}&kind=note`,
+      token,
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ path: string; workspaceSlug: string }> };
+    expect(body.hits.some((hit) => hit.path === "tools/volume-converter.md" && hit.workspaceSlug === workspaceASlug)).toBe(true);
+  });
+
+  it("rejects missing or invalid sandbox token with 401", async () => {
+    const res = await sandboxGet(`/sandbox/find/library?q=volume`, "tok_does-not-exist");
+    expect(res.status).toBe(401);
   });
 });

@@ -76,11 +76,11 @@ describe('appAttachmentToPreview', () => {
   })
   it('routes library dir paths to the library scope', () => {
     expect(appAttachmentToPreview('todo.app'))
-      .toEqual({ scope: 'library', appName: 'todo' })
+      .toEqual({ scope: 'library', appName: 'todo', appPath: 'todo.app' })
   })
   it('routes library manifest paths to the library scope', () => {
     expect(appAttachmentToPreview('Projects/todo.app/desk.app.json'))
-      .toEqual({ scope: 'library', appName: 'todo' })
+      .toEqual({ scope: 'library', appName: 'todo', appPath: 'Projects/todo.app' })
   })
   it('routes chat-fragment paths to the chat scope with fragment set', () => {
     expect(
@@ -90,7 +90,7 @@ describe('appAttachmentToPreview', () => {
   it('routes library-fragment paths to the library scope with fragment set', () => {
     expect(
       appAttachmentToPreview('Projects/todo.app/dist/fragments/list/index.html'),
-    ).toEqual({ scope: 'library', appName: 'todo', fragment: 'list' })
+    ).toEqual({ scope: 'library', appName: 'todo', appPath: 'Projects/todo.app', fragment: 'list' })
   })
   it('returns null for non-app paths', () => {
     expect(appAttachmentToPreview('notes.md')).toBeNull()
@@ -122,11 +122,12 @@ describe('parseChatAppFragmentPath', () => {
 describe('parseLibraryAppFragmentPath', () => {
   it('matches at the workspace root', () => {
     expect(parseLibraryAppFragmentPath('todo.app/dist/fragments/list/index.html'))
-      .toEqual({ appName: 'todo', fragment: 'list' })
+      .toEqual({ appName: 'todo', appPath: 'todo.app', fragment: 'list' })
   })
   it('matches under a subfolder', () => {
     expect(parseLibraryAppFragmentPath('Projects/Q2/todo.app/dist/fragments/list')).toEqual({
       appName: 'todo',
+      appPath: 'Projects/Q2/todo.app',
       fragment: 'list',
     })
   })

@@ -21,6 +21,8 @@ export interface RunOptions {
   attachments?: string[];
   /** On-disk slug for the workspace this run belongs to — feeds the mount plan + container name. */
   workspaceSlug: string;
+  /** DESK_HOME root. When omitted, runtime storage resolution is used. */
+  home?: string;
   /**
    * Called once per stdout/stderr/event log line. May be sync or async — the
    * driver tracks any returned promise and awaits all of them before
@@ -164,7 +166,7 @@ function createRealDriver(): SandboxDriver {
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
-      const handle = await createOrReuse(workspaceId, opts.workspaceSlug, undefined, opts.providerKeys);
+      const handle = await createOrReuse(workspaceId, opts.workspaceSlug, opts.home, opts.providerKeys);
 
       // The system prompt — including the per-chat artifact paths and the
       // user's goal fragment — lives entirely in the OpenCode agent file

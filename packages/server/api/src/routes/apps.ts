@@ -41,6 +41,7 @@ import {
 } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
+  validateLibrarySubpath,
   workspaceRootPath,
   type StorageContext,
 } from "@agent-desk/storage";
@@ -742,28 +743,45 @@ async function workspaceForUser(
   return { id: rows[0].id, slug: rows[0].path };
 }
 
-export async function resolveLibraryAppDist(
-  storage: StorageContext,
-  workspaceSlug: string,
-  appName: string,
-): Promise<{ distDir: string }> {
+function normalizeLibraryAppPath(appPathOrName: string): { appPath: string; appName: string } {
+  const appPath = appPathOrName.endsWith(".app") || appPathOrName.includes("/")
+    ? appPathOrName
+    : `${appPathOrName}.app`;
+  validateLibrarySubpath(appPath);
+  if (!appPath.endsWith(".app")) {
+    throw new NotFoundError(`Unknown app: ${appPathOrName}`);
+  }
+  const appName = path.basename(appPath, ".app");
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
+  return { appPath, appName };
+}
+
+function encodeAppPathForUrl(appPath: string): string {
+  return appPath.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
+export async function resolveLibraryAppDist(
+  storage: StorageContext,
+  workspaceSlug: string,
+  appPathOrName: string,
+): Promise<{ distDir: string; appPath: string; appName: string }> {
+  const { appPath, appName } = normalizeLibraryAppPath(appPathOrName);
   const wsRoot = await realpath(workspaceRootPath(storage.home, workspaceSlug)).catch(() => workspaceRootPath(storage.home, workspaceSlug));
-  const appRoot = path.join(wsRoot, `${appName}.app`);
+  const appRoot = path.join(wsRoot, appPath);
   const distDir = path.join(appRoot, "dist");
   const fsp = await import("node:fs/promises");
   let real: string;
   try {
     real = await fsp.realpath(distDir);
   } catch {
-    throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
+    throw new NotFoundError(`App dist not found: ${appPath}/dist`);
   }
   if (!real.startsWith(wsRoot + path.sep) && real !== wsRoot) {
-    throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
+    throw new NotFoundError(`App dist not found: ${appPath}/dist`);
   }
-  return { distDir: real };
+  return { distDir: real, appPath, appName };
 }
 
 export async function issueLibraryAppSession(
@@ -771,13 +789,22 @@ export async function issueLibraryAppSession(
   storage: StorageContext,
   userId: string,
   appName: string,
+  opts: { workspaceId?: string; appPath?: string } = {},
 ): Promise<IssueResult> {
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new ValidationError(`Invalid app name: ${appName}`);
   }
-  const ws = await workspaceForUser(pool, userId);
+  const ws = opts.workspaceId
+    ? await queries.workspaces.findById(pool, opts.workspaceId).then((w) => {
+        if (!w || w.userId !== userId) throw new NotFoundError(`Workspace not found: ${opts.workspaceId}`);
+        return { id: w.id, slug: w.path };
+      })
+    : await workspaceForUser(pool, userId);
   if (!ws) throw new NotFoundError("No workspace for user");
-  const { distDir } = await resolveLibraryAppDist(storage, ws.slug, appName);
+  const { distDir, appPath, appName: resolvedAppName } = await resolveLibraryAppDist(storage, ws.slug, opts.appPath ?? appName);
+  if (resolvedAppName !== appName) {
+    throw new ValidationError(`App path does not match app name: ${opts.appPath}`);
+  }
 
   const manifest = await readManifest(distDir);
   // Same sanitization as the chat scope — drop unknown capabilities and
@@ -800,7 +827,7 @@ export async function issueLibraryAppSession(
   });
 
   const assetToken = hashToken(token);
-  const url = `/apps/library/${encodeURIComponent(ws.id)}/${encodeURIComponent(assetToken)}/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
+  const url = `/apps/library/${encodeURIComponent(ws.id)}/${encodeURIComponent(assetToken)}/${encodeAppPathForUrl(appPath)}/dist/?t=${encodeURIComponent(token)}`;
   return {
     token,
     expiresAt: expiresAt.toISOString(),
@@ -849,25 +876,33 @@ export async function handleStaticLibraryAppRequest(
     return false;
   }
 
+  const workspaceAssetDistIndex = segments.findIndex((segment, index) => index >= 5 && segment === "dist");
+  const workspaceDistIndex = segments.findIndex((segment, index) => index >= 4 && segment === "dist");
   const hasWorkspaceAssetSegment =
     segments.length >= 6 &&
     /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) &&
     /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3])) &&
-    segments[5] === "dist";
-  const hasWorkspaceSegment = segments.length >= 5 && /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) && segments[4] === "dist";
+    workspaceAssetDistIndex !== -1;
+  const hasWorkspaceSegment = segments.length >= 5 && /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) && workspaceDistIndex !== -1;
   const legacyShape = segments.length >= 4 && segments[3] === "dist";
   if (!hasWorkspaceAssetSegment && !hasWorkspaceSegment && !legacyShape) return false;
 
   const routeWorkspaceId = (hasWorkspaceAssetSegment || hasWorkspaceSegment) ? decodeURIComponent(segments[2]) : null;
   const routeAssetToken = hasWorkspaceAssetSegment ? decodeURIComponent(segments[3]) : null;
-  const appName = decodeURIComponent(segments[hasWorkspaceAssetSegment ? 4 : hasWorkspaceSegment ? 3 : 2]);
+  const appPath = hasWorkspaceAssetSegment
+    ? segments.slice(4, workspaceAssetDistIndex).map((s) => decodeURIComponent(s)).join("/")
+    : hasWorkspaceSegment
+      ? segments.slice(3, workspaceDistIndex).map((s) => decodeURIComponent(s)).join("/")
+      : decodeURIComponent(segments[2]);
+  const { appName } = normalizeLibraryAppPath(appPath);
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
-  const tailStart = hasWorkspaceAssetSegment ? 6 : hasWorkspaceSegment ? 5 : 4;
+  const tailStart = hasWorkspaceAssetSegment ? workspaceAssetDistIndex + 1 : hasWorkspaceSegment ? workspaceDistIndex + 1 : 4;
   const tail = segments.slice(tailStart).map((s) => decodeURIComponent(s)).join("/");
 
-  if (routeWorkspaceId && tail !== "" && path.extname(tail).toLowerCase() !== ".html") {
+  const entryPoint = matchEntryPoint(tail);
+  if (routeWorkspaceId && tail !== "" && !entryPoint && path.extname(tail).toLowerCase() !== ".html") {
     if (!routeAssetToken) throw new UnauthorizedError("Missing app asset token");
     const ses = await queries.appSessions.verify(pool, routeAssetToken);
     if (
@@ -884,7 +919,7 @@ export async function handleStaticLibraryAppRequest(
     );
     const workspaceSlug = rows[0]?.path;
     if (!workspaceSlug) throw new NotFoundError("Workspace not found");
-    const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
+    const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appPath);
     await serveAsset(distDir, tail, res);
     return true;
   }
@@ -943,9 +978,9 @@ export async function handleStaticLibraryAppRequest(
   workspaceSlug = rows[0]?.path ?? null;
   if (!workspaceSlug) throw new NotFoundError("Workspace not found");
 
-  const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appName);
+  const { distDir } = await resolveLibraryAppDist(storage, workspaceSlug, appPath);
   const cookiePath = routeWorkspaceId
-    ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeURIComponent(appName)}`
+    ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeAppPathForUrl(appPath)}`
     : `/apps/library/${encodeURIComponent(appName)}`;
   const cookieName = libraryCookieNameFor(workspaceId!, appName);
 
@@ -959,7 +994,7 @@ export async function handleStaticLibraryAppRequest(
     return true;
   }
 
-  const entry = matchEntryPoint(tail);
+  const entry = entryPoint;
   if (entry) {
     await serveIndex({
       distDir,
@@ -983,13 +1018,14 @@ export async function handleIssueLibraryAppSession(
   storage: StorageContext,
   userId: string,
   appName: string,
+  opts: { workspaceId?: string; appPath?: string } = {},
 ): Promise<IssueResult> {
   // Same per-user rate limit as the chat scope — both endpoints share
   // the bucket so a parent SPA can't dodge the cap by alternating.
   if (!recordIssueAndCheck(userId)) {
     throw new IssueRateLimitError();
   }
-  return issueLibraryAppSession(pool, storage, userId, appName);
+  return issueLibraryAppSession(pool, storage, userId, appName, opts);
 }
 
 /** Exposed for tests so they can reset state between cases. */

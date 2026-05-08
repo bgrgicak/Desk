@@ -1,5 +1,5 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
-import type { ServerAgent, ServerChat, ServerMessage } from "../types";
+import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
 
 export function taskMessageKindsForDeveloperMode(developerMode: boolean): Array<"task" | "summary"> {
   return developerMode ? ["task", "summary"] : ["task"];
@@ -21,10 +21,15 @@ function colorFor(id: string): Task["color"] {
   return COLOR_PALETTE[Math.abs(h) % COLOR_PALETTE.length];
 }
 
-function nameFor(m: ServerMessage, chats: ServerChat[]): string {
+function nameFor(m: ServerMessage, chats: ServerChat[], workspaces: ServerWorkspace[]): string {
   if (m.content.type === "summary_request") {
     const chatTitle = chats.find((chat) => chat.id === m.chatId)?.title.trim();
     return chatTitle ? `Summarize - ${chatTitle}` : "Summarize";
+  }
+  if (m.content.type === "reflection_request") {
+    const workspaceId = m.content.workspaceId;
+    const workspaceName = workspaces.find((ws) => ws.id === workspaceId)?.name.trim();
+    return workspaceName ? `Reflect - ${workspaceName}` : "Reflect";
   }
   if (m.title && m.title.trim().length > 0) return m.title;
   if (m.content.type === "text") {
@@ -81,7 +86,12 @@ function statusTextFor(m: ServerMessage): string {
  * `color`, free-form `schedule`, and `history` per-occurrence are
  * client-derived — the server doesn't carry them yet.
  */
-export function toUiTask(m: ServerMessage, agents: ServerAgent[], chats: ServerChat[] = []): Task {
+export function toUiTask(
+  m: ServerMessage,
+  agents: ServerAgent[],
+  chats: ServerChat[] = [],
+  workspaces: ServerWorkspace[] = [],
+): Task {
   const agent = agents.find((a) => a.id === m.agentId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
@@ -117,7 +127,7 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[], chats: ServerC
 
   return {
     id: m.id,
-    name: nameFor(m, chats),
+    name: nameFor(m, chats, workspaces),
     description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,

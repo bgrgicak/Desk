@@ -17,7 +17,16 @@ describe('appPreviewRefForContextItem', () => {
         id: 'todo.app',
         type: 'app',
       }),
-    ).toEqual({ scope: 'library', appName: 'todo' })
+    ).toEqual({ scope: 'library', appName: 'todo', appPath: 'todo.app' })
+  })
+
+  it('keeps nested library fragments on the exact app path', () => {
+    expect(
+      appPreviewRefForContextItem({
+        id: 'Projects/Q2/todo.app/dist/fragments/list',
+        type: 'file',
+      }),
+    ).toEqual({ scope: 'library', appName: 'todo', appPath: 'Projects/Q2/todo.app', fragment: 'list' })
   })
 
   it('ignores non-app files', () => {

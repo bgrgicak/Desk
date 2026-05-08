@@ -232,6 +232,11 @@ describe("MessageContent summary / summary_request", () => {
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
+  it("parses reflection_request content", () => {
+    const msg = { ...base, role: "system", kind: "task" as const, content: { type: "reflection_request", workspaceId: "wks_abc" } };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
+
   it("rejects a summary with non-string body", () => {
     expect(() =>
       MessageSchema.parse({ ...base, role: "agent", content: { type: "summary", body: 123 } }),

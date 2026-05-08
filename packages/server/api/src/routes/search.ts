@@ -2,7 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { NotFoundError } from "@agent-desk/shared";
+import {
+  AppManifestSchema,
+  FragmentManifestSchema,
+  NotFoundError,
+  type AppManifest,
+  type FragmentManifest,
+} from "@agent-desk/shared";
 import {
   workspaceRootPath,
   loadGitignoreFrame,
@@ -23,6 +29,17 @@ export interface SearchResult {
   messageId?: string;
   kind?: SearchKind;
   score?: number;
+}
+
+export interface LibraryItemSearchResult {
+  kind: "app" | "fragment" | "note" | "doc";
+  path: string;
+  name: string;
+  description: string;
+  workspaceSlug: string;
+  lastModified: string;
+  score: number;
+  params_schema?: Record<string, string>;
 }
 
 type SearchKind =
@@ -107,6 +124,88 @@ function classifyFileKind(relPath: string): { kind: SearchKind; chatId: string |
     return null;
   }
   return { kind: "library_file", chatId: null };
+}
+
+function libraryItemKindForPath(relPath: string): LibraryItemSearchResult["kind"] {
+  if (relPath.endsWith("/desk.app.json")) return "app";
+  if (relPath.endsWith("/desk.fragment.json")) return "fragment";
+  const ext = path.extname(relPath).toLowerCase();
+  return ext === ".md" || ext === ".markdown" || ext === ".txt" ? "note" : "doc";
+}
+
+function libraryItemPathForFile(relPath: string, kind: LibraryItemSearchResult["kind"]): string {
+  if (kind === "app") return path.posix.dirname(relPath);
+  if (kind === "fragment") {
+    const fragmentDir = path.posix.dirname(relPath);
+    const appFragmentsDir = "/fragments/";
+    const markerIndex = fragmentDir.indexOf(appFragmentsDir);
+    if (markerIndex === -1) return fragmentDir;
+    const appDir = fragmentDir.slice(0, markerIndex);
+    const fragmentName = fragmentDir.slice(markerIndex + appFragmentsDir.length);
+    return `${appDir}/dist/fragments/${fragmentName}`;
+  }
+  return relPath;
+}
+
+function firstLine(text: string): string {
+  return (text.split(/\r?\n/, 1)[0] ?? "").trim();
+}
+
+async function readTextFile(abs: string): Promise<string> {
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat || !stat.isFile() || stat.size > MAX_INDEXED_FILE_BYTES) return "";
+  const buf = await fs.readFile(abs).catch(() => null);
+  if (!buf || buf.includes(0)) return "";
+  return buf.toString("utf-8");
+}
+
+async function readManifest(abs: string, kind: "app" | "fragment"): Promise<AppManifest | FragmentManifest | null> {
+  const raw = await readTextFile(abs);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return kind === "app" ? AppManifestSchema.parse(parsed) : FragmentManifestSchema.parse(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function libraryItemResultFromHit(
+  storage: StorageContext,
+  hit: Awaited<ReturnType<typeof queries.search.searchChatMessages>>[number],
+): Promise<LibraryItemSearchResult | null> {
+  if (!hit.workspaceSlug || hit.kind !== "library_file") return null;
+  const relPath = decodeFileRef(hit.workspaceSlug, hit.refId);
+  const kind = libraryItemKindForPath(relPath);
+  const libraryItemPath = libraryItemPathForFile(relPath, kind);
+  const root = workspaceRootPath(storage.home, hit.workspaceSlug);
+  const abs = path.join(root, relPath);
+
+  if (kind === "app" || kind === "fragment") {
+    const manifest = await readManifest(abs, kind);
+    const fallbackName = path.basename(libraryItemPath).replace(/\.app$/, "");
+    return {
+      kind,
+      path: libraryItemPath,
+      name: manifest?.name ?? fallbackName,
+      description: manifest?.description ?? "",
+      workspaceSlug: hit.workspaceSlug,
+      lastModified: hit.createdAt,
+      score: hit.score,
+      ...(manifest?.params ? { params_schema: manifest.params } : {}),
+    };
+  }
+
+  const body = await readTextFile(abs);
+  return {
+    kind,
+    path: libraryItemPath,
+    name: path.basename(relPath),
+    description: firstLine(body),
+    workspaceSlug: hit.workspaceSlug,
+    lastModified: hit.createdAt,
+    score: hit.score,
+  };
 }
 
 async function searchableBodyForFile(abs: string, relPath: string): Promise<string | null> {
@@ -256,4 +355,58 @@ export async function search(
       score: hit.score,
     }];
   }).slice(0, 40);
+}
+
+export async function findLibraryItems(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  opts: {
+    query?: string;
+    kind?: LibraryItemSearchResult["kind"] | "any";
+    workspaceId?: string;
+    limit?: number;
+  } = {},
+): Promise<LibraryItemSearchResult[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 25, 100));
+  const query = opts.query?.trim() ?? "";
+  const workspaces = opts.workspaceId
+    ? await queries.workspaces.findById(pool, opts.workspaceId).then((w) => {
+        if (!w || w.userId !== userId) throw new NotFoundError(`Workspace not found: ${opts.workspaceId}`);
+        return [w];
+      })
+    : await queries.workspaces.listByUser(pool, userId);
+
+  for (const ws of workspaces) await refreshWorkspaceFileIndex(pool, storage, ws.path, { showHidden: false });
+
+  const workspaceSlugs = workspaces.map((ws) => ws.path);
+  const rawLimit = Math.min(500, Math.max(limit * 20, 100));
+  const rawHits = query
+    ? await queries.search.searchChatMessages(pool, {
+        query,
+        workspaceSlugs,
+        kinds: ["library_file"],
+        limit: rawLimit,
+      })
+    : await queries.search.listSearchDocuments(pool, {
+        workspaceSlugs,
+        kinds: ["library_file"],
+        limit: rawLimit,
+      });
+
+  const wantedKind = opts.kind && opts.kind !== "any" ? opts.kind : null;
+  const seen = new Set<string>();
+  const results: LibraryItemSearchResult[] = [];
+  for (const hit of rawHits) {
+    const result = await libraryItemResultFromHit(storage, hit);
+    if (!result) continue;
+    if (wantedKind && result.kind !== wantedKind) continue;
+    const key = `${result.workspaceSlug}:${result.kind}:${result.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(result);
+  }
+
+  results.sort((a, b) => b.score - a.score || (a.lastModified < b.lastModified ? 1 : -1));
+  return results.slice(0, limit);
 }

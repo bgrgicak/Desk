@@ -41,4 +41,22 @@ describe("desk-agent chat attach-artifact", () => {
     await expect(run([".chats/cht_a/artifacts/report.md"])).rejects.toThrow(/Missing --chat/);
     expect(postJsonMock).not.toHaveBeenCalled();
   });
+
+  it("collects repeated --param flags", async () => {
+    await run([
+      "--chat",
+      "cht_a",
+      "--param",
+      "note_id=abc",
+      "--param",
+      "mode=edit",
+      "notes.app/dist/fragments/editor",
+    ]);
+
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/artifacts", {
+      chatId: "cht_a",
+      path: "notes.app/dist/fragments/editor",
+      params: { note_id: "abc", mode: "edit" },
+    });
+  });
 });
