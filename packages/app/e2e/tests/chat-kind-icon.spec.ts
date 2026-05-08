@@ -161,13 +161,13 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
   await postMessage(serverUrl, ctx, taskWithSummaryId, "task", "do the thing");
   await postMessage(serverUrl, ctx, taskWithSummaryId, "summary", "scheduled summary");
 
-  // Goal-driven: text "create a data table" → persisted data goal → Table icon.
+  // Goal-driven: explicit data goal → Table icon.
   const dataId = await createChat(serverUrl, ctx, "icon-data");
-  await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table");
+  await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table", { goal: "data" });
 
-  // Goal-driven: text "show me a portfolio" → persisted site goal → Globe icon.
+  // Goal-driven: explicit site goal → Globe icon.
   const siteId = await createChat(serverUrl, ctx, "icon-site");
-  await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio");
+  await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio", { goal: "site" });
 
   await loggedInPage.reload();
 
@@ -260,24 +260,23 @@ test("/chats `kind` reflects the newest user-action kind, with chat/summary as f
   expect(await fetchListedKind(serverUrl, ctx, summaryOnlyId)).toBe("chat");
 });
 
-test("/chats `goal` is inferred and persisted from clear user text", async ({
+test("/chats `goal` is persisted from explicit message goal field", async ({
   serverUrl,
   token,
 }) => {
   const ctx = await bootstrap(serverUrl, token);
 
-  // The exact regression: a chat where the user typed about a data table
-  // should infer `data` (not be hijacked by the system summary refresh).
+  // Explicit goal field on the message is persisted on the chat.
   const dataId = await createChat(serverUrl, ctx, "goal-data");
-  await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table");
+  await postMessage(serverUrl, ctx, dataId, "chat", "craete a randon data table", { goal: "data" });
   expect(await fetchListedGoal(serverUrl, ctx, dataId)).toBe("data");
 
-  // Site goal — avoid 'build/make/app' so the app heuristic doesn't fire.
+  // Explicit site goal.
   const siteId = await createChat(serverUrl, ctx, "goal-site");
-  await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio");
+  await postMessage(serverUrl, ctx, siteId, "chat", "show me a portfolio", { goal: "site" });
   expect(await fetchListedGoal(serverUrl, ctx, siteId)).toBe("site");
 
-  // Plain "hi" — too short for any heuristic match. goal stays unset.
+  // No explicit goal — stays unset.
   const plainId = await createChat(serverUrl, ctx, "goal-plain");
   await postMessage(serverUrl, ctx, plainId, "chat", "hi");
   expect(await fetchListedGoal(serverUrl, ctx, plainId)).toBeUndefined();

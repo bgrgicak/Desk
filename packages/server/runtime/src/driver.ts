@@ -92,13 +92,14 @@ function createFakeDriver(): SandboxDriver {
         "Run complete.",
       ];
 
+      const stepDelayMs = parseInt(process.env.DESK_FAKE_DRIVER_STEP_DELAY_MS ?? "10", 10);
       let seq = 0;
       for (const line of lines) {
         if (cancelled.has(runId)) {
           return { exitCode: 130 };
         }
         await onLog({ runId, seq: seq++, kind: "stdout", payload: line });
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => setTimeout(r, stepDelayMs));
       }
 
       return { exitCode: 0 };

@@ -105,6 +105,7 @@ export const wsMiddleware: Middleware = (storeApi) => {
   let reconnectDelay = RECONNECT_MIN_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let shouldReconnect = false;
+  let hasConnectedOnce = false;
 
   const wsUrl = (): string => {
     const token = getSessionToken();
@@ -127,12 +128,16 @@ export const wsMiddleware: Middleware = (storeApi) => {
       // the disconnect gap can't be corrected from wsKnownChatIds —
       // only a fresh server snapshot can fix stale running state.
       storeApi.dispatch(clearWsKnownChatIds());
-      // After the socket opens (initial connect or reconnect), refetch
-      // the chat list so the `running` boolean reflects post-recovery
-      // state. Without this, orphaned runs that completed between the
-      // initial getChats fetch and the WS handshake leave stale
-      // running=true entries in the sidebar.
-      storeApi.dispatch(api.util.invalidateTags([{ type: "Chat", id: "LIST" }]));
+      // On reconnect (not the initial connect), refetch the chat list so
+      // the `running` boolean reflects post-recovery state. Orphaned runs
+      // that completed during the disconnect gap are corrected here.
+      // Skipping this on initial connect avoids a race where the refetch
+      // returns running=false after the fast fake driver has already
+      // completed, causing the sidebar spinner to never appear.
+      if (hasConnectedOnce) {
+        storeApi.dispatch(api.util.invalidateTags([{ type: "Chat", id: "LIST" }]));
+      }
+      hasConnectedOnce = true;
     });
 
     ws.addEventListener("message", (ev: MessageEvent) => {
