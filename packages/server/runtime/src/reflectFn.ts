@@ -42,6 +42,7 @@ interface WorkspaceReflectionInput {
     createdAt: string;
     body: string;
   }>;
+  priorJournals: Array<{ date: string; body: string }>;
 }
 
 type ReflectFn<I> = (input: I) => Promise<ReflectionResult>;
@@ -72,14 +73,26 @@ function serializeWorkspaceInput(input: WorkspaceReflectionInput): string {
     "Activity (oldest first):",
     "",
   ].join("\n");
-  if (input.activity.length === 0) return `${header}(no activity)`;
-  const bullets = input.activity
+  const activity = input.activity.length === 0
+    ? "(no activity)"
+    : input.activity
     .map(
       (a) =>
         `- ${a.createdAt} [${a.role}] (${a.chatId}): ${a.body.replace(/\n/g, " ")}`,
     )
     .join("\n");
-  return `${header}${bullets}`;
+  const journalHeader = [
+    "",
+    "",
+    `Prior journals for memory curation (newest first, max ${input.priorJournals.length}):`,
+    "",
+  ].join("\n");
+  const journals = input.priorJournals.length === 0
+    ? "(no prior journals)"
+    : input.priorJournals
+      .map((j) => `## ${j.date}\n\n${j.body.trim()}`)
+      .join("\n\n---\n\n");
+  return `${header}${activity}${journalHeader}${journals}`;
 }
 
 // The reflection prompt asks for a JSON object back. Models occasionally
@@ -131,7 +144,7 @@ function extractOpencodeText(raw: string): string | null {
       // Non-JSON stdout is handled by the fallback object extractor below.
     }
   }
-  return texts.length > 0 ? texts.join("\n") : null;
+  return texts.length > 0 ? texts.join("") : null;
 }
 
 function parseReflection(raw: string): ReflectionResult | null {

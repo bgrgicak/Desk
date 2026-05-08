@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Cron } from "croner";
 import type { Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
+import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 
 /**
  * Memory-system Phase 5 — daily reflection.
@@ -45,6 +45,8 @@ export interface WorkspaceReflectionInput {
   date: string;          // yesterday, "YYYY-MM-DD"
   /** Yesterday's user + agent messages, oldest first. */
   activity: Array<{ chatId: string; role: string; createdAt: string; body: string }>;
+  /** Prior workspace journals, newest first, excluding `date`. */
+  priorJournals: Array<{ date: string; body: string }>;
 }
 
 export interface ReflectionResult {
@@ -82,6 +84,7 @@ export function yesterdayDateLocal(now: Date = new Date()): string {
 
 const TOPIC_PATTERN = /^[a-zA-Z0-9_][a-zA-Z0-9_-]*\.md$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const PRIOR_JOURNAL_LIMIT = 30;
 
 /**
  * Atomic write: stage to a sibling tempfile then rename onto the
@@ -120,8 +123,9 @@ async function listWorkspaceActivityForDate(
   date: string,
 ): Promise<WorkspaceReflectionInput["activity"]> {
   if (!DATE_PATTERN.test(date)) return [];
-  const dayStart = `${date}T00:00:00.000Z`;
-  const dayEnd = `${date}T23:59:59.999Z`;
+  const [year, month, day] = date.split("-").map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0).toISOString();
+  const dayEnd = new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
   const { rows } = await pool.query<{
     chat_id: string;
     role: string;
@@ -150,6 +154,37 @@ async function listWorkspaceActivityForDate(
   });
 }
 
+async function listPriorWorkspaceJournals(
+  home: string,
+  workspaceSlug: string,
+  date: string,
+): Promise<WorkspaceReflectionInput["priorJournals"]> {
+  if (!DATE_PATTERN.test(date)) return [];
+  const dir = workspaceJournalDir(home, workspaceSlug);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+
+  const dates = entries
+    .filter((entry) => entry.endsWith(".md"))
+    .map((entry) => entry.slice(0, -3))
+    .filter((entryDate) => DATE_PATTERN.test(entryDate) && entryDate < date)
+    .sort()
+    .reverse()
+    .slice(0, PRIOR_JOURNAL_LIMIT);
+
+  const journals: WorkspaceReflectionInput["priorJournals"] = [];
+  for (const journalDate of dates) {
+    const body = await fs.readFile(workspaceJournalPath(home, workspaceSlug, journalDate), "utf-8");
+    journals.push({ date: journalDate, body });
+  }
+  return journals;
+}
+
 /**
  * Per-workspace reflection pass. Reads yesterday's activity, calls
  * `reflectWorkspace`, writes the journal entry and any memory edits.
@@ -171,6 +206,7 @@ export async function runWorkspaceReflection(
   const activity = await listWorkspaceActivityForDate(opts.pool, opts.workspaceId, date);
   if (activity.length === 0) return null;
 
+  const priorJournals = await listPriorWorkspaceJournals(opts.home, opts.workspaceSlug, date);
   const result = await opts.reflectWorkspace({
     pool: opts.pool,
     home: opts.home,
@@ -184,6 +220,7 @@ export async function runWorkspaceReflection(
     providerKeys: opts.providerKeys,
     date,
     activity,
+    priorJournals,
   });
 
   const memoryRoot = workspaceMemoryDir(opts.home, opts.workspaceSlug);

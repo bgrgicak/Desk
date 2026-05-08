@@ -86,6 +86,12 @@ describeIf("productionReflectWorkspace (real opencode)", () => {
       userName: "reflector",
       agent: { id: agentId, name: "Workspace Reflector", model: "opencode/big-pickle" },
       date: "2026-05-05",
+      priorJournals: [
+        {
+          date: "2026-05-04",
+          body: "# Journal 2026-05-04\n\nThe user accepted todo/doing/done as the canonical kanban columns.",
+        },
+      ],
       activity: [
         {
           chatId: "chat_demo",

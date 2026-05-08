@@ -157,6 +157,59 @@ describe("runWorkspaceReflection", () => {
     expect(edit).toContain("Kanban prefs");
   });
 
+  it("passes the last 30 prior workspace journals for memory curation", async () => {
+    const journalDir = path.join(
+      home,
+      "Desk",
+      "workspaces",
+      workspaceASlug,
+      ".memory",
+      "journal",
+    );
+    await fs.mkdir(journalDir, { recursive: true });
+    const firstJournal = Date.UTC(2026, 3, 4); // 2026-04-04
+    for (let offset = 0; offset < 31; offset++) {
+      const journalDate = new Date(firstJournal + offset * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      await fs.writeFile(
+        path.join(journalDir, `${journalDate}.md`),
+        `# Journal ${journalDate}\n\nWorked on item ${offset + 1}.`,
+        "utf-8",
+      );
+    }
+    await fs.writeFile(
+      path.join(journalDir, `${REFLECTION_DATE}.md`),
+      "# Existing same-day journal should not be input",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(journalDir, "not-a-journal.txt"), "ignored", "utf-8");
+
+    const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
+      expect(input.priorJournals).toHaveLength(30);
+      expect(input.priorJournals[0]).toEqual({
+        date: "2026-05-04",
+        body: "# Journal 2026-05-04\n\nWorked on item 31.",
+      });
+      expect(input.priorJournals.at(-1)?.date).toBe("2026-04-05");
+      expect(input.priorJournals.map((j) => j.date)).not.toContain("2026-04-04");
+      expect(input.priorJournals.map((j) => j.date)).not.toContain(REFLECTION_DATE);
+      return { journal: "# Journal\n" };
+    };
+
+    await runWorkspaceReflection({
+      pool,
+      home,
+      date: REFLECTION_DATE,
+      workspaceId: workspaceAId,
+      workspaceSlug: workspaceASlug,
+      workspaceName: "WS A",
+      userId,
+      userName: "reflector",
+      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+      reflectWorkspace,
+    });
+  });
   it("skips silently when the workspace had no activity for the date", async () => {
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async () => {
       throw new Error("should not be called");
