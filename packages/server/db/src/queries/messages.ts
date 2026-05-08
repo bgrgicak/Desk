@@ -194,9 +194,23 @@ export async function listAgentContextByChat(
 const MAX_REQUEUE_ATTEMPTS = 5;
 
 export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[]; failed: number }> {
-  // Re-queue chat agent turns and summaries that haven't exceeded the retry
-  // cap. Messages that keep getting interrupted (e.g. rapid hot-reload cycles)
-  // are failed after MAX_REQUEUE_ATTEMPTS to prevent infinite re-queue loops.
+  // Fail orphans that have already hit the retry cap before re-queuing the
+  // rest. Running the fail query first ensures a message that reaches
+  // requeue_count = MAX_REQUEUE_ATTEMPTS gets one final attempt (from the
+  // previous cycle) before being marked failed — rather than being failed on
+  // the same call that would have re-queued it.
+  const { rowCount: cappedCount } = await db.query(
+    `UPDATE messages
+     SET state = 'failed',
+         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       AND requeue_count >= ?`,
+    [MAX_REQUEUE_ATTEMPTS],
+  );
+  // Re-queue remaining orphans that haven't exceeded the cap yet.
   const { rows: requeuedRows } = await db.query<{ id: string }>(
     `UPDATE messages
      SET state = 'pending',
@@ -210,18 +224,6 @@ export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[
        AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        AND requeue_count < ?
      RETURNING id`,
-    [MAX_REQUEUE_ATTEMPTS],
-  );
-  // Fail orphans that have hit the retry cap.
-  const { rowCount: cappedCount } = await db.query(
-    `UPDATE messages
-     SET state = 'failed',
-         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE state IN ('running', 'pending')
-       AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
-       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       AND requeue_count >= ?`,
     [MAX_REQUEUE_ATTEMPTS],
   );
   // Fail task_run orphans — their parent task handles rescheduling.

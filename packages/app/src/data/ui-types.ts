@@ -41,7 +41,7 @@ export interface ArtifactUpdate {
   id: string
   artifactId: string
   message: string
-  timestamp: Date
+  timestamp: number
 }
 
 // ── Today / Inbox ─────────────────────────────────────────────────────────────

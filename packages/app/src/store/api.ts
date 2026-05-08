@@ -61,8 +61,15 @@ const baseQuery: BaseQueryFn<
 > = async (args, api, extra) => {
   let result = await rawBaseQuery(args, api, extra);
 
+  // Only retry safe (idempotent read) methods. Retrying a POST/PUT/DELETE
+  // after a 502 could duplicate a mutation that the server already processed
+  // before crashing.
+  const method = (typeof args === "string" ? "GET" : (args as { method?: string }).method ?? "GET").toUpperCase();
+  const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(method);
+
   let attempts = 0;
   while (
+    isSafeMethod &&
     attempts < RETRY_ATTEMPTS &&
     result.error &&
     typeof result.error === "object" &&
