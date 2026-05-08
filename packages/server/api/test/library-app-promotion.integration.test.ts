@@ -284,10 +284,10 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     };
     expect(issued.token.startsWith("app_")).toBe(true);
     expect(issued.cookieName.startsWith("desk_libapp_")).toBe(true);
-    expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}/dist/\\?t=`));
+    expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/\\?t=`));
 
     const bootstrap = await httpRaw("GET", issued.url);
-    expect(bootstrap.status).toBe(302);
+    expect(bootstrap.status, bootstrap.body).toBe(302);
     const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
     expect(cookie).toBeTruthy();
 
@@ -308,6 +308,53 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     expect(indexResp.body).toContain('"chatId":""');
   });
 
+  it("issues and serves a nested library app from the requested workspace path", async () => {
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const nestedAppPath = "Projects/Q2/nested-app.app";
+    const nestedAppRoot = path.join(wsRoot, nestedAppPath);
+    await fs.mkdir(path.join(nestedAppRoot, "dist", "fragments", "list"), { recursive: true });
+    await fs.writeFile(
+      path.join(nestedAppRoot, "desk.app.json"),
+      JSON.stringify({ name: "nested-app", capabilities: [] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(nestedAppRoot, "dist", "index.html"),
+      "<!doctype html><html><head></head><body>Nested app root</body></html>",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(nestedAppRoot, "dist", "fragments", "list", "index.html"),
+      "<!doctype html><html><head></head><body>Nested fragment</body></html>",
+      "utf8",
+    );
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/library/nested-app/issue?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(nestedAppPath)}`,
+      { bearer: authToken },
+    );
+
+    expect(issue.status).toBe(201);
+    const issued = issue.bodyJson as { url: string; cookieName: string };
+    expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/Projects/Q2/nested-app\\.app/dist/\\?t=`));
+
+    const bootstrap = await httpRaw("GET", issued.url.replace("/dist/", "/dist/fragments/list/"));
+    expect(bootstrap.status, bootstrap.body).toBe(302);
+    const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
+    expect(cookie).toBeTruthy();
+    const setCookie = String(bootstrap.headers["set-cookie"]?.[0] ?? "");
+    const cookiePath = /Path=([^;]+)/.exec(setCookie)?.[1] ?? "";
+    expect(String(bootstrap.headers.location).startsWith(cookiePath)).toBe(true);
+
+    const fragment = await httpRaw("GET", String(bootstrap.headers.location), {
+      headers: { Cookie: cookie! },
+    });
+    expect(fragment.status).toBe(200);
+    expect(fragment.body).toContain("Nested fragment");
+    expect(fragment.body).toContain("window.desk");
+  });
+
   it("serves library app JS assets without cookies for opaque sandbox subresource loads", async () => {
     const issue = await httpRaw(
       "POST",
@@ -317,7 +364,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const issued = issue.bodyJson as { url: string };
     const bootstrap = await httpRaw("GET", issued.url);
     const cleanPath = String(bootstrap.headers["location"]);
-    const assetRootMatch = cleanPath.match(new RegExp(`^(/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}/dist/)`));
+    const assetRootMatch = cleanPath.match(new RegExp(`^(/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/)`));
     expect(assetRootMatch).toBeTruthy();
     const assetRoot = assetRootMatch![1];
 

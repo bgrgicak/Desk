@@ -6,6 +6,7 @@ describe('inlineAppPreviewFor', () => {
     expect(inlineAppPreviewFor('task-list.app', 'task-list.app', 'inode/directory')).toEqual({
       scope: 'library',
       appName: 'task-list',
+      appPath: 'task-list.app',
     })
   })
 
@@ -22,7 +23,7 @@ describe('inlineAppPreviewFor', () => {
   it('previews app manifest refs through the same app resolver', () => {
     expect(
       inlineAppPreviewFor('task-list.app/desk.app.json', 'desk.app.json', 'application/json'),
-    ).toEqual({ scope: 'library', appName: 'task-list' })
+    ).toEqual({ scope: 'library', appName: 'task-list', appPath: 'task-list.app' })
   })
 
   it('previews app fragment refs through the same app resolver', () => {
@@ -32,7 +33,7 @@ describe('inlineAppPreviewFor', () => {
         'index.html',
         'text/html',
       ),
-    ).toEqual({ scope: 'library', appName: 'task-list', fragment: 'list' })
+    ).toEqual({ scope: 'library', appName: 'task-list', appPath: 'task-list.app', fragment: 'list' })
   })
 
   it('ignores non-app refs', () => {

@@ -32,7 +32,7 @@ export type MessageContent =
   | { type: "text"; text: string }
   | { type: "toolCall"; toolName: string; args: Record<string, unknown> }
   | { type: "toolResult"; toolName: string; result: unknown }
-  | { type: "artifactRef"; path: string; name?: string; mime?: string }
+  | { type: "artifactRef"; path: string; workspaceId?: string; name?: string; mime?: string; params?: Record<string, string> }
   | { type: "events"; log: AgentLogEntry[] }
   | { type: "summary"; body: string }
   | { type: "summary_request" }
@@ -98,10 +98,12 @@ export interface ServerChat {
 export interface AttachmentRef {
   path: string;
   name: string;
+  workspaceId?: string;
   /** "directory" when the path points at a folder; defaults to "file" when omitted. */
   kind?: "file" | "directory";
   mime?: string;
   size?: number;
+  params?: Record<string, string>;
 }
 
 export interface ServerMessage {
