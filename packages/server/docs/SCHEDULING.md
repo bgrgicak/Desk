@@ -45,3 +45,11 @@ Tasks with a past `execute_at` fire naturally on the next tick — no special ha
 ## Summary scheduling
 
 `scheduleSummary(chatId)` deletes any existing pending `summary` request row for the chat and inserts a new one with `execute_at = now() + 30 minutes`. This refreshes the running summary for the chat without deleting completed summary messages.
+
+## Daily Reflection Scheduling
+
+Daily workspace reflection uses the same DB scheduler as recurring tasks. On startup, `ensureDailyReflectionTasks()` creates or repairs one `kind = 'task'` row per workspace with an enabled agent. The row stores `content.type = 'reflection_request'`, a cron expression, and the next `execute_at`.
+
+Reflection rows are task-like: every fire creates a `task_run` child, the parent returns to `pending`, and `execute_at` advances to the next cron occurrence. The default cron is `0 3 * * *`, overridable with `DESK_DAILY_REFLECTION_CRON`; seeding can be disabled with `DESK_DAILY_REFLECTION=off`.
+
+Reflection rows are regular tasks on the Tasks page. Each reflection task owns a dedicated `Workspace reflection` chat for follow-up conversation from the task detail panel; that chat is hidden from the sidebar so system maintenance chats are only reachable through Desk/task surfaces.

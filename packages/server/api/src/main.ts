@@ -18,8 +18,12 @@ import {
   resolveDeskHome,
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { auditSandboxMounts, writeGoalSkillFiles } from "@agent-desk/runtime";
+import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
+import {
+  auditSandboxMounts,
+  productionReflectWorkspace,
+  writeGoalSkillFiles,
+} from "@agent-desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -108,6 +112,8 @@ async function main(): Promise<void> {
 
   const runManager = createRunManager({
     pool,
+    home: DESK_HOME,
+    reflectWorkspace: productionReflectWorkspace,
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
@@ -118,6 +124,22 @@ async function main(): Promise<void> {
     10,
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
+
+  // Memory-system Phase 5 — daily reflection. Seed one internal recurring
+  // scheduler task per workspace instead of owning a separate process-local
+  // cron. Set DESK_DAILY_REFLECTION=off to skip seeding in dev / tests.
+  const reflectionDisabled =
+    (process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() === "off";
+  if (!reflectionDisabled) {
+    await ensureDailyReflectionTasks({
+      pool,
+      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+    });
+  }
+  if (reflectionDisabled) {
+    // eslint-disable-next-line no-console
+    console.log("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
+  }
 
   const server = createApp({
     pool,

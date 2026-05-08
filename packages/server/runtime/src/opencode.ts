@@ -84,10 +84,11 @@ export async function execRun(
 
   try {
     const driver = createDriver();
-    const result = await driver.execRun(handle.workspaceId, {
-      runId: opts.runId,
-      prompt: opts.prompt,
-      workspaceSlug: opts.workspaceSlug,
+      const result = await driver.execRun(handle.workspaceId, {
+        runId: opts.runId,
+        prompt: opts.prompt,
+        home: opts.home,
+        workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,

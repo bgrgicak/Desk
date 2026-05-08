@@ -22,6 +22,7 @@ const CONTENT_KINDS = [
   "events",
   "summary",
   "summary_request",
+  "reflection_request",
   "agent_turn",
 ] as const;
 

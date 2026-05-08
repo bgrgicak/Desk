@@ -50,6 +50,10 @@ beforeAll(async () => {
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed vacation plans." });
       return { exitCode: 0 };
     },
+    home,
+    reflectWorkspace: async (input) => ({
+      journal: `# Journal\n\nManual reflection for ${input.workspaceId} with ${input.activity.length} activity item(s).`,
+    }),
   });
 
   const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
@@ -116,6 +120,16 @@ async function insertScheduledTask(content: unknown, executeAt: string): Promise
     `INSERT INTO messages (id, chat_id, role, content, kind, state, execute_at)
      VALUES (?, ?, 'user', ?, 'task', 'pending', ?)`,
     [id, chatId, JSON.stringify(content), executeAt],
+  );
+  return id;
+}
+
+async function insertScheduledReflection(workspaceId: string, executeAt: string): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, kind, state, execute_at, cron)
+     VALUES (?, ?, 'system', ?, 'task', 'pending', ?, '0 3 * * *')`,
+    [id, chatId, JSON.stringify({ type: "reflection_request", workspaceId }), executeAt],
   );
   return id;
 }
@@ -304,6 +318,50 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
+
+    for (let i = 0; i < 50; i++) {
+      const { rows } = await pool.query<{ state: string }>(
+        `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+        [mid],
+      );
+      if (rows[0]?.state === "succeeded") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const parent = await queries.messages.findById(pool, mid);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.executeAt).toBe(executeAt);
+
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+      [mid],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].state).toBe("succeeded");
+
+    const { rows: outputRows } = await pool.query<{ content: string }>(
+      `SELECT child.content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [mid],
+    );
+    expect(JSON.parse(outputRows[0].content).type).toBe("events");
+  });
+
+  it("POST /run manually fires a scheduled reflection like a task", async () => {
+    const { rows: wsRows } = await pool.query<{ id: string }>("SELECT id FROM workspaces LIMIT 1");
+    const executeAt = new Date(Date.now() + 60_000).toISOString();
+    const mid = await insertScheduledReflection(wsRows[0].id, executeAt);
+
+    const before = await queries.messages.findById(pool, mid);
+    expect(before?.state).toBe("pending");
+
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+    expect((res.body as { kind: string; state: string }).kind).toBe("task");
+    expect((res.body as { state: string }).state).toBe("pending");
 
     for (let i = 0; i < 50; i++) {
       const { rows } = await pool.query<{ state: string }>(
