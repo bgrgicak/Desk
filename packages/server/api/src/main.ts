@@ -70,6 +70,20 @@ async function main(): Promise<void> {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
   }
 
+  // Re-queue agent_turn / summary_request messages that were interrupted
+  // by the previous server process (crash, hot-reload, etc.) so they are
+  // retried rather than silently dropped. task_run orphans are failed so
+  // their parent cron tasks can reschedule normally.
+  const orphaned = await queries.messages.recoverOrphanedRuns(pool);
+  const totalOrphaned = orphaned.requeued.length + orphaned.failed;
+  if (totalOrphaned > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `recovered ${totalOrphaned} orphaned message(s): ` +
+      `${orphaned.requeued.length} re-queued, ${orphaned.failed} failed`,
+    );
+  }
+
   // Repair/flag artifactRef messages whose target moved or vanished while
   // the server was down.
   const reconciled = await reconcileArtifactRefs(pool, DESK_HOME);
@@ -118,6 +132,11 @@ async function main(): Promise<void> {
     10,
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
+  // Fire any re-queued orphans immediately rather than waiting up to
+  // POLL_INTERVAL_MS for the first scheduled tick.
+  if (orphaned.requeued.length > 0) {
+    void runManager.tickScheduled();
+  }
 
   const server = createApp({
     pool,

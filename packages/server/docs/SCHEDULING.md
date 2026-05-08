@@ -22,7 +22,7 @@ Matched messages are fired concurrently via `fireMessage()`. The DB is the singl
 | Env var | Default | Description |
 |---|---|---|
 | `DESK_SCHEDULER_POLL_INTERVAL_MS` | `60000` | How often the poll loop runs (ms) |
-| `DESK_SCHEDULER_MAX_CONCURRENT` | `3` | Max simultaneous fires per tick |
+| `DESK_SCHEDULER_MAX_CONCURRENT` | `10` | Max simultaneous fires per tick |
 
 ## Cron tasks
 

@@ -36,6 +36,7 @@ import {
   useRunMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
+  usePatchChatMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
@@ -44,7 +45,6 @@ import {
   setTodaySheetOpen,
   setAgentationVisible,
   markArtifactSaved,
-  markChatRead,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
@@ -136,12 +136,10 @@ function AppInner() {
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
-  const readChatIdList = useAppSelector(s => s.ui.readChatIds)
   const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
   const agentationVisible = useAppSelector(s => s.ui.agentationVisible)
 
   const savedArtifactIds = new Set(savedArtifactIdList)
-  const readChatIds = new Set(readChatIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
@@ -176,6 +174,7 @@ function AppInner() {
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
+  const [patchChatMutation] = usePatchChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
@@ -339,10 +338,12 @@ function AppInner() {
     }
   }, [selectedChatId])
 
-  const handleSidebarChatClick = useCallback((chat: { id: string }) => {
-    dispatch(markChatRead(chat.id))
+  const handleSidebarChatClick = useCallback((chat: { id: string; unread?: boolean }) => {
+    if (chat.unread) {
+      void patchChatMutation({ id: chat.id, patch: { unread: false } })
+    }
     goTo({ chat: chat.id })
-  }, [dispatch, goTo])
+  }, [patchChatMutation, goTo])
 
   const handleNewChatFirstMessage = useCallback(async (
     message: string,
@@ -423,7 +424,7 @@ function AppInner() {
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
   const unreadCount = awaitingResp?.items.length ?? 0
 
-  const { data: libraryResp } = useGetLibraryQuery(
+  const { data: libraryResp, isLoading: libraryLoading } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },
   )
@@ -450,7 +451,7 @@ function AppInner() {
   const chatArtifacts = (selectedChat?.artifactIds ?? [])
     .map(id => artifacts.find(a => a.id === id))
     .filter(Boolean) as Artifact[]
-  const chatShowNewBadge = !!(selectedChat?.unread && readChatIds.has(selectedChat.id))
+  const chatShowNewBadge = !!selectedChat?.unread
 
   // Both `?artifact=<path>` and `?item=<path>` route to the same unified
   // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
@@ -509,7 +510,6 @@ function AppInner() {
         onChatClick={handleSidebarChatClick}
         onDeleteChat={handleDeleteChat}
         unreadCount={unreadCount}
-        readChatIds={readChatIds}
         isDetailOpen={!!selectedContextItem}
         onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
@@ -674,9 +674,10 @@ function AppInner() {
             }}
           />
         )}
-        {!selectedContextItem && !activeChat && activeView === 'context' && (
+        {!selectedContextItem && !activeChat && activeView === 'context' && !effectiveItemPath && (
           <ContextList
             items={libraryItems}
+            isLoading={libraryLoading || !libraryResp}
             onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
             onPinItem={(item) => {

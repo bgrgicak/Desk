@@ -219,7 +219,7 @@ describe("retargetAttachmentPaths", () => {
       role: "user",
       content: { type: "text", text: "no attachments" },
     });
-    // No throw, no spurious updates.
+     // No throw, no spurious updates.
     const updated = await messages.retargetAttachmentPaths(
       p,
       wsId,
@@ -227,5 +227,146 @@ describe("retargetAttachmentPaths", () => {
       "Other/path.txt",
     );
     expect(updated).toHaveLength(0);
+  });
+});
+
+describe("recoverOrphanedRuns", () => {
+  let p: Pool;
+  let cId: string;
+
+  beforeAll(async () => {
+    p = await setupTestDb();
+    const userId = generateId("user");
+    await users.insert(p, { id: userId, username: "orphan-user", passwordHash: "h", email: "orphan@example.com" });
+    const agentId = generateId("agent");
+    await agents.insert(p, { id: agentId, userId, name: "OrphanAgent" });
+    const wsId = generateId("workspace");
+    await workspaces.insert(p, { id: wsId, userId, name: "OrphanWS", path: `orphanws-${wsId.slice(-6)}` });
+    await p.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id)
+       VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      [wsId, agentId],
+    );
+    cId = generateId("chat");
+    await chats.insert(p, { id: cId, workspaceId: wsId, agentId, title: "OrphanChat" });
+  });
+
+  afterAll(async () => {
+    await teardownTestDb(p);
+  });
+
+  it("re-queues orphaned running agent_turn messages as pending", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake" },
+      state: "running",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+    expect(msg!.executeAt).toBeTruthy();
+    expect(msg!.startedAt).toBeUndefined();
+    expect(msg!.endedAt).toBeUndefined();
+  });
+
+  it("re-queues orphaned pending agent_turn (no execute_at) as pending with execute_at", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake2" },
+      state: "pending",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+    expect(msg!.executeAt).toBeTruthy();
+  });
+
+  it("re-queues orphaned running summary_request messages as pending", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "running",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+  });
+
+  it("fails orphaned task_run messages", async () => {
+    const taskId = generateId("message");
+    await messages.insert(p, {
+      id: taskId,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "a task" },
+      kind: "task",
+      state: "running",
+    });
+    const runId = generateId("message");
+    await p.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, state, parent_id)
+       VALUES (?, ?, 'user', '{"type":"text","text":"run"}', 'task_run', 'running', ?)`,
+      [runId, cId, taskId],
+    );
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.failed).toBeGreaterThanOrEqual(1);
+    const run = await messages.findById(p, runId);
+    expect(run!.state).toBe("failed");
+  });
+
+  it("leaves scheduled pending messages alone (future execute_at)", async () => {
+    const id = generateId("message");
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      executeAt: future,
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+  });
+
+  it("does not touch succeeded or failed messages", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake3" },
+      state: "succeeded",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("succeeded");
+  });
+
+  it("does not touch regular text messages in pending state", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "hello" },
+      state: "pending",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
   });
 });

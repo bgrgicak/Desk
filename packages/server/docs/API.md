@@ -266,17 +266,21 @@ in prod, the UI is the only way to populate them.
 |--------|--------------------------------|-------------------------------------------------|
 | GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| PUT    | /library/content?path=&workspaceId=  | Save content to a file (upsert — creates if missing) |
 | POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
 | DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
-| GET    | /library/download?path=&workspaceId= | Stream a library file                     |
+| GET    | /library/content?path=&workspaceId=  | Stream a library file inline (for preview)      |
+| GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
 (`~/Desk/workspaces/desk/`). There is no DB index; listing walks the
-directory and skips dot-prefixed entries (the universal hidden-file
-convention — `.chats/`, `.opencode/`, etc. are never shown). File
-identifiers are workspace-root-relative paths (`foo.pdf`,
-`notes/bar.md`). The `path` query parameter is url-encoded.
+directory and skips dot-prefixed entries (`.chats/`, `.memory/`, etc.)
+unless `showHidden=true` is set. Hidden (dot-prefixed) files are
+otherwise identical to regular files — all CRUD operations work the
+same way. File identifiers are workspace-root-relative paths (`foo.pdf`,
+`notes/bar.md`, `.memory/workspace.md`). The `path` query parameter is
+url-encoded.
 
 ### Links (`POST /library/link`)
 

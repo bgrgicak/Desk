@@ -536,8 +536,8 @@ describe("API e2e (real Postgres)", () => {
     expect(meta.path).toBe(libFile.path);
 
     // PUT /library/content overwrites the file in place and subsequent
-    // reads return the new bytes. A second PUT to a non-existent path
-    // yields 404 (no upsert — use POST to create).
+    // reads return the new bytes. PUT to a non-existent path creates the
+    // file (upsert) so agent-written hidden files can be saved directly.
     const newBody = "overwritten";
     const putResult = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
       const payload = Buffer.from(newBody);
@@ -593,7 +593,10 @@ describe("API e2e (real Postgres)", () => {
     });
     expect(afterPut.toString()).toBe(newBody);
 
-    const missingPut = await new Promise<{ status: number }>((resolve, reject) => {
+    // PUT to a non-existent path creates the file (upsert semantics) —
+    // this lets agent-created hidden files be saved without a separate
+    // POST creation step.
+    const upsertPut = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
       const payload = Buffer.from("x");
       const req = http.request(
         {
@@ -608,15 +611,24 @@ describe("API e2e (real Postgres)", () => {
           },
         },
         (res) => {
-          res.on("data", () => {});
-          res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString();
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
         },
       );
       req.on("error", reject);
       req.write(payload);
       req.end();
     });
-    expect(missingPut.status).toBe(404);
+    expect(upsertPut.status).toBe(200);
+    const upsertRef = upsertPut.body as { path: string; size: number };
+    expect(upsertRef.path).toBe("does-not-exist.txt");
+    expect(upsertRef.size).toBe(1);
   });
 
   it("library directory flow: subpath upload, create/rename/move/delete folders, recursive listing", async () => {

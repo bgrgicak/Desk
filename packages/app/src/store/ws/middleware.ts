@@ -173,6 +173,17 @@ export function applyEventToCache(
         ),
       );
       dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }]));
+      // Every messages.insert() sets chat.unread = 1 on the server.
+      // Invalidate the chat list so the sidebar picks up the new unread
+      // state without waiting for the next manual refetch.
+      if (event.type === "message.appended") {
+        dispatch(
+          api.util.invalidateTags([
+            { type: "Chat", id: msg.chatId },
+            { type: "Chat", id: "LIST" },
+          ]),
+        );
+      }
       break;
     }
     case "message.streaming": {

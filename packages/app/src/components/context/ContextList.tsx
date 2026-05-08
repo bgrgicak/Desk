@@ -58,6 +58,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Skeleton,
 } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import type { ContextItem } from '@/data/ui-types'
@@ -89,6 +90,7 @@ import { usePrefs } from '@/hooks/use-prefs'
 
 interface ContextListProps {
   items: ContextItem[]
+  isLoading?: boolean
   onItemClick: (item: ContextItem) => void
   onCompose: (attachedItems?: ContextItem[]) => void
   onPinItem?: (item: ContextItem) => void
@@ -128,14 +130,8 @@ const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
 // from normal listings (agent artifacts, `.opencode/`, drafts, etc.).
 const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', label: 'Hidden' }
 
-/** True when any path segment starts with `.` — matches the server's
- *  hidden-skip rule (search.ts) so we can locally separate hidden entries
- *  from the showHidden=true superset returned by the API. */
-function isHiddenPath(p: string): boolean {
-  return p.split('/').some(seg => seg.startsWith('.'))
-}
 
-export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
+export function ContextList({ items, isLoading, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
   const [byFilter, setByFilter] = usePersistedState<ByFilter>('desk.context.byFilter', 'all')
@@ -183,7 +179,6 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
     if (!isHiddenMode) return items
     if (!activeWorkspaceId) return []
     return (libraryResp?.items ?? [])
-      .filter(f => isHiddenPath(f.path))
       .map(f => toContextItem(f, activeWorkspaceId))
   }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
 
@@ -422,8 +417,8 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
   const handleCreateNote = async () => {
     if (!activeWorkspaceId) return
     const subpath = subpathFromFolderId(currentFolderId)
-    const name = 'Untitled.txt'
-    const blob = new File([''], name, { type: 'text/plain' })
+    const name = 'Untitled.md'
+    const blob = new File([''], name, { type: 'text/markdown' })
     try {
       const serverFile = await uploadLibraryFile({
         workspaceId: activeWorkspaceId,
@@ -466,7 +461,6 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
     byFilter === 'all'
   const filteredFolders = showFolders
     ? childFolders
-        .filter(f => !isHiddenMode || isHiddenPath(f.id))
         .filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : []
 
@@ -712,7 +706,19 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
       <ContextMenuTrigger asChild>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {totalCount === 0 ? (
+        {isLoading ? (
+          <div className="space-y-0.5 pt-1">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+                <Skeleton className="h-4 w-4 rounded" />
+                <Skeleton className="h-4 flex-1 max-w-[200px]" />
+                <div className="flex-1" />
+                <Skeleton className="h-4 w-14" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+            ))}
+          </div>
+        ) : totalCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="mb-4">
               {isInsideFolder
@@ -770,7 +776,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countItemsRecursive(folders, folder.id, items)
+                const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
                 return (
                   <motion.div
                     key={folder.id}
@@ -881,7 +887,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countItemsRecursive(folders, folder.id, items)
+              const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
               return (
                 <motion.div
                   key={folder.id}

@@ -10,3 +10,4 @@ test-results/
 NvVars
 .claude/scheduled_tasks.lock
 .playwright-mcp
+workspaces/

@@ -272,10 +272,12 @@ describe("removeChatAttachment", () => {
     ).rejects.toThrow(ValidationError);
   });
 
-  it("rejects hidden / dot-prefixed names", async () => {
+  it("treats hidden / dot-prefixed names like any other (NotFoundError when absent)", async () => {
+    // Hidden names are no longer rejected — they behave like regular
+    // files. If the file doesn't exist, the caller sees NotFoundError.
     await expect(
       removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, ".internal.txt"),
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toThrow(NotFoundError);
   });
 
   it("throws NotFoundError when the attachment doesn't exist", async () => {

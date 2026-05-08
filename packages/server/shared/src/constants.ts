@@ -8,7 +8,7 @@ export const ID_PREFIXES = {
   appSession: "aps_",
 } as const;
 
-export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_MESSAGE_BYTES = 128 * 1024;
 export const DEFAULT_LIBRARY_PAGE_SIZE = 50;
 

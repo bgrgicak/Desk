@@ -63,7 +63,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("RUN `desk-agent task schedule`");
   });
 
-  it("includes prompt-level goal autodetection instructions", () => {
+  it("does not include goal autodetection instructions (feature removed)", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
@@ -71,10 +71,7 @@ describe("renderAgentFile", () => {
       userName: "Desk",
     });
 
-    expect(result).toContain("## Goal autodetection");
-    expect(result).toContain("desk-goal-<goal>");
-    expect(result).toContain("native `skill` tool");
-    expect(result).toContain("Do not announce the detected goal");
+    expect(result).not.toContain("## Goal autodetection");
   });
 
   it("renders the per-chat artifact paths when chatId is supplied", () => {
@@ -152,7 +149,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
     expect(result).toContain("## Your workspace");
     expect(result).toContain("## Scheduling — act first, ask never");
-    expect(result).toContain("## Goal autodetection");
+    expect(result).not.toContain("## Goal autodetection");
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("## Memory and recall");
     expect(result).not.toContain("# Desk CLI");

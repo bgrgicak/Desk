@@ -6,7 +6,7 @@ import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
-import { useGetSummaryHistoryQuery } from '@/store/api'
+import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 
 interface MessageBubbleProps {
@@ -120,9 +120,12 @@ function MessageContentView({
   developerMode: boolean
   onAttachmentClick?: (attachment: AttachmentRef) => void
 }) {
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
+
   switch (content.type) {
     case 'text':
-      return <MarkdownContent text={content.text} />
+      return <MarkdownContent text={content.text} workspacePath={workspacePath} />
     case 'artifactRef':
       return (
         <ArtifactRefRow
@@ -136,7 +139,7 @@ function MessageContentView({
         />
       )
     case 'events':
-      return <EventsView log={content.log} developerMode={developerMode} />
+      return <EventsView log={content.log} developerMode={developerMode} workspacePath={workspacePath} />
     case 'toolCall':
       // Filtered upstream when developerMode is false; defensive guard here.
       if (!developerMode) return null
@@ -146,7 +149,7 @@ function MessageContentView({
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'summary':
       if (!developerMode) return null
-      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} />
+      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} />
     case 'summary_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
@@ -156,7 +159,7 @@ function MessageContentView({
   }
 }
 
-function SummaryView({ chatId, messageId, body }: { chatId: string; messageId: string; body: string }) {
+function SummaryView({ chatId, messageId, body, workspacePath }: { chatId: string; messageId: string; body: string; workspacePath?: string }) {
   const [showDiff, setShowDiff] = useState(false)
   // Lazy-load history only when the diff toggle is on so a chat with
   // many summaries doesn't hammer the API on render.
@@ -192,7 +195,7 @@ function SummaryView({ chatId, messageId, body }: { chatId: string; messageId: s
           No prior version to diff against — this is the first materialized summary.
         </div>
       ) : (
-        <MarkdownContent text={body} />
+        <MarkdownContent text={body} workspacePath={workspacePath} />
       )}
     </div>
   )
@@ -344,7 +347,7 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMode: boolean }) {
+function EventsView({ log, developerMode, workspacePath }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string }) {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
@@ -395,7 +398,7 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
       {chunks.map((c, i) => {
         if (c.kind === 'text') {
           if (!c.text.trim()) return null
-          return <MarkdownContent key={i} text={c.text.trim()} />
+          return <MarkdownContent key={i} text={c.text.trim()} workspacePath={workspacePath} />
         }
         if (c.kind === 'events') {
           return <EventGroup key={i} entries={c.entries} />

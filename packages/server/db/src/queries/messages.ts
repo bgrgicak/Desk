@@ -77,6 +77,11 @@ export async function listByChat(
   return { items, nextCursor };
 }
 
+/**
+ * Returns all messages in a chat that the agent should see as context,
+ * starting from the most recent summary (inclusive) so context is bounded
+ * by the last compaction point.
+ */
 export async function listAgentContextByChat(
   db: Pool,
   chatId: string,
@@ -105,6 +110,56 @@ export async function listAgentContextByChat(
   );
   return rows.map(rowToMessage);
 }
+
+/**
+ * Recovers orphaned runs on server startup.
+ *
+ * An orphan is a message stuck in `running` or `pending` (non-scheduled)
+ * state from a previous server process that died before finalising it.
+ *
+ * - `agent_turn` / `summary_request` (chat messages): reset to `pending`
+ *   with `execute_at = now` so the scheduler re-fires them immediately.
+ *   These were interrupted by a crash/restart — not by an agent error —
+ *   so retrying is the right behaviour.
+ *
+ * - `task_run`: mark as `failed`. The parent task re-schedules via cron;
+ *   one-shot tasks need manual retry.
+ *
+ * Returns the IDs of the re-queued chat messages so the caller can fire
+ * them immediately rather than waiting for the next scheduler tick.
+ */
+export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[]; failed: number }> {
+  // Re-queue chat agent turns and summaries so they are retried.
+  const { rows: requeuedRows } = await db.query<{ id: string }>(
+    `UPDATE messages
+     SET state = 'pending',
+         started_at = NULL,
+         ended_at = NULL,
+         execute_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+     RETURNING id`,
+    [],
+  );
+  // Fail task_run orphans — their parent task handles rescheduling.
+  const { rowCount: failedCount } = await db.query(
+    `UPDATE messages
+     SET state = 'failed',
+         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND kind = 'task_run'
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    [],
+  );
+  return {
+    requeued: requeuedRows.map((r) => r.id),
+    failed: failedCount ?? 0,
+  };
+}
+
 
 export async function insert(
   db: Pool,
@@ -147,11 +202,26 @@ export async function insert(
       data.title ?? null,
     ],
   );
-  // Touch the parent chat's updated_at
-  await db.query(
-    "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
-    [data.chatId],
-  );
+  // Touch the parent chat's updated_at. Internal messages (summaries,
+  // summary requests, agent_turn triggers) should not flip unread — they
+  // are not visible to regular users and would create noise in the
+  // sidebar's unread dot.
+  const contentType = (data.content as { type?: string } | null)?.type;
+  const isInternal =
+    contentType === "agent_turn" ||
+    contentType === "summary_request" ||
+    contentType === "summary";
+  if (isInternal) {
+    await db.query(
+      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      [data.chatId],
+    );
+  } else {
+    await db.query(
+      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
+      [data.chatId],
+    );
+  }
   return rowToMessage(rows[0]);
 }
 

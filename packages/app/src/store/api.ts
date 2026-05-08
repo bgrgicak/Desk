@@ -339,7 +339,7 @@ export const api = createApi({
       ServerChat,
       {
         id: string;
-        patch: Partial<Pick<ServerChat, "title" | "goal" | "agentId">>;
+        patch: Partial<Pick<ServerChat, "title" | "goal" | "agentId" | "unread">>;
       }
     >({
       query: ({ id, patch }) => ({
@@ -417,9 +417,14 @@ export const api = createApi({
         if (goal !== undefined) body.goal = goal;
         return { url, method: "POST", body };
       },
+      // Message cache is maintained via WS events (message.appended /
+      // message.updated). Invalidating Message tags here would trigger a
+      // full refetch that races with those WS patches — the refetch
+      // response can overwrite a more-recent WS state transition, leaving
+      // an agent_turn stuck in "pending" or "running" and the Thinking…
+      // indicator permanently visible. Chat tags are still invalidated so
+      // the sidebar picks up unread / title changes from the new message.
       invalidatesTags: (_r, _e, { chatId }) => [
-        { type: "Message", id: `CHAT_${chatId}` },
-        { type: "Message", id: "CROSS" },
         { type: "Chat", id: chatId },
         { type: "Chat", id: "LIST" },
       ],
@@ -541,8 +546,8 @@ export const api = createApi({
     >({
       query: ({ workspaceId, file, subpath }) => {
         const fd = new FormData();
-        fd.append("file", file, file.name);
         if (subpath) fd.append("subpath", subpath);
+        fd.append("file", file, file.name);
         const url = workspaceId
           ? `/library?workspaceId=${encodeURIComponent(workspaceId)}`
           : "/library";

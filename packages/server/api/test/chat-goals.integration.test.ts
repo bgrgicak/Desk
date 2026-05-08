@@ -121,7 +121,7 @@ describe("goal persistence on send", () => {
     )).rejects.toThrow(/Invalid chat goal/);
   });
 
-  it("JSON path: send without goal persists an inferred goal", async () => {
+  it("JSON path: send without goal leaves chats.goal empty", async () => {
     const chatId = await freshChat();
     await sendMessage(
       pool,
@@ -130,7 +130,7 @@ describe("goal persistence on send", () => {
       () => {},
     );
     const chat = await queries.chats.findById(pool, chatId);
-    expect(chat?.goal).toBe("app");
+    expect(chat?.goal).toBeUndefined();
   });
 
   it("JSON path: send without a matching goal leaves chats.goal empty", async () => {
@@ -145,7 +145,7 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBeUndefined();
   });
 
-  it("JSON path: agent-role send without goal does not persist an inferred goal", async () => {
+  it("JSON path: agent-role send without goal does not set chats.goal", async () => {
     const chatId = await freshChat();
     await sendMessage(
       pool,
@@ -176,7 +176,7 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("document");
   });
 
-  it("JSON path: explicit null goal clears chats.goal and prevents inference on that send", async () => {
+  it("JSON path: explicit null goal clears chats.goal", async () => {
     const chatId = await freshChat();
     await sendMessage(
       pool,
@@ -220,7 +220,7 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("data");
   });
 
-  it("multipart path: FormData without goal persists an inferred goal", async () => {
+  it("multipart path: FormData without goal leaves chats.goal empty", async () => {
     const chatId = await freshChat();
     const form = new FormData();
     form.set("content", "show me a portfolio site");
@@ -230,7 +230,7 @@ describe("goal persistence on send", () => {
 
     await sendMessage(pool, chatId, body, () => {});
     const chat = await queries.chats.findById(pool, chatId);
-    expect(chat?.goal).toBe("site");
+    expect(chat?.goal).toBeUndefined();
   });
 
   it("multipart path: empty goal field clears chats.goal", async () => {

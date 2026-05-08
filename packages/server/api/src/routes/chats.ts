@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -100,9 +100,25 @@ export async function createChat(
 export async function patchChat(
   pool: Pool,
   id: string,
-  data: { title?: string; goal?: string | null; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ) {
-  const chat = await queries.chats.updateMeta(pool, id, data);
+  // Handle unread separately — it uses a dedicated DB function.
+  if (data.unread === false) {
+    await queries.chats.markRead(pool, id);
+  }
+
+  // If there are other fields to update, delegate to updateMeta.
+  const { unread: _unread, ...metaFields } = data;
+  const hasMetaFields = Object.values(metaFields).some(v => v !== undefined);
+
+  if (hasMetaFields) {
+    const chat = await queries.chats.updateMeta(pool, id, metaFields);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
+
+  // unread-only patch — return the current chat state.
+  const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
@@ -171,7 +187,9 @@ function validateAttachableArtifactPath(relPath: string, chatId: string): void {
   if (relPath.startsWith(chatPrefix)) {
     const artifactSegments = relPath.slice(chatPrefix.length).split("/");
     for (const segment of artifactSegments) {
-      if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+      // Dot-prefixed segments are allowed — hidden files inside the
+      // artifacts dir behave like regular files.
+      if (segment === "" || segment === "." || segment === "..") {
         throw new ValidationError(`Invalid artifact path segment: ${segment}`);
       }
     }
@@ -283,15 +301,6 @@ export async function sendMessage(
 
   if (data.goal !== undefined) {
     await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
-  } else {
-    // Only infer a goal from message text for plain chat messages (kind='chat').
-    // Task and summary messages are system/scheduler actions — running
-    // inferGoal on their content (e.g. "scheduled summary") would wrongly
-    // stamp a goal like "document" onto the chat and change the sidebar icon.
-    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
-    if (goalToPersist) {
-      await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
-    }
   }
 
   // Self-firing kinds (task, summary): one row, schedule on the row, fire
@@ -334,7 +343,7 @@ export async function sendMessage(
   emit({ type: "message.appended", payload: userMessage });
 
   const triggerId = generateId("message");
-  await queries.messages.insert(pool, {
+  const trigger = await queries.messages.insert(pool, {
     id: triggerId,
     chatId,
     role: "system",
@@ -343,6 +352,7 @@ export async function sendMessage(
     parentId: userMessage.id,
     agentId: chat.agentId,
   });
+  emit({ type: "message.appended", payload: trigger });
 
   return { userMessage, triggerId };
 }

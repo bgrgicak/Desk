@@ -168,7 +168,7 @@ interface AppShellProps {
   onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
   unreadCount?: number
-  readChatIds?: Set<string>
+
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void
   // ── Workspace bar ──
@@ -198,7 +198,7 @@ export function AppShell({
   onChatClick,
   onDeleteChat,
   unreadCount = 0,
-  readChatIds = new Set(),
+
   isDetailOpen = false,
   onArtifactClick,
   activeWorkspaceId,
@@ -345,7 +345,7 @@ export function AppShell({
   const filteredChats = allChats.filter(chat => {
     if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
     if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
-    if (appliedFilter.updatesOnly && !(chat.unread && !readChatIds.has(chat.id))) return false
+    if (appliedFilter.updatesOnly && !chat.unread) return false
     if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
     return true
   })
@@ -624,7 +624,7 @@ export function AppShell({
                         >
                           <div className="relative shrink-0">
                             <ChatIcon className="h-4 w-4" />
-                            {chat.unread && !readChatIds.has(chat.id) && (
+                            {chat.unread && (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
                             )}
                           </div>

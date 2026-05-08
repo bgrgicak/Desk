@@ -11,7 +11,7 @@ export interface UiState {
   artifactBackLabel: string | null;
   savedArtifactIds: string[];
   readUpdateIds: string[];
-  readChatIds: string[];
+
   todaySheetOpen: boolean;
   agentationVisible: boolean;
   /** Agent id carried over from the artifact-creation sheet's "Skip to chat"
@@ -27,7 +27,7 @@ const initialState: UiState = {
   artifactBackLabel: null,
   savedArtifactIds: [],
   readUpdateIds: [],
-  readChatIds: [],
+
   todaySheetOpen: false,
   agentationVisible: true,
   pendingNewChatAgentId: null,
@@ -55,10 +55,7 @@ const slice = createSlice({
       if (!state.readUpdateIds.includes(action.payload))
         state.readUpdateIds.push(action.payload);
     },
-    markChatRead(state, action: PayloadAction<string>) {
-      if (!state.readChatIds.includes(action.payload))
-        state.readChatIds.push(action.payload);
-    },
+
     setTodaySheetOpen(state, action: PayloadAction<boolean>) {
       state.todaySheetOpen = action.payload;
     },
@@ -82,7 +79,7 @@ export const {
   setArtifactBackLabel,
   markArtifactSaved,
   markUpdateRead,
-  markChatRead,
+
   setTodaySheetOpen,
   setAgentationVisible,
   setPendingNewChatAgentId,

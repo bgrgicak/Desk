@@ -38,8 +38,6 @@ export interface AgentFileInput {
    * agent has the same goal context across the whole conversation.
    */
   goal?: GoalKey | null;
-  /** Whether to include the goal-selection/autodetection prompt fragment. */
-  includeGoalAutodetect?: boolean;
   /**
    * Summary runs are internal summary refreshes. They get a narrow prompt that
    * returns markdown only and never writes artifacts.
@@ -73,7 +71,6 @@ export function renderAgentFile(input: AgentFileInput): string {
     userTimezone: input.userTimezone,
     chatId: input.chatId,
     goal: input.goal ?? null,
-    includeGoalAutodetect: input.includeGoalAutodetect,
     runMode: input.runMode ?? "chat",
     home: input.home,
     workspaceSlug: input.workspaceSlug,

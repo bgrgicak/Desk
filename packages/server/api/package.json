@@ -37,6 +37,8 @@
     "@agent-desk/scheduler": "^0.1.0-alpha.0",
     "@agent-desk/shared": "^0.1.0-alpha.0",
     "@agent-desk/storage": "^0.1.0-alpha.0",
+    "@types/busboy": "^1.5.4",
+    "busboy": "^1.6.0",
     "croner": "^10.0.1"
   },
   "devDependencies": {

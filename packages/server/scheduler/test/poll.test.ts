@@ -179,32 +179,39 @@ describe("cron tasks", () => {
 
 describe("concurrency cap", () => {
   it("fires at most MAX_CONCURRENT tasks per tick", async () => {
-    let concurrentPeak = 0;
-    let current = 0;
-    const rm = createRunManager({
-      pool,
-      execRunFn: async (_runId) => {
-        current++;
-        concurrentPeak = Math.max(concurrentPeak, current);
-        await new Promise((r) => setTimeout(r, 80));
-        current--;
-        return { exitCode: 0 };
-      },
-    });
+    const prev = process.env.DESK_SCHEDULER_MAX_CONCURRENT;
+    process.env.DESK_SCHEDULER_MAX_CONCURRENT = "3";
+    try {
+      let concurrentPeak = 0;
+      let current = 0;
+      const rm = createRunManager({
+        pool,
+        execRunFn: async (_runId) => {
+          current++;
+          concurrentPeak = Math.max(concurrentPeak, current);
+          await new Promise((r) => setTimeout(r, 80));
+          current--;
+          return { exitCode: 0 };
+        },
+      });
 
-    // Insert 5 due tasks — more than the default cap of 3
-    for (let i = 0; i < 5; i++) {
-      const id = generateId("message");
-      await pool.query(
-        `INSERT INTO messages (id, chat_id, role, content, state, execute_at, kind)
-         VALUES (?, ?, 'user', ?, 'pending', ${PAST}, 'task')`,
-        [id, chatId, JSON.stringify({ type: "text", text: `task ${i}` })],
-      );
+      // Insert 5 due tasks — more than the configured cap of 3
+      for (let i = 0; i < 5; i++) {
+        const id = generateId("message");
+        await pool.query(
+          `INSERT INTO messages (id, chat_id, role, content, state, execute_at, kind)
+           VALUES (?, ?, 'user', ?, 'pending', ${PAST}, 'task')`,
+          [id, chatId, JSON.stringify({ type: "text", text: `task ${i}` })],
+        );
+      }
+
+      await rm.tickScheduled();
+
+      expect(concurrentPeak).toBeLessThanOrEqual(3);
+    } finally {
+      if (prev === undefined) delete process.env.DESK_SCHEDULER_MAX_CONCURRENT;
+      else process.env.DESK_SCHEDULER_MAX_CONCURRENT = prev;
     }
-
-    await rm.tickScheduled();
-
-    expect(concurrentPeak).toBeLessThanOrEqual(3);
   });
 });
 
