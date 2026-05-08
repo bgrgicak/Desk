@@ -54,7 +54,7 @@ import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
-import { shouldOpenChatSidebarsByDefault, chatRightPanelClassName } from './chatViewUtils'
+import { DESKTOP_SIDEBAR_BREAKPOINT, shouldOpenChatSidebarsByDefault, chatRightPanelClassName } from './chatViewUtils'
 
 function activateOnEnterOrSpace(e: KeyboardEvent<HTMLElement>, action: () => void) {
   if (e.currentTarget !== e.target) return
