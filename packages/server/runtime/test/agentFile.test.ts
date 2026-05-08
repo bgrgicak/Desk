@@ -63,12 +63,24 @@ describe("renderAgentFile", () => {
     expect(result).toContain("RUN `desk-agent task schedule`");
   });
 
-  it("does not include goal autodetection instructions (feature removed)", () => {
+  it("includes goal autodetection instructions by default", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
       model: "opencode/big-pickle",
       userName: "Desk",
+    });
+
+    expect(result).toContain("## Goal autodetection");
+  });
+
+  it("omits goal autodetection when includeGoalAutodetect is false", () => {
+    const result = renderAgentFile({
+      agentId: "agt_goal_detect",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      includeGoalAutodetect: false,
     });
 
     expect(result).not.toContain("## Goal autodetection");
@@ -149,7 +161,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
     expect(result).toContain("## Your workspace");
     expect(result).toContain("## Scheduling — act first, ask never");
-    expect(result).not.toContain("## Goal autodetection");
+    expect(result).toContain("## Goal autodetection");
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("## Memory and recall");
     expect(result).not.toContain("# Desk CLI");
