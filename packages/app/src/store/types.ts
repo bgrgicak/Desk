@@ -86,6 +86,12 @@ export interface ServerChat {
    * fallback. Only populated by /chats list responses.
    */
   kind?: "chat" | "task" | "task_run";
+  /**
+   * True when the chat has at least one message in `pending` or `running`
+   * state. Only populated by /chats list responses (derived from a
+   * subquery, not a persisted column). WS `chat.updated` events omit this.
+   */
+  running?: boolean;
 }
 
 export interface AttachmentRef {

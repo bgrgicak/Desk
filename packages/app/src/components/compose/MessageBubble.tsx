@@ -125,7 +125,7 @@ function MessageContentView({
 
   switch (content.type) {
     case 'text':
-      return <MarkdownContent text={content.text} workspacePath={workspacePath} />
+      return <MarkdownContent text={content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'artifactRef':
       return (
         <ArtifactRefRow
@@ -139,7 +139,7 @@ function MessageContentView({
         />
       )
     case 'events':
-      return <EventsView log={content.log} developerMode={developerMode} workspacePath={workspacePath} />
+      return <EventsView log={content.log} developerMode={developerMode} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'toolCall':
       // Filtered upstream when developerMode is false; defensive guard here.
       if (!developerMode) return null
@@ -149,7 +149,7 @@ function MessageContentView({
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'summary':
       if (!developerMode) return null
-      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} />
+      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'summary_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
@@ -159,7 +159,7 @@ function MessageContentView({
   }
 }
 
-function SummaryView({ chatId, messageId, body, workspacePath }: { chatId: string; messageId: string; body: string; workspacePath?: string }) {
+function SummaryView({ chatId, messageId, body, workspacePath, workspaceId }: { chatId: string; messageId: string; body: string; workspacePath?: string; workspaceId?: string }) {
   const [showDiff, setShowDiff] = useState(false)
   // Lazy-load history only when the diff toggle is on so a chat with
   // many summaries doesn't hammer the API on render.
@@ -195,7 +195,7 @@ function SummaryView({ chatId, messageId, body, workspacePath }: { chatId: strin
           No prior version to diff against — this is the first materialized summary.
         </div>
       ) : (
-        <MarkdownContent text={body} workspacePath={workspacePath} />
+        <MarkdownContent text={body} workspacePath={workspacePath} workspaceId={workspaceId} />
       )}
     </div>
   )
@@ -347,7 +347,7 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log, developerMode, workspacePath }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string }) {
+function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
@@ -398,7 +398,7 @@ function EventsView({ log, developerMode, workspacePath }: { log: AgentLogEntry[
       {chunks.map((c, i) => {
         if (c.kind === 'text') {
           if (!c.text.trim()) return null
-          return <MarkdownContent key={i} text={c.text.trim()} workspacePath={workspacePath} />
+          return <MarkdownContent key={i} text={c.text.trim()} workspacePath={workspacePath} workspaceId={workspaceId} />
         }
         if (c.kind === 'events') {
           return <EventGroup key={i} entries={c.entries} workspacePath={workspacePath} />

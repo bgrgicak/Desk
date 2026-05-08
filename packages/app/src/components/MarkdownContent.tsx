@@ -1,28 +1,29 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PathChip } from '@/components/shared/PathChip'
-import { remarkSandboxPaths } from '@/lib/remark-sandbox-paths'
+import { remarkSandboxPaths, sandboxToUserPath } from '@/lib/remark-sandbox-paths'
 
 interface MarkdownContentProps {
   text: string
   /**
-   * When provided, /home/agent/... sandbox paths in the text are detected and
-   * rendered as PathChip components showing the equivalent user-visible path.
-   * Should be the on-disk workspace directory name (e.g. "desk-2").
+   * When provided, sandbox paths (/home/agent/... or ~/...) are detected and
+   * rendered as PathChip components. Should be the workspace directory name
+   * (e.g. "desk-2"). Pair with workspaceId to make chips navigable.
    */
   workspacePath?: string
+  /** Workspace UUID — when paired with workspacePath, PathChip clicks open
+   *  the file in the library (context view). */
+  workspaceId?: string
 }
 
 function urlTransform(url: string): string {
-  // Allow desk-path: links through; they're handled by the custom `a` renderer.
   if (url.startsWith('desk-path:')) return url
-  // Default: block javascript: and other unsafe schemes.
   if (/^(https?:|mailto:|#)/.test(url)) return url
   if (url.startsWith('/') || url.startsWith('.')) return url
   return ''
 }
 
-export function MarkdownContent({ text, workspacePath }: MarkdownContentProps) {
+export function MarkdownContent({ text, workspacePath, workspaceId }: MarkdownContentProps) {
   const remarkPlugins = workspacePath
     ? [remarkGfm, remarkSandboxPaths(workspacePath)]
     : [remarkGfm]
@@ -36,8 +37,16 @@ export function MarkdownContent({ text, workspacePath }: MarkdownContentProps) {
           a: ({ href, children }) => {
             if (href?.startsWith('desk-path:')) {
               const sandboxPath = decodeURIComponent(href.slice('desk-path:'.length))
-              const displayPath = String(children)
-              return <PathChip sandboxPath={sandboxPath} displayPath={displayPath} />
+              // Compute display path from the sandbox path — avoids String(children)
+              // which would produce [object Object] for React element trees.
+              const displayPath = sandboxToUserPath(sandboxPath, workspacePath)
+              return (
+                <PathChip
+                  sandboxPath={sandboxPath}
+                  displayPath={displayPath}
+                  workspaceId={workspaceId}
+                />
+              )
             }
             return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
           },

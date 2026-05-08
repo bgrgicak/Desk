@@ -4,12 +4,21 @@ import type { Root, Text, Link, InlineCode, Parent } from 'mdast'
 export const SANDBOX_HOME = '/home/agent'
 
 /**
- * Regex matching an absolute sandbox path starting with /home/agent.
- * Stops at whitespace and common punctuation that wouldn't be part of a path.
+ * Matches either /home/agent/... or ~/... paths as written by the agent.
+ * The tilde form requires ~/ (tilde + slash) to avoid matching bare ~.
+ * Trailing slashes on directory paths may be stripped by the regex.
  */
-const SANDBOX_PATH_RE = /\/home\/agent(?:\/[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|\/[^\s"'`<>()[\]{},|#\n.]*|\/?(?=[/\s"'`<>()[\]{},|#\n]|$))/g
+const SANDBOX_PATH_RE = /(?:\/home\/agent(?:\/[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|\/[^\s"'`<>()[\]{},|#\n.]*|\/?(?=[/\s"'`<>()[\]{},|#\n]|$))|~\/(?:[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|[^\s"'`<>()[\]{},|#\n.]*|(?=[/\s"'`<>()[\]{},|#\n]|$)))/g
+
+function isSandboxPath(value: string): boolean {
+  return value.startsWith(SANDBOX_HOME) || value.startsWith('~/')
+}
 
 export function sandboxToUserPath(sandboxPath: string, workspacePath: string): string {
+  if (sandboxPath.startsWith('~/')) {
+    // ~/foo  →  ~/Desk/workspaces/<slug>/foo
+    return `~/Desk/workspaces/${workspacePath}/` + sandboxPath.slice(2)
+  }
   return sandboxPath.replace(SANDBOX_HOME, `~/Desk/workspaces/${workspacePath}`)
 }
 
@@ -23,16 +32,16 @@ function makePathLink(sandboxPath: string, workspacePath: string): Link {
 }
 
 /**
- * Remark plugin that transforms /home/agent/... paths in agent message text
- * into link nodes with a desk-path: URL. MarkdownContent renders these as
- * PathChip components. Works on both inline text and inline code nodes.
+ * Remark plugin that transforms sandbox paths in agent message text into link
+ * nodes with a desk-path: URL. MarkdownContent renders these as PathChip
+ * components. Handles both /home/agent/... and ~/... path forms.
  */
 export function remarkSandboxPaths(workspacePath: string) {
   return () => (tree: Root) => {
     // Replace inlineCode nodes whose entire value is a sandbox path.
     visit(tree, 'inlineCode', (node: InlineCode, index, parent: Parent | undefined) => {
       if (!parent || index == null) return
-      if (!node.value.startsWith(SANDBOX_HOME)) return
+      if (!isSandboxPath(node.value)) return
       const link = makePathLink(node.value.trim(), workspacePath)
       parent.children.splice(index, 1, link)
       return [SKIP, index + 1] as const
