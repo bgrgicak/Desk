@@ -725,6 +725,62 @@ describe("Routes coverage (real Postgres)", () => {
     expect(patchRes.status).toBe(400);
   });
 
+  it("PATCH /chats/:id — unread: false marks chat as read", async () => {
+    // Create a chat and insert a message to mark it unread.
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "UnreadTest",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    // Sending a message sets chats.unread = 1 via the DB trigger.
+    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(msgRes.status).toBe(201);
+
+    // Confirm the chat is now unread.
+    const getRes1 = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes1.body as { unread: boolean }).unread).toBe(true);
+
+    // PATCH unread: false.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      unread: false,
+    });
+    expect(patchRes.status).toBe(200);
+    expect((patchRes.body as { unread: boolean }).unread).toBe(false);
+
+    // Confirm via GET that the server persisted the change.
+    const getRes2 = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes2.body as { unread: boolean }).unread).toBe(false);
+  });
+
+  it("PATCH /chats/:id — unread: false combined with title update", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "CombinedPatch",
+    });
+    const chat = createRes.body as { id: string };
+
+    // Make it unread via a message.
+    await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "trigger unread",
+    });
+
+    // PATCH both title and unread in one call.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      title: "NewTitle",
+      unread: false,
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = patchRes.body as { title: string; unread: boolean };
+    expect(patched.title).toBe("NewTitle");
+    expect(patched.unread).toBe(false);
+  });
+
   // ── 7. DELETE /library + multipart upload ────────────────────────
   it("DELETE /library?path=... — file moves to trash and stops resolving", async () => {
     const content = "file to delete";

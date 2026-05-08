@@ -3,6 +3,14 @@ import { SANDBOX_HOME } from "./mounts.js";
 export interface RunOptions {
   runId: string;
   prompt: string;
+  /**
+   * Sandbox-absolute path to a file containing the prompt text. When set,
+   * the driver reads the prompt from this file via `cat` instead of passing
+   * it in the `DESK_PROMPT` environment variable, dodging the ARG_MAX limit
+   * that `execve` applies to the combined size of arguments + environment.
+   * The caller is responsible for writing and cleaning up this file.
+   */
+  promptFile?: string;
   agentFileId?: string;
   /**
    * Workspace-relative paths the user attached to this message. The driver
@@ -86,13 +94,14 @@ function createFakeDriver(): SandboxDriver {
         "Run complete.",
       ];
 
+      const stepDelayMs = parseInt(process.env.DESK_FAKE_DRIVER_STEP_DELAY_MS ?? "10", 10);
       let seq = 0;
       for (const line of lines) {
         if (cancelled.has(runId)) {
           return { exitCode: 130 };
         }
         await onLog({ runId, seq: seq++, kind: "stdout", payload: line });
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => setTimeout(r, stepDelayMs));
       }
 
       return { exitCode: 0 };
@@ -121,23 +130,29 @@ export function shSingleQuote(s: string): string {
 
 /**
  * Builds the `sh -c` invocation that runs opencode inside the sandbox.
- * The prompt itself is passed via `$DESK_PROMPT` (set in the exec env) to
- * dodge arg-length limits; this function only wires the flags. Exported so
- * the command synthesis is unit-testable without Docker.
+ *
+ * When `promptFile` is set the prompt is read from that sandbox path via
+ * `$(cat "$DESK_PROMPT_FILE")`, which avoids putting large text in the
+ * `execve` argument/environment block and hitting the ARG_MAX limit.
+ * Otherwise the prompt is read from `$DESK_PROMPT`.
+ *
+ * Exported so the command synthesis is unit-testable without Docker.
  */
 export function buildOpencodeCommand(opts: {
   agentFileId?: string;
   attachments?: string[];
   model?: string;
+  promptFile?: string;
 }): string[] {
   const agentFlag = opts.agentFileId ? ` --agent ${opts.agentFileId}` : "";
   const fileFlags = (opts.attachments ?? [])
     .map((p) => ` --file ${shSingleQuote(toSandboxPath(p))}`)
     .join("");
   const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
+  const promptExpr = opts.promptFile ? `"$(cat "$DESK_PROMPT_FILE")"` : `"$DESK_PROMPT"`;
   return [
     "sh", "-c",
-    `exec opencode run "$DESK_PROMPT"${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`,
+    `exec opencode run ${promptExpr}${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`,
   ];
 }
 
@@ -163,6 +178,7 @@ function createRealDriver(): SandboxDriver {
         agentFileId: opts.agentFileId,
         attachments: opts.attachments,
         model: opts.model,
+        promptFile: opts.promptFile,
       });
 
       const handle$ = await engine.exec({
@@ -170,7 +186,11 @@ function createRealDriver(): SandboxDriver {
         cmd,
         user: await sandboxUser(engine),
         env: [
-          `DESK_PROMPT=${fullPrompt}`,
+          // Use a file reference when available so the prompt text never appears
+          // in the execve env block, which is capped by ARG_MAX (~1 MB on macOS).
+          ...(opts.promptFile
+            ? [`DESK_PROMPT_FILE=${opts.promptFile}`]
+            : [`DESK_PROMPT=${fullPrompt}`]),
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
           // Inject provider keys per-exec so a key added after the container

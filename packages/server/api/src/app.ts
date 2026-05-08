@@ -1,11 +1,13 @@
 import { createReadStream } from "node:fs";
+import { type Readable } from "node:stream";
+import Busboy from "busboy";
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type WsEvent } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
   ReplaceLibraryAppConflictError,
@@ -167,13 +169,13 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Default destination for `/internal/backup`. Lands next to the live DB
- * inside `~/Desk/backups/` so file ownership matches the DB and the
- * directory is included in any host-level backup of `~/Desk`. Uses
+ * inside `$DESK_HOME/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of the data root. Uses
  * UTC date so multi-region rsync targets don't fight over filenames.
  */
 function defaultBackupPath(deskHome: string): string {
   const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
+  return pathJoin(deskHome, "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -196,6 +198,50 @@ async function parseMultipart(req: IncomingMessage): Promise<FormData> {
   } catch {
     throw new ValidationError("Malformed multipart body");
   }
+}
+
+/**
+ * Streaming multipart parser for single-file uploads. Text fields must
+ * appear before the file part in the body (the client must append them
+ * first). The returned stream is busboy's raw file stream — callers must
+ * consume it fully so the underlying HTTP request drains.
+ */
+function parseMultipartFileStream(req: IncomingMessage): Promise<{
+  name: string;
+  mime: string;
+  stream: Readable;
+  subpath?: string;
+}> {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    return Promise.reject(new ValidationError("Expected multipart/form-data body"));
+  }
+  return new Promise((resolve, reject) => {
+    const bb = Busboy({ headers: req.headers });
+    const fields: Record<string, string> = {};
+    let resolved = false;
+
+    bb.on("field", (fieldname, value) => { fields[fieldname] = value; });
+
+    bb.on("file", (fieldname, fileStream, info) => {
+      if (fieldname !== "file" || resolved) {
+        fileStream.resume();
+        return;
+      }
+      resolved = true;
+      const name = info.filename || fields["name"] || "upload";
+      const mime = info.mimeType || "application/octet-stream";
+      const subpath = fields["subpath"] && fields["subpath"] !== "" ? fields["subpath"] : undefined;
+      resolve({ name, mime, stream: fileStream, subpath });
+    });
+
+    bb.on("error", reject);
+    bb.on("close", () => {
+      if (!resolved) reject(new ValidationError("Missing 'file' part in multipart body"));
+    });
+
+    req.pipe(bb);
+  });
 }
 
 type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: RouteParams) => Promise<void>;
@@ -585,6 +631,39 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Seed messages — bulk-inserts text messages without triggering agent
+    // turns. Used by the agent to populate a chat for scrollback testing.
+    if (path === "/sandbox/seed-messages" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as {
+        chatId?: string;
+        messages?: Array<{ role?: string; text: string }>;
+      };
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      if (!Array.isArray(body.messages) || body.messages.length === 0) {
+        throw new ValidationError("Missing or empty messages array");
+      }
+      await requireOwnedChat(pool, body.chatId, agent.userId);
+
+      const inserted: unknown[] = [];
+      for (const m of body.messages) {
+        const role = m.role === "agent" ? "agent" : "user";
+        const msg = await queries.messages.insert(pool, {
+          id: generateId("message"),
+          chatId: body.chatId,
+          role,
+          content: { type: "text", text: m.text },
+        });
+        inserted.push(msg);
+      }
+      sendJson(res, 201, { count: inserted.length });
+      return;
+    }
+
     // Memory-system P3.5 — full-text search for the in-sandbox agent.
     // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
     // session's workspace; cross-workspace recall requires a future
@@ -925,11 +1004,12 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string };
+      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string; unread?: boolean };
       if (body.agentId !== undefined) {
         await requireOwnedAgent(pool, body.agentId, userId);
       }
       const result = await chatRoutes.patchChat(pool, segments[1], body);
+      emitEvent({ type: "chat.updated", payload: result });
       sendJson(res, 200, result);
       return;
     }
@@ -947,7 +1027,8 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor });
+      const before = query.get("before") ?? undefined;
+      const result = await chatRoutes.listMessages(pool, segments[1], { cursor, before });
       sendJson(res, 200, result);
       return;
     }
@@ -1165,16 +1246,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (path === "/library" && method === "POST") {
       const wsId = await requireWorkspaceId(pool, userId, query);
-      const form = await parseMultipart(req);
-      const part = form.get("file");
-      if (!(part instanceof Blob)) {
-        throw new ValidationError("Missing 'file' part in multipart body");
-      }
-      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
-      const mime = part.type || "application/octet-stream";
-      const subpathRaw = form.get("subpath");
-      const subpath = typeof subpathRaw === "string" && subpathRaw !== "" ? subpathRaw : undefined;
-      const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
+      const { name, mime, stream, subpath } = await parseMultipartFileStream(req);
       const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream, subpath }, emitEvent);
       sendJson(res, 201, result);
       return;

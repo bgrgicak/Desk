@@ -7,6 +7,7 @@ import {
   relativeSymlinkTarget,
   uploadArtifact,
   validateLibrarySubpath,
+  validateReadableSubpath,
 } from "../src/files.js";
 import {
   listLibrary,
@@ -219,20 +220,31 @@ describe("listLibrary gitignore", () => {
 });
 
 describe("validateLibrarySubpath", () => {
-  it("accepts simple and nested paths and normalizes leading/trailing slashes", () => {
+  it("accepts simple, nested, and dot-prefixed paths and normalizes leading/trailing slashes", () => {
     expect(validateLibrarySubpath(undefined)).toBe("");
     expect(validateLibrarySubpath("")).toBe("");
     expect(validateLibrarySubpath("foo")).toBe("foo");
     expect(validateLibrarySubpath("foo/bar/baz")).toBe("foo/bar/baz");
     expect(validateLibrarySubpath("/foo/bar/")).toBe("foo/bar");
+    // Dot-prefixed (hidden) segments are allowed — hidden files are
+    // regular files; visibility is controlled at the listing/search layer.
+    expect(validateLibrarySubpath(".hidden")).toBe(".hidden");
+    expect(validateLibrarySubpath(".memory/workspace.md")).toBe(".memory/workspace.md");
+    expect(validateLibrarySubpath(".hidden/nested/.deep")).toBe(".hidden/nested/.deep");
   });
 
-  it("rejects traversal, dotfile, backslash, and empty segments", () => {
+  it("rejects traversal, backslash, null bytes, and empty segments", () => {
     expect(() => validateLibrarySubpath("../etc")).toThrow();
     expect(() => validateLibrarySubpath("foo/../bar")).toThrow();
-    expect(() => validateLibrarySubpath(".hidden")).toThrow();
     expect(() => validateLibrarySubpath("foo//bar")).toThrow();
     expect(() => validateLibrarySubpath("foo\\bar")).toThrow();
+    expect(() => validateLibrarySubpath("foo\0bar")).toThrow();
+  });
+});
+
+describe("validateReadableSubpath", () => {
+  it("is an alias for validateLibrarySubpath", () => {
+    expect(validateReadableSubpath).toBe(validateLibrarySubpath);
   });
 });
 

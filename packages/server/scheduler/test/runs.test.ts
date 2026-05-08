@@ -469,41 +469,7 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     expect(capturedGoal).toBeNull();
   });
 
-  it("omits goal autodetection for the first user message when the chat already has a goal", async () => {
-    const explicitGoalChatId = await createChat("explicit initial goal");
-    await pool.query(`UPDATE chats SET goal = 'app' WHERE id = ?`, [explicitGoalChatId]);
 
-    const captured: unknown[] = [];
-    const mgr = createRunManager({
-      pool,
-      execRunFn: async (_id, _agentId, _prompt, onLog, opts) => {
-        captured.push(opts?.agentFileInput.includeGoalAutodetect);
-        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
-        return { exitCode: 0 };
-      },
-    });
-
-    const firstUserMessageId = await insertChatRow({
-      targetChatId: explicitGoalChatId,
-      role: "user",
-      content: { type: "text", text: "create a trivial task list" },
-      createdAt: "2026-05-05T00:00:00.000Z",
-    });
-    const secondUserMessageId = await insertChatRow({
-      targetChatId: explicitGoalChatId,
-      role: "user",
-      content: { type: "text", text: "actually make it a document" },
-      createdAt: "2026-05-05T00:01:00.000Z",
-    });
-
-    const firstTriggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: firstUserMessageId }, explicitGoalChatId);
-    await mgr.fireMessage(firstTriggerId);
-
-    const secondTriggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: secondUserMessageId }, explicitGoalChatId);
-    await mgr.fireMessage(secondTriggerId);
-
-    expect(captured).toEqual([false, true]);
-  });
 
   it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
     let captured: { goal?: unknown; chatId?: unknown } = {};
@@ -1034,5 +1000,57 @@ describe("cancelMessage", () => {
     await mgr.cancelMessage(messageId);
 
     expect(await queries.messages.findById(pool, messageId)).toBeNull();
+  });
+});
+
+describe("summary run does not trigger unread", () => {
+  it("no WS event from a summary run should trigger unread on the chat", async () => {
+    const testChatId = await createChat("summary-unread-test");
+    // Pre-condition: chat starts as not unread
+    const beforeChat = await queries.chats.findById(pool, testChatId);
+    expect(beforeChat!.unread).toBe(false);
+
+    // Track all emitted WS events
+    const events: Array<{ type: string; payload: unknown }> = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (event) => { events.push(event); },
+      execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "# Summary\n\nA test summary." } }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Schedule and fire the summary
+    await mgr.scheduleSummary(testChatId);
+    const { rows: summaryRows } = await pool.query(
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+      [testChatId],
+    );
+    expect(summaryRows).toHaveLength(1);
+    const summaryMsgId = summaryRows[0].id as string;
+
+    // Fire the summary run
+    const result = await mgr.fireMessage(summaryMsgId);
+    expect(result.fired).toBe(true);
+
+    // Post-condition: chat should still be not unread
+    const afterChat = await queries.chats.findById(pool, testChatId);
+    expect(afterChat!.unread).toBe(false);
+
+    // Verify that all emitted message.appended events are for internal messages
+    const appendedEvents = events.filter((e) => e.type === "message.appended");
+    for (const event of appendedEvents) {
+      const msg = event.payload as { content: { type: string }; kind?: string };
+      const ct = msg.content?.type;
+      const mk = msg.kind ?? "chat";
+      const isInternal =
+        ct === "agent_turn" ||
+        ct === "summary_request" ||
+        ct === "summary" ||
+        ct === "artifactRef" ||
+        mk === "summary";
+      expect(isInternal).toBe(true);
+    }
   });
 });

@@ -59,7 +59,6 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   // the agent would do after a run.
   const artifactDir = path.join(
     serverHome,
-    "Desk",
     "workspaces",
     ws.path,
     ".chats",

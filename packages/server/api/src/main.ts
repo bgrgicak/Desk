@@ -31,12 +31,12 @@ import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const DESK_HOME = resolveDeskHome();
-// Default to ~/Desk/.database/desk.sqlite3. Dotfile parent so the DB
-// stays out of any in-app library listing of ~/Desk; tests override
+// Default to $DESK_HOME/.database/desk.sqlite3. Dotfile parent so the DB
+// stays out of any in-app library listing; tests override
 // DESK_DB_PATH to a per-run mkdtemp path.
 const DESK_DB_PATH =
   process.env.DESK_DB_PATH
-  ?? path.join(DESK_HOME, "Desk", ".database", "desk.sqlite3");
+  ?? path.join(DESK_HOME, ".database", "desk.sqlite3");
 
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the
@@ -72,6 +72,20 @@ async function main(): Promise<void> {
   // that were created before per-workspace dirs existed.
   for (const ws of await queries.workspaces.list(pool)) {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
+  }
+
+  // Re-queue agent_turn / summary_request messages that were interrupted
+  // by the previous server process (crash, hot-reload, etc.) so they are
+  // retried rather than silently dropped. task_run orphans are failed so
+  // their parent cron tasks can reschedule normally.
+  const orphaned = await queries.messages.recoverOrphanedRuns(pool);
+  const totalOrphaned = orphaned.requeued.length + orphaned.failed;
+  if (totalOrphaned > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `recovered ${totalOrphaned} orphaned message(s): ` +
+      `${orphaned.requeued.length} re-queued, ${orphaned.failed} failed`,
+    );
   }
 
   // Repair/flag artifactRef messages whose target moved or vanished while
@@ -124,6 +138,11 @@ async function main(): Promise<void> {
     10,
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
+  // Fire any re-queued orphans immediately rather than waiting up to
+  // POLL_INTERVAL_MS for the first scheduled tick.
+  if (orphaned.requeued.length > 0) {
+    void runManager.tickScheduled();
+  }
 
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local

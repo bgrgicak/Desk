@@ -1,7 +1,7 @@
 import { type Pool } from "@agent-desk/db";
 import { NotFoundError, ValidationError } from "@agent-desk/shared";
 import { queries } from "@agent-desk/db";
-import { validateLibrarySubpath } from "@agent-desk/storage";
+import { validateLibrarySubpath, validateReadableSubpath } from "@agent-desk/storage";
 import { requireOwnedChat, requireOwnedWorkspace } from "./auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
@@ -55,8 +55,12 @@ export async function requireWorkspaceId(
  * Under the workspace-as-home model the workspace root IS the library —
  * all user-visible content lives under it without a per-workspace
  * prefix. This check rejects traversal (`..`), absolute paths, and
- * dot-prefixed (infrastructure) segments so endpoints that accept a
- * `?path=` cannot reach into `.chats/` or escape the workspace.
+ * unsafe characters so endpoints that accept a `?path=` cannot escape
+ * the workspace.
+ *
+ * Dot-prefixed (hidden) segments are allowed — hidden files are regular
+ * files whose only special behavior is being excluded from listing /
+ * search results unless `showHidden` is set.
  *
  * Still takes `workspaceId` for forward-compatibility with a future
  * multi-workspace layout; it is not used today.
@@ -70,13 +74,11 @@ export function requireLibraryPathInWorkspace(relPath: string, _workspaceId: str
 }
 
 /**
- * Path validator for read endpoints that should also serve user-uploaded
- * chat attachments and materialized chat summaries. Accepts strict library
- * paths (delegates to `requireLibraryPathInWorkspace`),
- * `.chats/<chatId>/attachments/<filename>` (uploads), and
- * `.chats/<chatId>/notes/<messageId>.md` (summary mirrors), after verifying
- * the caller owns the chat. Other dot-prefixed paths (e.g. `logs/`)
- * remain blocked so this can't be used to traverse agent infrastructure.
+ * Path validator for read endpoints that also serves user-uploaded chat
+ * attachments, materialized chat summaries, and chat artifacts. Accepts
+ * library paths (including hidden dot-prefixed paths) and special
+ * `.chats/<chatId>/...` sub-paths after verifying the caller owns the
+ * chat.
  */
 const CHAT_ATTACHMENT_PATTERN =
   /^\.chats\/(cht_[A-Za-z0-9_-]+)\/attachments\/([^/]+)$/;
@@ -120,5 +122,11 @@ export async function requireReadablePathInWorkspace(
     await requireOwnedChat(pool, artifact.chatId, userId);
     return;
   }
-  requireLibraryPathInWorkspace(relPath, workspaceId);
+  // Validate the path — blocks traversal (`..`), backslashes, empty
+  // segments, and null bytes. Dot-prefixed (hidden) paths are allowed.
+  try {
+    validateReadableSubpath(relPath);
+  } catch {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
 }

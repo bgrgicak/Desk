@@ -88,7 +88,7 @@ agent by default and lets the user change it from the compose bar.
 | GET    | /chats/{id}               | Get chat                  |
 | PATCH  | /chats/{id}               | Update chat               |
 | DELETE | /chats/{id}               | Soft-delete chat (cascades messages, cancels schedules, trashes on-disk dirs, emits `chat.deleted` WS) |
-| GET    | /chats/{id}/messages                    | List messages             |
+| GET    | /chats/{id}/messages                    | List messages (scrollback-ready) |
 | POST   | /chats/{id}/messages                    | Send message              |
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
 | DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
@@ -197,6 +197,28 @@ Partial update. Body can include:
 
 Emits `message.updated` over WS.
 
+### GET /chats/{id}/messages
+
+Lists messages in a chat with cursor-based pagination, supporting both
+forward and backward (scrollback) directions.
+
+**Query parameters:**
+
+| Param    | Type   | Description |
+|----------|--------|-------------|
+| `cursor` | string | Page forward: return messages after this cursor (chronological). |
+| `before` | string | Page backward (scrollback): return messages older than this cursor. |
+
+When neither `cursor` nor `before` is given, returns the **newest** 50
+messages so the chat opens at the bottom. The response includes
+`prevCursor` when older messages exist — pass it as `?before=` to load
+the next older page.
+
+**Response:** `{ items: Message[], nextCursor?: string, prevCursor?: string }`
+
+Items are always returned in chronological (ASC) order regardless of
+pagination direction.
+
 ### DELETE /chats/{id}/messages/{messageId}
 
 Deletes the message and, if a `schedulerRef` is set, cancels the at/cron
@@ -266,17 +288,21 @@ in prod, the UI is the only way to populate them.
 |--------|--------------------------------|-------------------------------------------------|
 | GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| PUT    | /library/content?path=&workspaceId=  | Save content to a file (upsert — creates if missing) |
 | POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
 | DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
-| GET    | /library/download?path=&workspaceId= | Stream a library file                     |
+| GET    | /library/content?path=&workspaceId=  | Stream a library file inline (for preview)      |
+| GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
 (`~/Desk/workspaces/desk/`). There is no DB index; listing walks the
-directory and skips dot-prefixed entries (the universal hidden-file
-convention — `.chats/`, `.opencode/`, etc. are never shown). File
-identifiers are workspace-root-relative paths (`foo.pdf`,
-`notes/bar.md`). The `path` query parameter is url-encoded.
+directory and skips dot-prefixed entries (`.chats/`, `.memory/`, etc.)
+unless `showHidden=true` is set. Hidden (dot-prefixed) files are
+otherwise identical to regular files — all CRUD operations work the
+same way. File identifiers are workspace-root-relative paths (`foo.pdf`,
+`notes/bar.md`, `.memory/workspace.md`). The `path` query parameter is
+url-encoded.
 
 ### Links (`POST /library/link`)
 

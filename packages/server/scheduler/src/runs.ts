@@ -66,7 +66,7 @@ export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
 
   let inFlight = 0;
-  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "3", 10);
+  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
 
   async function getDefaultAgentId(): Promise<string> {
     const agents = await queries.agents.list(pool);
@@ -83,7 +83,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
     const home = resolveDeskHome();
-    const dir = path.join(home, "Desk", "workspaces", workspaceSlug, ".chats", chatId, "logs");
+    const dir = path.join(home, "workspaces", workspaceSlug, ".chats", chatId, "logs");
     await fsp.mkdir(dir, { recursive: true });
     return dir;
   }
@@ -233,6 +233,14 @@ export function createRunManager(opts: RunManagerOptions) {
     return message.role === "user" || message.role === "agent" || type === "summary";
   }
 
+  // Maximum UTF-8 bytes the transcript context may occupy before being
+  // trimmed. The full prompt (context + task) must fit inside the
+  // container's ARG_MAX (2 097 152 bytes on Linux). We reserve ~500 KB for
+  // the task text, wrapper headers, and other env vars, leaving 1.5 MB for
+  // the context. Oldest entries are dropped first so the most recent
+  // messages are always preserved.
+  const MAX_CONTEXT_BYTES = 1_500_000;
+
   async function buildChatTranscriptContext(
     currentMessage: Message,
     currentUserMessageId?: string,
@@ -243,7 +251,25 @@ export function createRunManager(opts: RunManagerOptions) {
       .filter(shouldIncludeInPromptContext)
       .map(formatMessageForPrompt)
       .filter((entry): entry is { role: string; text: string } => entry !== null);
-    return entries.map((entry) => `${entry.role}:\n${entry.text}`).join("\n\n---\n\n");
+
+    // Trim from oldest → newest until the serialised context fits.
+    const sep = "\n\n---\n\n";
+    let bytes = 0;
+    let trimFrom = 0; // first index to keep
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const chunk = `${entries[i].role}:\n${entries[i].text}`;
+      bytes += Buffer.byteLength(chunk, "utf8") + (i < entries.length - 1 ? Buffer.byteLength(sep, "utf8") : 0);
+      if (bytes > MAX_CONTEXT_BYTES) {
+        trimFrom = i + 1;
+        break;
+      }
+    }
+    const kept = trimFrom > 0 ? entries.slice(trimFrom) : entries;
+    const parts = kept.map((entry) => `${entry.role}:\n${entry.text}`);
+    if (trimFrom > 0) {
+      parts.unshift(`System:\n[Earlier context omitted — transcript exceeded size limit. ${trimFrom} older message(s) not shown.]`);
+    }
+    return parts.join(sep);
   }
 
   async function withChatTranscriptContext(
@@ -306,35 +332,7 @@ export function createRunManager(opts: RunManagerOptions) {
     return { prompt: await withChatTranscriptContext(msg, fallback) };
   }
 
-  function currentUserMessageIdForGoalAutodetectGate(msg: Message): string | null {
-    const c = msg.content as { type?: string; userMessageId?: string };
-    if (c?.type === "agent_turn" && typeof c.userMessageId === "string") return c.userMessageId;
-    return msg.role === "user" ? msg.id : null;
-  }
 
-  async function isFirstUserMessageInChat(chatId: string, userMessageId: string): Promise<boolean> {
-    const { rows } = await pool.query(
-      `SELECT 1
-       FROM messages m
-       WHERE m.id = ?
-         AND m.chat_id = ?
-         AND m.role = 'user'
-         AND NOT EXISTS (
-           SELECT 1
-           FROM messages prior
-           WHERE prior.chat_id = m.chat_id
-             AND prior.role = 'user'
-             AND prior.id <> m.id
-             AND (
-               prior.created_at < m.created_at
-               OR (prior.created_at = m.created_at AND prior.id < m.id)
-             )
-         )
-       LIMIT 1`,
-      [userMessageId, chatId],
-    );
-    return rows.length > 0;
-  }
 
   function outputContentTypeFor(msg: Message): "summary" | "text" {
     if (msg.kind === "summary") return "summary";
@@ -469,54 +467,15 @@ export function createRunManager(opts: RunManagerOptions) {
       });
     }
 
-    const { prompt, attachments } = await derivePromptInputs(msg);
-    const outputKind = outputContentTypeFor(msg);
-
-    // Single JOIN resolves workspace slug, agent, user, timezone, and the
-    // chat's persistent goal in one round-trip. `chat_goal` feeds the
-    // per-chat goal fragment into the rendered system prompt.
-    const { rows: ctxRows } = await pool.query<{
-      workspace_id: string;
-      workspace_path: string;
-      workspace_name: string;
-      agent_id: string | null;
-      user_id: string | null;
-      username: string | null;
-      timezone: string | null;
-      chat_goal: string | null;
-    }>(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name, c.agent_id,
-              u.id AS user_id, u.username, u.timezone,
-              c.goal AS chat_goal
-       FROM chats c
-       JOIN workspaces w ON w.id = c.workspace_id
-       LEFT JOIN users u ON u.id = w.user_id
-       WHERE c.id = ?`,
-      [msg.chatId],
-    );
-    const ctxRow = ctxRows[0];
-    const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
-    const workspaceSlug = ctxRow?.workspace_path ?? "desk";
-    const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
-    const chatAgentId = ctxRow?.agent_id ?? null;
-    const userId = ctxRow?.user_id ?? null;
-    const userName = ctxRow?.username ?? "User";
-    const userTimezone = ctxRow?.timezone ?? undefined;
-    // Validate against the known goal keys before treating the column as a
-    // GoalKey: if a row holds a value outside GOAL_KEYS (legacy data, manual
-    // SQL edit), `goal/<key>.md` would not exist and the run would crash on
-    // ENOENT mid-render. Fall back to no goal in that case.
-    const rawGoal = ctxRow?.chat_goal ?? null;
-    const chatGoal: GoalKey | null =
-      rawGoal !== null && (GOAL_KEYS as readonly string[]).includes(rawGoal)
-        ? (rawGoal as GoalKey)
-        : null;
-
-    const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
-    const logFile = path.join(logDir, `${runId}.log`);
-    const logStream = fs.createWriteStream(logFile, { flags: "a" });
+    // All post-claim work is wrapped in a single try/catch so any failure
+    // — including pre-execution setup like prompt building or workspace lookup
+    // — always reaches finalizeExecution and never leaves the message stuck
+    // in `running` state.
+    let logStream: fs.WriteStream | undefined;
+    let logFile: string | undefined;
 
     const onLog = async (evt: LogEvent) => {
+      if (!logStream) return;
       // Split on internal newlines so each log file line is exactly one
       // `kind\tpayload\n` record. A single onLog call may carry several
       // events concatenated by the driver (a stdout chunk covering
@@ -532,6 +491,52 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
+      const { prompt, attachments } = await derivePromptInputs(msg);
+      const outputKind = outputContentTypeFor(msg);
+
+      // Single JOIN resolves workspace slug, agent, user, timezone, and the
+      // chat's persistent goal in one round-trip. `chat_goal` feeds the
+      // per-chat goal fragment into the rendered system prompt.
+      const { rows: ctxRows } = await pool.query<{
+        workspace_id: string;
+        workspace_path: string;
+        workspace_name: string;
+        agent_id: string | null;
+        user_id: string | null;
+        username: string | null;
+        timezone: string | null;
+        chat_goal: string | null;
+      }>(
+        `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name, c.agent_id,
+                u.id AS user_id, u.username, u.timezone,
+                c.goal AS chat_goal
+         FROM chats c
+         JOIN workspaces w ON w.id = c.workspace_id
+         LEFT JOIN users u ON u.id = w.user_id
+         WHERE c.id = ?`,
+        [msg.chatId],
+      );
+      const ctxRow = ctxRows[0];
+      const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
+      const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+      const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
+      const chatAgentId = ctxRow?.agent_id ?? null;
+      const userId = ctxRow?.user_id ?? null;
+      const userName = ctxRow?.username ?? "User";
+      const userTimezone = ctxRow?.timezone ?? undefined;
+      // Validate against the known goal keys before treating the column as a
+      // GoalKey: if a row holds a value outside GOAL_KEYS (legacy data, manual
+      // SQL edit), `goal/<key>.md` would not exist and the run would crash on
+      // ENOENT mid-render. Fall back to no goal in that case.
+      const rawGoal = ctxRow?.chat_goal ?? null;
+      const chatGoal: GoalKey | null =
+        rawGoal !== null && (GOAL_KEYS as readonly string[]).includes(rawGoal)
+          ? (rawGoal as GoalKey)
+          : null;
+
+      const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
+      logFile = path.join(logDir, `${runId}.log`);
+      logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId
         ? await queries.userSettings.getProviderKeys(pool, userId)
@@ -542,10 +547,6 @@ export function createRunManager(opts: RunManagerOptions) {
         );
       }
       const agent = await queries.agents.findById(pool, agentId);
-      const userMessageIdForGoalGate = currentUserMessageIdForGoalAutodetectGate(msg);
-      const includeGoalAutodetect = chatGoal && userMessageIdForGoalGate
-        ? !(await isFirstUserMessageInChat(msg.chatId, userMessageIdForGoalGate))
-        : true;
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
@@ -554,7 +555,6 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
         chatId: msg.chatId,
         goal: chatGoal,
-        includeGoalAutodetect,
         runMode: outputKind === "summary" ? "summary" : "chat",
       };
 
@@ -597,8 +597,8 @@ export function createRunManager(opts: RunManagerOptions) {
 
       // Wait for pending writes to flush before reading the file back.
       await new Promise<void>((resolve) => {
-        logStream.once("finish", resolve);
-        logStream.end();
+        logStream!.once("finish", resolve);
+        logStream!.end();
       });
       const terminal = result.exitCode === 0 ? "succeeded" : "failed";
       await queries.messages.finalizeExecution(pool, runId, terminal);
@@ -632,6 +632,9 @@ export function createRunManager(opts: RunManagerOptions) {
           }
         }
 
+        // Summary runs carry kind="summary" on the output child so the
+        // insert path treats them as internal (no unread flip).
+        const childKind = outputKind === "summary" ? "summary" : undefined;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
           chatId: msg.chatId,
@@ -640,6 +643,7 @@ export function createRunManager(opts: RunManagerOptions) {
           parentId: runId,
           agentId,
           model: agentFileInput.model,
+          ...(childKind ? { kind: childKind } : {}),
         });
         // Summary output: also write the body to the notes/ dir so the
         // agent (and any other filesystem consumer) can see the latest
@@ -662,30 +666,34 @@ export function createRunManager(opts: RunManagerOptions) {
       for (const line of errorLogLines(err)) {
         await onLog({ runId, seq: 0, kind: "stderr", payload: line });
       }
-      await new Promise<void>((resolve) => {
-        logStream.once("finish", resolve);
-        logStream.end();
-      });
+      if (logStream) {
+        await new Promise<void>((resolve) => {
+          logStream!.once("finish", resolve);
+          logStream!.end();
+        });
+      }
       await queries.messages.finalizeExecution(pool, runId, "failed");
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, runId))!,
-      });
+      const failedMsg = await queries.messages.findById(pool, runId);
+      if (failedMsg) emit({ type: "message.updated", payload: failedMsg });
       await afterTaskRun(msg, "failed", fireOptions);
+      if (!logFile) return { fired: true, childIds: [] };
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent("text", entries);
       if (!content) {
         return { fired: true, childIds: [] };
       }
+      // Failed summary runs: tag the error output child with
+      // kind="summary" so it doesn't flip unread.
+      const errorChildKind = outputContentTypeFor(msg) === "summary" ? "summary" : undefined;
       const child = await queries.messages.insert(pool, {
         id: generateId("message"),
         chatId: msg.chatId,
         role: "agent",
         content,
         parentId: runId,
+        ...(errorChildKind ? { kind: errorChildKind } : {}),
       });
       emit({ type: "message.appended", payload: child });
-      emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [child.id] };
     }
   }
@@ -814,7 +822,11 @@ export function createRunManager(opts: RunManagerOptions) {
       process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW ?? "",
       10,
     );
-    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 200_000;
+    // Default: 60 000 tokens. At the 0.6 trigger fraction this fires a
+    // summary when the transcript reaches ~36 000 tokens. Kept well below
+    // the frontier model maximum (200 K) so context stays focused and the
+    // agent doesn't get confused by very long transcripts.
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
   }
 
   function summaryTriggerFraction(): number {

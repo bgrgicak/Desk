@@ -66,6 +66,8 @@ export interface ServerWorkspace {
   description: string;
   icon: string;
   color: string;
+  /** On-disk directory name under ~/Desk/workspaces/. Used for sandbox path translation. */
+  path: string;
   createdAt: string;
 }
 
@@ -85,6 +87,13 @@ export interface ServerChat {
    * fallback. Only populated by /chats list responses.
    */
   kind?: "chat" | "task" | "task_run";
+  /**
+   * True when the chat's most recent `agent_turn` message is in `pending`
+   * or `running` state. Only populated by /chats list responses (derived
+   * from a subquery, not a persisted column). WS `chat.updated` events
+   * omit this.
+   */
+  running?: boolean;
 }
 
 export interface AttachmentRef {
@@ -168,6 +177,8 @@ export interface Cursor {
 
 export interface ListMessagesResponse extends Cursor {
   items: ServerMessage[];
+  /** Cursor for loading older messages (scrollback). */
+  prevCursor?: string;
 }
 
 export interface ListLibraryResponse extends Cursor {

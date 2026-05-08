@@ -35,48 +35,116 @@ function rowToMessage(row: Record<string, unknown>): Message {
 export interface PaginatedMessages {
   items: Message[];
   nextCursor?: string;
+  /** Cursor pointing backwards (towards older messages). Present when
+   *  `before` was used and there are still older messages. */
+  prevCursor?: string;
 }
 
+/**
+ * Lists messages in a chat with cursor-based pagination.
+ *
+ * Two pagination directions are supported:
+ *
+ * - **Forward (default / `cursor`)**: returns messages *after* the cursor
+ *   in chronological order. The traditional page-forward behaviour.
+ * - **Backward (`before`)**: returns the *newest* `limit` messages whose
+ *   `(created_at, id)` is strictly less than the cursor. Items are
+ *   returned in chronological (ASC) order so the client can prepend them
+ *   without re-sorting. When `before` is omitted and `cursor` is also
+ *   omitted, the query returns the **last** `limit` messages (newest
+ *   page) so the chat opens at the bottom.
+ *
+ * Cursor format: `<createdAtISO>|<id>` (unchanged).
+ */
 export async function listByChat(
   db: Pool,
   chatId: string,
-  opts?: { cursor?: string; limit?: number },
+  opts?: { cursor?: string; before?: string; limit?: number },
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
-  // Cursor is `<createdAtISO>|<id>` so paging stays stable when multiple
-  // messages share a ms-precision timestamp — without the id tiebreaker,
-  // `created_at > cursor` would skip every message that landed in the
-  // same tick as the cursor row.
-  // SQL uses anonymous `?` placeholders bound by textual order. The
-  // params array is built to match: chatId, [cursorIso, cursorId,] limit.
   const params: unknown[] = [chatId];
   let whereClause = "chat_id = ?";
 
+  // ── Backward pagination (scrollback) ───────────────────────────────
+  if (opts?.before) {
+    const sep = opts.before.indexOf("|");
+    const cursorIso = sep === -1 ? opts.before : opts.before.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.before.slice(sep + 1);
+    whereClause += " AND (created_at, id) < (?, ?)";
+    params.push(cursorIso);
+    params.push(cursorId);
+    params.push(limit + 1);
+
+    // Fetch in DESC order so LIMIT clips the *oldest* surplus row, then
+    // reverse to ASC for the caller.
+    const { rows } = await db.query(
+      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      params,
+    );
+
+    const hasMore = rows.length > limit;
+    // Drop the extra row (oldest) and reverse to chronological order.
+    const slice = rows.slice(0, limit).reverse();
+    const items = slice.map(rowToMessage);
+    let prevCursor: string | undefined;
+    if (hasMore && items.length > 0) {
+      const oldest = items[0];
+      prevCursor = `${oldest.createdAt}|${oldest.id}`;
+    }
+    return { items, prevCursor };
+  }
+
+  // ── Forward pagination / initial load ──────────────────────────────
   if (opts?.cursor) {
+    // Traditional forward paging: messages after cursor.
     const sep = opts.cursor.indexOf("|");
     const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
     const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
     whereClause += " AND (created_at, id) > (?, ?)";
     params.push(cursorIso);
     params.push(cursorId);
-  }
-  params.push(limit + 1);
+    params.push(limit + 1);
 
+    const { rows } = await db.query(
+      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
+      params,
+    );
+
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(rowToMessage);
+    let nextCursor: string | undefined;
+    if (hasMore && items.length > 0) {
+      const last = items[items.length - 1];
+      nextCursor = `${last.createdAt}|${last.id}`;
+    }
+    return { items, nextCursor };
+  }
+
+  // No cursor at all → return the *last* `limit` messages (newest page)
+  // so the chat opens at the bottom. Include a prevCursor when there are
+  // older messages.
+  params.push(limit + 1);
   const { rows } = await db.query(
-    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
+    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
     params,
   );
 
   const hasMore = rows.length > limit;
-  const items = rows.slice(0, limit).map(rowToMessage);
-  let nextCursor: string | undefined;
+  const slice = rows.slice(0, limit).reverse();
+  const items = slice.map(rowToMessage);
+  let prevCursor: string | undefined;
   if (hasMore && items.length > 0) {
-    const last = items[items.length - 1];
-    nextCursor = `${last.createdAt}|${last.id}`;
+    const oldest = items[0];
+    prevCursor = `${oldest.createdAt}|${oldest.id}`;
   }
-  return { items, nextCursor };
+  return { items, prevCursor };
 }
 
+/**
+ * Returns all messages in a chat that the agent should see as context,
+ * starting from the most recent summary (inclusive) so context is bounded
+ * by the last compaction point.
+ */
 export async function listAgentContextByChat(
   db: Pool,
   chatId: string,
@@ -105,6 +173,56 @@ export async function listAgentContextByChat(
   );
   return rows.map(rowToMessage);
 }
+
+/**
+ * Recovers orphaned runs on server startup.
+ *
+ * An orphan is a message stuck in `running` or `pending` (non-scheduled)
+ * state from a previous server process that died before finalising it.
+ *
+ * - `agent_turn` / `summary_request` (chat messages): reset to `pending`
+ *   with `execute_at = now` so the scheduler re-fires them immediately.
+ *   These were interrupted by a crash/restart — not by an agent error —
+ *   so retrying is the right behaviour.
+ *
+ * - `task_run`: mark as `failed`. The parent task re-schedules via cron;
+ *   one-shot tasks need manual retry.
+ *
+ * Returns the IDs of the re-queued chat messages so the caller can fire
+ * them immediately rather than waiting for the next scheduler tick.
+ */
+export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[]; failed: number }> {
+  // Re-queue chat agent turns and summaries so they are retried.
+  const { rows: requeuedRows } = await db.query<{ id: string }>(
+    `UPDATE messages
+     SET state = 'pending',
+         started_at = NULL,
+         ended_at = NULL,
+         execute_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+     RETURNING id`,
+    [],
+  );
+  // Fail task_run orphans — their parent task handles rescheduling.
+  const { rowCount: failedCount } = await db.query(
+    `UPDATE messages
+     SET state = 'failed',
+         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND kind = 'task_run'
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    [],
+  );
+  return {
+    requeued: requeuedRows.map((r) => r.id),
+    failed: failedCount ?? 0,
+  };
+}
+
 
 export async function insert(
   db: Pool,
@@ -147,11 +265,30 @@ export async function insert(
       data.title ?? null,
     ],
   );
-  // Touch the parent chat's updated_at
-  await db.query(
-    "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
-    [data.chatId],
-  );
+  // Internal messages (summaries, summary requests, agent_turn triggers)
+  // are not visible to regular users and should not flip unread or bump
+  // updated_at — either change would create noise in the sidebar (unread
+  // dot, reordering). Dev-mode users can see some of these but should get
+  // the same treatment: no false unread signals.
+  //
+  // The check uses both content.type (the message payload discriminator)
+  // AND kind (the message-kind discriminator). Summary output children
+  // (including failed-run error output) carry kind="summary" so they're
+  // internal regardless of content.type.
+  const contentType = (data.content as { type?: string } | null)?.type;
+  const kind = data.kind ?? "chat";
+  const isInternal =
+    contentType === "agent_turn" ||
+    contentType === "summary_request" ||
+    contentType === "summary" ||
+    contentType === "artifactRef" ||
+    kind === "summary";
+  if (!isInternal) {
+    await db.query(
+      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
+      [data.chatId],
+    );
+  }
   return rowToMessage(rows[0]);
 }
 

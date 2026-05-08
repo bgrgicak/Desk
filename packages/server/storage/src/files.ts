@@ -92,25 +92,35 @@ function guessMime(name: string): string {
  * Validates and normalizes a workspace-root-relative subdirectory.
  * Returns the cleaned subpath with forward slashes, or "" for the root.
  *
- * Rejects: absolute paths, `..` traversal, empty segments, segments
- * starting with `.` (hidden — reserved for agent artifacts / infrastructure),
- * backslashes.
+ * Rejects: absolute paths, `..` traversal, empty segments,
+ * backslashes, and null bytes.
+ *
+ * Dot-prefixed (hidden) segments are allowed — hidden files behave like
+ * regular files for all operations; the only difference is that listing /
+ * search APIs hide them unless `showHidden` is set.
  */
 export function validateLibrarySubpath(raw: string | undefined): string {
   if (!raw) return "";
-  if (raw.includes("\\")) {
+  if (raw.includes("\\") || raw.includes("\0")) {
     throw new ValidationError(`Invalid subpath: ${raw}`);
   }
   const trimmed = raw.replace(/^\/+/, "").replace(/\/+$/, "");
   if (trimmed === "") return "";
   const segments = trimmed.split("/");
   for (const seg of segments) {
-    if (seg === "" || seg === "." || seg === ".." || seg.startsWith(".")) {
+    if (seg === "" || seg === "." || seg === "..") {
       throw new ValidationError(`Invalid subpath segment: ${seg}`);
     }
   }
   return segments.join("/");
 }
+
+/**
+ * Alias for {@link validateLibrarySubpath}. Previously used a more
+ * relaxed rule for read-only paths; now both are identical because hidden
+ * (dot-prefixed) paths are treated the same as regular paths everywhere.
+ */
+export const validateReadableSubpath = validateLibrarySubpath;
 
 /**
  * Rejects filenames reserved for hidden (agent-origin) content. The dotfile
@@ -286,10 +296,14 @@ export async function statFile(
 }
 
 /**
- * Overwrites an existing library file's contents in place. Unlike
- * `uploadArtifact`, this requires the file to already exist — it will not
- * create a new file or auto-rename on collision. Writes through a temp
- * file + atomic rename so partial writes don't leave the target truncated.
+ * Saves content to a library file. Creates the file (and any missing
+ * parent directories) when it doesn't exist yet, or overwrites the
+ * existing file in place. This makes hidden files created by the agent
+ * (`.memory/workspace.md`, etc.) saveable through the same PUT endpoint
+ * as user-uploaded files — no separate creation step required.
+ *
+ * Writes through a temp file + atomic rename so partial writes don't
+ * leave the target truncated.
  */
 export async function overwriteFile(
   ctx: StorageContext,
@@ -299,8 +313,11 @@ export async function overwriteFile(
 ): Promise<FileRef> {
   const abs = resolveHostPath(ctx.home, slug, relPath);
   const stat = await fs.stat(abs).catch(() => null);
-  if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
-  if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
+  if (stat && !stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
+
+  // Ensure parent directory exists so new files in nested hidden paths
+  // (e.g. .memory/workspace.md) can be created via PUT.
+  await fs.mkdir(path.dirname(abs), { recursive: true });
 
   const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
   let size = 0;
@@ -371,7 +388,6 @@ export async function pinLibraryFileToChat(
   }
 
   const desiredName = path.basename(targetAbs);
-  rejectHiddenName(desiredName);
 
   const sameNameAbs = path.join(attDir, desiredName);
   const existingTarget = await fs.readlink(sameNameAbs).catch(() => null);
@@ -593,7 +609,7 @@ export interface CopyLibraryAppResult extends FileRef {
 }
 
 function validateLibraryAppPath(raw: string, field: string): string {
-  if (raw.includes("\\")) {
+  if (raw.includes("\\") || raw.includes("\0")) {
     throw new ValidationError(`Invalid ${field}: ${raw}`);
   }
 
@@ -602,9 +618,17 @@ function validateLibraryAppPath(raw: string, field: string): string {
     throw new ValidationError(`${field} must be a <name>.app path`);
   }
 
+  // Block paths that reach into internal directories — .chats/ is chat
+  // infrastructure, not user library content.
+  if (trimmed.startsWith(".chats/")) {
+    throw new ValidationError(`${field} must not be inside .chats/: ${trimmed}`);
+  }
+
+  // Dot-prefixed (hidden) segments are allowed — an app inside a hidden
+  // folder (e.g. `.drafts/my.app`) should be copyable just like any other.
   const segments = trimmed.split("/");
   for (const segment of segments) {
-    if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+    if (segment === "" || segment === "." || segment === "..") {
       throw new ValidationError(`Invalid ${field} segment: ${segment}`);
     }
   }
@@ -921,9 +945,7 @@ export async function deleteFile(
  * Removes a single entry from `.chats/{chatId}/attachments/`. Works for
  * symlinks (library pins) and regular files (direct chat uploads): the
  * unlink only touches the entry inside the chat dir, so a pinned
- * library file's source stays put. Hidden / dot-prefixed names are
- * rejected because that namespace belongs to agent infrastructure and
- * isn't user-removable from the Files panel.
+ * library file's source stays put.
  */
 export async function removeChatAttachment(
   ctx: StorageContext,
@@ -934,7 +956,6 @@ export async function removeChatAttachment(
   if (path.basename(attachmentName) !== attachmentName) {
     throw new ValidationError(`Invalid attachment name: ${attachmentName}`);
   }
-  rejectHiddenName(attachmentName);
   const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
   const linkPath = path.join(attDir, attachmentName);
   // lstat (not stat) so a dangling symlink — pointing at a deleted

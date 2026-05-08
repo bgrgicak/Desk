@@ -98,6 +98,10 @@ export async function startDeskServer(
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.
     DESK_SANDBOX_DRIVER: "fake",
+    // Slow down each fake driver step so the page has time to observe
+    // running=true before the agent turn completes. The spinner tests
+    // (sidebar-running-spinner.spec.ts) rely on this window.
+    DESK_FAKE_DRIVER_STEP_DELAY_MS: "500",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
     DESK_SCHEDULER_POLL_INTERVAL_MS: "2000",
   };

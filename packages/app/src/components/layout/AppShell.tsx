@@ -4,8 +4,8 @@ import { AnimatePresence } from 'framer-motion'
 import {
   PinOff, Zap, FolderOpen, Plus,
   ListFilter, SlidersHorizontal,
-  ChevronDown, MessageSquare, MoreHorizontal, Trash2,
-  FileText,
+  ChevronDown, MessageSquare, MoreHorizontal,
+  FileText, Loader2,
   ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
   type LucideIcon,
 } from 'lucide-react'
@@ -42,6 +42,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@agent-desk/ui'
+import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { TodayPanel } from '@/components/today/TodayPanel'
 import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
@@ -63,6 +64,7 @@ import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
+import { selectRunningChatIds } from '@/store/slices/derivedSlice'
 
 export type View = 'today' | 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
 
@@ -168,7 +170,7 @@ interface AppShellProps {
   onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
   unreadCount?: number
-  readChatIds?: Set<string>
+
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void
   // ── Workspace bar ──
@@ -198,7 +200,7 @@ export function AppShell({
   onChatClick,
   onDeleteChat,
   unreadCount = 0,
-  readChatIds = new Set(),
+
   isDetailOpen = false,
   onArtifactClick,
   activeWorkspaceId,
@@ -243,6 +245,7 @@ export function AppShell({
     appliedFilter.artifactsOnly
 
   const { data: agents = [] } = useGetAgentsQuery()
+  const runningChatIds = useAppSelector(selectRunningChatIds)
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -345,7 +348,7 @@ export function AppShell({
   const filteredChats = allChats.filter(chat => {
     if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
     if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
-    if (appliedFilter.updatesOnly && !(chat.unread && !readChatIds.has(chat.id))) return false
+    if (appliedFilter.updatesOnly && !chat.unread) return false
     if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
     return true
   })
@@ -615,6 +618,7 @@ export function AppShell({
                 <SidebarMenu>
                   {visibleChats.map(chat => {
                     const ChatIcon = getChatIcon(chat)
+                    const isRunning = runningChatIds.includes(chat.id)
                     return (
                       <SidebarMenuItem key={chat.id}>
                         <MobileDismissSidebarMenuButton
@@ -623,29 +627,31 @@ export function AppShell({
                           className="pr-7 text-foreground/70"
                         >
                           <div className="relative shrink-0">
-                            <ChatIcon className="h-4 w-4" />
-                            {chat.unread && !readChatIds.has(chat.id) && (
-                              <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+                            {isRunning ? (
+                              <Loader2 className="h-4 w-4 animate-spin" data-testid="chat-running-spinner" />
+                            ) : (
+                              <ChatIcon className="h-4 w-4" />
                             )}
+                            {!isRunning && chat.unread ? (
+                              <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+                            ) : null}
                           </div>
                           <span className="truncate">{chat.title}</span>
                         </MobileDismissSidebarMenuButton>
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <SidebarMenuAction showOnHover onClick={e => e.stopPropagation()} className="!right-2">
+                            <SidebarMenuAction
+                              showOnHover
+                              onClick={e => e.stopPropagation()}
+                              className="!right-2"
+                            >
                               <MoreHorizontal />
                               <span className="sr-only">Chat options</span>
                             </SidebarMenuAction>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent side="right" align="start" className="w-40">
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              onClick={e => { e.stopPropagation(); onDeleteChat(chat.id) }}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
+                          <DropdownMenuContent side="right" align="start" className="w-40" onClick={e => e.stopPropagation()}>
+                            <ChatMenuItems chatId={chat.id} onDelete={onDeleteChat} />
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </SidebarMenuItem>

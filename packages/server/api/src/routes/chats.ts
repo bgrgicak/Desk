@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, inferGoal, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -24,6 +24,7 @@ import {
   snapshotSummary,
   snapshotAndReplaceSummary,
   trashChatDirectories,
+  trashDir,
   uploadArtifact,
   validateLibrarySubpath,
   workspaceRootPath,
@@ -100,9 +101,29 @@ export async function createChat(
 export async function patchChat(
   pool: Pool,
   id: string,
-  data: { title?: string; goal?: string | null; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ) {
-  const chat = await queries.chats.updateMeta(pool, id, data);
+  const { unread, ...metaFields } = data;
+  const hasMetaFields = Object.values(metaFields).some(v => v !== undefined);
+
+  // When meta fields and unread are both present, merge into a single UPDATE
+  // so the RETURNING * snapshot is atomic across both changes.
+  // When only unread is being cleared, delegate to markRead which uses a
+  // targeted UPDATE for the same atomicity guarantee.
+  if (hasMetaFields) {
+    const updateData = unread !== undefined ? { ...metaFields, unread } : metaFields;
+    const chat = await queries.chats.updateMeta(pool, id, updateData);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
+
+  if (unread === false) {
+    const chat = await queries.chats.markRead(pool, id);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
+
+  const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
@@ -110,7 +131,7 @@ export async function patchChat(
 export async function listMessages(
   pool: Pool,
   chatId: string,
-  opts?: { cursor?: string },
+  opts?: { cursor?: string; before?: string },
 ) {
   return queries.messages.listByChat(pool, chatId, opts);
 }
@@ -172,7 +193,9 @@ function validateAttachableArtifactPath(relPath: string, chatId: string): void {
   if (relPath.startsWith(chatPrefix)) {
     const artifactSegments = relPath.slice(chatPrefix.length).split("/");
     for (const segment of artifactSegments) {
-      if (segment === "" || segment === "." || segment === ".." || segment.startsWith(".")) {
+      // Dot-prefixed segments are allowed — hidden files inside the
+      // artifacts dir behave like regular files.
+      if (segment === "" || segment === "." || segment === "..") {
         throw new ValidationError(`Invalid artifact path segment: ${segment}`);
       }
     }
@@ -284,15 +307,6 @@ export async function sendMessage(
 
   if (data.goal !== undefined) {
     await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
-  } else {
-    // Only infer a goal from message text for plain chat messages (kind='chat').
-    // Task and summary messages are system/scheduler actions — running
-    // inferGoal on their content (e.g. "scheduled summary") would wrongly
-    // stamp a goal like "document" onto the chat and change the sidebar icon.
-    const goalToPersist = kind === "chat" && !chat.goal ? inferGoal(data.content) ?? undefined : undefined;
-    if (goalToPersist) {
-      await queries.chats.updateMeta(pool, chatId, { goal: goalToPersist });
-    }
   }
 
   // Self-firing kinds (task, summary): one row, schedule on the row, fire
@@ -335,7 +349,7 @@ export async function sendMessage(
   emit({ type: "message.appended", payload: userMessage });
 
   const triggerId = generateId("message");
-  await queries.messages.insert(pool, {
+  const trigger = await queries.messages.insert(pool, {
     id: triggerId,
     chatId,
     role: "system",
@@ -344,6 +358,7 @@ export async function sendMessage(
     parentId: userMessage.id,
     agentId: chat.agentId,
   });
+  emit({ type: "message.appended", payload: trigger });
 
   return { userMessage, triggerId };
 }
@@ -652,9 +667,9 @@ export async function deleteMessage(
     `${messageId}.log`,
   );
   await fs.access(logPath).then(async () => {
-    const trashDir = path.join(storage.home, "Desk", ".trash");
-    await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(logPath, path.join(trashDir, `${Date.now()}-${messageId}.log`));
+    const trash = trashDir(storage.home);
+    await fs.mkdir(trash, { recursive: true });
+    await fs.rename(logPath, path.join(trash, `${Date.now()}-${messageId}.log`));
   }).catch(() => { /* no log file, fine */ });
 }
 

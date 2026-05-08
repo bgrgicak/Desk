@@ -42,6 +42,18 @@ export interface ChatWithLastMessage extends Chat {
    * 'chat' when no user-action messages exist.
    */
   kind: MessageKind;
+  /**
+   * True when the chat's **most recent** `agent_turn` message is in
+   * `pending` or `running` state. Derived from a correlated subquery at
+   * query time — not a persisted column. Only the latest `agent_turn`
+   * is checked so orphaned older turns (e.g. from a server crash
+   * recovery re-queue) don't falsely light up the sidebar spinner.
+   * `task` messages stay `running` as a kanban signal and
+   * `summary_request` is background work — neither is checked.
+   * The frontend uses this to hydrate the sidebar spinner on cold start
+   * (before any WS events arrive).
+   */
+  running: boolean;
 }
 
 export async function listWithLatestMessage(
@@ -50,13 +62,23 @@ export async function listWithLatestMessage(
 ): Promise<ChatWithLastMessage[]> {
   const { rows } = await db.query(
     `SELECT c.*,
-            (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
+            (SELECT m.content FROM messages m
+               WHERE m.chat_id = c.id
+                 AND json_extract(m.content, '$.type') NOT IN ('agent_turn', 'summary_request', 'summary', 'artifactRef')
+               ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
             COALESCE(
               (SELECT m.kind FROM messages m
                  WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'summary', 'reflection')
                  ORDER BY m.created_at DESC LIMIT 1),
               'chat'
-            ) AS kind
+            ) AS kind,
+            COALESCE(
+              (SELECT m.state IN ('pending', 'running') FROM messages m
+               WHERE m.chat_id = c.id
+                 AND json_extract(m.content, '$.type') = 'agent_turn'
+               ORDER BY m.created_at DESC LIMIT 1),
+              0
+            ) AS is_running
      FROM chats c
      WHERE c.workspace_id = ?
        AND NOT EXISTS (
@@ -72,6 +94,7 @@ export async function listWithLatestMessage(
     ...rowToChat(r),
     lastMessageContent: r.last_message_content ?? undefined,
     kind: r.kind as MessageKind,
+    running: !!r.is_running,
   }));
 }
 
@@ -111,7 +134,7 @@ export async function insert(
 export async function updateMeta(
   db: Pool,
   id: string,
-  data: { title?: string; goal?: string | null; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ): Promise<Chat | null> {
   const goal = validateGoal(data.goal);
 
@@ -151,6 +174,10 @@ export async function updateMeta(
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
   }
+  if (data.unread !== undefined) {
+    sets.push(`unread = ?`);
+    params.push(data.unread ? 1 : 0);
+  }
 
   sets.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`);
 
@@ -162,13 +189,15 @@ export async function updateMeta(
   return rows.length ? rowToChat(rows[0]) : null;
 }
 
-export async function markRead(db: Pool, id: string): Promise<boolean> {
-  // SQLite stores BOOLEAN as INTEGER 0/1.
-  const { rowCount } = await db.query(
-    "UPDATE chats SET unread = 0 WHERE id = ?",
+export async function markRead(db: Pool, id: string): Promise<Chat | null> {
+  // Use RETURNING * so the caller gets an atomic snapshot of the chat row
+  // immediately after clearing unread — no window for a concurrent
+  // messages.insert to set unread=1 between the UPDATE and a separate SELECT.
+  const { rows } = await db.query(
+    "UPDATE chats SET unread = 0 WHERE id = ? RETURNING *",
     [id],
   );
-  return (rowCount ?? 0) > 0;
+  return rows.length ? rowToChat(rows[0]) : null;
 }
 
 export async function setAwaitingUser(

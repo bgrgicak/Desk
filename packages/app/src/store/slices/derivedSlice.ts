@@ -2,58 +2,62 @@
  * Client-derived shims for UI concepts the server can't represent yet.
  *
  * Every piece of state here is either fed by the WS middleware (slice 12's
- * work) or derived from other RTK Query caches via selectors. Nothing here
- * persists — a reload clears the slice and the shims re-hydrate from
- * server events.
+ * work) or derived from other RTK Query caches via selectors and matchers.
+ * Nothing here persists — a reload clears the slice and the shims
+ * re-hydrate from server events and fulfilled query results.
  *
  * TODO(api-gap): see feature-gap-matrix §4.2 — folders-as-entity,
  * notes-for-AI sidecars, artifact authorship, "1 update" pills, and the
  * compose status sequence all live here until the server exposes them.
  */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { RootState } from '../store'
+import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
+import { api } from "../api"
+import type { RootState } from "../store"
 import type {
   ArtifactUpdate,
   Folder,
   InboxItem,
   TodayItem,
   Run,
-} from '@/data/ui-types'
+} from "@/data/ui-types"
 
 export interface DerivedState {
-  /**
-   * Populated by the WS middleware from `artifact.created` events so the
-   * Desk surface can render the "1 update" pill and Today's artifact
-   * callouts without a dedicated endpoint. Matrix §4.2.4.
-   */
   artifactUpdates: ArtifactUpdate[]
-  /**
-   * Monotonic counters bumped by the WS middleware on `library.changed`
-   * events. Components subscribe to the counter for the file they display
-   * and use it as a `useEffect` dependency to re-fetch content when an
-   * agent writes new data. Keyed by library path.
-   */
   fileChangeCounters: Record<string, number>
-  /**
-   * Bumped on `workspace.synced` events (emitted after every agent run).
-   * `ContextDetail` includes this in its fetch effect deps so the open file
-   * re-fetches automatically when an agent run completes. Keyed by workspaceId.
-   */
   workspaceChangeCounters: Record<string, number>
+  /**
+   * Chat IDs that currently have an active agent turn (pending or running).
+   * Fed by the WS middleware on message.appended / message.updated events
+   * for agent_turn messages. The sidebar uses this to show a spinning
+   * indicator.
+   */
+  runningChatIds: string[]
+  /**
+   * Chat IDs that WS has touched (marked running or idle) since the last
+   * getChats fulfillment. Guards against both stale-refetch races:
+   *   - WS marked idle, server still says running (Race 1)
+   *   - WS marked running, server not yet updated (Race 2)
+   * For WS-known chats the current runningChatIds value wins over the
+   * server snapshot. Cleared after each matchFulfilled processes it.
+   */
+  wsKnownChatIds: string[]
+  viewingChatId: string | null
 }
 
 const initialState: DerivedState = {
   artifactUpdates: [],
   fileChangeCounters: {},
   workspaceChangeCounters: {},
+  runningChatIds: [],
+  wsKnownChatIds: [],
+  viewingChatId: null,
 }
 
 const slice = createSlice({
-  name: 'derived',
+  name: "derived",
   initialState,
   reducers: {
-    /** Called by wsMiddleware on `artifact.created`. */
     pushArtifactUpdate(state, action: PayloadAction<ArtifactUpdate>) {
       const exists = state.artifactUpdates.some(u => u.id === action.payload.id)
       if (!exists) state.artifactUpdates.unshift(action.payload)
@@ -61,23 +65,94 @@ const slice = createSlice({
     clearArtifactUpdates(state) {
       state.artifactUpdates = []
     },
-    /** Called by wsMiddleware on `library.changed`. */
     bumpFileChangeCounter(state, action: PayloadAction<string>) {
       const path = action.payload
       state.fileChangeCounters[path] = (state.fileChangeCounters[path] ?? 0) + 1
     },
-    /** Called by wsMiddleware on `workspace.synced`. */
     bumpWorkspaceChangeCounter(state, action: PayloadAction<string>) {
       const wsId = action.payload
       state.workspaceChangeCounters[wsId] = (state.workspaceChangeCounters[wsId] ?? 0) + 1
     },
+    markChatRunning(state, action: PayloadAction<string>) {
+      if (!state.runningChatIds.includes(action.payload)) {
+        state.runningChatIds.push(action.payload)
+      }
+      if (!state.wsKnownChatIds.includes(action.payload)) {
+        state.wsKnownChatIds.push(action.payload)
+      }
+    },
+    markChatIdle(state, action: PayloadAction<string>) {
+      state.runningChatIds = state.runningChatIds.filter(id => id !== action.payload)
+      if (!state.wsKnownChatIds.includes(action.payload)) {
+        state.wsKnownChatIds.push(action.payload)
+      }
+    },
+    setViewingChat(state, action: PayloadAction<string | null>) {
+      state.viewingChatId = action.payload
+    },
+    clearWsKnownChatIds(state) {
+      state.wsKnownChatIds = []
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addMatcher(
+      api.endpoints.getChats.matchFulfilled,
+      (state, action) => {
+        const chats = action.payload as Array<{ id: string; running?: boolean }>
+        const wsKnownSet = new Set(state.wsKnownChatIds)
+        // For non-WS-known chats, trust the server snapshot.
+        const merged = new Set(
+          chats.filter((c) => c.running && !wsKnownSet.has(c.id)).map((c) => c.id),
+        )
+        // For WS-known chats, preserve whatever the WS said last (current
+        // runningChatIds reflects that). This handles both Race 1 (WS idle,
+        // stale server says running) and Race 2 (WS running, stale server
+        // says not running).
+        for (const id of state.runningChatIds) {
+          if (wsKnownSet.has(id)) merged.add(id)
+        }
+        state.runningChatIds = Array.from(merged)
+        state.wsKnownChatIds = []
+      },
+    )
+
+    builder.addMatcher(
+      api.endpoints.getChatMessages.matchFulfilled,
+      (state, action) => {
+        // Skip scrollback (before-cursor) loads: older pages don't contain the
+        // running agent_turn, so updating state from them calls markChatIdle
+        // while the agent is still active at the bottom of the thread.
+        if (action.meta.arg.originalArgs.before) return
+        const chatId = action.meta.arg.originalArgs.chatId
+        const agentTurns = action.payload.items.filter(
+          (m) => m.content?.type === "agent_turn",
+        )
+        const latest = agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null
+        const isRunning = latest !== null &&
+          (latest.state === "pending" || latest.state === "running")
+        if (isRunning && !state.runningChatIds.includes(chatId)) {
+          state.runningChatIds.push(chatId)
+        } else if (!isRunning && state.runningChatIds.includes(chatId)) {
+          state.runningChatIds = state.runningChatIds.filter(
+            (id) => id !== chatId,
+          )
+        }
+      },
+    )
   },
 })
 
-export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter } = slice.actions
+export const {
+  pushArtifactUpdate,
+  clearArtifactUpdates,
+  bumpFileChangeCounter,
+  bumpWorkspaceChangeCounter,
+  markChatRunning,
+  markChatIdle,
+  setViewingChat,
+  clearWsKnownChatIds,
+} = slice.actions
 export default slice.reducer
-
-// ── Selectors ────────────────────────────────────────────────────────────────
 
 export const selectArtifactUpdates = (s: RootState): ArtifactUpdate[] =>
   s.derived.artifactUpdates
@@ -88,37 +163,13 @@ export const selectFileChangeCounter = (s: RootState, path: string): number =>
 export const selectWorkspaceChangeCounter = (s: RootState, wsId: string): number =>
   s.derived.workspaceChangeCounters[wsId] ?? 0
 
-/**
- * Folders view of the library.
- *
- * TODO(api-gap): derive from library path prefixes (e.g. `work/finance/*.md`
- * → {id: 'work/finance', name: 'finance'}). Returning `[]` for now keeps
- * the Library surface flat — matrix §4.2.1.
- */
+export const selectRunningChatIds = (s: RootState): string[] =>
+  s.derived.runningChatIds
+
+export const selectViewingChatId = (s: RootState): string | null =>
+  s.derived.viewingChatId
+
 export const selectFolders = (_s: RootState): Folder[] => []
-
-/**
- * Inbox items. Awaiting-user messages now arrive from
- * `useGetMessagesQuery({ awaitingUser: true })`, so selecting from the API
- * cache here would duplicate caching. Components call the query directly
- * and pass through `toInboxItem`; this selector returns `[]` as a safety
- * net while the shape stabilises — matrix §4.3.6.
- */
 export const selectInboxItems = (_s: RootState): InboxItem[] => []
-
-/**
- * Today items. The 7 client-side TodayItemType categories collapse onto
- * `awaitingUser` + content kind once wired. Selector returns `[]` until
- * the mapping is finalised (slice 6 covers the direct awaiting-user path;
- * matrix §4.3.6 tracks the rest).
- */
 export const selectTodayItems = (_s: RootState): TodayItem[] => []
-
-/**
- * Lookup for a run by id. Used by Inbox / Today to show a run title on
- * an agent question card. Runs live in the RTK Query cache; this helper
- * returns `null` until the lookup is needed — then a component should
- * select the matching run from `useGetMessagesQuery({ scheduled: true })`
- * results. Matrix §4.3.5.
- */
 export const selectRunById = (_s: RootState, _runId: string | undefined): Run | null => null

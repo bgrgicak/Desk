@@ -5,39 +5,47 @@ import { ValidationError, ID_PREFIXES } from "@agent-desk/shared";
 /**
  * Single source of truth for resolving the Desk on-disk root.
  *
+ * Returns the **data root** — the directory that contains `.database/`,
+ * `.memory/`, `.skills/`, `workspaces/`, etc. directly (no "Desk" sub-segment).
+ *
  * Every subsystem that touches files (API uploads, scheduler runs, runtime
  * bind-mounts) MUST go through this so they all land on the same tree. A
  * silent split — API writing to `$HOME` while the runtime mounts `/opt/desk`
  * — caused user uploads to vanish from inside sandboxes.
  *
- * Resolution order: explicit `DESK_HOME` env var → `HOME` (the user
- * running desk-server) → `/home/desk` (last-ditch fallback for headless
- * environments without `$HOME`).
+ * Resolution order:
+ *   1. Explicit `DESK_HOME` env var (set by dev.sh to `$HOME/Desk`, by
+ *      sandbox-entrypoint to `$HOME=/home/agent` = workspace root).
+ *   2. `$HOME/Desk` — sensible default when running on the host without
+ *      explicit configuration.
+ *   3. `/home/desk/Desk` — last-ditch fallback for headless environments.
  */
 export function resolveDeskHome(): string {
-  return process.env.DESK_HOME ?? process.env.HOME ?? "/home/desk";
+  if (process.env.DESK_HOME) return process.env.DESK_HOME;
+  const userHome = process.env.HOME ?? "/home/desk";
+  return path.join(userHome, "Desk");
 }
 
 /**
  * Resolves the absolute path of a workspace's root directory.
  *
- * Each workspace gets its own subdirectory under `~/Desk/workspaces/{slug}/`.
+ * Each workspace gets its own subdirectory under `$DESK_HOME/workspaces/{slug}/`.
  * The `slug` is the `path` column on `workspaces` — derived from the
  * workspace name at create time and renamed in lock-step on rename.
  */
 function workspaceRoot(home: string, slug: string): string {
   validateSlug(slug);
-  return path.join(home, "Desk", "workspaces", slug);
+  return path.join(home, "workspaces", slug);
 }
 
 /** Absolute path to the global trash directory. Sits outside the workspace so the agent can't see it. */
 export function trashDir(home: string): string {
-  return path.join(home, "Desk", ".trash");
+  return path.join(home, ".trash");
 }
 
 /** Parent directory that holds every workspace as a subdirectory. */
 export function workspacesRoot(home: string): string {
-  return path.join(home, "Desk", "workspaces");
+  return path.join(home, "workspaces");
 }
 
 /** Validates that an ID string matches the expected prefix pattern and contains no path separators. */
@@ -59,14 +67,14 @@ function validateSlug(slug: string): void {
 }
 
 /**
- * Ensures the global Desk layout exists: `~/Desk/.tmp/`, `~/Desk/.trash/`,
- * and the `~/Desk/workspaces/` parent directory. Idempotent — safe to
+ * Ensures the global Desk layout exists: `.tmp/`, `.trash/`,
+ * and the `workspaces/` parent directory. Idempotent — safe to
  * call on every boot.
  *
  * Per-workspace directories are created by `ensureWorkspaceLayout`.
  */
 export async function ensureLayout(home: string): Promise<void> {
-  await fs.mkdir(path.join(home, "Desk", ".tmp"), { recursive: true });
+  await fs.mkdir(path.join(home, ".tmp"), { recursive: true });
   await fs.mkdir(trashDir(home), { recursive: true });
   await fs.mkdir(workspacesRoot(home), { recursive: true });
   await ensureUserMemoryLayout(home);
@@ -114,16 +122,16 @@ export function chatArtifactsDir(home: string, slug: string, chatId: string): st
 
 /** Returns the temp directory for in-progress uploads. */
 export function tmpDir(home: string): string {
-  return path.join(home, "Desk", ".tmp");
+  return path.join(home, ".tmp");
 }
 
 /**
  * Path helpers for the memory system.
  *
  * Memory has three on-disk roots:
- *   - User memory:      ~/Desk/.memory/
- *   - Workspace memory: ~/Desk/workspaces/<slug>/.memory/
- *   - Chat memory:      existing ~/Desk/workspaces/<slug>/.chats/<id>/notes/ (covered elsewhere)
+ *   - User memory:      $DESK_HOME/.memory/
+ *   - Workspace memory: $DESK_HOME/workspaces/<slug>/.memory/
+ *   - Chat memory:      existing $DESK_HOME/workspaces/<slug>/.chats/<id>/notes/ (covered elsewhere)
  *
  * The user and workspace roots each contain an always-injected index file
  * (`memory.md` / `workspace.md`), arbitrary topic files referenced by the
@@ -159,34 +167,34 @@ function validateJournalDate(date: string): void {
   }
 }
 
-/** Absolute path to the user memory root: `~/Desk/.memory/`. */
+/** Absolute path to the user memory root: `$DESK_HOME/.memory/`. */
 export function userMemoryDir(home: string): string {
-  return path.join(home, "Desk", MEMORY_DIR);
+  return path.join(home, MEMORY_DIR);
 }
 
-/** Absolute path to the user memory index file: `~/Desk/.memory/memory.md`. */
+/** Absolute path to the user memory index file: `$DESK_HOME/.memory/memory.md`. */
 export function userMemoryIndexPath(home: string): string {
   return path.join(userMemoryDir(home), USER_MEMORY_INDEX);
 }
 
-/** Absolute path to a user memory topic file: `~/Desk/.memory/<topic>.md`. */
+/** Absolute path to a user memory topic file: `$DESK_HOME/.memory/<topic>.md`. */
 export function userMemoryTopicPath(home: string, topic: string): string {
   validateTopicFilename(topic);
   return path.join(userMemoryDir(home), topic);
 }
 
-/** Absolute path to the user journal directory: `~/Desk/.memory/journal/`. */
+/** Absolute path to the user journal directory: `$DESK_HOME/.memory/journal/`. */
 export function userJournalDir(home: string): string {
   return path.join(userMemoryDir(home), JOURNAL_DIR);
 }
 
-/** Absolute path to a user journal entry: `~/Desk/.memory/journal/<YYYY-MM-DD>.md`. */
+/** Absolute path to a user journal entry: `$DESK_HOME/.memory/journal/<YYYY-MM-DD>.md`. */
 export function userJournalPath(home: string, date: string): string {
   validateJournalDate(date);
   return path.join(userJournalDir(home), `${date}.md`);
 }
 
-/** Absolute path to a workspace memory root: `~/Desk/workspaces/<slug>/.memory/`. */
+/** Absolute path to a workspace memory root: `$DESK_HOME/workspaces/<slug>/.memory/`. */
 export function workspaceMemoryDir(home: string, slug: string): string {
   return path.join(workspaceRoot(home, slug), MEMORY_DIR);
 }

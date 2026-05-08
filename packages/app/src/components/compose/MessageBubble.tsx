@@ -6,7 +6,7 @@ import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
-import { useGetSummaryHistoryQuery } from '@/store/api'
+import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 
 interface MessageBubbleProps {
@@ -38,6 +38,8 @@ export function MessageBubble({
   hideAgentHeader = false,
   developerMode = false,
 }: MessageBubbleProps) {
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
@@ -98,6 +100,7 @@ export function MessageBubble({
         chatId={message.chatId}
         messageId={message.id}
         workspaceId={workspaceId}
+        workspacePath={workspacePath}
         developerMode={developerMode}
         onAttachmentClick={onAttachmentClick}
       />
@@ -110,6 +113,7 @@ function MessageContentView({
   chatId,
   messageId,
   workspaceId,
+  workspacePath,
   developerMode,
   onAttachmentClick,
 }: {
@@ -117,12 +121,13 @@ function MessageContentView({
   chatId: string
   messageId: string
   workspaceId?: string
+  workspacePath?: string
   developerMode: boolean
   onAttachmentClick?: (attachment: AttachmentRef) => void
 }) {
   switch (content.type) {
     case 'text':
-      return <MarkdownContent text={content.text} />
+      return <MarkdownContent text={content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'artifactRef':
       return (
         <ArtifactRefRow
@@ -143,7 +148,7 @@ function MessageContentView({
         />
       )
     case 'events':
-      return <EventsView log={content.log} developerMode={developerMode} />
+      return <EventsView log={content.log} developerMode={developerMode} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'toolCall':
       // Filtered upstream when developerMode is false; defensive guard here.
       if (!developerMode) return null
@@ -153,7 +158,7 @@ function MessageContentView({
       return <ToolResultChip toolName={content.toolName} result={content.result} />
     case 'summary':
       if (!developerMode) return null
-      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} />
+      return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'summary_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
@@ -163,7 +168,7 @@ function MessageContentView({
   }
 }
 
-function SummaryView({ chatId, messageId, body }: { chatId: string; messageId: string; body: string }) {
+function SummaryView({ chatId, messageId, body, workspacePath, workspaceId }: { chatId: string; messageId: string; body: string; workspacePath?: string; workspaceId?: string }) {
   const [showDiff, setShowDiff] = useState(false)
   // Lazy-load history only when the diff toggle is on so a chat with
   // many summaries doesn't hammer the API on render.
@@ -199,7 +204,7 @@ function SummaryView({ chatId, messageId, body }: { chatId: string; messageId: s
           No prior version to diff against — this is the first materialized summary.
         </div>
       ) : (
-        <MarkdownContent text={body} />
+        <MarkdownContent text={body} workspacePath={workspacePath} workspaceId={workspaceId} />
       )}
     </div>
   )
@@ -352,7 +357,7 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMode: boolean }) {
+function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
@@ -403,10 +408,10 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
       {chunks.map((c, i) => {
         if (c.kind === 'text') {
           if (!c.text.trim()) return null
-          return <MarkdownContent key={i} text={c.text.trim()} />
+          return <MarkdownContent key={i} text={c.text.trim()} workspacePath={workspacePath} workspaceId={workspaceId} />
         }
         if (c.kind === 'events') {
-          return <EventGroup key={i} entries={c.entries} />
+          return <EventGroup key={i} entries={c.entries} workspacePath={workspacePath} />
         }
         return <StderrBlock key={i} lines={c.lines} />
       })}
@@ -414,7 +419,7 @@ function EventsView({ log, developerMode }: { log: AgentLogEntry[]; developerMod
   )
 }
 
-function EventGroup({ entries }: { entries: AgentLogEntry[] }) {
+function EventGroup({ entries, workspacePath }: { entries: AgentLogEntry[]; workspacePath?: string }) {
   const [open, setOpen] = useState(false)
   if (entries.length === 0) return null
   const count = entries.length
@@ -432,9 +437,9 @@ function EventGroup({ entries }: { entries: AgentLogEntry[] }) {
       {open && (
         <div className="mt-1 space-y-1">
           {entries.map((entry, i) => entry.kind === 'event' && (
-            <CollapsibleChip key={i} icon={<Wrench className="h-3 w-3" />} label={labelForEvent(entry.event)}>
+            <CollapsibleChip key={i} icon={<Wrench className="h-3 w-3" />} label={labelForEvent(entry.event, workspacePath)}>
               <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">
-                {safeStringify(entry.event)}
+                {translateSandboxPaths(safeStringify(entry.event), workspacePath)}
               </pre>
             </CollapsibleChip>
           ))}
@@ -492,8 +497,38 @@ function CollapsibleChip({
   )
 }
 
-function labelForEvent(ev: AgentEvent): string {
+function translateSandboxPaths(text: string, workspacePath?: string): string {
+  if (!workspacePath) return text
+  return text.replaceAll('/home/agent', `~/Desk/workspaces/${workspacePath}`)
+}
+
+/** Extract the most relevant file path from a tool_use event's input object. */
+function pickToolFilePath(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const obj = input as Record<string, unknown>
+  for (const key of ['filePath', 'file_path', 'path', 'file']) {
+    const v = obj[key]
+    if (typeof v === 'string' && v.startsWith('/home/agent')) return v
+  }
+  return undefined
+}
+
+function labelForEvent(ev: AgentEvent, workspacePath?: string): string {
   const t = ev.type
+
+  // opencode tool_use format: {type:'tool_use', part:{tool:'read', state:{input:{filePath:'...'}}}}
+  if (t === 'tool_use') {
+    const tool = pickString(ev.part, 'tool') ?? 'tool'
+    const state = (ev.part as Record<string, unknown> | undefined)?.state
+    const input = (state as Record<string, unknown> | undefined)?.input
+    const filePath = pickToolFilePath(input)
+    if (filePath && workspacePath) {
+      const display = translateSandboxPaths(filePath, workspacePath)
+      return `${tool}: ${display}`
+    }
+    return `called ${tool}`
+  }
+
   if (t === 'tool-call' || t === 'tool_call') {
     const name = pickString(ev.part, 'name') ?? pickString(ev, 'name') ?? 'tool'
     return `called ${name}`

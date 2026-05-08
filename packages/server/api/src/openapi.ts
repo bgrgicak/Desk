@@ -561,8 +561,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "200": { description: "File content (Content-Disposition: inline)" }, "404": { description: "No such path in the resolved workspace" } },
         },
         put: {
-          summary: "Overwrite an existing library file's contents",
-          description: "Replaces the file at `path` with the request body. Fails with 404 if the file doesn't exist — use POST /library to create.",
+          summary: "Save content to a library file (upsert)",
+          description: "Replaces the file at `path` with the request body. Creates the file and parent directories if they don't exist yet, so agent-written files (e.g. `.memory/workspace.md`) can be saved without a separate POST.",
           parameters: [
             { name: "path", in: "query", required: true, schema: { type: "string" } },
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
@@ -572,8 +572,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
           },
           responses: {
-            "200": { description: "Updated FileRef" },
-            "404": { description: "No such path in the resolved workspace" },
+            "200": { description: "Saved FileRef (created or updated)" },
             "413": { description: "File exceeds maximum size" },
           },
         },

@@ -471,7 +471,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     await expect(fs.stat(appRoot)).rejects.toMatchObject({ code: "ENOENT" });
 
     // …but a backup landed in .trash/.app-versions/.
-    const versionsRoot = path.join(home, "Desk", ".trash", ".app-versions");
+    const versionsRoot = path.join(home, ".trash", ".app-versions");
     const trashEntries = await fs.readdir(versionsRoot);
     expect(
       trashEntries.find((e) => e.startsWith(`${DELETE_NAME}.app-`)),

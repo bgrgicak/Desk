@@ -115,7 +115,7 @@ describe("POST /internal/backup", () => {
     }
   });
 
-  it("defaults destination to ${DESK_HOME}/Desk/backups/desk-<ts>.sqlite3", async () => {
+  it("defaults destination to ${DESK_HOME}/backups/desk-<ts>.sqlite3", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/internal/backup`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -123,7 +123,7 @@ describe("POST /internal/backup", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { path: string };
     expect(body.path).toMatch(
-      new RegExp(`^${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/Desk/backups/desk-[0-9-]+\\.sqlite3$`),
+      new RegExp(`^${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/backups/desk-[0-9-]+\\.sqlite3$`),
     );
     const stat = await fs.stat(body.path);
     expect(stat.size).toBeGreaterThan(0);

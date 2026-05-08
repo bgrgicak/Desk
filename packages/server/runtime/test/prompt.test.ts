@@ -51,7 +51,7 @@ describe("renderPromptBody", () => {
     userName: "Desk",
   };
 
-  it("orders mandate → artifacts → task context → scheduling → goal autodetect → persistence → memory rules → goal → Desk skill router", () => {
+  it("orders mandate → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -63,7 +63,6 @@ describe("renderPromptBody", () => {
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxTaskContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
-    const idxGoalAutodetect = body.indexOf("## Goal autodetection");
     const idxPersistence = body.indexOf("## Persistence (~/.deskrc)");
     const idxMemoryRules = body.indexOf("## Memory and recall");
     const idxGoal = body.indexOf("## User's goal: write a document");
@@ -73,8 +72,7 @@ describe("renderPromptBody", () => {
     expect(idxArtifacts).toBeGreaterThan(idxMandate);
     expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
     expect(idxScheduling).toBeGreaterThan(idxTaskContext);
-    expect(idxGoalAutodetect).toBeGreaterThan(idxScheduling);
-    expect(idxPersistence).toBeGreaterThan(idxGoalAutodetect);
+    expect(idxPersistence).toBeGreaterThan(idxScheduling);
     expect(idxMemoryRules).toBeGreaterThan(idxPersistence);
     expect(idxGoal).toBeGreaterThan(idxMemoryRules);
     expect(idxSkills).toBeGreaterThan(idxGoal);
@@ -114,26 +112,9 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("NO_TOKEN");
   });
 
-  it("includes goal autodetection even when no persisted goal is set", () => {
-    const body = renderPromptBody({ ...baseInput });
-    expect(body).toContain("## Goal autodetection");
-    expect(body).toContain("desk-goal-<goal>");
-    expect(body).toContain("native `skill` tool");
-    expect(body).toContain("Do not announce the detected goal");
-  });
-
-  it("makes an explicit persisted goal authoritative over autodetection", () => {
+  it("includes the persisted goal section when a goal is set", () => {
     const body = renderPromptBody({ ...baseInput, goal: "site" });
-    expect(body).toContain("If this prompt includes a persisted user-goal section");
-    expect(body).toContain("treat that as the\n   loaded goal skill for the chat");
     expect(body).toContain("## User's goal: build a site");
-  });
-
-  it("can omit goal autodetection while keeping the persisted goal section", () => {
-    const body = renderPromptBody({ ...baseInput, goal: "app", includeGoalAutodetect: false });
-    expect(body).not.toContain("## Goal autodetection");
-    expect(body).not.toContain("desk-goal-<goal>");
-    expect(body).toContain("## User's goal: build an app");
   });
 
   it("artifacts fragment includes the chat paths when chatId is set", () => {

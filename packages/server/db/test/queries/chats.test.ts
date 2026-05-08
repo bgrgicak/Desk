@@ -226,6 +226,108 @@ describe("chats queries", () => {
     expect(cleared?.goal).toBeUndefined();
   });
 
+  it("running is true when a message has pending or running state", async () => {
+    const runningChatId = generateId("chat");
+    await chats.insert(pool, { id: runningChatId, workspaceId: wsId, agentId, title: "Running chat" });
+    // Insert a user message (no state) and an agent_turn in 'running' state
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: runningChatId,
+      role: "user",
+      content: { type: "text", text: "do something" },
+      kind: "chat",
+    });
+    const agentTurnId = generateId("message");
+    await messages.insert(pool, {
+      id: agentTurnId,
+      chatId: runningChatId,
+      role: "agent",
+      content: { type: "agent_turn", userMessageId: "ignored" },
+      kind: "chat",
+      state: "running",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === runningChatId)?.running).toBe(true);
+
+    // Transition to succeeded — running should become false
+    await pool.query("UPDATE messages SET state = 'succeeded' WHERE id = ?", [agentTurnId]);
+    const list2 = await chats.listWithLatestMessage(pool, wsId);
+    expect(list2.find((c) => c.id === runningChatId)?.running).toBe(false);
+  });
+
+  it("running ignores non-agent_turn messages in pending/running state", async () => {
+    const taskChatId = generateId("chat");
+    await chats.insert(pool, { id: taskChatId, workspaceId: wsId, agentId, title: "Task chat" });
+    // Insert a task message in 'running' state (kanban signal) — should NOT
+    // make the chat appear as running in the sidebar spinner sense.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: taskChatId,
+      role: "user",
+      content: { type: "text", text: "a task" },
+      kind: "task",
+      state: "running",
+    });
+    // Also insert a summary_request in 'pending' — also should not count.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: taskChatId,
+      role: "system",
+      content: { type: "summary_request" },
+      kind: "summary",
+      state: "pending",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === taskChatId)?.running).toBe(false);
+  });
+
+  it("running checks only the latest agent_turn, ignoring orphaned older ones", async () => {
+    const orphanChatId = generateId("chat");
+    await chats.insert(pool, { id: orphanChatId, workspaceId: wsId, agentId, title: "Orphan chat" });
+    // Old agent_turn stuck in 'pending' (e.g. from crash recovery re-queue)
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: orphanChatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "old" },
+      kind: "chat",
+      state: "pending",
+    });
+    // Newer agent_turn that already succeeded
+    // Use a small delay so created_at ordering is deterministic
+    await pool.query("SELECT 1"); // tiny pause
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: orphanChatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "new" },
+      kind: "chat",
+      state: "succeeded",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    // The latest agent_turn succeeded, so the chat should NOT show as running
+    // even though an older orphaned agent_turn is still in 'pending'.
+    expect(list.find((c) => c.id === orphanChatId)?.running).toBe(false);
+  });
+
+  it("running is false when no messages have pending/running state", async () => {
+    const idleChatId = generateId("chat");
+    await chats.insert(pool, { id: idleChatId, workspaceId: wsId, agentId, title: "Idle chat" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: idleChatId,
+      role: "user",
+      content: { type: "text", text: "just chatting" },
+      kind: "chat",
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    expect(list.find((c) => c.id === idleChatId)?.running).toBe(false);
+  });
+
   it("updates meta", async () => {
     const updated = await chats.updateMeta(pool, chatId, { title: "Renamed Chat" });
     expect(updated).not.toBeNull();

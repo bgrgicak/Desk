@@ -45,6 +45,7 @@ export {
   trashChatDirectories,
   resolveForSandbox,
   validateLibrarySubpath,
+  validateReadableSubpath,
 } from "./files.js";
 export type {
   StorageContext,

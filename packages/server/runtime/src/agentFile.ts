@@ -38,8 +38,6 @@ export interface AgentFileInput {
    * agent has the same goal context across the whole conversation.
    */
   goal?: GoalKey | null;
-  /** Whether to include the goal-selection/autodetection prompt fragment. */
-  includeGoalAutodetect?: boolean;
   /**
    * Summary and reflection runs are internal. They get narrow prompts instead
    * of the full chat/task/artifact instruction set.
@@ -53,6 +51,11 @@ export interface AgentFileInput {
   home?: string;
   /** Workspace slug for resolving the workspace memory index. */
   workspaceSlug?: string;
+  /**
+   * When false, the goal-autodetect fragment is omitted from the prompt.
+   * Defaults to true.
+   */
+  includeGoalAutodetect?: boolean;
 }
 
 /**
@@ -73,10 +76,10 @@ export function renderAgentFile(input: AgentFileInput): string {
     userTimezone: input.userTimezone,
     chatId: input.chatId,
     goal: input.goal ?? null,
-    includeGoalAutodetect: input.includeGoalAutodetect,
     runMode: input.runMode ?? "chat",
     home: input.home,
     workspaceSlug: input.workspaceSlug,
+    includeGoalAutodetect: input.includeGoalAutodetect,
   });
 
   return `${frontmatter}\n\n${body}\n`;

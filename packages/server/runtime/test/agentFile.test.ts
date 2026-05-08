@@ -63,7 +63,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("RUN `desk-agent task schedule`");
   });
 
-  it("includes prompt-level goal autodetection instructions", () => {
+  it("includes goal autodetection instructions by default", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
@@ -72,9 +72,18 @@ describe("renderAgentFile", () => {
     });
 
     expect(result).toContain("## Goal autodetection");
-    expect(result).toContain("desk-goal-<goal>");
-    expect(result).toContain("native `skill` tool");
-    expect(result).toContain("Do not announce the detected goal");
+  });
+
+  it("omits goal autodetection when includeGoalAutodetect is false", () => {
+    const result = renderAgentFile({
+      agentId: "agt_goal_detect",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      includeGoalAutodetect: false,
+    });
+
+    expect(result).not.toContain("## Goal autodetection");
   });
 
   it("renders the per-chat artifact paths when chatId is supplied", () => {

@@ -407,3 +407,185 @@ describe("GET /library/meta and /library/download", () => {
     expect(dlWrongWs.status).toBe(404);
   });
 });
+
+describe("hidden (dot-prefixed) paths — full CRUD", () => {
+  it("returns metadata for a file inside a hidden folder", async () => {
+    // Look up the workspace slug so we can create the hidden file on disk
+    const { rows } = await pool.query<{ path: string }>(
+      "SELECT path FROM workspaces WHERE id = ?",
+      [alpha.wsA],
+    );
+    const wsSlug = rows[0]!.path;
+    const wsRoot = path.join(home, "workspaces", wsSlug);
+
+    // Create .memory/workspace.md directly on disk (mimics agent-created files)
+    const hiddenDir = path.join(wsRoot, ".memory");
+    await fs.mkdir(hiddenDir, { recursive: true });
+    await fs.writeFile(path.join(hiddenDir, "workspace.md"), "# Workspace memory");
+
+    const res = await request(
+      "GET",
+      `/library/meta?workspaceId=${alpha.wsA}&path=${encodeURIComponent(".memory/workspace.md")}`,
+      alpha.token,
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as { path: string; name: string };
+    expect(body.path).toBe(".memory/workspace.md");
+    expect(body.name).toBe("workspace.md");
+  });
+
+  it("returns content for a file inside a hidden folder", async () => {
+    // File already created by the previous test
+    const res = await request(
+      "GET",
+      `/library/content?workspaceId=${alpha.wsA}&path=${encodeURIComponent(".memory/workspace.md")}`,
+      alpha.token,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("saves (PUT) content to a file inside a hidden folder", async () => {
+    const newContent = "# Updated workspace memory\n\nSaved via PUT";
+    const putRes = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const payload = Buffer.from(newContent);
+      const url = `/library/content?workspaceId=${encodeURIComponent(alpha.wsA)}&path=${encodeURIComponent(".memory/workspace.md")}`;
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: url,
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${alpha.token}`,
+            "Content-Type": "text/markdown",
+            "Content-Length": String(payload.length),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString();
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    });
+    expect(putRes.status).toBe(200);
+    const ref = putRes.body as { path: string; size: number };
+    expect(ref.path).toBe(".memory/workspace.md");
+    expect(ref.size).toBe(newContent.length);
+
+    // Verify the content was actually written
+    const getRes = await request(
+      "GET",
+      `/library/content?workspaceId=${alpha.wsA}&path=${encodeURIComponent(".memory/workspace.md")}`,
+      alpha.token,
+    );
+    expect(getRes.status).toBe(200);
+  });
+
+  it("still blocks traversal paths even with dot-prefixed segments", async () => {
+    const res = await request(
+      "GET",
+      `/library/meta?workspaceId=${alpha.wsA}&path=${encodeURIComponent(".memory/../../../etc/passwd")}`,
+      alpha.token,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("allows delete on hidden paths", async () => {
+    const res = await request(
+      "DELETE",
+      `/library?workspaceId=${alpha.wsA}&path=${encodeURIComponent(".memory/workspace.md")}`,
+      alpha.token,
+    );
+    // Hidden files are regular files — all operations work the same
+    expect(res.status).toBe(200);
+  });
+
+  it("PUT creates a hidden file that does not exist yet (upsert)", async () => {
+    // After the previous test deleted .memory/workspace.md, saving via
+    // PUT should create it again rather than returning 404.
+    const content = "# Re-created workspace memory";
+    const putRes = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const payload = Buffer.from(content);
+      const url = `/library/content?workspaceId=${encodeURIComponent(alpha.wsA)}&path=${encodeURIComponent(".memory/workspace.md")}`;
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: url,
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${alpha.token}`,
+            "Content-Type": "text/markdown",
+            "Content-Length": String(payload.length),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString();
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    });
+    expect(putRes.status).toBe(200);
+    const ref = putRes.body as { path: string; name: string; size: number };
+    expect(ref.path).toBe(".memory/workspace.md");
+    expect(ref.size).toBe(content.length);
+  });
+
+  it("PUT creates a file in a brand-new hidden directory", async () => {
+    // Saving to a completely new hidden path should create both the
+    // directory and file — matches the agent sandbox writing pattern.
+    const content = "agent scratch notes";
+    const putRes = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const payload = Buffer.from(content);
+      const url = `/library/content?workspaceId=${encodeURIComponent(alpha.wsA)}&path=${encodeURIComponent(".scratch/notes.md")}`;
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: url,
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${alpha.token}`,
+            "Content-Type": "text/markdown",
+            "Content-Length": String(payload.length),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            const raw = Buffer.concat(chunks).toString();
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    });
+    expect(putRes.status).toBe(200);
+    const ref = putRes.body as { path: string; name: string };
+    expect(ref.path).toBe(".scratch/notes.md");
+    expect(ref.name).toBe("notes.md");
+  });
+});

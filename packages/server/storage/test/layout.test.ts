@@ -34,11 +34,11 @@ describe("ensureLayout", () => {
     await ensureLayout(home);
 
     // Global dirs exist regardless of whether any workspaces were created.
-    const tmpStat = await fs.stat(path.join(home, "Desk", ".tmp"));
+    const tmpStat = await fs.stat(path.join(home, ".tmp"));
     expect(tmpStat.isDirectory()).toBe(true);
-    const trashStat = await fs.stat(path.join(home, "Desk", ".trash"));
+    const trashStat = await fs.stat(path.join(home, ".trash"));
     expect(trashStat.isDirectory()).toBe(true);
-    const wsRoot = await fs.stat(path.join(home, "Desk", "workspaces"));
+    const wsRoot = await fs.stat(path.join(home, "workspaces"));
     expect(wsRoot.isDirectory()).toBe(true);
   });
 
@@ -46,7 +46,7 @@ describe("ensureLayout", () => {
     await ensureLayout(home);
     await ensureLayout(home);
 
-    const tmpStat = await fs.stat(path.join(home, "Desk", ".tmp"));
+    const tmpStat = await fs.stat(path.join(home, ".tmp"));
     expect(tmpStat.isDirectory()).toBe(true);
   });
 });
@@ -56,7 +56,7 @@ describe("ensureWorkspaceLayout", () => {
     await ensureLayout(home);
     await ensureWorkspaceLayout(home, "desk");
 
-    const root = path.join(home, "Desk", "workspaces", "desk");
+    const root = path.join(home, "workspaces", "desk");
     const stat = await fs.stat(root);
     expect(stat.isDirectory()).toBe(true);
 
@@ -69,38 +69,38 @@ describe("ensureWorkspaceLayout", () => {
     await ensureWorkspaceLayout(home, "alpha");
     await ensureWorkspaceLayout(home, "beta");
 
-    const alpha = await fs.stat(path.join(home, "Desk", "workspaces", "alpha"));
-    const beta = await fs.stat(path.join(home, "Desk", "workspaces", "beta"));
+    const alpha = await fs.stat(path.join(home, "workspaces", "alpha"));
+    const beta = await fs.stat(path.join(home, "workspaces", "beta"));
     expect(alpha.isDirectory()).toBe(true);
     expect(beta.isDirectory()).toBe(true);
   });
 });
 
 describe("memory path helpers", () => {
-  it("resolves user memory paths under ~/Desk/.memory/", () => {
-    expect(userMemoryDir("/h")).toBe(path.join("/h", "Desk", ".memory"));
-    expect(userMemoryIndexPath("/h")).toBe(path.join("/h", "Desk", ".memory", "memory.md"));
-    expect(userJournalDir("/h")).toBe(path.join("/h", "Desk", ".memory", "journal"));
+  it("resolves user memory paths under $DESK_HOME/.memory/", () => {
+    expect(userMemoryDir("/h")).toBe(path.join("/h", ".memory"));
+    expect(userMemoryIndexPath("/h")).toBe(path.join("/h", ".memory", "memory.md"));
+    expect(userJournalDir("/h")).toBe(path.join("/h", ".memory", "journal"));
   });
 
   it("resolves user memory topic and journal files", () => {
     expect(userMemoryTopicPath("/h", "build-tools.md"))
-      .toBe(path.join("/h", "Desk", ".memory", "build-tools.md"));
+      .toBe(path.join("/h", ".memory", "build-tools.md"));
     expect(userJournalPath("/h", "2026-05-06"))
-      .toBe(path.join("/h", "Desk", ".memory", "journal", "2026-05-06.md"));
+      .toBe(path.join("/h", ".memory", "journal", "2026-05-06.md"));
   });
 
   it("resolves workspace memory paths under <workspace>/.memory/", () => {
     expect(workspaceMemoryDir("/h", "alpha"))
-      .toBe(path.join("/h", "Desk", "workspaces", "alpha", ".memory"));
+      .toBe(path.join("/h", "workspaces", "alpha", ".memory"));
     expect(workspaceMemoryIndexPath("/h", "alpha"))
-      .toBe(path.join("/h", "Desk", "workspaces", "alpha", ".memory", "workspace.md"));
+      .toBe(path.join("/h", "workspaces", "alpha", ".memory", "workspace.md"));
     expect(workspaceMemoryTopicPath("/h", "alpha", "naming.md"))
-      .toBe(path.join("/h", "Desk", "workspaces", "alpha", ".memory", "naming.md"));
+      .toBe(path.join("/h", "workspaces", "alpha", ".memory", "naming.md"));
     expect(workspaceJournalDir("/h", "alpha"))
-      .toBe(path.join("/h", "Desk", "workspaces", "alpha", ".memory", "journal"));
+      .toBe(path.join("/h", "workspaces", "alpha", ".memory", "journal"));
     expect(workspaceJournalPath("/h", "alpha", "2026-05-06"))
-      .toBe(path.join("/h", "Desk", "workspaces", "alpha", ".memory", "journal", "2026-05-06.md"));
+      .toBe(path.join("/h", "workspaces", "alpha", ".memory", "journal", "2026-05-06.md"));
   });
 
   it("rejects topic filenames that escape the memory directory", () => {

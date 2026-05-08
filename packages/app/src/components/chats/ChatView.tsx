@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
@@ -27,6 +27,7 @@ import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ChatThread } from '@/components/compose/ChatThread'
+import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { ChatInput } from '@/components/compose/ChatInput'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
@@ -43,8 +44,10 @@ import { toContextItem } from '@/store/selectors/library'
 import { iconForFile } from '@/data/file-kind'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
 import { NEW_CHAT_ID } from '@/router/nav'
-import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
+import { setViewingChat } from '@/store/slices/derivedSlice'
+import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { AttachmentRef, ServerFile } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
@@ -714,15 +717,41 @@ export function ChatView({
 
   const isNewChat = chat.id === NEW_CHAT_ID
 
+  const dispatch = useAppDispatch()
+  const store = useAppStore()
   const [postMessageMutation, postMessageState] = usePostChatMessageMutation()
   const [patchChatMutation] = usePatchChatMutation()
+
+  // Track which chat the user is viewing so the WS middleware can suppress
+  // unread-dot flashes for messages arriving in the active chat.
+  // useLayoutEffect ensures viewingChatId is set synchronously before the
+  // browser paints, closing the window where a WS event could arrive
+  // between mount and viewingChatId being set (useEffect fires after
+  // paint, leaving a gap where the middleware treats the viewed chat as
+  // non-viewed and flashes the unread dot).
+  useLayoutEffect(() => {
+    if (!isNewChat) {
+      dispatch(setViewingChat(chat.id))
+      return () => { dispatch(setViewingChat(null)) }
+    }
+  }, [isNewChat, chat.id, dispatch])
+
+  // Mark the chat as read on the server whenever the user is viewing it
+  // and the server-side unread flag is true (initial open or agent reply).
+  // Uses markChatReadQuietly (raw PATCH + cache patch) instead of the RTK
+  // Query mutation to avoid Chat tag invalidation which races with the
+  // unread update and causes a visible dot flash.
+  useEffect(() => {
+    if (!isNewChat && chat.unread) {
+      markChatReadQuietly(chat.id, dispatch, store.getState)
+    }
+  }, [isNewChat, chat.id, chat.unread, dispatch, store])
 
   // Pre-creation agent pick for the "new chat" case. Once the chat
   // exists, re-binding flows through PATCH /chats/:id instead. The
   // initial value is seeded from any pending agent id stashed by the
   // artifact-creation sheet's "Skip to chat" path; ChatView is keyed by
   // chat.id, so remounting on navigation refreshes the seed.
-  const dispatch = useAppDispatch()
   const pendingNewChatAgentId = useAppSelector(s => s.ui.pendingNewChatAgentId)
   const [newChatAgentId, setNewChatAgentId] = useState<string | null>(
     isNewChat ? pendingNewChatAgentId : null,
@@ -933,13 +962,7 @@ export function ChatView({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onClick={() => onDeleteChat?.(chat.id)}
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete chat
-                  </DropdownMenuItem>
+                  <ChatMenuItems chatId={chat.id} onDelete={(id) => onDeleteChat?.(id)} />
                 </DropdownMenuContent>
               </DropdownMenu>
 
