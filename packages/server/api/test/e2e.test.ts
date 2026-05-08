@@ -1126,7 +1126,8 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     }
 
     const sentinel = "CORSAIR_SENTINEL_USER_MEMORY";
-    const memoryDir = path.join(realHome, "Desk", ".memory");
+    // DESK_HOME is the data root — no "Desk" sub-segment since ac4ecca.
+    const memoryDir = path.join(realHome, ".memory");
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
       path.join(memoryDir, "memory.md"),
@@ -1159,7 +1160,6 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     // <workspace>/.opencode/agents/<agentId>.md).
     const agentFile = path.join(
       realHome,
-      "Desk",
       "workspaces",
       workspaceSlug,
       ".opencode",
