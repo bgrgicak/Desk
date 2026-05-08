@@ -73,7 +73,7 @@ describe("reconcileArtifactRefs", () => {
     });
     const mid = await insertArtifactMessage(file.path);
 
-    const root = path.join(ctx.home, "workspaces", "desk");
+    const root = path.join(ctx.home, "desk");
     const oldAbs = path.join(root, file.path);
     const newAbs = path.join(root, "Projects", "moved-me.txt");
     await fs.mkdir(path.dirname(newAbs), { recursive: true });
@@ -106,7 +106,7 @@ describe("reconcileArtifactRefs", () => {
     const mid = await insertArtifactMessage("comeback.txt", { missing: true });
 
     // Create the file so reconcile finds it.
-    const abs = path.join(ctx.home, "workspaces", "desk", "comeback.txt");
+    const abs = path.join(ctx.home, "desk", "comeback.txt");
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, "back!");
 
@@ -120,7 +120,7 @@ describe("reconcileArtifactRefs", () => {
 
   it("does not repair when multiple candidates exist", async () => {
     // Two files named "ambig.txt" in different user-visible folders.
-    const root = path.join(ctx.home, "workspaces", "desk");
+    const root = path.join(ctx.home, "desk");
     const aAbs = path.join(root, "Projects", "ambig.txt");
     const bAbs = path.join(root, "Notes", "ambig.txt");
     await fs.mkdir(path.dirname(aAbs), { recursive: true });

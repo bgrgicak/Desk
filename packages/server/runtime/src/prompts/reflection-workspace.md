@@ -12,7 +12,7 @@ Return a single JSON object — no preamble, no code fence, no commentary:
 
 ```json
 {
-  "journal": "<markdown body for ~/Desk/workspaces/<slug>/.memory/journal/<date>.md>",
+  "journal": "<markdown body for ~/Desk/<slug>/.memory/journal/<date>.md>",
   "memoryEdits": [
     { "path": "<topic>.md", "body": "<full file contents>" }
   ]

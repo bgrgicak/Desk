@@ -50,7 +50,7 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
     })
   ).json()) as Chat
 
-  const artifactDir = path.join(serverHome, 'workspaces', ws.path, '.chats', chat.id, 'artifacts')
+  const artifactDir = path.join(serverHome, ws.path, '.chats', chat.id, 'artifacts')
   await fs.mkdir(artifactDir, { recursive: true })
 
   const htmlName = `inline-preview-${Date.now()}.html`

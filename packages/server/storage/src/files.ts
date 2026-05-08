@@ -33,7 +33,7 @@ export interface StorageContext {
 export interface UploadArtifactInput {
   /** Workspace whose on-disk slug this upload is destined for. */
   workspaceId: string;
-  /** The workspace's `path` column — the directory name under `~/Desk/workspaces/`. */
+  /** The workspace's `path` column — the directory name under `~/Desk/`. */
   workspaceSlug: string;
   chatId?: string;
   name: string;

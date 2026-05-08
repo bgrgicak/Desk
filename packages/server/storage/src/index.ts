@@ -23,7 +23,7 @@ export {
   workspaceJournalDir,
   workspaceJournalPath,
   workspaceRootPath,
-  workspacesRoot,
+  migrateLegacyWorkspaceLayout,
 } from "./layout.js";
 export {
   uploadArtifact,

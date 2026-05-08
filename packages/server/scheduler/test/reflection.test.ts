@@ -102,7 +102,7 @@ describe("yesterdayDateLocal", () => {
 
 describe("runWorkspaceReflection", () => {
   beforeEach(async () => {
-    await fs.rm(path.join(home, "workspaces", workspaceASlug, ".memory"), {
+    await fs.rm(path.join(home, workspaceASlug, ".memory"), {
       recursive: true,
       force: true,
     });
@@ -137,7 +137,6 @@ describe("runWorkspaceReflection", () => {
 
     const journalPath = path.join(
       home,
-      "workspaces",
       workspaceASlug,
       ".memory",
       "journal",
@@ -148,7 +147,6 @@ describe("runWorkspaceReflection", () => {
 
     const editPath = path.join(
       home,
-      "workspaces",
       workspaceASlug,
       ".memory",
       "kanban-prefs.md",
@@ -160,7 +158,6 @@ describe("runWorkspaceReflection", () => {
   it("passes the last 30 prior workspace journals for memory curation", async () => {
     const journalDir = path.join(
       home,
-      "workspaces",
       workspaceASlug,
       ".memory",
       "journal",
@@ -231,7 +228,6 @@ describe("runWorkspaceReflection", () => {
     // No journal file appeared.
     const journalDir = path.join(
       home,
-      "workspaces",
       workspaceBSlug,
       ".memory",
       "journal",
@@ -257,7 +253,6 @@ describe("runWorkspaceReflection", () => {
     const memoryEditPath = "concurrency-prefs.md";
     const memoryAbs = path.join(
       home,
-      "workspaces",
       workspaceASlug,
       ".memory",
       memoryEditPath,
@@ -345,10 +340,10 @@ describe("runWorkspaceReflection", () => {
       reflectWorkspace,
     });
 
-    const memoryDir = path.join(home, "workspaces", workspaceASlug, ".memory");
+    const memoryDir = path.join(home, workspaceASlug, ".memory");
     expect(await fs.readFile(path.join(memoryDir, "valid.md"), "utf-8")).toBe("valid body");
     // Path-traversal target must not exist.
-    const escape = path.join(home, "workspaces", "escape.md");
+    const escape = path.join(home, "escape.md");
     expect(await fs.stat(escape).catch(() => null)).toBeNull();
   });
 });
@@ -368,7 +363,7 @@ describe("runDailyReflection", () => {
 
     // Reset memory dirs for both workspaces + user.
     await fs.rm(path.join(home, ".memory"), { recursive: true, force: true });
-    await fs.rm(path.join(home, "workspaces", workspaceASlug, ".memory"), {
+    await fs.rm(path.join(home, workspaceASlug, ".memory"), {
       recursive: true,
       force: true,
     });
@@ -386,7 +381,6 @@ describe("runDailyReflection", () => {
 
     const workspaceJournalPath = path.join(
       home,
-      "workspaces",
       workspaceASlug,
       ".memory",
       "journal",
@@ -593,7 +587,7 @@ describe("scheduler-managed daily reflection tasks", () => {
     expect(runRows).toEqual([{ state: "succeeded" }]);
 
     const journal = await fs.readFile(
-      path.join(home, "workspaces", workspaceASlug, ".memory", "journal", `${dynamicDate}.md`),
+      path.join(home, workspaceASlug, ".memory", "journal", `${dynamicDate}.md`),
       "utf-8",
     );
     expect(journal).toContain(workspaceASlug);

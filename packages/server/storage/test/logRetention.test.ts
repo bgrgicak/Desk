@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function seedLogs(chatId: string, count: number): Promise<string[]> {
-  const dir = path.join(home, "workspaces", "desk", ".chats", chatId, "logs");
+  const dir = path.join(home, "desk", ".chats", chatId, "logs");
   await fs.mkdir(dir, { recursive: true });
   const names: string[] = [];
   for (let i = 0; i < count; i++) {
@@ -46,7 +46,7 @@ describe("enforceLogRetention", () => {
     expect(res.evicted).toBe(6);
 
     const remaining = await fs.readdir(
-      path.join(home, "workspaces", "desk", ".chats", chatId, "logs"),
+      path.join(home, "desk", ".chats", chatId, "logs"),
     );
     expect(remaining.length).toBe(4);
     // Survivors are the 6 newest (indices 4..9).

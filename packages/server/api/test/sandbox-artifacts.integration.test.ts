@@ -355,7 +355,7 @@ describe("POST /sandbox/artifacts", () => {
 describe("chat artifact file reads", () => {
   it("rejects traversal out of the chat artifacts directory", async () => {
     const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
-    const logsDir = path.join(home, "workspaces", workspaceSlug, ".chats", chatId, "logs");
+    const logsDir = path.join(home, workspaceSlug, ".chats", chatId, "logs");
     await fs.mkdir(artifactsDir, { recursive: true });
     await fs.mkdir(logsDir, { recursive: true });
     await fs.writeFile(path.join(logsDir, "secret.log"), "secret", "utf8");
@@ -372,7 +372,7 @@ describe("chat artifact file reads", () => {
 
   it("rejects artifact symlinks that resolve outside the artifacts directory", async () => {
     const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
-    const logsDir = path.join(home, "workspaces", workspaceSlug, ".chats", chatId, "logs");
+    const logsDir = path.join(home, workspaceSlug, ".chats", chatId, "logs");
     await fs.mkdir(artifactsDir, { recursive: true });
     await fs.mkdir(logsDir, { recursive: true });
     await fs.writeFile(path.join(logsDir, "secret-symlink.log"), "secret", "utf8");
@@ -396,7 +396,7 @@ describe("chat artifact file reads", () => {
       `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
       [symlinkChatId, workspaceId, agentId, "Symlink Root Chat"],
     );
-    const chatDir = path.join(home, "workspaces", workspaceSlug, ".chats", symlinkChatId);
+    const chatDir = path.join(home, workspaceSlug, ".chats", symlinkChatId);
     const outsideDir = path.join(home, "outside-artifacts");
     await fs.mkdir(chatDir, { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });

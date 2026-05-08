@@ -5,8 +5,9 @@ The Desk app keeps **all** durable state under `~/Desk/` on the host:
 - `~/Desk/.database/desk.sqlite3` — SQLite database (users, workspaces,
   chats, messages, tasks, auth sessions, encrypted provider keys). Mode
   0600 — readable only by the host user.
-- `~/Desk/workspaces/{slug}/` — workspace files (notes, attachments, chat
-  logs, summary snapshots under `.chats/*/notes/`).
+- `~/Desk/{slug}/` — workspace files (notes, attachments, chat
+  logs, summary snapshots under `.chats/*/notes/`). One directory per
+  workspace, sitting directly under `~/Desk/`.
 - `~/Desk/.trash/` — soft-deleted workspaces and rotated logs.
 
 The DB lives under a dotfile parent (`.database/`) so it doesn't show up
@@ -70,7 +71,7 @@ explicit `--include` may not. Verify the tool you use copies
 2. Replace `~/Desk/.database/desk.sqlite3` with the backup file (and
    delete any leftover `desk.sqlite3-wal` and `desk.sqlite3-shm` so SQLite
    doesn't replay stale WAL on top of the restored snapshot).
-3. Restore `~/Desk/workspaces/` if needed.
+3. Restore the per-workspace directories under `~/Desk/` if needed.
 4. Start the server again.
 
 The migrations are idempotent — if the backup is from an older schema, the

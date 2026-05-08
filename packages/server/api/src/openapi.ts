@@ -361,7 +361,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}/logs": {
         get: {
           summary: "Stream a message's execution log file",
-          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
+          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },

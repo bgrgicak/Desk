@@ -1160,7 +1160,6 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     // <workspace>/.opencode/agents/<agentId>.md).
     const agentFile = path.join(
       realHome,
-      "workspaces",
       workspaceSlug,
       ".opencode",
       "agents",
