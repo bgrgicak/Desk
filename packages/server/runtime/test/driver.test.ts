@@ -49,6 +49,18 @@ describe("buildOpencodeCommand", () => {
     expect(cmd[2]).not.toContain("--model");
   });
 
+  it("reads prompt from file when promptFile is set", () => {
+    const cmd = buildOpencodeCommand({ promptFile: `${SANDBOX_HOME}/.desk-prompt-msg_1` });
+    expect(cmd[2]).toContain(`"$(cat "$DESK_PROMPT_FILE")"`);
+    expect(cmd[2]).not.toContain(`"$DESK_PROMPT"`);
+  });
+
+  it("falls back to DESK_PROMPT env when promptFile is omitted", () => {
+    const cmd = buildOpencodeCommand({});
+    expect(cmd[2]).toContain(`"$DESK_PROMPT"`);
+    expect(cmd[2]).not.toContain("DESK_PROMPT_FILE");
+  });
+
   it("survives spaces, single quotes, and leading slashes in paths", () => {
     const cmd = buildOpencodeCommand({
       attachments: [

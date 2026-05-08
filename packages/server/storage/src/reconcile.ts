@@ -31,7 +31,8 @@ export async function reconcileArtifactRefs(
      FROM messages m
      JOIN chats c ON c.id = m.chat_id
      JOIN workspaces w ON w.id = c.workspace_id
-     WHERE json_extract(m.content, '$.type') = 'artifactRef'`,
+     WHERE json_valid(m.content)
+       AND json_extract(m.content, '$.type') = 'artifactRef'`,
   );
 
   // SQLite stores JSON columns as TEXT; parse here so the rest of the

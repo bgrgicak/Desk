@@ -7,7 +7,6 @@ import {
   ChevronDown, MessageSquare, MoreHorizontal,
   FileText,
   ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
-  Loader2,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -628,14 +627,15 @@ export function AppShell({
                           className="pr-7 text-foreground/70"
                         >
                           <div className="relative shrink-0">
+                            <ChatIcon className="h-4 w-4" />
                             {isRunning ? (
-                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" data-testid="chat-running-spinner" />
-                            ) : (
-                              <ChatIcon className="h-4 w-4" />
-                            )}
-                            {chat.unread && (
+                              <span
+                                className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border-[1.5px] border-foreground/50 border-t-transparent animate-spin"
+                                data-testid="chat-running-spinner"
+                              />
+                            ) : chat.unread ? (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
-                            )}
+                            ) : null}
                           </div>
                           <span className="truncate">{chat.title}</span>
                         </MobileDismissSidebarMenuButton>

@@ -27,7 +27,7 @@
     "build": "tsc",
     "openapi:dump": "npx tsx src/scripts/dump-openapi.ts",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/index.js",
+    "start": "tsx --conditions=@agent-desk/dev src/main.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },

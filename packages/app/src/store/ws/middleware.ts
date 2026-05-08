@@ -1,7 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
 import type { ServerChat, ServerMessage, WsEvent } from "../types";
@@ -122,6 +122,17 @@ export const wsMiddleware: Middleware = (storeApi) => {
 
     ws.addEventListener("open", () => {
       reconnectDelay = RECONNECT_MIN_MS;
+      // Clear the WS-known guard so the upcoming getChats refetch is
+      // fully authoritative. On reconnect, any WS events missed during
+      // the disconnect gap can't be corrected from wsKnownChatIds —
+      // only a fresh server snapshot can fix stale running state.
+      storeApi.dispatch(clearWsKnownChatIds());
+      // After the socket opens (initial connect or reconnect), refetch
+      // the chat list so the `running` boolean reflects post-recovery
+      // state. Without this, orphaned runs that completed between the
+      // initial getChats fetch and the WS handshake leave stale
+      // running=true entries in the sidebar.
+      storeApi.dispatch(api.util.invalidateTags([{ type: "Chat", id: "LIST" }]));
     });
 
     ws.addEventListener("message", (ev: MessageEvent) => {
@@ -211,17 +222,17 @@ export const wsMiddleware: Middleware = (storeApi) => {
       const viewingId = state.derived.viewingChatId;
       if (viewingId) {
         const args = action.meta.arg.originalArgs as { workspaceId?: string } | undefined;
-        let needsServerReconcile = false;
-        (storeApi.dispatch as (a: unknown) => unknown)(
-          api.util.updateQueryData("getChats", args, (draft) => {
-            const c = draft.find((x) => x.id === viewingId);
-            if (c && c.unread) {
-              c.unread = false;
-              needsServerReconcile = true;
-            }
-          }),
-        );
-        if (needsServerReconcile) {
+        // Read unread state from the payload (the fresh server response) rather
+        // than from inside an Immer callback — avoids mutation-in-closure.
+        const payload = action.payload as ServerChat[];
+        const viewedInPayload = payload.find((c) => c.id === viewingId);
+        if (viewedInPayload?.unread) {
+          (storeApi.dispatch as (a: unknown) => unknown)(
+            api.util.updateQueryData("getChats", args, (draft) => {
+              const c = draft.find((x) => x.id === viewingId);
+              if (c) c.unread = false;
+            }),
+          );
           markChatReadQuietly(viewingId, storeApi.dispatch as (a: unknown) => unknown, storeApi.getState as () => unknown);
         }
       }

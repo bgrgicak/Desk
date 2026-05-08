@@ -103,26 +103,25 @@ export async function patchChat(
   id: string,
   data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ) {
-  // Handle unread separately — markRead uses RETURNING * for an atomic
-  // snapshot so a concurrent messages.insert can't sneak unread=1 between
-  // the UPDATE and the response.
-  let markedReadChat: Awaited<ReturnType<typeof queries.chats.markRead>> = null;
-  if (data.unread === false) {
-    markedReadChat = await queries.chats.markRead(pool, id);
-  }
-
-  // If there are other fields to update, delegate to updateMeta.
-  const { unread: _unread, ...metaFields } = data;
+  const { unread, ...metaFields } = data;
   const hasMetaFields = Object.values(metaFields).some(v => v !== undefined);
 
+  // When meta fields and unread are both present, merge into a single UPDATE
+  // so the RETURNING * snapshot is atomic across both changes.
+  // When only unread is being cleared, delegate to markRead which uses a
+  // targeted UPDATE for the same atomicity guarantee.
   if (hasMetaFields) {
-    const chat = await queries.chats.updateMeta(pool, id, metaFields);
+    const updateData = unread !== undefined ? { ...metaFields, unread } : metaFields;
+    const chat = await queries.chats.updateMeta(pool, id, updateData);
     if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
     return chat;
   }
 
-  // unread-only patch — return the atomic snapshot from markRead.
-  if (markedReadChat) return markedReadChat;
+  if (unread === false) {
+    const chat = await queries.chats.markRead(pool, id);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
 
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);

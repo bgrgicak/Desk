@@ -222,6 +222,14 @@ export function createRunManager(opts: RunManagerOptions) {
     return message.role === "user" || message.role === "agent" || type === "summary";
   }
 
+  // Maximum UTF-8 bytes the transcript context may occupy before being
+  // trimmed. The full prompt (context + task) must fit inside the
+  // container's ARG_MAX (2 097 152 bytes on Linux). We reserve ~500 KB for
+  // the task text, wrapper headers, and other env vars, leaving 1.5 MB for
+  // the context. Oldest entries are dropped first so the most recent
+  // messages are always preserved.
+  const MAX_CONTEXT_BYTES = 1_500_000;
+
   async function buildChatTranscriptContext(
     currentMessage: Message,
     currentUserMessageId?: string,
@@ -232,7 +240,25 @@ export function createRunManager(opts: RunManagerOptions) {
       .filter(shouldIncludeInPromptContext)
       .map(formatMessageForPrompt)
       .filter((entry): entry is { role: string; text: string } => entry !== null);
-    return entries.map((entry) => `${entry.role}:\n${entry.text}`).join("\n\n---\n\n");
+
+    // Trim from oldest → newest until the serialised context fits.
+    const sep = "\n\n---\n\n";
+    let bytes = 0;
+    let trimFrom = 0; // first index to keep
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const chunk = `${entries[i].role}:\n${entries[i].text}`;
+      bytes += Buffer.byteLength(chunk, "utf8") + (i < entries.length - 1 ? Buffer.byteLength(sep, "utf8") : 0);
+      if (bytes > MAX_CONTEXT_BYTES) {
+        trimFrom = i + 1;
+        break;
+      }
+    }
+    const kept = trimFrom > 0 ? entries.slice(trimFrom) : entries;
+    const parts = kept.map((entry) => `${entry.role}:\n${entry.text}`);
+    if (trimFrom > 0) {
+      parts.unshift(`System:\n[Earlier context omitted — transcript exceeded size limit. ${trimFrom} older message(s) not shown.]`);
+    }
+    return parts.join(sep);
   }
 
   async function withChatTranscriptContext(
@@ -715,7 +741,11 @@ export function createRunManager(opts: RunManagerOptions) {
       process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW ?? "",
       10,
     );
-    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 200_000;
+    // Default: 60 000 tokens. At the 0.6 trigger fraction this fires a
+    // summary when the transcript reaches ~36 000 tokens. Kept well below
+    // the frontier model maximum (200 K) so context stays focused and the
+    // agent doesn't get confused by very long transcripts.
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
   }
 
   function summaryTriggerFraction(): number {

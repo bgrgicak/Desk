@@ -55,9 +55,9 @@ async function createChatWithRunningMessage(
     },
     body: JSON.stringify({ content: "Please do something that takes a while" }),
   });
-  const msgData = (await msgRes.json()) as { triggerId?: string };
+  const msgData = (await msgRes.json()) as { id: string };
 
-  return { chatId: chat.id, messageId: msgData.triggerId ?? "" };
+  return { chatId: chat.id, messageId: msgData.id };
 }
 
 test("sidebar shows spinner for running chat on page load (cold-start hydration)", async ({
