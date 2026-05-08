@@ -8,6 +8,9 @@ export {
   runDailyReflection,
   runWorkspaceReflection,
   startDailyReflection,
+  ensureDailyReflectionTasks,
+  DAILY_REFLECTION_CRON,
+  DAILY_REFLECTION_TITLE,
   yesterdayDateLocal,
 } from "./reflection.js";
 export type {
@@ -16,4 +19,5 @@ export type {
   ReflectFn,
   RunDailyReflectionOptions,
   DailyReflectionScheduleOptions,
+  EnsureDailyReflectionTasksOptions,
 } from "./reflection.js";

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { Cron } from "croner";
 import type { Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
+import { generateId } from "@agent-desk/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 
 /**
@@ -64,6 +65,8 @@ export interface RunDailyReflectionOptions {
   date?: string;
   /** Per-workspace AI call. */
   reflectWorkspace: ReflectFn<WorkspaceReflectionInput>;
+  /** Manual runs should produce an observable run even when yesterday was quiet. */
+  reflectOnEmptyActivity?: boolean;
 }
 
 /**
@@ -204,9 +207,9 @@ export async function runWorkspaceReflection(
 ): Promise<string | null> {
   const date = opts.date ?? yesterdayDateLocal();
   const activity = await listWorkspaceActivityForDate(opts.pool, opts.workspaceId, date);
-  if (activity.length === 0) return null;
-
+  if (activity.length === 0 && !opts.reflectOnEmptyActivity) return null;
   const priorJournals = await listPriorWorkspaceJournals(opts.home, opts.workspaceSlug, date);
+
   const result = await opts.reflectWorkspace({
     pool: opts.pool,
     home: opts.home,
@@ -280,12 +283,129 @@ export interface DailyReflectionScheduleOptions extends RunDailyReflectionOption
   onError?: (err: unknown) => void;
 }
 
+export const DAILY_REFLECTION_CRON = "0 3 * * *";
+export const DAILY_REFLECTION_TITLE = "Daily workspace memory reflection";
+const DAILY_REFLECTION_CHAT_TITLE = "Workspace reflection";
+
+function nextCronRun(cronExpr: string): string {
+  const next = new Cron(cronExpr).nextRun();
+  if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
+  return next.toISOString();
+}
+
+async function findOrCreateReflectionChat(
+  pool: Pool,
+  workspaceId: string,
+  agentId: string,
+): Promise<string> {
+  const { rows: existing } = await pool.query<{ id: string }>(
+    `SELECT c.id
+     FROM chats c
+     WHERE c.workspace_id = ?
+       AND c.title = ?
+     ORDER BY c.updated_at
+     LIMIT 1`,
+    [workspaceId, DAILY_REFLECTION_CHAT_TITLE],
+  );
+  if (existing[0]?.id) return existing[0].id;
+
+  const chatId = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title, unread)
+     VALUES (?, ?, ?, ?, 0)`,
+    [chatId, workspaceId, agentId, DAILY_REFLECTION_CHAT_TITLE],
+  );
+  return chatId;
+}
+
+async function moveReflectionTaskToChat(
+  pool: Pool,
+  messageId: string,
+  chatId: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE messages
+     SET chat_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+    [chatId, messageId],
+  );
+}
+
+export interface EnsureDailyReflectionTasksOptions {
+  pool: Pool;
+  cron?: string;
+}
+
+/**
+ * Ensures each workspace with an enabled agent has one scheduler-owned
+ * recurring reflection task. The row is an ordinary `kind='task'` scheduler
+ * entry whose content tells the task executor to run the reflection pass.
+ */
+export async function ensureDailyReflectionTasks(
+  opts: EnsureDailyReflectionTasksOptions,
+): Promise<void> {
+  const cron = opts.cron ?? DAILY_REFLECTION_CRON;
+  const nextRun = nextCronRun(cron);
+  const workspaces = await queries.workspaces.list(opts.pool);
+
+  for (const ws of workspaces) {
+    const [workspaceAgent] = await queries.workspaceAgents.listForWorkspace(opts.pool, ws.id);
+    if (!workspaceAgent) continue;
+    const agent = await queries.agents.findById(opts.pool, workspaceAgent.agentId);
+    if (!agent) continue;
+    const chatId = await findOrCreateReflectionChat(opts.pool, ws.id, agent.id);
+    const { rows } = await opts.pool.query<{ id: string; cron: string | null; execute_at: string | null }>(
+      `SELECT id, cron, execute_at
+       FROM messages
+       WHERE kind IN ('task', 'reflection')
+         AND json_valid(content)
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       ORDER BY created_at
+       LIMIT 1`,
+      [ws.id],
+    );
+    if (rows[0]) {
+      const patch: Parameters<typeof queries.messages.updateMessage>[2] = {};
+      if (rows[0].cron !== cron) {
+        patch.cron = cron;
+        patch.executeAt = nextRun;
+      }
+      if (!rows[0].execute_at) patch.executeAt = nextRun;
+      if (Object.keys(patch).length > 0) {
+        await queries.messages.updateMessage(opts.pool, rows[0].id, patch);
+      }
+      await moveReflectionTaskToChat(opts.pool, rows[0].id, chatId);
+      await opts.pool.query(
+        `UPDATE messages
+         SET kind = 'task', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND kind <> 'task'`,
+        [rows[0].id],
+      );
+      continue;
+    }
+    await queries.messages.insert(opts.pool, {
+      id: generateId("message"),
+      chatId,
+      role: "system",
+      content: { type: "reflection_request", workspaceId: ws.id },
+      state: "pending",
+      executeAt: nextRun,
+      cron,
+      agentId: agent.id,
+      model: agent.model,
+      kind: "task",
+      title: DAILY_REFLECTION_TITLE,
+    });
+  }
+}
+
 /**
  * P5.1 — register a recurring daily-reflection job. Returns the
  * `Cron` instance so callers can stop it during shutdown / tests.
  */
 export function startDailyReflection(opts: DailyReflectionScheduleOptions): Cron {
-  const expression = opts.cron ?? "0 3 * * *";
+  const expression = opts.cron ?? DAILY_REFLECTION_CRON;
   const job = new Cron(expression, async () => {
     try {
       await runDailyReflection(opts);

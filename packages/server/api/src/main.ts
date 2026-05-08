@@ -18,7 +18,7 @@ import {
   resolveDeskHome,
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
-import { createRunManager, startDailyReflection } from "@agent-desk/scheduler";
+import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
   productionReflectWorkspace,
@@ -112,6 +112,8 @@ async function main(): Promise<void> {
 
   const runManager = createRunManager({
     pool,
+    home: DESK_HOME,
+    reflectWorkspace: productionReflectWorkspace,
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
@@ -123,25 +125,17 @@ async function main(): Promise<void> {
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
 
-  // Memory-system Phase 5 — daily reflection cron. Fires at 03:00
-  // server-local time by default (overridable via env). Set
-  // DESK_DAILY_REFLECTION=off to disable in dev / tests so the cron
-  // doesn't surprise anyone at 3am with a real opencode call.
+  // Memory-system Phase 5 — daily reflection. Seed one internal recurring
+  // scheduler task per workspace instead of owning a separate process-local
+  // cron. Set DESK_DAILY_REFLECTION=off to skip seeding in dev / tests.
   const reflectionDisabled =
     (process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() === "off";
-  const reflectionCron =
-    !reflectionDisabled
-      ? startDailyReflection({
-          pool,
-          home: DESK_HOME,
-          cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
-          reflectWorkspace: productionReflectWorkspace,
-          onError: (err) => {
-            // eslint-disable-next-line no-console
-            console.error("daily reflection job failed:", err);
-          },
-        })
-      : null;
+  if (!reflectionDisabled) {
+    await ensureDailyReflectionTasks({
+      pool,
+      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+    });
+  }
   if (reflectionDisabled) {
     // eslint-disable-next-line no-console
     console.log("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
@@ -177,7 +171,6 @@ async function main(): Promise<void> {
     console.log(`received ${signal}, shutting down`);
     clearInterval(pollTimer);
     clearInterval(retentionTimer);
-    if (reflectionCron) reflectionCron.stop();
     clearConnections();
     server.close();
     await pool.end();

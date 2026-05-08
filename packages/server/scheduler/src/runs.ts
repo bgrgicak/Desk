@@ -19,9 +19,16 @@ import {
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
+  productionReflectWorkspace,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
+import {
+  runWorkspaceReflection,
+  yesterdayDateLocal,
+  type ReflectFn,
+  type WorkspaceReflectionInput,
+} from "./reflection.js";
 
 export interface RunManagerOptions {
   pool: Pool;
@@ -38,6 +45,10 @@ export interface RunManagerOptions {
     onLog: (evt: LogEvent) => void | Promise<void>,
     opts?: { agentFileInput: AgentFileInput; attachments?: string[] },
   ) => Promise<{ exitCode: number }>;
+  /** Test-injectable replacement for the production workspace reflection call. */
+  reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
+  /** DESK_HOME root. Defaults to resolveDeskHome(). */
+  home?: string;
 }
 
 export interface FireMessageOptions {
@@ -217,7 +228,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   function shouldIncludeInPromptContext(message: Message): boolean {
     const type = message.content.type;
-    if (type === "agent_turn" || type === "summary_request") return false;
+    if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
     if (message.state === "pending" || message.state === "running") return false;
     return message.role === "user" || message.role === "agent" || type === "summary";
   }
@@ -272,6 +283,9 @@ export function createRunManager(opts: RunManagerOptions) {
       const refs = msg.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
       return { prompt: await withChatTranscriptContext(msg, text), attachments };
+    }
+    if (msg.content.type === "reflection_request") {
+      return { prompt: "Run the daily workspace memory reflection." };
     }
     const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
     if (c?.type === "text" && typeof c.text === "string") {
@@ -349,6 +363,55 @@ export function createRunManager(opts: RunManagerOptions) {
     ].filter((line) => line.trim().length > 0);
   }
 
+  async function fireReflectionTask(
+    msg: Message,
+    workspaceId: string,
+    workspaceSlug: string,
+    workspaceName: string,
+    userId: string | null,
+    userName: string,
+    userTimezone: string | undefined,
+    manual: boolean,
+  ): Promise<string | null> {
+    const c = msg.content as { type?: string; workspaceId?: string };
+    if (c.type !== "reflection_request" || c.workspaceId !== workspaceId) {
+      throw new Error("reflection request does not match its chat workspace");
+    }
+    const agentId = msg.agentId ?? (await getDefaultAgentId());
+    const agent = await queries.agents.findById(pool, agentId);
+    if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
+    const providerKeys = userId
+      ? await queries.userSettings.getProviderKeys(pool, userId)
+      : {};
+    return await runWorkspaceReflection({
+      pool,
+      home: opts.home ?? resolveDeskHome(),
+      date: yesterdayDateLocal(),
+      workspaceId,
+      workspaceSlug,
+      workspaceName,
+      userId: userId ?? "",
+      userName,
+      userTimezone,
+      agent: { id: agent.id, name: agent.name, model: agent.model },
+      providerKeys,
+      reflectWorkspace: opts.reflectWorkspace ?? productionReflectWorkspace,
+      reflectOnEmptyActivity: manual,
+    });
+  }
+
+  async function logReflectionOutcome(runId: string, body: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
+    const text = body === null
+      ? "Daily workspace reflection skipped: no activity found for the reflection date."
+      : "Daily workspace reflection completed.";
+    await onLog({
+      runId,
+      seq: 0,
+      kind: "stdout",
+      payload: JSON.stringify({ type: "text", part: { text } }),
+    });
+  }
+
   /**
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
@@ -415,13 +478,14 @@ export function createRunManager(opts: RunManagerOptions) {
     const { rows: ctxRows } = await pool.query<{
       workspace_id: string;
       workspace_path: string;
+      workspace_name: string;
       agent_id: string | null;
       user_id: string | null;
       username: string | null;
       timezone: string | null;
       chat_goal: string | null;
     }>(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name, c.agent_id,
               u.id AS user_id, u.username, u.timezone,
               c.goal AS chat_goal
        FROM chats c
@@ -433,6 +497,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const ctxRow = ctxRows[0];
     const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
     const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+    const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
     const chatAgentId = ctxRow?.agent_id ?? null;
     const userId = ctxRow?.user_id ?? null;
     const userName = ctxRow?.username ?? "User";
@@ -498,21 +563,36 @@ export function createRunManager(opts: RunManagerOptions) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
         const home = resolveDeskHome();
-        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+        if (msg.content.type === "reflection_request") {
+          const reflected = await fireReflectionTask(
+            msg,
+            workspaceId,
+            workspaceSlug,
+            workspaceName,
+            userId,
+            userName,
+            userTimezone,
+            fireOptions.manual === true,
+          );
+          await logReflectionOutcome(runId, reflected, onLog);
+          result = { exitCode: 0 };
+        } else {
+          const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
           ? { containerId: "fake-sandbox", workspaceId }
           : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
-        result = await runtimeExecRun(pool, handle, {
-          runId,
-          prompt,
-          home,
-          workspaceId,
-          workspaceSlug,
-          chatId: msg.chatId,
-          agent: agentFileInput,
-          attachments,
-          providerKeys,
-          onLog,
-        });
+          result = await runtimeExecRun(pool, handle, {
+            runId,
+            prompt,
+            home,
+            workspaceId,
+            workspaceSlug,
+            chatId: msg.chatId,
+            agent: agentFileInput,
+            attachments,
+            providerKeys,
+            onLog,
+          });
+        }
       }
 
       // Wait for pending writes to flush before reading the file back.

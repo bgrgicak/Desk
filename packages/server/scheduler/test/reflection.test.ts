@@ -6,12 +6,14 @@ import { Pool } from "@agent-desk/db";
 import { runMigrations, queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import {
+  createRunManager,
   runDailyReflection,
   runWorkspaceReflection,
+  ensureDailyReflectionTasks,
   yesterdayDateLocal,
   type ReflectFn,
   type WorkspaceReflectionInput,
-} from "../src/reflection.js";
+} from "../src/index.js";
 
 let pool: Pool;
 let home: string;
@@ -210,6 +212,7 @@ describe("runWorkspaceReflection", () => {
       reflectWorkspace,
     });
   });
+
   it("skips silently when the workspace had no activity for the date", async () => {
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async () => {
       throw new Error("should not be called");
@@ -418,5 +421,232 @@ describe("runDailyReflection", () => {
       },
     });
     expect(workspaceCallCount).toBe(0);
+  });
+});
+
+describe("scheduler-managed daily reflection tasks", () => {
+  it("ensures one recurring internal reflection task per workspace", async () => {
+    await pool.query(`DELETE FROM messages WHERE json_extract(content, '$.type') = 'reflection_request'`);
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+
+    const { rows } = await pool.query<{
+      workspace_id: string;
+      task_count: number;
+      cron: string;
+      state: string;
+      content_type: string;
+      chat_title: string;
+    }>(
+      `SELECT json_extract(m.content, '$.workspaceId') AS workspace_id,
+              COUNT(*) AS task_count,
+              MAX(m.cron) AS cron,
+              MAX(m.state) AS state,
+              MAX(json_extract(m.content, '$.type')) AS content_type,
+              MAX(c.title) AS chat_title
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+       WHERE m.kind = 'task'
+         AND json_extract(m.content, '$.type') = 'reflection_request'
+       GROUP BY json_extract(m.content, '$.workspaceId')
+       ORDER BY workspace_id`,
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.workspace_id).sort()).toEqual([workspaceAId, workspaceBId].sort());
+    for (const row of rows) {
+      expect(Number(row.task_count)).toBe(1);
+      expect(row.cron).toBe("0 3 * * *");
+      expect(row.state).toBe("pending");
+      expect(row.content_type).toBe("reflection_request");
+      expect(row.chat_title).toBe("Workspace reflection");
+    }
+
+    const visibleChats = await queries.chats.listWithLatestMessage(pool, workspaceAId);
+    expect(visibleChats.map((chat) => chat.title)).not.toContain("Workspace reflection");
+  });
+
+  it("moves existing reflection tasks from borrowed chats into the dedicated reflection chat", async () => {
+    await pool.query(`DELETE FROM messages WHERE json_extract(content, '$.type') = 'reflection_request'`);
+    const { rows: chatRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? AND title = 'WS A Chat' LIMIT 1`,
+      [workspaceAId],
+    );
+    const borrowedChatId = chatRows[0].id;
+    const messageId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: messageId,
+      chatId: borrowedChatId,
+      role: "system",
+      content: { type: "reflection_request", workspaceId: workspaceAId },
+      state: "pending",
+      executeAt: new Date(Date.now() + 60_000).toISOString(),
+      cron: "0 3 * * *",
+      agentId,
+      kind: "task",
+      title: "Daily workspace memory reflection",
+    });
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+
+    const { rows } = await pool.query<{ chat_id: string; title: string }>(
+      `SELECT m.chat_id, c.title
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+       WHERE m.id = ?`,
+      [messageId],
+    );
+    expect(rows[0].chat_id).not.toBe(borrowedChatId);
+    expect(rows[0].title).toBe("Workspace reflection");
+  });
+
+  it("migrates legacy reflection-kind rows into ordinary tasks", async () => {
+    await pool.query(`DELETE FROM messages WHERE json_extract(content, '$.type') = 'reflection_request'`);
+    const { rows: chatRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? AND title = 'WS A Chat' LIMIT 1`,
+      [workspaceAId],
+    );
+    const messageId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, state, execute_at, cron, agent_id, title)
+       VALUES (?, ?, 'system', ?, 'reflection', 'pending', ?, '0 3 * * *', ?, ?)`,
+      [
+        messageId,
+        chatRows[0].id,
+        JSON.stringify({ type: "reflection_request", workspaceId: workspaceAId }),
+        new Date(Date.now() + 60_000).toISOString(),
+        agentId,
+        "Daily workspace memory reflection",
+      ],
+    );
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+
+    const migrated = await queries.messages.findById(pool, messageId);
+    expect(migrated?.kind).toBe("task");
+  });
+
+  it("recomputes the next run when the reflection cron changes", async () => {
+    await pool.query(`DELETE FROM messages WHERE json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+
+    const { rows: beforeRows } = await pool.query<{ id: string; execute_at: string }>(
+      `SELECT id, execute_at FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 4 * * *" });
+
+    const updated = await queries.messages.findById(pool, beforeRows[0].id);
+    expect(updated?.cron).toBe("0 4 * * *");
+    expect(updated?.executeAt).not.toBe(beforeRows[0].execute_at);
+  });
+
+  it("fires a due reflection task through task-run scheduling and advances the cron", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    const dynamicDate = yesterdayDateLocal();
+    const { rows: chatRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? ORDER BY updated_at LIMIT 1`,
+      [workspaceAId],
+    );
+    await createMessage(chatRows[0].id, "user", "Remember the recurring reflection scheduler.", `${dynamicDate}T09:00:00.000Z`);
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    await queries.messages.updateMessage(pool, taskId, {
+      executeAt: new Date(Date.now() - 60_000).toISOString(),
+      state: "pending",
+    });
+
+    const calls: WorkspaceReflectionInput[] = [];
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async (input) => {
+        calls.push(input);
+        return { journal: `# Journal\n\nReflected ${input.workspaceSlug} on ${input.date}.` };
+      },
+    });
+
+    await mgr.tickScheduled();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].workspaceId).toBe(workspaceAId);
+    expect(calls[0].date).toBe(dynamicDate);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+    expect(parent?.cron).toBe("0 3 * * *");
+    expect(new Date(parent?.executeAt ?? 0).getTime()).toBeGreaterThan(Date.now());
+
+    const { rows: runRows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+      [taskId],
+    );
+    expect(runRows).toEqual([{ state: "succeeded" }]);
+
+    const journal = await fs.readFile(
+      path.join(home, "Desk", "workspaces", workspaceASlug, ".memory", "journal", `${dynamicDate}.md`),
+      "utf-8",
+    );
+    expect(journal).toContain(workspaceASlug);
+  });
+
+  it("manual reflection run produces an observable task run even with no activity", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceBId],
+    );
+    const taskId = taskRows[0].id;
+    const calls: WorkspaceReflectionInput[] = [];
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async (input) => {
+        calls.push(input);
+        return { journal: `# Manual Reflection\n\nActivity: ${input.activity.length}` };
+      },
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].workspaceId).toBe(workspaceBId);
+    expect(calls[0].activity).toHaveLength(0);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+
+    const { rows } = await pool.query<{ run_state: string; child_content: string }>(
+      `SELECT run.state AS run_state, child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    expect(rows[0].run_state).toBe("succeeded");
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    expect(child.type).toBe("events");
+    expect(child.log.length).toBeGreaterThan(0);
   });
 });

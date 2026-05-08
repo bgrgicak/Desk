@@ -27,4 +27,11 @@ describe('isMessageVisible', () => {
     expect(isMessageVisible(request, false)).toBe(false)
     expect(isMessageVisible(request, true)).toBe(false)
   })
+
+  it('keeps reflection requests hidden even in developer mode', () => {
+    const request = message({ type: 'reflection_request', workspaceId: 'wks_test' }, { role: 'system' })
+
+    expect(isMessageVisible(request, false)).toBe(false)
+    expect(isMessageVisible(request, true)).toBe(false)
+  })
 })
