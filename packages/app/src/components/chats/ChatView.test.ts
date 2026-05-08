@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatRightPanelClassName, shouldOpenChatSidebarsByDefault } from './ChatView'
+import { chatRightPanelClassName, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
 
 describe('chat sidebar responsive defaults', () => {
   it('starts chat sidebars closed below the desktop breakpoint', () => {

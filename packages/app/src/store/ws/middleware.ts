@@ -382,7 +382,7 @@ export function applyEventToCache(
           id: `upd-${event.payload.path}-${event.payload.createdAt}`,
           artifactId: event.payload.path,
           message: `New artifact: ${event.payload.name}`,
-          timestamp: new Date(event.payload.createdAt),
+          timestamp: new Date(event.payload.createdAt).getTime(),
         }),
       );
       break;

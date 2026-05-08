@@ -19,7 +19,7 @@ import {
 } from "@agent-desk/storage";
 import { queries } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
-import { auditSandboxMounts, writeGoalSkillFiles } from "@agent-desk/runtime";
+import { auditSandboxMounts, pruneDriftedContainers, writeGoalSkillFiles } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -152,15 +152,16 @@ async function main(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(`desk-server listening on :${PORT}`);
 
-  void auditSandboxMounts(DESK_HOME).then((drift) => {
+  void auditSandboxMounts(DESK_HOME).then(async (drift) => {
     for (const d of drift) {
       // eslint-disable-next-line no-console
       console.warn(
         `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
           `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
-          `Container will be recreated on next run.`,
+          `Removing stale container.`,
       );
     }
+    await pruneDriftedContainers(drift);
   });
 
   const shutdown = async (signal: string) => {
