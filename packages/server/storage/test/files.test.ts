@@ -52,7 +52,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
 
-    const hostPath = path.join(ctx.home, "workspaces", "desk", file.path);
+    const hostPath = path.join(ctx.home, "desk", file.path);
     const content = await fs.readFile(hostPath, "utf-8");
     expect(content).toBe("library content");
   });
@@ -179,7 +179,7 @@ describe("deleteFile (moves to trash)", () => {
       stream: makeStream("bye"),
     });
 
-    const hostPath = path.join(ctx.home, "workspaces", "desk", uploaded.path);
+    const hostPath = path.join(ctx.home, "desk", uploaded.path);
     await fs.access(hostPath);
 
     await deleteFile(ctx, ctx.workspaceSlug,uploaded.path);
@@ -301,7 +301,7 @@ describe("moveFile (symlink-on-move)", () => {
     const moved = await moveFile(ctx, ctx.workspaceSlug,uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
-    const oldAbs = path.join(ctx.home, "workspaces", "desk", uploaded.path);
+    const oldAbs = path.join(ctx.home, "desk", uploaded.path);
     const lstat = await fs.lstat(oldAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
 

@@ -6,7 +6,7 @@ import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent
 /**
  * Mount model (workspace-as-home):
  *
- *   host: ~/Desk/workspaces/desk/   →   sandbox: /home/agent/   (rw)
+ *   host: ~/Desk/desk/              →   sandbox: /home/agent/   (rw)
  *
  * The workspace root *is* the agent's home directory inside the sandbox.
  * User-visible files live at the root; dot-prefixed entries (`.chats/`,

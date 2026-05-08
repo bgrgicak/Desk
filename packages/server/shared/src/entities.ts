@@ -39,7 +39,7 @@ export const WorkspaceSchema = z.object({
   description: z.string(),
   icon: z.string(),
   color: z.string(),
-  /** On-disk directory name under `~/Desk/workspaces/`. Derived from `name`
+  /** On-disk directory name under `~/Desk/`. Derived from `name`
    * at create time, renamed in lock-step when the workspace is renamed. */
   path: z.string(),
   createdAt: z.string(),

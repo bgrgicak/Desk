@@ -18,10 +18,10 @@ function isSandboxPath(value: string): boolean {
 
 export function sandboxToUserPath(sandboxPath: string, workspacePath: string): string {
   if (sandboxPath.startsWith('~/')) {
-    // ~/foo  →  ~/Desk/workspaces/<slug>/foo
-    return `~/Desk/workspaces/${workspacePath}/` + sandboxPath.slice(2)
+    // ~/foo  →  ~/Desk/<slug>/foo
+    return `~/Desk/${workspacePath}/` + sandboxPath.slice(2)
   }
-  return sandboxPath.replace(SANDBOX_HOME, `~/Desk/workspaces/${workspacePath}`)
+  return sandboxPath.replace(SANDBOX_HOME, `~/Desk/${workspacePath}`)
 }
 
 function makePathLink(sandboxPath: string, workspacePath: string): Link {

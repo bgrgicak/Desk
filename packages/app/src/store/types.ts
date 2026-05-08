@@ -66,7 +66,7 @@ export interface ServerWorkspace {
   description: string;
   icon: string;
   color: string;
-  /** On-disk directory name under ~/Desk/workspaces/. Used for sandbox path translation. */
+  /** On-disk directory name under ~/Desk/. Used for sandbox path translation. */
   path: string;
   createdAt: string;
 }

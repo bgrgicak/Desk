@@ -35,18 +35,18 @@ function collectLinks(tree: Root): Link[] {
 describe('sandboxToUserPath', () => {
   it('translates /home/agent prefix to workspace path', () => {
     expect(sandboxToUserPath(`${SANDBOX_HOME}/foo/bar.md`, WS)).toBe(
-      `~/Desk/workspaces/${WS}/foo/bar.md`,
+      `~/Desk/${WS}/foo/bar.md`,
     )
   })
 
   it('translates ~/ prefix to workspace path', () => {
     expect(sandboxToUserPath('~/notes.md', WS)).toBe(
-      `~/Desk/workspaces/${WS}/notes.md`,
+      `~/Desk/${WS}/notes.md`,
     )
   })
 
   it('translates bare ~/  (sandbox root)', () => {
-    expect(sandboxToUserPath('~/', WS)).toBe(`~/Desk/workspaces/${WS}/`)
+    expect(sandboxToUserPath('~/', WS)).toBe(`~/Desk/${WS}/`)
   })
 })
 

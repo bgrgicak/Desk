@@ -304,7 +304,10 @@ export interface SandboxBindDrift {
 }
 
 export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift[]> {
-  const expectedPrefix = `${home}/workspaces/`;
+  // Workspaces sit directly under DESK_HOME — every legitimate bind source
+  // is `${home}/{slug}`. Containers from the legacy `workspaces/` layout
+  // (parent `${home}/workspaces`) get pruned along with any DESK_HOME drift.
+  const expectedPrefix = `${home}/`;
   const drift: SandboxBindDrift[] = [];
   try {
     const engine = await detectEngine();
@@ -323,7 +326,12 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
       );
       if (!workspaceBind) continue;
       const source = workspaceBind.split(":")[0];
-      if (!source.startsWith(expectedPrefix)) {
+      const parent = source.endsWith("/") ? source.slice(0, -1) : source;
+      // Bind source must be a direct child of DESK_HOME — i.e. its parent
+      // directory equals home. This catches both DESK_HOME drift and the
+      // legacy `workspaces/<slug>` layout in the same check.
+      const sourceParent = parent.substring(0, parent.lastIndexOf("/"));
+      if (!source.startsWith(expectedPrefix) || sourceParent !== home) {
         drift.push({ containerName: c.name, expectedPrefix, actualBinds: info.binds });
       }
     }

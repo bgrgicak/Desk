@@ -380,7 +380,7 @@ describe("memory injection", () => {
     expect(body).toContain("Workspace memory is writable from the sandbox");
     expect(body).toContain("~/.memory/workspace.md");
     expect(body).not.toContain("~/Desk/.memory/memory.md");
-    expect(body).not.toContain("~/Desk/workspaces/alpha/.memory/workspace.md");
+    expect(body).not.toContain("~/Desk/alpha/.memory/workspace.md");
   });
 
   it("injects empty stubs when memory indexes are missing", async () => {

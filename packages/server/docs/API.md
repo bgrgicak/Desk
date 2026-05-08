@@ -121,7 +121,7 @@ Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
 2. Drops the chat row from SQLite; `ON DELETE CASCADE` removes its messages.
-3. Moves the chat's on-disk subtree `~/Desk/workspaces/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
+3. Moves the chat's on-disk subtree `~/Desk/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 
 Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE returns 404, never 403.
@@ -228,7 +228,7 @@ entry. Moves the execution log file to `~/Desk/.trash/` if present.
 
 Streams the execution log file (stdout/stderr) for a running or completed
 message. Served directly from
-`~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
+`~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
 
 ### GET /chats/{id}/messages/{messageId}/summary-history
@@ -237,7 +237,7 @@ Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
 written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/notes/.history/`. The endpoint also
+`~/Desk/desk/.chats/{chatId}/notes/.history/`. The endpoint also
 reads legacy `.chats/{chatId}/note-history/` and
 `.chats/{chatId}/summary-history/` snapshots for compatibility. Empty array
 when nothing has been snapshotted yet.
@@ -296,7 +296,7 @@ in prod, the UI is the only way to populate them.
 | GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
-(`~/Desk/workspaces/desk/`). There is no DB index; listing walks the
+(`~/Desk/desk/`). There is no DB index; listing walks the
 directory and skips dot-prefixed entries (`.chats/`, `.memory/`, etc.)
 unless `showHidden=true` is set. Hidden (dot-prefixed) files are
 otherwise identical to regular files — all CRUD operations work the
@@ -375,7 +375,7 @@ Removed in M6. Execution state and scheduling both live on the
   and a `schedulerRef` pointing at the at/cron entry. See PATCH on
   `/chats/{id}/messages/{messageId}` to reschedule or cancel.
 - Logs are a file at
-  `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`, served
+  `~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`, served
   by `GET /chats/{id}/messages/{messageId}/logs`.
 
 ## Tools

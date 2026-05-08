@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { trashDir, workspacesRoot } from "./layout.js";
+import { trashDir } from "./layout.js";
 
 /**
  * Walks every workspace's `.chats/{chatId}/logs/` directory and enforces
@@ -9,9 +9,10 @@ import { trashDir, workspacesRoot } from "./layout.js";
  * elsewhere). Returns the total number of files evicted.
  *
  * Retention is per-chat, not global, so a chat with a lot of activity
- * doesn't starve a quiet one of history. Per-workspace rollup so a
- * single global retention pass covers every workspace directory without
- * having to enumerate the DB.
+ * doesn't starve a quiet one of history. Workspaces are discovered by
+ * scanning the data root for non-dot subdirectories (matching the
+ * validateSlug rules) so a single retention pass covers every workspace
+ * without having to enumerate the DB.
  */
 export async function enforceLogRetention(
   home: string,
@@ -19,20 +20,24 @@ export async function enforceLogRetention(
 ): Promise<{ scanned: number; evicted: number }> {
   if (maxFiles <= 0) return { scanned: 0, evicted: 0 };
 
-  const wsRoot = workspacesRoot(home);
-  let workspaceSlugs: string[];
+  let entries: import("node:fs").Dirent[];
   try {
-    workspaceSlugs = await fs.readdir(wsRoot);
+    entries = await fs.readdir(home, { withFileTypes: true });
   } catch {
     return { scanned: 0, evicted: 0 };
   }
+  // Workspaces sit directly under $DESK_HOME with non-dot slugs. Skip the
+  // legacy `workspaces/` parent in case migration left it behind.
+  const workspaceSlugs = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "workspaces")
+    .map((e) => e.name);
 
   let scanned = 0;
   let evicted = 0;
   const trash = path.join(trashDir(home), "logs");
 
   for (const slug of workspaceSlugs) {
-    const chatsRoot = path.join(wsRoot, slug, ".chats");
+    const chatsRoot = path.join(home, slug, ".chats");
     let chatDirs: string[];
     try {
       chatDirs = await fs.readdir(chatsRoot);
@@ -42,13 +47,13 @@ export async function enforceLogRetention(
 
     for (const chatId of chatDirs) {
       const logsDir = path.join(chatsRoot, chatId, "logs");
-      let entries: string[];
+      let logEntries: string[];
       try {
-        entries = await fs.readdir(logsDir);
+        logEntries = await fs.readdir(logsDir);
       } catch {
         continue;
       }
-      const files = entries.filter((n) => n.endsWith(".log"));
+      const files = logEntries.filter((n) => n.endsWith(".log"));
       scanned += files.length;
       if (files.length <= maxFiles) continue;
 

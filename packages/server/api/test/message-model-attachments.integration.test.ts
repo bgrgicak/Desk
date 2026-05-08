@@ -252,7 +252,7 @@ describe("GET /library/content for chat attachments", () => {
 
   beforeAll(async () => {
     attachmentPath = `.chats/${chatId}/attachments/${filename}`;
-    const dir = path.join(home, "workspaces", "desk", ".chats", chatId, "attachments");
+    const dir = path.join(home, "desk", ".chats", chatId, "attachments");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, filename), fileBody);
   });
@@ -281,7 +281,7 @@ describe("GET /library/content for chat attachments", () => {
   it("serves a chat-owned summary via /library/meta with a 'Chat summary' label", async () => {
     const summaryFilename = "msg_open_me.md";
     const summaryPath = `.chats/${chatId}/notes/${summaryFilename}`;
-    const summaryDir = path.join(home, "workspaces", "desk", ".chats", chatId, "notes");
+    const summaryDir = path.join(home, "desk", ".chats", chatId, "notes");
     await fs.mkdir(summaryDir, { recursive: true });
     await fs.writeFile(path.join(summaryDir, summaryFilename), "# Running summary\n");
 
@@ -376,7 +376,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
-    const summaryPath = path.join(home, "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
     const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toContain("Summary");
     expect(content).toContain("attached file");
@@ -401,7 +401,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     );
     expect(patched.status).toBe(200);
 
-    const summaryPath = path.join(home, "workspaces", "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
     const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toBe("User-edited summary of the chat.");
   });
@@ -415,7 +415,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     );
     const { childIds } = await runManager.fireMessage(reqId);
     const summaryId = childIds[0];
-    const summaryPath = path.join(home, "workspaces", "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
     await expect(fs.stat(summaryPath)).resolves.toBeTruthy();
 
     const deleted = await request("DELETE", `/chats/${chatId}/messages/${summaryId}`, undefined, userToken);

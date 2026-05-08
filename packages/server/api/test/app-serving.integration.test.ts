@@ -155,7 +155,7 @@ async function createChatApp(appName: string): Promise<{ appPath: string; distDi
 
 /** Creates a minimal .app directory under the workspace library root. */
 async function createLibraryApp(appName: string): Promise<{ appPath: string; distDir: string }> {
-  const wsRoot = path.join(home, "workspaces", workspaceSlug);
+  const wsRoot = path.join(home, workspaceSlug);
   const appDir = path.join(wsRoot, appName);
   const distDir = path.join(appDir, "dist");
   await fs.mkdir(distDir, { recursive: true });
@@ -213,7 +213,7 @@ describe("GET /library/meta — .app directory metadata", () => {
 
   it("still rejects non-.app directories", async () => {
     // Create a plain folder (not .app)
-    const wsRoot = path.join(home, "workspaces", workspaceSlug);
+    const wsRoot = path.join(home, workspaceSlug);
     const plainDir = path.join(wsRoot, "plain-folder");
     await fs.mkdir(plainDir, { recursive: true });
 

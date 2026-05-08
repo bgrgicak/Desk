@@ -499,7 +499,7 @@ function CollapsibleChip({
 
 function translateSandboxPaths(text: string, workspacePath?: string): string {
   if (!workspacePath) return text
-  return text.replaceAll('/home/agent', `~/Desk/workspaces/${workspacePath}`)
+  return text.replaceAll('/home/agent', `~/Desk/${workspacePath}`)
 }
 
 /** Extract the most relevant file path from a tool_use event's input object. */

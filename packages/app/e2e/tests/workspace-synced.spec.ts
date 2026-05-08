@@ -141,7 +141,6 @@ test("open library file auto-refreshes after workspace.synced when agent writes 
   // a re-fetch once the scheduled task below completes).
   const absPath = path.join(
     serverHome,
-    "workspaces",
     workspace.path,
     filePath,
   );

@@ -6,7 +6,8 @@ import { ValidationError, ID_PREFIXES } from "@agent-desk/shared";
  * Single source of truth for resolving the Desk on-disk root.
  *
  * Returns the **data root** — the directory that contains `.database/`,
- * `.memory/`, `.skills/`, `workspaces/`, etc. directly (no "Desk" sub-segment).
+ * `.memory/`, `.skills/`, plus one directory per workspace, directly (no
+ * "Desk" sub-segment).
  *
  * Every subsystem that touches files (API uploads, scheduler runs, runtime
  * bind-mounts) MUST go through this so they all land on the same tree. A
@@ -27,25 +28,28 @@ export function resolveDeskHome(): string {
 }
 
 /**
+ * Slugs that would collide with a system directory or the legacy
+ * `workspaces/` parent (kept reserved so a future migration can never
+ * conflict with a real workspace). Dot-prefixed names are already rejected
+ * by the leading-dot rule in `validateSlug`.
+ */
+const RESERVED_SLUGS = new Set(["workspaces"]);
+
+/**
  * Resolves the absolute path of a workspace's root directory.
  *
- * Each workspace gets its own subdirectory under `$DESK_HOME/workspaces/{slug}/`.
+ * Each workspace gets its own subdirectory directly under `$DESK_HOME/{slug}/`.
  * The `slug` is the `path` column on `workspaces` — derived from the
  * workspace name at create time and renamed in lock-step on rename.
  */
 function workspaceRoot(home: string, slug: string): string {
   validateSlug(slug);
-  return path.join(home, "workspaces", slug);
+  return path.join(home, slug);
 }
 
 /** Absolute path to the global trash directory. Sits outside the workspace so the agent can't see it. */
 export function trashDir(home: string): string {
   return path.join(home, ".trash");
-}
-
-/** Parent directory that holds every workspace as a subdirectory. */
-export function workspacesRoot(home: string): string {
-  return path.join(home, "workspaces");
 }
 
 /** Validates that an ID string matches the expected prefix pattern and contains no path separators. */
@@ -56,28 +60,95 @@ function validateId(id: string, prefix: string): void {
 }
 
 /**
- * Rejects slugs that would escape the workspaces root or name a reserved
- * system file. Valid slugs are non-empty, made of `[a-z0-9-]`, and don't
- * start or end with `-`.
+ * Rejects slugs that would escape the data root, name a reserved system
+ * directory, or collide with the legacy `workspaces/` parent. Valid slugs
+ * are non-empty, made of `[a-z0-9-]`, don't start with a dot, and aren't
+ * in `RESERVED_SLUGS`.
  */
 function validateSlug(slug: string): void {
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..") || slug.startsWith(".")) {
     throw new ValidationError(`Invalid workspace slug: ${slug}`);
   }
+  if (RESERVED_SLUGS.has(slug)) {
+    throw new ValidationError(`Reserved workspace slug: ${slug}`);
+  }
 }
 
 /**
- * Ensures the global Desk layout exists: `.tmp/`, `.trash/`,
- * and the `workspaces/` parent directory. Idempotent — safe to
- * call on every boot.
+ * Ensures the global Desk layout exists: `.tmp/` and `.trash/`. Idempotent
+ * — safe to call on every boot.
  *
- * Per-workspace directories are created by `ensureWorkspaceLayout`.
+ * Per-workspace directories are created by `ensureWorkspaceLayout`. Each
+ * workspace lands directly under `$DESK_HOME/{slug}/` — there is no
+ * `workspaces/` parent in the new layout.
  */
 export async function ensureLayout(home: string): Promise<void> {
   await fs.mkdir(path.join(home, ".tmp"), { recursive: true });
   await fs.mkdir(trashDir(home), { recursive: true });
-  await fs.mkdir(workspacesRoot(home), { recursive: true });
   await ensureUserMemoryLayout(home);
+}
+
+/**
+ * Migrates from the legacy `$DESK_HOME/workspaces/{slug}/` layout to the
+ * flat `$DESK_HOME/{slug}/` layout. Walks `workspaces/`, renames each
+ * sub-directory up one level, then removes the now-empty parent.
+ *
+ * Idempotent — returns `{ migrated: 0 }` when no legacy directory exists.
+ * Skips entries whose destination already exists (manual cleanup needed)
+ * and entries whose slug is reserved or invalid (logged, left in place).
+ */
+export async function migrateLegacyWorkspaceLayout(
+  home: string,
+): Promise<{ migrated: number; skipped: number; conflicts: string[] }> {
+  const legacyRoot = path.join(home, "workspaces");
+  const stat = await fs.stat(legacyRoot).catch(() => null);
+  if (!stat || !stat.isDirectory()) {
+    return { migrated: 0, skipped: 0, conflicts: [] };
+  }
+
+  const entries = await fs.readdir(legacyRoot, { withFileTypes: true });
+  let migrated = 0;
+  let skipped = 0;
+  const conflicts: string[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      skipped++;
+      continue;
+    }
+    const slug = entry.name;
+    try {
+      validateSlug(slug);
+    } catch {
+      // Invalid or reserved slug (e.g. literally named "workspaces"). Leave
+      // it in place — the operator must rename it manually.
+      conflicts.push(slug);
+      skipped++;
+      continue;
+    }
+    const src = path.join(legacyRoot, slug);
+    const dst = path.join(home, slug);
+    const dstStat = await fs.stat(dst).catch(() => null);
+    if (dstStat) {
+      conflicts.push(slug);
+      skipped++;
+      continue;
+    }
+    await fs.rename(src, dst);
+    migrated++;
+  }
+
+  // Best-effort: remove the now-empty parent so future boots short-circuit.
+  try {
+    const remaining = await fs.readdir(legacyRoot);
+    if (remaining.length === 0) {
+      await fs.rmdir(legacyRoot);
+    }
+  } catch {
+    // Non-fatal — leave the directory if it can't be removed.
+  }
+
+  return { migrated, skipped, conflicts };
 }
 
 /**
@@ -130,8 +201,8 @@ export function tmpDir(home: string): string {
  *
  * Memory has three on-disk roots:
  *   - User memory:      $DESK_HOME/.memory/
- *   - Workspace memory: $DESK_HOME/workspaces/<slug>/.memory/
- *   - Chat memory:      existing $DESK_HOME/workspaces/<slug>/.chats/<id>/notes/ (covered elsewhere)
+ *   - Workspace memory: $DESK_HOME/<slug>/.memory/
+ *   - Chat memory:      existing $DESK_HOME/<slug>/.chats/<id>/notes/ (covered elsewhere)
  *
  * The user and workspace roots each contain an always-injected index file
  * (`memory.md` / `workspace.md`), arbitrary topic files referenced by the
@@ -194,7 +265,7 @@ export function userJournalPath(home: string, date: string): string {
   return path.join(userJournalDir(home), `${date}.md`);
 }
 
-/** Absolute path to a workspace memory root: `$DESK_HOME/workspaces/<slug>/.memory/`. */
+/** Absolute path to a workspace memory root: `$DESK_HOME/<slug>/.memory/`. */
 export function workspaceMemoryDir(home: string, slug: string): string {
   return path.join(workspaceRoot(home, slug), MEMORY_DIR);
 }
@@ -302,7 +373,7 @@ export async function trashWorkspaceDir(
 /**
  * Renames a workspace's directory from one slug to another. Creates the
  * parent if needed and fails cleanly if the destination already exists.
- * Both the old and new directory must sit under `~/Desk/workspaces/`.
+ * Both the old and new directory must sit directly under `~/Desk/`.
  */
 export async function renameWorkspaceDir(
   home: string,

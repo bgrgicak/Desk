@@ -14,6 +14,7 @@ import {
   ensureLayout,
   ensureWorkspaceLayout,
   enforceLogRetention,
+  migrateLegacyWorkspaceLayout,
   reconcileArtifactRefs,
   resolveDeskHome,
 } from "@agent-desk/storage";
@@ -65,6 +66,17 @@ async function main(): Promise<void> {
     );
   }
   await fs.mkdir(DESK_HOME, { recursive: true });
+  // One-shot migration from the legacy `${DESK_HOME}/workspaces/{slug}/`
+  // layout to the flat `${DESK_HOME}/{slug}/` layout. Idempotent — does
+  // nothing once the legacy parent is gone.
+  const wsMigration = await migrateLegacyWorkspaceLayout(DESK_HOME);
+  if (wsMigration.migrated > 0 || wsMigration.conflicts.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `workspace layout migration: migrated=${wsMigration.migrated} ` +
+        `skipped=${wsMigration.skipped} conflicts=${JSON.stringify(wsMigration.conflicts)}`,
+    );
+  }
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
   // Ensure every existing workspace has its on-disk tree, so a server

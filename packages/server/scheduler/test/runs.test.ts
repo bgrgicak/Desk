@@ -41,7 +41,7 @@ beforeAll(async () => {
     [chatId, workspaceId, agentId, "Test Chat"],
   );
 
-  // Log files land under $DESK_HOME/Desk/workspaces/desk/.chats/{chatId}/logs/
+  // Log files land under $DESK_HOME/desk/.chats/{chatId}/logs/
   const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scheduler-"));
   process.env.DESK_HOME = tmpHome;
 });

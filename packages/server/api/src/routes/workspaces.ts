@@ -33,7 +33,7 @@ async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: str
  * Without this, chat creation would 400 on every agentId in the new workspace.
  * Users can override the enrollment via the Agent access settings panel.
  *
- * The workspace's on-disk directory at `~/Desk/workspaces/{slug}/` is
+ * The workspace's on-disk directory at `~/Desk/{slug}/` is
  * created before the DB insert so every successful insert has a matching
  * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
  * collision so two workspaces can't share a directory.
