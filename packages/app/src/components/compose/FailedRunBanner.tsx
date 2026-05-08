@@ -13,7 +13,7 @@ interface FailedRunBannerProps {
  * re-fires the failed agent_turn via `POST /chats/{id}/messages/{id}/run`.
  */
 export function FailedRunBanner({ chatId, messageId }: FailedRunBannerProps) {
-  const [runMessage, { isLoading: isRetrying }] = useRunMessageMutation()
+  const [runMessage, { isLoading: isRetrying, isError: retryFailed }] = useRunMessageMutation()
 
   function handleRetry() {
     runMessage({ chatId, messageId })
@@ -33,6 +33,11 @@ export function FailedRunBanner({ chatId, messageId }: FailedRunBannerProps) {
         <p className="text-sm text-muted-foreground mt-0.5">
           This can happen when something goes wrong on my end. You can try again or send a new message.
         </p>
+        {retryFailed && (
+          <p className="text-xs text-destructive mt-1">
+            Retry failed — please try again or send a new message.
+          </p>
+        )}
         <button
           onClick={handleRetry}
           disabled={isRetrying}

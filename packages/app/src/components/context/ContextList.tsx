@@ -185,6 +185,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     if (!isHiddenMode) return items
     if (!activeWorkspaceId) return []
     return (libraryResp?.items ?? [])
+      .filter(f => (f.path.split('/').pop() ?? '').startsWith('.'))
       .map(f => toContextItem(f, activeWorkspaceId))
   }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
 
@@ -467,6 +468,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     byFilter === 'all'
   const filteredFolders = showFolders
     ? childFolders
+        .filter(f => !isHiddenMode || f.name.startsWith('.'))
         .filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : []
 

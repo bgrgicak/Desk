@@ -128,7 +128,7 @@ export async function insert(
 export async function updateMeta(
   db: Pool,
   id: string,
-  data: { title?: string; goal?: string | null; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ): Promise<Chat | null> {
   const goal = validateGoal(data.goal);
 
@@ -167,6 +167,10 @@ export async function updateMeta(
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
+  }
+  if (data.unread !== undefined) {
+    sets.push(`unread = ?`);
+    params.push(data.unread ? 1 : 0);
   }
 
   sets.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`);

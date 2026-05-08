@@ -38,6 +38,8 @@ export function MessageBubble({
   hideAgentHeader = false,
   developerMode = false,
 }: MessageBubbleProps) {
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
@@ -98,6 +100,7 @@ export function MessageBubble({
         chatId={message.chatId}
         messageId={message.id}
         workspaceId={workspaceId}
+        workspacePath={workspacePath}
         developerMode={developerMode}
         onAttachmentClick={onAttachmentClick}
       />
@@ -110,6 +113,7 @@ function MessageContentView({
   chatId,
   messageId,
   workspaceId,
+  workspacePath,
   developerMode,
   onAttachmentClick,
 }: {
@@ -117,12 +121,10 @@ function MessageContentView({
   chatId: string
   messageId: string
   workspaceId?: string
+  workspacePath?: string
   developerMode: boolean
   onAttachmentClick?: (attachment: AttachmentRef) => void
 }) {
-  const { data: workspaces } = useGetWorkspacesQuery()
-  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
-
   switch (content.type) {
     case 'text':
       return <MarkdownContent text={content.text} workspacePath={workspacePath} workspaceId={workspaceId} />

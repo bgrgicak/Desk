@@ -1,10 +1,13 @@
 import { type Pool } from "@agent-desk/db";
 import { networkInterfaces } from "node:os";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import { workspaceRootPath } from "@agent-desk/storage";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
-import { projectMounts, teardownMounts } from "./mounts.js";
+import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
 import { writeAgentFile, type AgentFileInput } from "./agentFile.js";
 
 export interface ExecRunOptions {
@@ -82,11 +85,21 @@ export async function execRun(
   // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
 
+  // Write the prompt to a file on the shared workspace mount instead of
+  // passing it via DESK_PROMPT. Large chat transcripts can exceed ARG_MAX
+  // (~1 MB on macOS) when packed into an execve environment block; a file
+  // reference dodges that limit entirely.
+  const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
+  const promptHostPath = path.join(wsRoot, `.desk-prompt-${opts.runId}`);
+  const promptSandboxPath = `${SANDBOX_HOME}/.desk-prompt-${opts.runId}`;
+  await fsp.writeFile(promptHostPath, opts.prompt, "utf8");
+
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
+      promptFile: promptSandboxPath,
       workspaceSlug: opts.workspaceSlug,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
@@ -100,6 +113,7 @@ export async function execRun(
     // Always clean up
     await revokeToken(pool, session.id);
     await teardownMounts(handle, opts.runId);
+    await fsp.unlink(promptHostPath).catch(() => {});
   }
 }
 

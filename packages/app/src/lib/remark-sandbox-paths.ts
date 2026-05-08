@@ -6,9 +6,11 @@ export const SANDBOX_HOME = '/home/agent'
 /**
  * Matches either /home/agent/... or ~/... paths as written by the agent.
  * The tilde form requires ~/ (tilde + slash) to avoid matching bare ~.
+ * A negative lookbehind ensures ~/ only matches when not preceded by a
+ * word character (prevents false matches like foo~/bar in URLs or text).
  * Trailing slashes on directory paths may be stripped by the regex.
  */
-const SANDBOX_PATH_RE = /(?:\/home\/agent(?:\/[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|\/[^\s"'`<>()[\]{},|#\n.]*|\/?(?=[/\s"'`<>()[\]{},|#\n]|$))|~\/(?:[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|[^\s"'`<>()[\]{},|#\n.]*|(?=[/\s"'`<>()[\]{},|#\n]|$)))/g
+const SANDBOX_PATH_RE = /(?:\/home\/agent(?:\/[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|\/[^\s"'`<>()[\]{},|#\n.]*|\/?(?=[/\s"'`<>()[\]{},|#\n]|$))|(?<![a-zA-Z0-9_])~\/(?:[^\s"'`<>()[\]{},|#\n]*[^\s"'`<>()[\]{},|#\n./]|[^\s"'`<>()[\]{},|#\n.]*|(?=[/\s"'`<>()[\]{},|#\n]|$)))/g
 
 function isSandboxPath(value: string): boolean {
   return value.startsWith(SANDBOX_HOME) || value.startsWith('~/')
@@ -48,8 +50,11 @@ export function remarkSandboxPaths(workspacePath: string) {
     })
 
     // Split text nodes that contain one or more sandbox paths.
+    // Skip text inside link nodes — those are already-translated display labels
+    // and processing them would create nested links.
     visit(tree, 'text', (node: Text, index, parent: Parent | undefined) => {
       if (!parent || index == null) return
+      if (parent.type === 'link') return
 
       SANDBOX_PATH_RE.lastIndex = 0
       const matches: { start: number; end: number; path: string }[] = []

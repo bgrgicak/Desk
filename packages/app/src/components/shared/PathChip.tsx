@@ -13,8 +13,7 @@ interface PathChipProps {
 }
 
 function isDirectory(path: string): boolean {
-  const last = path.split('/').pop() ?? ''
-  return !last.includes('.')
+  return path.endsWith('/')
 }
 
 function workspaceRelativePath(sandboxPath: string): string {

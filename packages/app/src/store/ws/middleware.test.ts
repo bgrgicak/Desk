@@ -272,9 +272,6 @@ describe('applyEventToCache', () => {
         // the workspace-scoped cache (found via getState). Verify we got
         // more dispatches than the baseline (cache update + CROSS + unscoped patch).
         // With getState, we should also get the workspace-scoped patch.
-        const updateActions = dispatched.filter(
-          (a) => typeof a === 'object' && a !== null && (a as { type?: string }).type?.includes('updateQueryData'),
-        )
         // At minimum: 1 message cache update + 1 unscoped patch + 1 workspace-scoped patch
         expect(dispatched.length).toBeGreaterThan(3)
       } finally {
