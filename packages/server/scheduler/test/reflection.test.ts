@@ -11,7 +11,6 @@ import {
   yesterdayDateLocal,
   type ReflectFn,
   type WorkspaceReflectionInput,
-  type UserReflectionInput,
 } from "../src/reflection.js";
 
 let pool: Pool;
@@ -66,6 +65,8 @@ beforeAll(async () => {
       workspaceBId, userId, "WS B", workspaceBSlug,
     ],
   );
+  await queries.workspaceAgents.addToWorkspace(pool, workspaceAId, agentId);
+  await queries.workspaceAgents.addToWorkspace(pool, workspaceBId, agentId);
 
   // Seed yesterday's activity in workspace A only.
   const chatA = generateId("chat");
@@ -117,8 +118,6 @@ describe("runWorkspaceReflection", () => {
         ],
       };
     };
-    const reflectUser: ReflectFn<UserReflectionInput> = async () => ({ journal: "ignored" });
-
     const body = await runWorkspaceReflection({
       pool,
       home,
@@ -126,8 +125,10 @@ describe("runWorkspaceReflection", () => {
       workspaceId: workspaceAId,
       workspaceSlug: workspaceASlug,
       workspaceName: "WS A",
+      userId,
+      userName: "reflector",
+      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
       reflectWorkspace,
-      reflectUser,
     });
 
     expect(body).toContain("kanban board");
@@ -160,8 +161,6 @@ describe("runWorkspaceReflection", () => {
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async () => {
       throw new Error("should not be called");
     };
-    const reflectUser: ReflectFn<UserReflectionInput> = async () => ({ journal: "" });
-
     const body = await runWorkspaceReflection({
       pool,
       home,
@@ -169,8 +168,10 @@ describe("runWorkspaceReflection", () => {
       workspaceId: workspaceBId,
       workspaceSlug: workspaceBSlug,
       workspaceName: "WS B",
+      userId,
+      userName: "reflector",
+      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
       reflectWorkspace,
-      reflectUser,
     });
     expect(body).toBeNull();
 
@@ -222,13 +223,15 @@ describe("runWorkspaceReflection", () => {
         workspaceId: workspaceAId,
         workspaceSlug: workspaceASlug,
         workspaceName: "WS A",
+        userId,
+        userName: "reflector",
+        agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
         reflectWorkspace: async () => ({
           journal: `# Journal — iteration ${i}\n`.padEnd(2048, "x"),
           memoryEdits: [
             { path: memoryEditPath, body: `# Concurrency prefs\n\niteration=${i}\n`.padEnd(1024, "y") },
           ],
         }),
-        reflectUser: async () => ({ journal: "" }),
       }),
     );
 
@@ -278,8 +281,6 @@ describe("runWorkspaceReflection", () => {
         { path: "valid.md", body: "valid body" },
       ],
     });
-    const reflectUser: ReflectFn<UserReflectionInput> = async () => ({ journal: "" });
-
     await runWorkspaceReflection({
       pool,
       home,
@@ -287,8 +288,10 @@ describe("runWorkspaceReflection", () => {
       workspaceId: workspaceAId,
       workspaceSlug: workspaceASlug,
       workspaceName: "WS A",
+      userId,
+      userName: "reflector",
+      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
       reflectWorkspace,
-      reflectUser,
     });
 
     const memoryDir = path.join(home, "Desk", "workspaces", workspaceASlug, ".memory");
@@ -300,22 +303,15 @@ describe("runWorkspaceReflection", () => {
 });
 
 describe("runDailyReflection", () => {
-  it("runs per-workspace and per-user passes, calling the user roll-up only once with all journal bodies", async () => {
+  it("runs only workspace-owned agents and does not write global user memory", async () => {
     const workspaceCalls: WorkspaceReflectionInput[] = [];
-    const userCalls: UserReflectionInput[] = [];
 
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
       workspaceCalls.push(input);
+      expect(input.agent.id).toBe(agentId);
+      expect(input.userId).toBe(userId);
       return {
         journal: `# Journal — ${input.workspaceSlug} on ${input.date}\n${input.activity.length} message(s).`,
-      };
-    };
-    const reflectUser: ReflectFn<UserReflectionInput> = async (input) => {
-      userCalls.push(input);
-      return {
-        journal: `# User journal — ${input.date}\nWorkspaces touched: ${input.workspaceJournals
-          .map((j) => j.workspaceSlug)
-          .join(", ")}`,
       };
     };
 
@@ -331,41 +327,43 @@ describe("runDailyReflection", () => {
       home,
       date: REFLECTION_DATE,
       reflectWorkspace,
-      reflectUser,
     });
 
     // Workspace A had activity; B did not.
     expect(workspaceCalls.length).toBe(1);
     expect(workspaceCalls[0].workspaceSlug).toBe(workspaceASlug);
 
-    // The user pass receives only WS A's journal.
-    expect(userCalls.length).toBe(1);
-    expect(userCalls[0].workspaceJournals.length).toBe(1);
-    expect(userCalls[0].workspaceJournals[0].workspaceSlug).toBe(workspaceASlug);
+    const workspaceJournalPath = path.join(
+      home,
+      "Desk",
+      "workspaces",
+      workspaceASlug,
+      ".memory",
+      "journal",
+      `${REFLECTION_DATE}.md`,
+    );
+    const workspaceJournal = await fs.readFile(workspaceJournalPath, "utf-8");
+    expect(workspaceJournal).toContain(workspaceASlug);
 
-    // User-level journal landed.
-    const userJournalPath = path.join(home, "Desk", ".memory", "journal", `${REFLECTION_DATE}.md`);
-    const userJournal = await fs.readFile(userJournalPath, "utf-8");
-    expect(userJournal).toContain(workspaceASlug);
+    const userMemory = await fs.stat(path.join(home, "Desk", ".memory")).catch(() => null);
+    expect(userMemory).toBeNull();
   });
 
-  it("does not run the user roll-up when no workspaces had activity", async () => {
+  it("does not run any agent when no workspaces had activity", async () => {
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async () => ({
       journal: "should not be called",
     });
-    let userCallCount = 0;
-    const reflectUser: ReflectFn<UserReflectionInput> = async () => {
-      userCallCount++;
-      return { journal: "" };
-    };
+    let workspaceCallCount = 0;
 
     await runDailyReflection({
       pool,
       home,
       date: "1999-01-01", // No activity on that date.
-      reflectWorkspace,
-      reflectUser,
+      reflectWorkspace: async (input) => {
+        workspaceCallCount++;
+        return reflectWorkspace(input);
+      },
     });
-    expect(userCallCount).toBe(0);
+    expect(workspaceCallCount).toBe(0);
   });
 });

@@ -7,13 +7,11 @@ export type RunManager = ReturnType<typeof createRunManager>;
 export {
   runDailyReflection,
   runWorkspaceReflection,
-  runUserReflectionRollup,
   startDailyReflection,
   yesterdayDateLocal,
 } from "./reflection.js";
 export type {
   WorkspaceReflectionInput,
-  UserReflectionInput,
   ReflectionResult,
   ReflectFn,
   RunDailyReflectionOptions,

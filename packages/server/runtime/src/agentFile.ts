@@ -41,10 +41,10 @@ export interface AgentFileInput {
   /** Whether to include the goal-selection/autodetection prompt fragment. */
   includeGoalAutodetect?: boolean;
   /**
-   * Summary runs are internal summary refreshes. They get a narrow prompt that
-   * returns markdown only and never writes artifacts.
+   * Summary and reflection runs are internal. They get narrow prompts instead
+   * of the full chat/task/artifact instruction set.
    */
-  runMode?: "chat" | "summary";
+  runMode?: "chat" | "summary" | "reflection";
   /**
    * DESK_HOME root, threaded through so the prompt renderer can read the
    * user `.memory/memory.md` index and the workspace `.memory/workspace.md`

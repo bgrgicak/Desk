@@ -56,5 +56,4 @@ export {
 export type { TokenizableMessage } from "./tokenize.js";
 export {
   productionReflectWorkspace,
-  productionReflectUser,
 } from "./reflectFn.js";

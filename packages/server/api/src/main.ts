@@ -21,7 +21,6 @@ import { queries } from "@agent-desk/db";
 import { createRunManager, startDailyReflection } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
-  productionReflectUser,
   productionReflectWorkspace,
   writeGoalSkillFiles,
 } from "@agent-desk/runtime";
@@ -137,7 +136,6 @@ async function main(): Promise<void> {
           home: DESK_HOME,
           cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
           reflectWorkspace: productionReflectWorkspace,
-          reflectUser: productionReflectUser,
           onError: (err) => {
             // eslint-disable-next-line no-console
             console.error("daily reflection job failed:", err);

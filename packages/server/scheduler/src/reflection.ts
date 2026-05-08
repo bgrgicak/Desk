@@ -4,24 +4,15 @@ import * as path from "node:path";
 import { Cron } from "croner";
 import type { Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import {
-  userJournalPath,
-  userMemoryDir,
-  workspaceJournalPath,
-  workspaceMemoryDir,
-} from "@agent-desk/storage";
+import { workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 
 /**
  * Memory-system Phase 5 — daily reflection.
  *
- * Runs once per day per user. Two passes:
- *   1. Per-workspace pass — for every workspace the user touched
- *      yesterday, summarize the day's activity and write
- *      `<workspace>/.memory/journal/<date>.md` plus any workspace
- *      memory edits the AI considers worth keeping.
- *   2. Per-user roll-up pass — once all workspace passes finish,
- *      consume the per-workspace journals and write the user-level
- *      `~/Desk/.memory/journal/<date>.md` plus user memory edits.
+ * Runs once per day per user workspace. For every workspace the user
+ * touched yesterday, the workspace's own enabled agent reflects inside
+ * that workspace's sandbox and writes `<workspace>/.memory/journal/<date>.md`
+ * plus any workspace memory edits the agent considers worth keeping.
  *
  * The AI call is abstracted as `ReflectFn` so unit tests can inject a
  * deterministic stub. Production should pass a real opencode-backed
@@ -31,30 +22,29 @@ import {
  * Output format conventions (driven by the reflection prompt):
  *   - The AI returns a JSON object `{ journal: string, memoryEdits?:
  *     Array<{ path: string, body: string }> }`.
- *   - `journal` lands at the spec-mandated path (workspace or user
- *     journal directory).
+ *   - `journal` lands at the workspace journal path.
  *   - Each `memoryEdits` entry is a write to a memory topic file.
  *     `path` is interpreted relative to the workspace's `.memory/`
- *     directory (per-workspace pass) or `~/Desk/.memory/` (user pass).
+ *     directory.
  *     This is how the agent promotes inline preferences to dedicated
  *     topic files.
  */
 
 /** Inputs the reflection AI receives for a single workspace. */
 export interface WorkspaceReflectionInput {
+  pool: Pool;
+  home: string;
+  workspaceId: string;
   workspaceSlug: string;
   workspaceName: string;
+  userId: string;
+  userName: string;
+  userTimezone?: string;
+  agent: { id: string; name: string; model: string };
+  providerKeys?: Record<string, string>;
   date: string;          // yesterday, "YYYY-MM-DD"
   /** Yesterday's user + agent messages, oldest first. */
   activity: Array<{ chatId: string; role: string; createdAt: string; body: string }>;
-}
-
-/** Inputs the reflection AI receives for the per-user rollup. */
-export interface UserReflectionInput {
-  userId: string;
-  date: string;
-  /** Per-workspace journal bodies produced upstream this run. */
-  workspaceJournals: Array<{ workspaceSlug: string; body: string }>;
 }
 
 export interface ReflectionResult {
@@ -72,8 +62,6 @@ export interface RunDailyReflectionOptions {
   date?: string;
   /** Per-workspace AI call. */
   reflectWorkspace: ReflectFn<WorkspaceReflectionInput>;
-  /** Per-user AI call (rollup). */
-  reflectUser: ReflectFn<UserReflectionInput>;
 }
 
 /**
@@ -165,14 +153,18 @@ async function listWorkspaceActivityForDate(
 /**
  * Per-workspace reflection pass. Reads yesterday's activity, calls
  * `reflectWorkspace`, writes the journal entry and any memory edits.
- * Returns the journal body (for the per-user roll-up pass) or null
- * when the workspace had no activity.
+ * Returns the journal body, or null when the workspace had no activity.
  */
 export async function runWorkspaceReflection(
   opts: RunDailyReflectionOptions & {
     workspaceId: string;
     workspaceSlug: string;
     workspaceName: string;
+    userId: string;
+    userName: string;
+    userTimezone?: string;
+    agent: { id: string; name: string; model: string };
+    providerKeys?: Record<string, string>;
   },
 ): Promise<string | null> {
   const date = opts.date ?? yesterdayDateLocal();
@@ -180,8 +172,16 @@ export async function runWorkspaceReflection(
   if (activity.length === 0) return null;
 
   const result = await opts.reflectWorkspace({
+    pool: opts.pool,
+    home: opts.home,
+    workspaceId: opts.workspaceId,
     workspaceSlug: opts.workspaceSlug,
     workspaceName: opts.workspaceName,
+    userId: opts.userId,
+    userName: opts.userName,
+    userTimezone: opts.userTimezone,
+    agent: opts.agent,
+    providerKeys: opts.providerKeys,
     date,
     activity,
   });
@@ -197,66 +197,42 @@ export async function runWorkspaceReflection(
 }
 
 /**
- * Per-user roll-up. Consumes all per-workspace journal bodies the
- * upstream pass produced, calls `reflectUser`, and writes the
- * user-level journal and user memory edits.
- */
-export async function runUserReflectionRollup(
-  opts: RunDailyReflectionOptions & {
-    userId: string;
-    workspaceJournals: Array<{ workspaceSlug: string; body: string }>;
-  },
-): Promise<void> {
-  const date = opts.date ?? yesterdayDateLocal();
-  if (opts.workspaceJournals.length === 0) return;
-
-  const result = await opts.reflectUser({
-    userId: opts.userId,
-    date,
-    workspaceJournals: opts.workspaceJournals,
-  });
-
-  const memoryRoot = userMemoryDir(opts.home);
-  const journalAbs = userJournalPath(opts.home, date);
-  await fs.mkdir(path.dirname(journalAbs), { recursive: true });
-  await atomicWriteFile(journalAbs, result.journal);
-  for (const edit of result.memoryEdits ?? []) {
-    await writeMemoryEdit(memoryRoot, edit);
-  }
-}
-
-/**
  * Orchestrator. Runs the per-workspace pass for every user-owned
- * workspace touched yesterday, then runs the user roll-up pass.
+ * workspace touched yesterday. Workspaces without an enabled agent are
+ * skipped because there is no workspace-owned agent to manage memory.
  */
 export async function runDailyReflection(opts: RunDailyReflectionOptions): Promise<void> {
   const date = opts.date ?? yesterdayDateLocal();
-  const { rows: users } = await opts.pool.query<{ id: string; username: string }>(
-    `SELECT id, username FROM users`,
+  const { rows: users } = await opts.pool.query<{
+    id: string;
+    username: string;
+    timezone: string | null;
+  }>(
+    `SELECT id, username, timezone FROM users`,
   );
 
   for (const user of users) {
     const userId = user.id;
+    const providerKeys = await queries.userSettings.getProviderKeys(opts.pool, userId);
     const workspaces = await queries.workspaces.listByUser(opts.pool, userId);
-    const journals: Array<{ workspaceSlug: string; body: string }> = [];
     for (const ws of workspaces) {
-      const body = await runWorkspaceReflection({
+      const [workspaceAgent] = await queries.workspaceAgents.listForWorkspace(opts.pool, ws.id);
+      if (!workspaceAgent) continue;
+      const agent = await queries.agents.findById(opts.pool, workspaceAgent.agentId);
+      if (!agent) continue;
+      await runWorkspaceReflection({
         ...opts,
         date,
         workspaceId: ws.id,
         workspaceSlug: ws.path,
         workspaceName: ws.name,
+        userId,
+        userName: user.username,
+        userTimezone: user.timezone ?? undefined,
+        agent: { id: agent.id, name: agent.name, model: agent.model },
+        providerKeys,
       });
-      if (body !== null) {
-        journals.push({ workspaceSlug: ws.path, body });
-      }
     }
-    await runUserReflectionRollup({
-      ...opts,
-      date,
-      userId,
-      workspaceJournals: journals,
-    });
   }
 }
 
