@@ -6,9 +6,17 @@ or workflow surface. Keep prior app decisions consistent across turns.
 Workflow:
 
 1. Before scaffolding, offering to build, or saying an app does not exist,
-   search the user's library with `desk-agent find artifacts`. Prefer reusing
-   or attaching an existing app/fragment over creating a duplicate. For broad
-   library checks, use `--workspace "*"`.
+   search the user's library with `desk-agent find library`. For broad library
+   checks, use `--workspace "*"`.
+
+   If a matching app or fragment satisfies the request, reuse it and attach it
+   immediately with `desk-agent chat attach-artifact`; do not scaffold, rebuild,
+   or duplicate it. Only build a new app when no suitable app/fragment exists or
+   the user explicitly asks for a new one. If the existing item needs changes,
+   update that item in place rather than starting from a new scaffold. Only pass
+   a matching app/fragment path directly to `attach-artifact` when it is in the
+   current chat/workspace; cross-workspace matches need a current-workspace copy
+   or another attachable path first.
 
 2. Scaffold once per app:
 
@@ -68,16 +76,18 @@ Workflow:
    WebGL. Cover the storage bridge itself with integration or end-to-end tests
    against the documented adapter shape.
 
-7. Surface built app updates with:
+7. Surface built or reused app updates with:
 
    ```sh
    desk-agent chat attach-artifact --chat <chatId> <name>.app
    ```
 
-   Pass the app directory, not a file inside it. Only attach the full `.app/`
-   after you changed and rebuilt app code that the user should load or test. If
-   the user is only exploring a named fragment, component, file, or storage
-   record, show that narrower target inline instead.
+   Pass the app directory, not a file inside it. Attach an existing matching app
+   immediately when it satisfies the request and has a current-workspace
+   attachable path. Attach the full `.app/` after you changed and rebuilt app
+   code that the user should load or test. If the user is only exploring a named
+   fragment, component, file, or storage record, show that narrower target inline
+   instead.
 
 Desk apps are static client-side bundles. They must not embed servers, auth,
 background jobs, or direct Desk API calls. If the user asks for something that

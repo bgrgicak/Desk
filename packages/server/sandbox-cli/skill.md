@@ -5,24 +5,30 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have four commands:
+You have five commands:
 - `desk-agent app create` — clone the Desk app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
 - `desk-agent chat attach-artifact` — surface a generated file **or directory**
   as an `artifactRef` card in the current chat.
 - `desk-agent file to-markdown` — convert PDFs, DOCX, ODT, RTF, HTML, EPUB,
   LaTeX, and plain text files into agent-readable Markdown/text.
+- `desk-agent find library` — discover reusable apps, fragments, notes, and
+  docs before building or answering whether a reusable item exists.
 - `desk-agent task schedule` — create or schedule Tasks board work.
 
 Reach for them when:
 
-1. **You wrote an artifact the user should see or open.**
+1. **You wrote, updated, or retrieved an artifact the user should see or open.**
    Always call `desk-agent chat attach-artifact --chat <chatId> "<path>"`
-   as the last step of any turn in which you create or significantly update
-   an artifact. There are no exceptions for type: file, app, directory, image,
-   or any other artifact. If the artifact is a directory, pass the directory
-   path. Do not reply until the attach command has executed; if it fails,
-   report the error inline instead of silently skipping.
+   as the last step of any turn in which you create, significantly update, or
+   retrieve from the library an artifact. There are no exceptions for type:
+   file, app, directory, image, library item, or any other artifact. If the
+   artifact is a directory, pass the directory path. Do not reply until the
+   attach command has executed or you have determined no attachable
+   current-workspace path exists. A library hit from another workspace cannot be
+   attached by passing its cross-workspace path directly; copy or update it into
+   the current chat/workspace first when possible. If no attachable path exists,
+   report that limitation instead of silently skipping or rebuilding.
 2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
@@ -99,9 +105,13 @@ desk-agent app create --chat cht_abc my-todos
 ## desk-agent chat attach-artifact
 
 Create an `artifactRef` message in the chat for an existing file or directory.
-Always use this as the last step of any turn in which you create or
-significantly update an artifact before replying to the user. If the command
-fails, report the error inline instead of silently skipping.
+Always use this as the last step of any turn in which you create,
+significantly update, or retrieve from the library an artifact before replying
+to the user. Only pass paths that exist in the current chat/workspace; a
+cross-workspace library hit must be copied or updated into the current
+chat/workspace before attachment when possible. If the command fails or no
+attachable current-workspace path exists, report the limitation inline instead
+of silently skipping.
 
 ```
 desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
@@ -178,27 +188,32 @@ desk-agent chat search-messages --query "deploy notes" --kind summary
 desk-agent chat search-messages --query "passwords"
 ```
 
-## desk-agent find artifacts
+## desk-agent find library
 
 Discover reusable apps, fragments, notes, and docs in the user's library. Use
-this before building something new; if a fragment already solves the task,
-attach it with `desk-agent chat attach-artifact` instead of creating a duplicate.
+this before building something new. If a returned library item satisfies the
+task, attach it with `desk-agent chat attach-artifact` in the same turn instead
+of creating a duplicate. Do not scaffold or rebuild an app, fragment, note, doc,
+or artifact when a suitable library item already exists unless the user
+explicitly asks for a new one. Only pass a hit's `path` directly when the item
+is in the current chat/workspace; cross-workspace hits need a current-workspace
+copy or another attachable path before `chat attach-artifact` can surface them.
 
 ```
-desk-agent find artifacts [--query <text>] [--kind app|fragment|note|doc|any]
-                          [--workspace <slug>|*] [--limit N]
+desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any]
+                        [--workspace <slug>|*] [--limit N]
 ```
 
-When `--query` is omitted, the command returns recent artifacts. App and
+When `--query` is omitted, the command returns recent library items. App and
 fragment hits may include `params_schema`; pass concrete values with repeated
 `--param key=value` flags when attaching a fragment.
 
 ### Examples
 
 ```
-desk-agent find artifacts --query "note editor" --kind fragment
-desk-agent find artifacts --query "todos"
-desk-agent find artifacts --kind app
+desk-agent find library --query "note editor" --kind fragment
+desk-agent find library --query "todos"
+desk-agent find library --kind app
 ```
 
 ## desk-agent file to-markdown

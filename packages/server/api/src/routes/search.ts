@@ -31,7 +31,7 @@ export interface SearchResult {
   score?: number;
 }
 
-export interface ArtifactSearchResult {
+export interface LibraryItemSearchResult {
   kind: "app" | "fragment" | "note" | "doc";
   path: string;
   name: string;
@@ -126,14 +126,14 @@ function classifyFileKind(relPath: string): { kind: SearchKind; chatId: string |
   return { kind: "library_file", chatId: null };
 }
 
-function artifactKindForPath(relPath: string): ArtifactSearchResult["kind"] {
+function libraryItemKindForPath(relPath: string): LibraryItemSearchResult["kind"] {
   if (relPath.endsWith("/desk.app.json")) return "app";
   if (relPath.endsWith("/desk.fragment.json")) return "fragment";
   const ext = path.extname(relPath).toLowerCase();
   return ext === ".md" || ext === ".markdown" || ext === ".txt" ? "note" : "doc";
 }
 
-function artifactPathForFile(relPath: string, kind: ArtifactSearchResult["kind"]): string {
+function libraryItemPathForFile(relPath: string, kind: LibraryItemSearchResult["kind"]): string {
   if (kind === "app") return path.posix.dirname(relPath);
   if (kind === "fragment") {
     const fragmentDir = path.posix.dirname(relPath);
@@ -170,23 +170,23 @@ async function readManifest(abs: string, kind: "app" | "fragment"): Promise<AppM
   }
 }
 
-async function artifactResultFromHit(
+async function libraryItemResultFromHit(
   storage: StorageContext,
   hit: Awaited<ReturnType<typeof queries.search.searchChatMessages>>[number],
-): Promise<ArtifactSearchResult | null> {
+): Promise<LibraryItemSearchResult | null> {
   if (!hit.workspaceSlug || hit.kind !== "library_file") return null;
   const relPath = decodeFileRef(hit.workspaceSlug, hit.refId);
-  const kind = artifactKindForPath(relPath);
-  const artifactPath = artifactPathForFile(relPath, kind);
+  const kind = libraryItemKindForPath(relPath);
+  const libraryItemPath = libraryItemPathForFile(relPath, kind);
   const root = workspaceRootPath(storage.home, hit.workspaceSlug);
   const abs = path.join(root, relPath);
 
   if (kind === "app" || kind === "fragment") {
     const manifest = await readManifest(abs, kind);
-    const fallbackName = path.basename(artifactPath).replace(/\.app$/, "");
+    const fallbackName = path.basename(libraryItemPath).replace(/\.app$/, "");
     return {
       kind,
-      path: artifactPath,
+      path: libraryItemPath,
       name: manifest?.name ?? fallbackName,
       description: manifest?.description ?? "",
       workspaceSlug: hit.workspaceSlug,
@@ -199,7 +199,7 @@ async function artifactResultFromHit(
   const body = await readTextFile(abs);
   return {
     kind,
-    path: artifactPath,
+    path: libraryItemPath,
     name: path.basename(relPath),
     description: firstLine(body),
     workspaceSlug: hit.workspaceSlug,
@@ -357,17 +357,17 @@ export async function search(
   }).slice(0, 40);
 }
 
-export async function findArtifacts(
+export async function findLibraryItems(
   pool: Pool,
   storage: StorageContext,
   userId: string,
   opts: {
     query?: string;
-    kind?: ArtifactSearchResult["kind"] | "any";
+    kind?: LibraryItemSearchResult["kind"] | "any";
     workspaceId?: string;
     limit?: number;
   } = {},
-): Promise<ArtifactSearchResult[]> {
+): Promise<LibraryItemSearchResult[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 25, 100));
   const query = opts.query?.trim() ?? "";
   const workspaces = opts.workspaceId
@@ -396,9 +396,9 @@ export async function findArtifacts(
 
   const wantedKind = opts.kind && opts.kind !== "any" ? opts.kind : null;
   const seen = new Set<string>();
-  const results: ArtifactSearchResult[] = [];
+  const results: LibraryItemSearchResult[] = [];
   for (const hit of rawHits) {
-    const result = await artifactResultFromHit(storage, hit);
+    const result = await libraryItemResultFromHit(storage, hit);
     if (!result) continue;
     if (wantedKind && result.kind !== wantedKind) continue;
     const key = `${result.workspaceSlug}:${result.kind}:${result.path}`;

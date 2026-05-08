@@ -153,9 +153,12 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
     expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
     expect(body).toContain("as the last step of any turn");
+    expect(body).toContain("create, significantly update, or retrieve from the current chat/workspace library");
     expect(body).toContain("no exceptions for type");
+    expect(body).toContain("library item");
+    expect(body).toContain("do not pass that cross-workspace path directly");
     expect(body).toContain("pass the directory path");
-    expect(body).toContain("Do not reply to the user until the attach command has been executed");
+    expect(body).toContain("Do not reply to the user until the attach command has been executed or you have determined no attachable current-workspace path exists");
     expect(body).toContain("If the command fails, report the error inline instead of silently skipping");
     expect(body).toContain("Quote the path.");
     expect(body).toContain("desk-cli-chat-attach-artifact");
@@ -299,30 +302,47 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("self-contained HTML file");
   });
 
-  it("requires artifact discovery before answering library availability", () => {
+  it("requires library discovery before answering library availability", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
     expect(body).toContain("Before answering whether the user's library already has");
-    expect(body).toContain("run\n`desk-agent find artifacts`");
-    expect(body).toContain("Never say that no matching\nartifact exists unless you ran `desk-agent find artifacts`");
+    expect(body).toContain("run\n`desk-agent find library`");
+    expect(body).toContain("Also run `desk-agent find library` before answering a\nrequest that looks like it could be satisfied by a reusable tool");
+    expect(body).toContain("even\nwhen the request could also be answered inline with a quick calculation");
+    expect(body).toContain("Never say that no matching library item exists\nunless you ran `desk-agent find library`");
     expect(body).toContain("Do not say \"I checked\", \"I found\", or \"there is no app\"");
-    expect(body).toContain("Filesystem/search tools may supplement artifact discovery but\ndo not replace it");
+    expect(body).toContain("Filesystem/search tools may supplement library discovery but do not\nreplace it for availability claims or tool-like request handling");
   });
 
-  it("requires broad artifact fallback when targeted discovery is incomplete", () => {
+  it("requires broad library fallback when targeted discovery is incomplete", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
-    expect(body).toContain("Use the requested artifact kind\nwhen it is clear; otherwise use `--kind any`");
-    expect(body).toContain("desk-agent find artifacts --kind <app|fragment|note|doc|any> --workspace \"*\" --limit 100");
+    expect(body).toContain("Use the requested library item kind\nwhen it is clear; otherwise use `--kind any`");
+    expect(body).toContain("desk-agent find library --kind <app|fragment|note|doc|any> --workspace \"*\" --limit 100");
     expect(body).toContain("assume the search\nquery was too narrow");
   });
 
-  it("the `app` goal searches existing library artifacts before scaffolding", () => {
+  it("requires matching library items to be reused and attached immediately", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("When `desk-agent find library` returns a library item that satisfies the user's\nrequest, reuse it");
+    expect(body).toContain("Do not scaffold, rebuild, or create a duplicate app");
+    expect(body).toContain("When returning a matching library item to the user, attach it in the same turn\nwith `desk-agent chat attach-artifact` before replying");
+    expect(body).toContain("Only pass a hit's `path` directly to `attach-artifact`\nwhen it is in the current chat/workspace");
+    expect(body).toContain("do not pass that cross-workspace\npath directly");
+    expect(body).toContain("Do not merely describe a matching\nitem or ask whether the user wants to see it");
+  });
+
+  it("the `app` goal searches existing library items before scaffolding", () => {
     const body = renderPromptBody({ ...baseInput, goal: "app" });
 
     expect(body).toContain("Before scaffolding, offering to build, or saying an app does not exist");
-    expect(body).toContain("search the user's library with `desk-agent find artifacts`");
-    expect(body).toContain("Prefer reusing\n   or attaching an existing app/fragment");
+    expect(body).toContain("search the user's library with `desk-agent find library`");
+    expect(body).toContain("If a matching app or fragment satisfies the request, reuse it and attach it");
+    expect(body).toContain("do not scaffold, rebuild,\n   or duplicate it");
+    expect(body).toContain("Only build a new app when no suitable app/fragment exists or\n   the user explicitly asks for a new one");
+    expect(body).toContain("cross-workspace matches need a current-workspace copy\n   or another attachable path first");
+    expect(body).toContain("immediately when it satisfies the request and has a current-workspace\n   attachable path");
   });
 
 });
@@ -439,6 +459,16 @@ describe("memory injection", () => {
 });
 
 describe("Desk reference skills", () => {
+  it("publishes cross-workspace-safe artifact attachment guidance", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-attach-artifact");
+    const body = skill?.body() ?? "";
+
+    expect(skill).toBeTruthy();
+    expect(body).toContain("Only pass paths that exist in the current chat/workspace");
+    expect(body).toContain("cross-workspace library hit must be copied or updated into the current\nchat/workspace before attachment");
+    expect(body).toContain("no\nattachable current-workspace path exists");
+  });
+
   it("publishes a persistence playbook", () => {
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-persistence");
 
@@ -475,6 +505,17 @@ describe("Desk reference skills", () => {
     expect(body).toContain("desk-agent chat search-messages");
     expect(body).toContain("--query");
     expect(body).toContain("--workspace");
+  });
+
+  it("publishes hard reuse rules in the library discovery reference", () => {
+    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-find-library");
+    const body = skill?.body() ?? "";
+
+    expect(skill).toBeTruthy();
+    expect(body).toContain("attach it with `desk-agent chat attach-artifact` in the same turn");
+    expect(body).toContain("Do not scaffold or rebuild an app, fragment, note, doc");
+    expect(body).toContain("unless the user\nexplicitly asks for a new one");
+    expect(body).toContain("cross-workspace hits need a current-workspace\ncopy or another attachable path");
   });
 
   it("keeps scaffold guidance explicit about app storage contracts", () => {

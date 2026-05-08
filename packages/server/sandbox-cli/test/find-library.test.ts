@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { run } from "../src/commands/find-artifacts.js";
+import { run } from "../src/commands/find-library.js";
 
 const getJsonMock = vi.fn();
 const outputMock = vi.fn();
@@ -18,11 +18,11 @@ beforeEach(() => {
   getJsonMock.mockResolvedValue({ hits: [] });
 });
 
-describe("desk-agent find artifacts", () => {
-  it("forwards query options to /sandbox/find/artifacts", async () => {
+describe("desk-agent find library", () => {
+  it("forwards query options to /sandbox/find/library", async () => {
     await run(["--query", "note editor", "--kind", "fragment", "--workspace", "*", "--limit", "5"]);
     const url = getJsonMock.mock.calls[0][0] as string;
-    expect(url.startsWith("/sandbox/find/artifacts?")).toBe(true);
+    expect(url.startsWith("/sandbox/find/library?")).toBe(true);
     const params = new URLSearchParams(url.split("?")[1]);
     expect(params.get("q")).toBe("note editor");
     expect(params.get("kind")).toBe("fragment");

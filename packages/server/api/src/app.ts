@@ -665,7 +665,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    if (path === "/sandbox/find/artifacts" && method === "GET") {
+    if (path === "/sandbox/find/library" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { session, agent } = await authenticateSandboxToken(pool, token);
@@ -682,7 +682,7 @@ export function createApp(opts: AppOptions): Server {
       }
       const kindParam = params.get("kind") ?? "any";
       const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
-      const result = await searchRoutes.findArtifacts(pool, storage, agent.userId, {
+      const result = await searchRoutes.findLibraryItems(pool, storage, agent.userId, {
         query: params.get("q") ?? params.get("query") ?? undefined,
         kind:
           kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"

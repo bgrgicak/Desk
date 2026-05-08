@@ -18,7 +18,7 @@ const COMMANDS: Record<string, () => Promise<Command>> = {
   "chat attach-artifact": () => import("./commands/chat-attach-artifact.js"),
   "chat search-messages": () => import("./commands/chat-search-messages.js"),
   "file to-markdown": () => import("./commands/file-to-markdown.js"),
-  "find artifacts": () => import("./commands/find-artifacts.js"),
+  "find library": () => import("./commands/find-library.js"),
   "task schedule": () => import("./commands/task-schedule.js"),
 };
 

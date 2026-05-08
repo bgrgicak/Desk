@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent find artifacts [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <slug>|*] [--limit N]";
+  "desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <slug>|*] [--limit N]";
 
 export const help = `\
-desk-agent find artifacts — discover reusable apps, fragments, notes, and docs.
+desk-agent find library — discover reusable library apps, fragments, notes, and docs.
 
 Optional:
   --query <text>           Free-text query. When omitted, returns recent hits.
@@ -38,5 +38,5 @@ export async function run(argv: string[]): Promise<void> {
   if (typeof flags["limit"] === "string" && flags["limit"]) params.set("limit", flags["limit"]);
 
   const qs = params.toString();
-  output(await getJson(`/sandbox/find/artifacts${qs ? `?${qs}` : ""}`));
+  output(await getJson(`/sandbox/find/library${qs ? `?${qs}` : ""}`));
 }
