@@ -1,7 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle } from "../slices/derivedSlice";
 import { getSessionToken } from "@/auth/session";
 import type { ServerMessage, WsEvent } from "../types";
 
@@ -156,6 +156,9 @@ export function applyEventToCache(
           draft.filter((c) => c.id !== chatId),
         ),
       );
+      // Clean up running-chat tracking so deleted chats don't leave
+      // orphaned spinner entries.
+      dispatch(markChatIdle(chatId));
       break;
     }
     case "message.appended":
@@ -173,16 +176,31 @@ export function applyEventToCache(
         ),
       );
       dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }]));
-      // Every messages.insert() sets chat.unread = 1 on the server.
-      // Invalidate the chat list so the sidebar picks up the new unread
-      // state without waiting for the next manual refetch.
+      // Track running chats for the sidebar spinner.
+      if (msg.content?.type === "agent_turn") {
+        if (msg.state === "pending" || msg.state === "running") {
+          dispatch(markChatRunning(msg.chatId));
+        } else {
+          dispatch(markChatIdle(msg.chatId));
+        }
+      }
+      // Non-internal messages update chat.unread and chat.updated_at on
+      // the server. Invalidate the chat list so the sidebar picks up the
+      // new state. Internal messages (summary, summary_request, agent_turn)
+      // leave the chat row untouched, so skip the invalidation to avoid a
+      // redundant refetch.
       if (event.type === "message.appended") {
-        dispatch(
-          api.util.invalidateTags([
-            { type: "Chat", id: msg.chatId },
-            { type: "Chat", id: "LIST" },
-          ]),
-        );
+        const ct = msg.content?.type;
+        const isInternal =
+          ct === "agent_turn" || ct === "summary_request" || ct === "summary";
+        if (!isInternal) {
+          dispatch(
+            api.util.invalidateTags([
+              { type: "Chat", id: msg.chatId },
+              { type: "Chat", id: "LIST" },
+            ]),
+          );
+        }
       }
       break;
     }

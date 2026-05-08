@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
-  MoreHorizontal, Trash2, Search, FileText, Copy,
+  MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
   PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
 } from 'lucide-react'
@@ -27,7 +27,7 @@ import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ChatThread } from '@/components/compose/ChatThread'
-import { messagesToClipboardText } from '@/components/compose/messageVisibility'
+import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { ChatInput } from '@/components/compose/ChatInput'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
@@ -35,7 +35,6 @@ import {
   useDeleteChatAttachmentMutation,
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
-  useGetChatMessagesQuery,
   useGetLibraryQuery,
   usePatchChatMutation,
   usePinChatLibraryRefMutation,
@@ -902,30 +901,6 @@ export function ChatView({
 
   const { developerMode } = usePrefs()
 
-  // Messages query for "Copy chat" — reuses the same cache entry as
-  // ChatThread so there is no extra network request.
-  const { data: messagesResp } = useGetChatMessagesQuery(
-    { chatId: chat.id },
-    { skip: isNewChat },
-  )
-
-  const handleCopyChat = useCallback(() => {
-    const items = messagesResp?.items
-    if (!items || items.length === 0) {
-      toast.info('Nothing to copy')
-      return
-    }
-    const text = messagesToClipboardText(items)
-    if (!text) {
-      toast.info('Nothing to copy')
-      return
-    }
-    navigator.clipboard.writeText(text).then(
-      () => toast.success('Chat copied to clipboard'),
-      () => toast.error('Failed to copy chat'),
-    )
-  }, [messagesResp])
-
   // Focus the composer when a chat is opened. Defers past the
   // scroll-to-bottom and message-load layout shifts that follow
   // mount, so focus reliably lands on the textarea.
@@ -967,17 +942,7 @@ export function ChatView({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem onClick={handleCopyChat}>
-                    <Copy className="h-4 w-4 mr-2" />
-                    Copy chat
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onClick={() => onDeleteChat?.(chat.id)}
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete chat
-                  </DropdownMenuItem>
+                  <ChatMenuItems chatId={chat.id} onDelete={(id) => onDeleteChat?.(id)} />
                 </DropdownMenuContent>
               </DropdownMenu>
 

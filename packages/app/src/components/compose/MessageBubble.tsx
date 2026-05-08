@@ -401,7 +401,7 @@ function EventsView({ log, developerMode, workspacePath }: { log: AgentLogEntry[
           return <MarkdownContent key={i} text={c.text.trim()} workspacePath={workspacePath} />
         }
         if (c.kind === 'events') {
-          return <EventGroup key={i} entries={c.entries} />
+          return <EventGroup key={i} entries={c.entries} workspacePath={workspacePath} />
         }
         return <StderrBlock key={i} lines={c.lines} />
       })}
@@ -409,7 +409,7 @@ function EventsView({ log, developerMode, workspacePath }: { log: AgentLogEntry[
   )
 }
 
-function EventGroup({ entries }: { entries: AgentLogEntry[] }) {
+function EventGroup({ entries, workspacePath }: { entries: AgentLogEntry[]; workspacePath?: string }) {
   const [open, setOpen] = useState(false)
   if (entries.length === 0) return null
   const count = entries.length
@@ -427,9 +427,9 @@ function EventGroup({ entries }: { entries: AgentLogEntry[] }) {
       {open && (
         <div className="mt-1 space-y-1">
           {entries.map((entry, i) => entry.kind === 'event' && (
-            <CollapsibleChip key={i} icon={<Wrench className="h-3 w-3" />} label={labelForEvent(entry.event)}>
+            <CollapsibleChip key={i} icon={<Wrench className="h-3 w-3" />} label={labelForEvent(entry.event, workspacePath)}>
               <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">
-                {safeStringify(entry.event)}
+                {translateSandboxPaths(safeStringify(entry.event), workspacePath)}
               </pre>
             </CollapsibleChip>
           ))}
@@ -487,8 +487,38 @@ function CollapsibleChip({
   )
 }
 
-function labelForEvent(ev: AgentEvent): string {
+function translateSandboxPaths(text: string, workspacePath?: string): string {
+  if (!workspacePath) return text
+  return text.replaceAll('/home/agent', `~/Desk/workspaces/${workspacePath}`)
+}
+
+/** Extract the most relevant file path from a tool_use event's input object. */
+function pickToolFilePath(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const obj = input as Record<string, unknown>
+  for (const key of ['filePath', 'file_path', 'path', 'file']) {
+    const v = obj[key]
+    if (typeof v === 'string' && v.startsWith('/home/agent')) return v
+  }
+  return undefined
+}
+
+function labelForEvent(ev: AgentEvent, workspacePath?: string): string {
   const t = ev.type
+
+  // opencode tool_use format: {type:'tool_use', part:{tool:'read', state:{input:{filePath:'...'}}}}
+  if (t === 'tool_use') {
+    const tool = pickString(ev.part, 'tool') ?? 'tool'
+    const state = (ev.part as Record<string, unknown> | undefined)?.state
+    const input = (state as Record<string, unknown> | undefined)?.input
+    const filePath = pickToolFilePath(input)
+    if (filePath && workspacePath) {
+      const display = translateSandboxPaths(filePath, workspacePath)
+      return `${tool}: ${display}`
+    }
+    return `called ${tool}`
+  }
+
   if (t === 'tool-call' || t === 'tool_call') {
     const name = pickString(ev.part, 'name') ?? pickString(ev, 'name') ?? 'tool'
     return `called ${name}`

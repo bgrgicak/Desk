@@ -48,7 +48,7 @@ describe("messages queries", () => {
     expect(chat!.unread).toBe(true);
   });
 
-  it("lists by chat with cursor pagination", async () => {
+  it("lists by chat with cursor pagination (forward)", async () => {
     // Insert a few more
     for (let i = 0; i < 3; i++) {
       await messages.insert(pool, {
@@ -59,17 +59,40 @@ describe("messages queries", () => {
       });
     }
 
-    const page1 = await messages.listByChat(pool, chatId, { limit: 2 });
-    expect(page1.items).toHaveLength(2);
-    expect(page1.nextCursor).toBeDefined();
+    // Forward pagination with explicit cursor: use the first message as cursor
+    // to page forward from it.
+    const allMsgs = await messages.listByChat(pool, chatId);
+    expect(allMsgs.items.length).toBe(4); // 1 from prior test + 3 new
 
-    const page2 = await messages.listByChat(pool, chatId, { cursor: page1.nextCursor, limit: 2 });
-    expect(page2.items.length).toBeGreaterThanOrEqual(1);
+    const firstMsg = allMsgs.items[0];
+    const cursor = `${firstMsg.createdAt}|${firstMsg.id}`;
+    const page = await messages.listByChat(pool, chatId, { cursor, limit: 2 });
+    expect(page.items).toHaveLength(2);
+    // Messages after the first should be the next ones chronologically.
+    expect(page.items[0].id).not.toBe(firstMsg.id);
+  });
+
+  it("lists by chat with reverse pagination (before)", async () => {
+    // No-cursor call returns newest page. With 4 messages and limit=2,
+    // we should get the 2 newest + a prevCursor.
+    const newest = await messages.listByChat(pool, chatId, { limit: 2 });
+    expect(newest.items).toHaveLength(2);
+    expect(newest.prevCursor).toBeDefined();
+
+    // Load older page using prevCursor.
+    const older = await messages.listByChat(pool, chatId, { before: newest.prevCursor, limit: 2 });
+    expect(older.items).toHaveLength(2);
+    // Items returned in chronological order — oldest first.
+    expect(new Date(older.items[0].createdAt).getTime())
+      .toBeLessThanOrEqual(new Date(older.items[1].createdAt).getTime());
+    // Older page items should come before newest page items chronologically.
+    expect(new Date(older.items[1].createdAt).getTime())
+      .toBeLessThanOrEqual(new Date(newest.items[0].createdAt).getTime());
   });
 
   it("cascades delete when chat is deleted", async () => {
-    const { rows } = await messages.listByChat(pool, chatId);
-    expect(rows).toBeUndefined(); // it returns { items, nextCursor }
+    const { items } = await messages.listByChat(pool, chatId);
+    expect(items.length).toBeGreaterThan(0);
 
     await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
     const result = await messages.listByChat(pool, chatId);

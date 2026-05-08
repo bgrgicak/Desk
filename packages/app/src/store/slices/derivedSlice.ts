@@ -2,9 +2,9 @@
  * Client-derived shims for UI concepts the server can't represent yet.
  *
  * Every piece of state here is either fed by the WS middleware (slice 12's
- * work) or derived from other RTK Query caches via selectors. Nothing here
- * persists — a reload clears the slice and the shims re-hydrate from
- * server events.
+ * work) or derived from other RTK Query caches via selectors and matchers.
+ * Nothing here persists — a reload clears the slice and the shims
+ * re-hydrate from server events and fulfilled query results.
  *
  * TODO(api-gap): see feature-gap-matrix §4.2 — folders-as-entity,
  * notes-for-AI sidecars, artifact authorship, "1 update" pills, and the
@@ -12,6 +12,7 @@
  */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
+import { api } from '../api'
 import type { RootState } from '../store'
 import type {
   ArtifactUpdate,
@@ -41,12 +42,20 @@ export interface DerivedState {
    * re-fetches automatically when an agent run completes. Keyed by workspaceId.
    */
   workspaceChangeCounters: Record<string, number>
+  /**
+   * Chat IDs that currently have an active agent turn (pending or running).
+   * Fed by the WS middleware on `message.appended` / `message.updated`
+   * events for `agent_turn` messages. The sidebar uses this to show a
+   * spinning indicator.
+   */
+  runningChatIds: string[]
 }
 
 const initialState: DerivedState = {
   artifactUpdates: [],
   fileChangeCounters: {},
   workspaceChangeCounters: {},
+  runningChatIds: [],
 }
 
 const slice = createSlice({
@@ -71,10 +80,42 @@ const slice = createSlice({
       const wsId = action.payload
       state.workspaceChangeCounters[wsId] = (state.workspaceChangeCounters[wsId] ?? 0) + 1
     },
+    /** Called by wsMiddleware when an agent_turn message enters pending/running. */
+    markChatRunning(state, action: PayloadAction<string>) {
+      if (!state.runningChatIds.includes(action.payload)) {
+        state.runningChatIds.push(action.payload)
+      }
+    },
+    /** Called by wsMiddleware when an agent_turn message leaves pending/running. */
+    markChatIdle(state, action: PayloadAction<string>) {
+      state.runningChatIds = state.runningChatIds.filter(id => id !== action.payload)
+    },
+  },
+  extraReducers: (builder) => {
+    // Hydrate running state from fetched messages (cold-start path).
+    // When getChatMessages fulfills, check if any agent_turn is active.
+    builder.addMatcher(
+      api.endpoints.getChatMessages.matchFulfilled,
+      (state, action) => {
+        const chatId = action.meta.arg.originalArgs.chatId
+        const hasRunning = action.payload.items.some(
+          (m) =>
+            m.content?.type === 'agent_turn' &&
+            (m.state === 'pending' || m.state === 'running'),
+        )
+        if (hasRunning && !state.runningChatIds.includes(chatId)) {
+          state.runningChatIds.push(chatId)
+        } else if (!hasRunning && state.runningChatIds.includes(chatId)) {
+          state.runningChatIds = state.runningChatIds.filter(
+            (id) => id !== chatId,
+          )
+        }
+      },
+    )
   },
 })
 
-export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter } = slice.actions
+export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle } = slice.actions
 export default slice.reducer
 
 // ── Selectors ────────────────────────────────────────────────────────────────
@@ -87,6 +128,9 @@ export const selectFileChangeCounter = (s: RootState, path: string): number =>
 
 export const selectWorkspaceChangeCounter = (s: RootState, wsId: string): number =>
   s.derived.workspaceChangeCounters[wsId] ?? 0
+
+export const selectRunningChatIds = (s: RootState): string[] =>
+  s.derived.runningChatIds
 
 /**
  * Folders view of the library.

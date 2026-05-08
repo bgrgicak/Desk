@@ -7,7 +7,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type WsEvent } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
   ReplaceLibraryAppConflictError,
@@ -629,6 +629,39 @@ export function createApp(opts: AppOptions): Server {
 
       const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, userMessage);
+      return;
+    }
+
+    // Seed messages — bulk-inserts text messages without triggering agent
+    // turns. Used by the agent to populate a chat for scrollback testing.
+    if (path === "/sandbox/seed-messages" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as {
+        chatId?: string;
+        messages?: Array<{ role?: string; text: string }>;
+      };
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      if (!Array.isArray(body.messages) || body.messages.length === 0) {
+        throw new ValidationError("Missing or empty messages array");
+      }
+      await requireOwnedChat(pool, body.chatId, agent.userId);
+
+      const inserted: unknown[] = [];
+      for (const m of body.messages) {
+        const role = m.role === "agent" ? "agent" : "user";
+        const msg = await queries.messages.insert(pool, {
+          id: generateId("message"),
+          chatId: body.chatId,
+          role,
+          content: { type: "text", text: m.text },
+        });
+        inserted.push(msg);
+      }
+      sendJson(res, 201, { count: inserted.length });
       return;
     }
 

@@ -50,7 +50,10 @@ export async function listWithLatestMessage(
 ): Promise<ChatWithLastMessage[]> {
   const { rows } = await db.query(
     `SELECT c.*,
-            (SELECT m.content FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
+            (SELECT m.content FROM messages m
+               WHERE m.chat_id = c.id
+                 AND json_extract(m.content, '$.type') NOT IN ('agent_turn', 'summary_request', 'summary')
+               ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
             COALESCE(
               (SELECT m.kind FROM messages m
                  WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'summary')

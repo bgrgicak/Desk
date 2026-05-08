@@ -364,15 +364,50 @@ export const api = createApi({
     // ── Messages (per chat) ───────────────────────────────────────────
     getChatMessages: build.query<
       ListMessagesResponse,
-      { chatId: string; cursor?: string }
+      { chatId: string; cursor?: string; before?: string }
     >({
-      query: ({ chatId, cursor }) => {
-        const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-        return `/chats/${chatId}/messages${qs}`;
+      query: ({ chatId, cursor, before }) => {
+        const params = new URLSearchParams();
+        if (cursor) params.set("cursor", cursor);
+        if (before) params.set("before", before);
+        const qs = params.toString();
+        return `/chats/${chatId}/messages${qs ? `?${qs}` : ""}`;
       },
       providesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
       ],
+      // All pages for the same chatId share a single cache entry so
+      // older pages merge into the existing array.
+      serializeQueryArgs: ({ queryArgs }) => queryArgs.chatId,
+      merge: (existing, incoming, { arg }) => {
+        if (arg.before) {
+          // Loading older messages — prepend to existing items, dedup by id.
+          const existingIds = new Set(existing.items.map((m) => m.id));
+          const newItems = incoming.items.filter(
+            (m) => !existingIds.has(m.id),
+          );
+          existing.items = [...newItems, ...existing.items];
+          // Update prevCursor from the older-page response.
+          existing.prevCursor = incoming.prevCursor;
+        } else if (arg.cursor) {
+          // Forward pagination (not used for scrollback, but keep for
+          // potential forward paging). Append new items.
+          const existingIds = new Set(existing.items.map((m) => m.id));
+          const newItems = incoming.items.filter(
+            (m) => !existingIds.has(m.id),
+          );
+          existing.items = [...existing.items, ...newItems];
+          existing.cursor = incoming.cursor;
+        } else {
+          // Initial load (no cursor/before) — replace entirely.
+          existing.items = incoming.items;
+          existing.cursor = incoming.cursor;
+          existing.prevCursor = incoming.prevCursor;
+        }
+      },
+      forceRefetch: ({ currentArg, previousArg }) => {
+        return currentArg !== previousArg;
+      },
     }),
     postChatMessage: build.mutation<
       ServerMessage,

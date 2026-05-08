@@ -304,7 +304,7 @@ export interface SandboxBindDrift {
 }
 
 export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift[]> {
-  const expectedPrefix = `${home}/Desk/workspaces/`;
+  const expectedPrefix = `${home}/workspaces/`;
   const drift: SandboxBindDrift[] = [];
   try {
     const engine = await detectEngine();

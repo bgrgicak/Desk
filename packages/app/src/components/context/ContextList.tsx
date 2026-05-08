@@ -168,12 +168,18 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
   // Hidden mode pulls the showHidden=true superset directly so we can render
   // dot-prefixed entries that the parent's items prop excludes by default.
-  const { data: libraryResp } = useGetLibraryQuery(
+  const { data: libraryResp, isLoading: internalLoading, isUninitialized: internalUninitialized } = useGetLibraryQuery(
     activeWorkspaceId
       ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) }
       : undefined,
     { skip: !activeWorkspaceId },
   )
+
+  // Treat the list as loading until both the parent AND internal queries have
+  // settled with data.  This closes every gap where `isLoading` (prop) flips
+  // false one render before data has propagated — the empty "Nothing yet"
+  // screen never appears while data is still in flight.
+  const resolvedLoading = isLoading || internalLoading || internalUninitialized || !libraryResp
 
   const effectiveItems: ContextItem[] = useMemo(() => {
     if (!isHiddenMode) return items
@@ -706,7 +712,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
       <ContextMenuTrigger asChild>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {isLoading ? (
+        {resolvedLoading ? (
           <div className="space-y-0.5 pt-1">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 px-3 py-2.5">

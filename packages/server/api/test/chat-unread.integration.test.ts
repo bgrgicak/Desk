@@ -167,8 +167,9 @@ describe("chat unread status", () => {
 
   // ── Internal messages should NOT trigger unread ─────────────────────────────
 
-  it("inserting an agent_turn message does not set unread", async () => {
+  it("inserting an agent_turn message does not set unread or bump updated_at", async () => {
     const chatId = await freshChat();
+    const before = await queries.chats.findById(pool, chatId);
     await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
@@ -176,12 +177,14 @@ describe("chat unread status", () => {
       content: { type: "agent_turn", userMessageId: "msg_placeholder" },
       state: "pending",
     });
-    const chat = await queries.chats.findById(pool, chatId);
-    expect(chat!.unread).toBe(false);
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(before!.updatedAt);
   });
 
-  it("inserting a summary_request message does not set unread", async () => {
+  it("inserting a summary_request message does not set unread or bump updated_at", async () => {
     const chatId = await freshChat();
+    const before = await queries.chats.findById(pool, chatId);
     await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
@@ -190,20 +193,23 @@ describe("chat unread status", () => {
       state: "pending",
       kind: "summary",
     });
-    const chat = await queries.chats.findById(pool, chatId);
-    expect(chat!.unread).toBe(false);
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(before!.updatedAt);
   });
 
-  it("inserting a summary message does not set unread", async () => {
+  it("inserting a summary message does not set unread or bump updated_at", async () => {
     const chatId = await freshChat();
+    const before = await queries.chats.findById(pool, chatId);
     await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
       role: "agent",
       content: { type: "summary", body: "# Chat Summary\nThis is a test." },
     });
-    const chat = await queries.chats.findById(pool, chatId);
-    expect(chat!.unread).toBe(false);
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(before!.updatedAt);
   });
 
   it("internal message does not flip unread back after marking read", async () => {
@@ -236,5 +242,29 @@ describe("chat unread status", () => {
     });
     const chat = await queries.chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
+  });
+
+  // ── lastMessageContent should skip internal messages ────────────────────────
+
+  it("listWithLatestMessage skips internal messages for lastMessageContent", async () => {
+    const chatId = await freshChat();
+    // Insert a visible user message
+    await sendMessage(pool, chatId, { content: "hello from user" }, () => {});
+
+    // Insert a summary message (internal — newer, but should be skipped)
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: { type: "summary", body: "# Summary" },
+    });
+
+    const list = await queries.chats.listWithLatestMessage(pool, workspaceId);
+    const found = list.find((c) => c.id === chatId);
+    expect(found).toBeDefined();
+    // The lastMessageContent should be from the user message, not the summary.
+    // It's the raw JSON string from the DB.
+    const parsed = JSON.parse(found!.lastMessageContent!);
+    expect(parsed.type).not.toBe("summary");
   });
 });

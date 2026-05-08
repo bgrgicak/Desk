@@ -167,6 +167,8 @@ export interface Cursor {
 
 export interface ListMessagesResponse extends Cursor {
   items: ServerMessage[];
+  /** Cursor for loading older messages (scrollback). */
+  prevCursor?: string;
 }
 
 export interface ListLibraryResponse extends Cursor {

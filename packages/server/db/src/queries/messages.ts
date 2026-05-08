@@ -35,46 +35,109 @@ function rowToMessage(row: Record<string, unknown>): Message {
 export interface PaginatedMessages {
   items: Message[];
   nextCursor?: string;
+  /** Cursor pointing backwards (towards older messages). Present when
+   *  `before` was used and there are still older messages. */
+  prevCursor?: string;
 }
 
+/**
+ * Lists messages in a chat with cursor-based pagination.
+ *
+ * Two pagination directions are supported:
+ *
+ * - **Forward (default / `cursor`)**: returns messages *after* the cursor
+ *   in chronological order. The traditional page-forward behaviour.
+ * - **Backward (`before`)**: returns the *newest* `limit` messages whose
+ *   `(created_at, id)` is strictly less than the cursor. Items are
+ *   returned in chronological (ASC) order so the client can prepend them
+ *   without re-sorting. When `before` is omitted and `cursor` is also
+ *   omitted, the query returns the **last** `limit` messages (newest
+ *   page) so the chat opens at the bottom.
+ *
+ * Cursor format: `<createdAtISO>|<id>` (unchanged).
+ */
 export async function listByChat(
   db: Pool,
   chatId: string,
-  opts?: { cursor?: string; limit?: number },
+  opts?: { cursor?: string; before?: string; limit?: number },
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
-  // Cursor is `<createdAtISO>|<id>` so paging stays stable when multiple
-  // messages share a ms-precision timestamp — without the id tiebreaker,
-  // `created_at > cursor` would skip every message that landed in the
-  // same tick as the cursor row.
-  // SQL uses anonymous `?` placeholders bound by textual order. The
-  // params array is built to match: chatId, [cursorIso, cursorId,] limit.
   const params: unknown[] = [chatId];
   let whereClause = "chat_id = ?";
 
+  // ── Backward pagination (scrollback) ───────────────────────────────
+  if (opts?.before) {
+    const sep = opts.before.indexOf("|");
+    const cursorIso = sep === -1 ? opts.before : opts.before.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.before.slice(sep + 1);
+    whereClause += " AND (created_at, id) < (?, ?)";
+    params.push(cursorIso);
+    params.push(cursorId);
+    params.push(limit + 1);
+
+    // Fetch in DESC order so LIMIT clips the *oldest* surplus row, then
+    // reverse to ASC for the caller.
+    const { rows } = await db.query(
+      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      params,
+    );
+
+    const hasMore = rows.length > limit;
+    // Drop the extra row (oldest) and reverse to chronological order.
+    const slice = rows.slice(0, limit).reverse();
+    const items = slice.map(rowToMessage);
+    let prevCursor: string | undefined;
+    if (hasMore && items.length > 0) {
+      const oldest = items[0];
+      prevCursor = `${oldest.createdAt}|${oldest.id}`;
+    }
+    return { items, prevCursor };
+  }
+
+  // ── Forward pagination / initial load ──────────────────────────────
   if (opts?.cursor) {
+    // Traditional forward paging: messages after cursor.
     const sep = opts.cursor.indexOf("|");
     const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
     const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
     whereClause += " AND (created_at, id) > (?, ?)";
     params.push(cursorIso);
     params.push(cursorId);
-  }
-  params.push(limit + 1);
+    params.push(limit + 1);
 
+    const { rows } = await db.query(
+      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
+      params,
+    );
+
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(rowToMessage);
+    let nextCursor: string | undefined;
+    if (hasMore && items.length > 0) {
+      const last = items[items.length - 1];
+      nextCursor = `${last.createdAt}|${last.id}`;
+    }
+    return { items, nextCursor };
+  }
+
+  // No cursor at all → return the *last* `limit` messages (newest page)
+  // so the chat opens at the bottom. Include a prevCursor when there are
+  // older messages.
+  params.push(limit + 1);
   const { rows } = await db.query(
-    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
+    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
     params,
   );
 
   const hasMore = rows.length > limit;
-  const items = rows.slice(0, limit).map(rowToMessage);
-  let nextCursor: string | undefined;
+  const slice = rows.slice(0, limit).reverse();
+  const items = slice.map(rowToMessage);
+  let prevCursor: string | undefined;
   if (hasMore && items.length > 0) {
-    const last = items[items.length - 1];
-    nextCursor = `${last.createdAt}|${last.id}`;
+    const oldest = items[0];
+    prevCursor = `${oldest.createdAt}|${oldest.id}`;
   }
-  return { items, nextCursor };
+  return { items, prevCursor };
 }
 
 /**
@@ -202,21 +265,17 @@ export async function insert(
       data.title ?? null,
     ],
   );
-  // Touch the parent chat's updated_at. Internal messages (summaries,
-  // summary requests, agent_turn triggers) should not flip unread — they
-  // are not visible to regular users and would create noise in the
-  // sidebar's unread dot.
+  // Internal messages (summaries, summary requests, agent_turn triggers)
+  // are not visible to regular users and should not flip unread or bump
+  // updated_at — either change would create noise in the sidebar (unread
+  // dot, reordering). Dev-mode users can see some of these but should get
+  // the same treatment: no false unread signals.
   const contentType = (data.content as { type?: string } | null)?.type;
   const isInternal =
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
     contentType === "summary";
-  if (isInternal) {
-    await db.query(
-      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-      [data.chatId],
-    );
-  } else {
+  if (!isInternal) {
     await db.query(
       "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
       [data.chatId],

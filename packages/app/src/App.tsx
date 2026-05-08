@@ -424,7 +424,12 @@ function AppInner() {
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
   const unreadCount = awaitingResp?.items.length ?? 0
 
-  const { data: libraryResp, isLoading: libraryLoading } = useGetLibraryQuery(
+  const {
+    data: libraryResp,
+    isLoading: libraryLoading,
+    isUninitialized: libraryUninitialized,
+    isFetching: libraryFetching,
+  } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },
   )
@@ -677,7 +682,7 @@ function AppInner() {
         {!selectedContextItem && !activeChat && activeView === 'context' && !effectiveItemPath && (
           <ContextList
             items={libraryItems}
-            isLoading={libraryLoading || !libraryResp}
+            isLoading={libraryLoading || libraryUninitialized || !libraryResp || (libraryFetching && libraryItems.length === 0)}
             onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
             onPinItem={(item) => {
