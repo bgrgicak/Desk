@@ -132,9 +132,20 @@ test("recurring task: poll loop fires it and keeps it pending with advanced exec
     )
     .toBe(true);
 
-  // Recurring task: must stay pending with executeAt advanced to the future.
-  const task = await findMessage(serverUrl, token, chatId, taskId);
-  expect(task?.state).toBe("pending");
-  expect(task?.executeAt).toBeDefined();
-  expect(new Date(task!.executeAt!).getTime()).toBeGreaterThan(Date.now());
+  // Recurring task: the child appears when execution starts, so poll until
+  // the parent is re-queued with executeAt advanced to the future.
+  await expect
+    .poll(
+      async () => {
+        const task = await findMessage(serverUrl, token, chatId, taskId);
+        return {
+          state: task?.state,
+          executeAtInFuture: task?.executeAt
+            ? new Date(task.executeAt).getTime() > Date.now()
+            : false,
+        };
+      },
+      { timeout: 12_000, intervals: [200, 500, 1000, 1000, 2000] },
+    )
+    .toEqual({ state: "pending", executeAtInFuture: true });
 });
