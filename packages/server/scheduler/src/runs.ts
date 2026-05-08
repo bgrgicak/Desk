@@ -20,6 +20,7 @@ import {
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   productionReflectWorkspace,
+  resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
@@ -64,6 +65,7 @@ function computeNextRun(cronExpr: string): string {
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
+  const home = opts.home ?? resolveDeskHome();
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
@@ -82,7 +84,6 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
-    const home = resolveDeskHome();
     const dir = path.join(home, workspaceSlug, ".chats", chatId, "logs");
     await fsp.mkdir(dir, { recursive: true });
     return dir;
@@ -379,11 +380,12 @@ export function createRunManager(opts: RunManagerOptions) {
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
     const providerKeys = userId
-      ? await queries.userSettings.getProviderKeys(pool, userId)
+      ? await queries.userSettings.getActiveProviderKeys(pool, userId)
       : {};
+    const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
-      home: opts.home ?? resolveDeskHome(),
+      home,
       date: yesterdayDateLocal(),
       workspaceId,
       workspaceSlug,
@@ -393,6 +395,7 @@ export function createRunManager(opts: RunManagerOptions) {
       userTimezone,
       agent: { id: agent.id, name: agent.name, model: agent.model },
       providerKeys,
+      extraEnv,
       reflectWorkspace: opts.reflectWorkspace ?? productionReflectWorkspace,
       reflectOnEmptyActivity: manual,
     });
@@ -539,13 +542,19 @@ export function createRunManager(opts: RunManagerOptions) {
       logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId
-        ? await queries.userSettings.getProviderKeys(pool, userId)
+        ? await queries.userSettings.getActiveProviderKeys(pool, userId)
         : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
         );
       }
+      // Codex/ChatGPT bridge: when the user has opted in and the host has a
+      // valid `~/.codex/auth.json`, translate it to OpenCode's auth blob and
+      // forward it as OPENCODE_AUTH_CONTENT. Re-read per run so a refresh on
+      // the host (interactive `codex` use) propagates without recreating the
+      // sandbox.
+      const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
       const agent = await queries.agents.findById(pool, agentId);
       const agentFileInput: AgentFileInput = {
         agentId,
@@ -562,7 +571,6 @@ export function createRunManager(opts: RunManagerOptions) {
       if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
-        const home = resolveDeskHome();
         if (msg.content.type === "reflection_request") {
           const reflected = await fireReflectionTask(
             msg,
@@ -579,7 +587,7 @@ export function createRunManager(opts: RunManagerOptions) {
         } else {
           const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
           ? { containerId: "fake-sandbox", workspaceId }
-          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
+          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
           result = await runtimeExecRun(pool, handle, {
             runId,
             prompt,
@@ -590,6 +598,7 @@ export function createRunManager(opts: RunManagerOptions) {
             agent: agentFileInput,
             attachments,
             providerKeys,
+            extraEnv,
             onLog,
           });
         }
@@ -626,7 +635,6 @@ export function createRunManager(opts: RunManagerOptions) {
             const prevRow = prev.rows[0] as { id: string; content: string };
             const parsed = JSON.parse(prevRow.content) as { body?: string };
             if (typeof parsed.body === "string") {
-              const home = resolveDeskHome();
               await snapshotSummary(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
@@ -651,7 +659,6 @@ export function createRunManager(opts: RunManagerOptions) {
         // source of truth.
         if (content.type === "summary") {
           const { materializeSummary } = await import("@agent-desk/storage");
-          const home = resolveDeskHome();
           await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child });

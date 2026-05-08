@@ -24,6 +24,8 @@ const APP_ROOT = path.resolve(__dirname, "..", "..");
 interface StoredHandle {
   server: { pid: number; url: string; dbPath: string; home: string };
   vite: { pid: number; url: string };
+  /** Path the spawned server reads for its host-managed Codex auth file. */
+  codexAuthPath: string;
 }
 
 function pickFreePort(): Promise<number> {
@@ -120,6 +122,16 @@ async function startVite(
 }
 
 export async function globalSetup(): Promise<void> {
+  // Pin the Codex auth path to a per-run tmp file so e2e tests can write
+  // deterministic auth blobs without touching the developer's real
+  // ~/.codex/auth.json (which would otherwise leak through `...process.env`).
+  // The file does not need to exist up front — `getCodexAuthStatus` returns
+  // `available: false` when missing, which is the expected default state.
+  process.env.DESK_CODEX_AUTH_PATH = path.join(
+    os.tmpdir(),
+    `desk-app-e2e-codex-auth-${Date.now()}.json`,
+  );
+
   const server = await startDeskServer({
     username: "e2e",
     password: "e2e",
@@ -149,6 +161,7 @@ export async function globalSetup(): Promise<void> {
       home: server.home,
     },
     vite: { pid: viteProc.pid ?? -1, url: viteUrl },
+    codexAuthPath: process.env.DESK_CODEX_AUTH_PATH!,
   };
   await fs.writeFile(HANDLE_FILE, JSON.stringify(handle), "utf8");
   // Let the test fixtures find the URLs.

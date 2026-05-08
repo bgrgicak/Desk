@@ -20,6 +20,7 @@ vi.mock("../src/providerKeys.js", () => ({
 
 vi.mock("@agent-desk/runtime", () => ({
   listModels: vi.fn(),
+  resolveLocalSourceEnv: vi.fn(async () => ({})),
   SandboxExecError: class SandboxExecError extends Error {
     exitCode: number;
     stderr: string;
@@ -34,7 +35,7 @@ vi.mock("@agent-desk/runtime", () => ({
 import { queries } from "@agent-desk/db";
 import { resolveProviderKeys } from "../src/providerKeys.js";
 import { listModels as runtimeListModels } from "@agent-desk/runtime";
-import { listModels } from "../src/routes/tools.js";
+import { listModels, relabelOpenAiBySource } from "../src/routes/tools.js";
 
 const fakePool = {} as never;
 const fakeWorkspace = { id: "wks_test", path: "desk", user_id: "usr_1", name: "Desk" };
@@ -73,7 +74,46 @@ describe("listModels — decryption failure fallback", () => {
     expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
       provider: undefined,
       providerKeys: {},
+      env: {},
     });
+  });
+});
+
+describe("relabelOpenAiBySource — Codex vs OpenAI auth labeling", () => {
+  const models = [
+    { id: "opencode/big-pickle", provider: "opencode" },
+    { id: "openai/gpt-5.4", provider: "openai" },
+    { id: "openai/gpt-5.4-mini", provider: "openai" },
+    { id: "anthropic/claude-4-7", provider: "anthropic" },
+  ];
+
+  it("relabels openai/* → codex when only Codex env is present", () => {
+    const out = relabelOpenAiBySource(models, {}, { OPENCODE_AUTH_CONTENT: "blob" });
+    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("codex");
+    expect(out.find((m) => m.id === "openai/gpt-5.4-mini")?.provider).toBe("codex");
+    // Non-openai providers are untouched.
+    expect(out.find((m) => m.id === "anthropic/claude-4-7")?.provider).toBe("anthropic");
+    expect(out.find((m) => m.id === "opencode/big-pickle")?.provider).toBe("opencode");
+  });
+
+  it("keeps openai/* labeled as openai when an API key is set, even with Codex enabled", () => {
+    const out = relabelOpenAiBySource(
+      models,
+      { OPENAI_API_KEY: "sk-xxx" },
+      { OPENCODE_AUTH_CONTENT: "blob" },
+    );
+    // Cloud key takes precedence — user explicitly opted into billing.
+    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
+  });
+
+  it("is a no-op when neither source is active", () => {
+    const out = relabelOpenAiBySource(models, {}, {});
+    expect(out).toBe(models);
+  });
+
+  it("treats an empty OPENCODE_AUTH_CONTENT string as inactive", () => {
+    const out = relabelOpenAiBySource(models, {}, { OPENCODE_AUTH_CONTENT: "" });
+    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
   });
 });
 
@@ -88,6 +128,22 @@ describe("listModels — happy path", () => {
     expect(models.some((m) => m.provider === "openai")).toBe(true);
   });
 
+  it("relabels openai/* models as 'codex' when only Codex is the active OpenAI source", async () => {
+    vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
+    vi.mocked(resolveProviderKeys).mockResolvedValue({});
+    const { resolveLocalSourceEnv } = await import("@agent-desk/runtime");
+    vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
+      .mockResolvedValue({ OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" });
+    vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
+
+    const models = await listModels(fakePool, { userId: "usr_1" });
+    const openai = models.filter((m) => m.id.startsWith("openai/"));
+    expect(openai.length).toBeGreaterThan(0);
+    expect(openai.every((m) => m.provider === "codex")).toBe(true);
+    // The model `id` is left untouched so OpenCode still resolves it.
+    expect(openai.every((m) => m.id.startsWith("openai/"))).toBe(true);
+  });
+
   it("filters by provider", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
@@ -99,6 +155,7 @@ describe("listModels — happy path", () => {
     expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
       provider: "opencode",
       providerKeys: {},
+      env: {},
     });
   });
 });

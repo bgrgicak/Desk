@@ -20,6 +20,11 @@ export interface ListModelsOptions {
   timeoutMs?: number;
   /** Provider API keys to inject when the sandbox is first created. */
   providerKeys?: Record<string, string>;
+  /**
+   * Extra env vars (typically from local sources — Codex, LM Studio, Ollama)
+   * forwarded into the `opencode models` exec so those providers light up.
+   */
+  env?: Record<string, string>;
 }
 
 export class SandboxExecError extends Error {
@@ -55,6 +60,7 @@ export async function listModels(
     argv,
     timeoutMs: opts.timeoutMs ?? 15_000,
     providerKeys: opts.providerKeys,
+    env: opts.env,
   });
 
   if (result.exitCode !== 0) {

@@ -88,6 +88,10 @@ export async function ensureImage(): Promise<void> {
  * `providerKeys` is an optional map of AI-provider credentials to inject as
  * env vars. When omitted the function falls back to reading the host env —
  * that legacy path is what tests without DB access use.
+ *
+ * `extraEnv` carries non-key env vars (e.g. `OPENCODE_AUTH_CONTENT` for the
+ * Codex/ChatGPT bridge) that should be present at container birth so the
+ * first opencode invocation has the auth blob already wired up.
  */
 export async function createOrReuse(
   workspaceId: string,
@@ -95,6 +99,7 @@ export async function createOrReuse(
   home?: string,
   providerKeys?: Record<string, string>,
   mountPlan?: MountPlan,
+  extraEnv?: Record<string, string>,
 ): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
@@ -142,7 +147,7 @@ export async function createOrReuse(
       // writes owned by the host user on rootful Docker.
       user: expectedUser,
       env: [
-        ...providerKeyEnv(providerKeys),
+        ...providerKeyEnv(providerKeys, extraEnv),
         `DESK_SANDBOX_AGENT_USER=${agentUser}`,
       ],
       labels: {
@@ -275,15 +280,28 @@ function parseBindStrings(strings: string[]): BindMount[] {
  * the host process env — a legacy path for tests and dev flows that haven't
  * moved to DB-backed keys yet.
  *
+ * `extraEnv` is emitted as-is, bypassing the PROVIDER_KEY_VARS allowlist.
+ * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which
+ * carry their own validation contract (the value is an opaque OAuth blob,
+ * not a per-provider key name).
+ *
  * Only keys with non-empty values are emitted, so opencode's auto-detection
  * doesn't light up empty providers.
  */
-export function providerKeyEnv(keys?: Record<string, string>): string[] {
+export function providerKeyEnv(
+  keys?: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): string[] {
   const out: string[] = [];
   const source: Record<string, string | undefined> = keys ?? process.env;
   for (const name of PROVIDER_KEY_VARS) {
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
+  }
+  if (extraEnv) {
+    for (const [name, value] of Object.entries(extraEnv)) {
+      if (value && value.length > 0) out.push(`${name}=${value}`);
+    }
   }
   return out;
 }

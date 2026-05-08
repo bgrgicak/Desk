@@ -15,6 +15,8 @@ describe("OpenAPI spec", () => {
       "/me",
       "/me/password",
       "/me/providers",
+      "/me/providers/local",
+      "/me/providers/local/{kind}",
       "/workspaces",
       "/workspaces/{id}",
       "/workspaces/{id}/agents",

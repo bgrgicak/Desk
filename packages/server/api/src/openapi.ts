@@ -153,6 +153,66 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
+      "/me/providers/local": {
+        get: {
+          summary: "List host-detected local sources",
+          description: "Returns every registered local source (Codex CLI auth today; LM Studio / Ollama in the future) with its detection status and the user's per-source opt-in flag.",
+          responses: {
+            "200": {
+              description: "Local source array",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      sources: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            kind: { type: "string" },
+                            available: { type: "boolean" },
+                            enabled: { type: "boolean" },
+                            reason: { type: "string" },
+                            detail: { type: "object", additionalProperties: true },
+                          },
+                          required: ["kind", "available", "enabled"],
+                        },
+                      },
+                    },
+                    required: ["sources"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/me/providers/local/{kind}": {
+        put: {
+          summary: "Toggle a local source's per-user opt-in",
+          parameters: [
+            { name: "kind", in: "path", required: true, schema: { type: "string" }, description: "Local source kind, e.g. 'codex'." },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { enabled: { type: "boolean" } },
+                  required: ["enabled"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Updated source state" },
+            "400": { description: "Missing or non-boolean enabled" },
+            "404": { description: "Unknown source kind" },
+          },
+        },
+      },
       "/workspaces": {
         get: { summary: "List workspaces", responses: { "200": { description: "Workspace array" } } },
         post: {

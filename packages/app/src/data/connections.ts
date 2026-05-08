@@ -6,7 +6,7 @@
 // until a backend lands — there is no mock data seeded.
 
 export type ConnectionKind =
-  | 'claude' | 'chatgpt'
+  | 'claude' | 'chatgpt' | 'codex'
   | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
 
 export interface ConnectionMeta {
@@ -19,6 +19,7 @@ export interface ConnectionMeta {
 export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
   'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API',  icon: '🅰️' },
   'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',     icon: '🅶' },
+  'codex':        { name: 'Codex',        description: 'OpenAI models via your ChatGPT subscription (Codex on this machine)', icon: '🌀' },
   'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',              icon: '📁' },
   'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
   'github':       { name: 'GitHub',       description: 'Repositories and issues',              icon: '🐙' },
@@ -28,12 +29,26 @@ export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
   'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
 }
 
-// Maps a provider-style connection kind to the env key in /me/providers
-// where its API key is persisted. Kinds not in this map have no backend
-// yet and stay disabled in the picker.
+// Maps a cloud connection kind to the env key in /me/providers where its
+// API key is persisted. Kinds not in this map have no cloud backend yet
+// and stay disabled in the picker. Local-source kinds (`codex`, future
+// `lm-studio`, `ollama`, …) are handled separately — see
+// `LOCAL_SOURCE_KINDS` and the /me/providers/local endpoints.
 export const PROVIDER_KEY_BY_KIND: Partial<Record<ConnectionKind, string>> = {
   claude: 'ANTHROPIC_API_KEY',
   chatgpt: 'OPENAI_API_KEY',
+}
+
+/**
+ * Connection kinds that are host-detected rather than API-key-backed.
+ * The server reports their detection state via /me/providers/local; the
+ * UI surfaces them as connections with a server-persisted enable toggle
+ * and no API-key form.
+ */
+export const LOCAL_SOURCE_KINDS: readonly ConnectionKind[] = ['codex']
+
+export function isLocalSourceKind(kind: ConnectionKind): boolean {
+  return (LOCAL_SOURCE_KINDS as readonly string[]).includes(kind)
 }
 
 export interface Connection {

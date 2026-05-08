@@ -14,6 +14,8 @@ export { expect };
 interface Fixtures {
   serverUrl: string;
   serverHome: string;
+  /** Path the spawned server reads for its host-managed Codex auth file. */
+  codexAuthPath: string;
   token: string;
   loggedInPage: import("@playwright/test").Page;
 }
@@ -21,6 +23,7 @@ interface Fixtures {
 interface Handle {
   server: { url: string; home: string };
   vite: { url: string };
+  codexAuthPath: string;
 }
 
 function readHandle(): Handle {
@@ -43,6 +46,10 @@ export const test = base.extend<Fixtures>({
 
   serverHome: async ({}, use) => {
     await use(readHandle().server.home);
+  },
+
+  codexAuthPath: async ({}, use) => {
+    await use(readHandle().codexAuthPath);
   },
 
   token: async ({ serverUrl }, use) => {
