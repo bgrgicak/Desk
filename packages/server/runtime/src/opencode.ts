@@ -27,6 +27,11 @@ export interface ExecRunOptions {
   apiUrl?: string;
   /** Provider API keys forwarded into every exec so they're always current. */
   providerKeys?: Record<string, string>;
+  /**
+   * Non-key env entries forwarded into every exec — currently used for the
+   * Codex/ChatGPT bridge (`OPENCODE_AUTH_CONTENT`).
+   */
+  extraEnv?: Record<string, string>;
   onLog: (event: LogEvent) => void;
 }
 
@@ -107,6 +112,7 @@ export async function execRun(
       sandboxToken: token,
       apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
       providerKeys: opts.providerKeys,
+      extraEnv: opts.extraEnv,
       onLog: opts.onLog,
     });
     return result;

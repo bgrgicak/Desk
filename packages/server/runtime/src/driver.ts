@@ -43,6 +43,12 @@ export interface RunOptions {
    */
   providerKeys?: Record<string, string>;
   /**
+   * Non-key env vars (e.g. `OPENCODE_AUTH_CONTENT`) injected on every exec.
+   * Re-read per run so a refreshed Codex token on the host propagates without
+   * having to recreate the sandbox.
+   */
+  extraEnv?: Record<string, string>;
+  /**
    * Per-run sandbox session token. The driver passes it into the container
    * as `DESK_SANDBOX_TOKEN`; the in-sandbox `desk` CLI forwards it to the
    * REST API as `X-Desk-Sandbox-Token`. Omit in fake-driver tests that
@@ -166,7 +172,14 @@ function createRealDriver(): SandboxDriver {
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
-      const handle = await createOrReuse(workspaceId, opts.workspaceSlug, opts.home, opts.providerKeys);
+      const handle = await createOrReuse(
+        workspaceId,
+        opts.workspaceSlug,
+        opts.home,
+        opts.providerKeys,
+        undefined,
+        opts.extraEnv,
+      );
 
       // The system prompt — including the per-chat artifact paths and the
       // user's goal fragment — lives entirely in the OpenCode agent file
@@ -195,7 +208,7 @@ function createRealDriver(): SandboxDriver {
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
           // Inject provider keys per-exec so a key added after the container
           // was created takes effect immediately without recreation.
-          ...providerKeyEnv(opts.providerKeys),
+          ...providerKeyEnv(opts.providerKeys, opts.extraEnv),
         ],
       });
 

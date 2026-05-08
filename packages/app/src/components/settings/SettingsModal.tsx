@@ -48,6 +48,8 @@ import {
   usePutProviderKeysMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
+  useGetLocalSourcesQuery,
+  usePutLocalSourceMutation,
   useGetMeQuery,
   type ModelRef,
 } from '@/store/api'
@@ -55,9 +57,33 @@ import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
   PROVIDER_KEY_BY_KIND,
+  isLocalSourceKind,
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
+
+interface LocalSourceState {
+  kind: string
+  available: boolean
+  enabled: boolean
+  reason?: string
+  detail?: Record<string, string | number | boolean>
+}
+
+/**
+ * Per-kind copy for the unavailable-source state. The set of recognised
+ * reasons grows as we register more local sources; falling back to a
+ * generic "not detected" message keeps the UI safe for unknown reasons.
+ */
+function describeLocalSourceReason(kind: string, reason: string | undefined): string {
+  if (kind === 'codex') {
+    if (reason === 'missing') return 'No `~/.codex/auth.json` was found on this machine. Run `codex` and sign in to your ChatGPT account.'
+    if (reason === 'wrong_mode') return 'Codex is configured with an API key, not a ChatGPT subscription. Sign in via `codex` with your ChatGPT account.'
+    if (reason === 'no_tokens' || reason === 'invalid') return 'The Codex auth file is incomplete or invalid. Re-run `codex` to refresh it.'
+    if (reason === 'expired_no_refresh') return 'The Codex tokens are expired and cannot be refreshed. Re-run `codex` to sign back in.'
+  }
+  return 'Not detected on this machine.'
+}
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { PreferenceRow } from '@/components/settings/shared'
@@ -118,39 +144,64 @@ const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
 ]
 
 // Provider id → brand glyph kind. Anything not in the map renders the
-// generic muted square.
+// generic muted square. `codex` is the Codex-via-ChatGPT-subscription path
+// for OpenAI models — distinct from the API-key-backed `openai` provider.
 function brandKindForProvider(provider: string): ConnectionKind | null {
   if (provider === 'anthropic') return 'claude'
   if (provider === 'openai')    return 'chatgpt'
+  if (provider === 'codex')     return 'codex'
   return null
 }
 
 // Connection kinds that the picker can actually configure (i.e. we have a
 // backend to persist them). Other catalog entries appear in the picker
-// but are disabled.
-function isFunctionalKind(kind: ConnectionKind): boolean {
+// but are disabled. Local-source kinds (Codex, future LM Studio / Ollama)
+// count as functional only when the host has them available; cloud kinds
+// count as functional whenever they have a registered env-key mapping.
+function isFunctionalKind(
+  kind: ConnectionKind,
+  localSources: Record<string, LocalSourceState>,
+): boolean {
+  if (isLocalSourceKind(kind)) return localSources[kind]?.available === true
   return PROVIDER_KEY_BY_KIND[kind] !== undefined
 }
 
-// Build the connections list from the persisted provider keys. Only
-// kinds whose key is set show up — we don't fake "Claude is connected"
-// when no key has been saved. Custom display names come from providerMeta.
+// Build the connections list from the persisted provider keys + every
+// host-detected local source. Cloud (API-key) kinds show up once their
+// key is saved; local-source kinds show up whenever the host has them
+// available, and their switch reflects the per-user server-side opt-in.
+// Custom display names come from providerMeta (cloud only).
 function deriveConnections(
   providerKeys: Record<string, string | null>,
-  providerMeta: Record<string, { name?: string }>,
+  providerMeta: Record<string, { name?: string; enabled?: boolean }>,
+  localSources: Record<string, LocalSourceState>,
 ): Connection[] {
   const out: Connection[] = []
   for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
     if (providerKeys[envKey]) {
       const catalogMeta = CONNECTION_CATALOG[kind]
-      const customName = providerMeta[envKey]?.name
+      const entry = providerMeta[envKey]
       out.push({
         id: `conn-${kind}`,
         kind,
-        name: customName || catalogMeta.name,
-        enabled: true,
+        name: entry?.name || catalogMeta.name,
+        // The flag is opt-out: omitted/`true` = on. Disable persists via
+        // providersMeta and is honored server-side when forwarding keys
+        // to the sandbox.
+        enabled: entry?.enabled !== false,
       })
     }
+  }
+  for (const [kind, source] of Object.entries(localSources) as [ConnectionKind, LocalSourceState][]) {
+    if (!source.available) continue
+    const catalogMeta = CONNECTION_CATALOG[kind]
+    if (!catalogMeta) continue
+    out.push({
+      id: `conn-${kind}`,
+      kind,
+      name: catalogMeta.name,
+      enabled: source.enabled === true,
+    })
   }
   return out
 }
@@ -421,6 +472,7 @@ type AgentsFocus =
 function providerLabel(provider: string): string {
   if (provider === 'anthropic') return 'Claude'
   if (provider === 'openai')    return 'ChatGPT'
+  if (provider === 'codex')     return 'Codex'
   if (provider === 'opencode')  return 'OpenCode'
   return provider
 }
@@ -810,9 +862,10 @@ function ConnectionsList({
 }
 
 function ConnectionsPicker({
-  configuredKinds, onPick,
+  configuredKinds, localSources, onPick,
 }: {
   configuredKinds: Set<ConnectionKind>
+  localSources: Record<string, LocalSourceState>
   onPick: (kind: ConnectionKind) => void
 }) {
   const [search, setSearch] = useState('')
@@ -832,14 +885,15 @@ function ConnectionsPicker({
       ) : (
         <div className="grid grid-cols-3 gap-3">
           {entries.map(([kind, meta], i) => {
-            const functional = isFunctionalKind(kind)
+            const functional = isFunctionalKind(kind, localSources)
             const alreadyAdded = configuredKinds.has(kind)
             const disabled = !functional || alreadyAdded
+            const localKind = isLocalSourceKind(kind)
             const badge = !functional
-              ? 'Coming soon'
+              ? (localKind ? 'Not detected' : 'Coming soon')
               : alreadyAdded
                 ? 'Added'
-                : null
+                : (localKind ? 'Detected' : null)
             return (
               <motion.button
                 key={kind}
@@ -877,19 +931,22 @@ function ConnectionsPicker({
 }
 
 function ConnectionDetail({
-  connections, focus, providerKeys, providerMeta, busySaveKey, busySaveMeta,
-  onSave, onCancel, onDelete, onSaveProviderKey,
+  connections, focus, providerKeys, providerMeta, localSource, busySaveKey, busySaveMeta, busyLocalSource,
+  onSave, onCancel, onDelete, onSaveProviderKey, onToggleLocalSource,
 }: {
   connections: Connection[]
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   providerKeys: Record<string, string | null>
   providerMeta: Record<string, { name?: string }>
+  localSource: LocalSourceState | undefined
   busySaveKey: boolean
   busySaveMeta: boolean
+  busyLocalSource: boolean
   onSave: (c: Connection) => void
   onCancel: () => void
   onDelete: (id: string) => void
   onSaveProviderKey: (envKey: string, value: string) => void
+  onToggleLocalSource: (kind: string, enabled: boolean) => void
 }) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
   const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
@@ -935,6 +992,80 @@ function ConnectionDetail({
 
   const [deleteOpen, setDeleteOpen] = useState(false)
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
+
+  if (isLocalSourceKind(kind)) {
+    const detail = localSource?.detail ?? {}
+    const email = typeof detail.email === 'string' ? detail.email : undefined
+    const plan = typeof detail.plan === 'string' ? detail.plan : undefined
+    const expMs = typeof detail.expiresAt === 'number' ? detail.expiresAt : undefined
+    const expiry = expMs ? new Date(expMs) : undefined
+    const reasonLabel = describeLocalSourceReason(kind, localSource?.reason)
+    return (
+      <div className="flex-1 flex flex-col min-h-0">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+          <div className="flex items-center gap-3">
+            <ConnectionGlyph kind={kind} size="lg" />
+            <div>
+              <p className="text-sm font-medium">{catalogMeta.name}</p>
+              <p className="text-xs text-muted-foreground">{catalogMeta.description}</p>
+            </div>
+          </div>
+
+          <Field
+            label="Status"
+            help={`Desk detects this source on the host at run time and forwards it to the sandbox — no API key required.`}
+          >
+            {localSource?.available ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                <p>Detected on this machine{email ? ` — ${email}` : ''}.</p>
+                {(plan || expiry) && (
+                  <p className="text-xs text-muted-foreground">
+                    {plan ? `Plan: ${plan}` : ''}
+                    {plan && expiry ? ' · ' : ''}
+                    {expiry ? `Token expires ${expiry.toLocaleString()}` : ''}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
+                {reasonLabel}
+              </div>
+            )}
+          </Field>
+
+          <Field
+            label="Use in sandboxes"
+            help="When enabled, Desk forwards this source's auth/credentials to OpenCode so it can call its models from inside the sandbox."
+          >
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={localSource?.enabled === true}
+                disabled={!localSource?.available || busyLocalSource}
+                onCheckedChange={(next) => onToggleLocalSource(kind, next)}
+                aria-label={`Toggle ${catalogMeta.name} in sandboxes`}
+                data-testid={`local-source-toggle-${kind}`}
+              />
+              <span className="text-xs text-muted-foreground">
+                {busyLocalSource ? 'Saving…' : localSource?.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+          </Field>
+        </div>
+
+        <div
+          className={cn(
+            'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+            scrolledUnder && 'border-border',
+          )}
+        >
+          <div />
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={onCancel}>Close</Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -1271,26 +1402,32 @@ export function SettingsModal({
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
   const { data: providersMeta } = useGetProvidersMetaQuery()
   const [putProvidersMeta, { isLoading: savingMeta }] = usePutProvidersMetaMutation()
+  const { data: localSourcesData } = useGetLocalSourcesQuery()
+  const [putLocalSource, { isLoading: savingLocalSource }] = usePutLocalSourceMutation()
 
   const providerKeysMap = providerKeys ?? {}
   const providersMetaMap = providersMeta ?? {}
+  const localSourcesByKind = useMemo<Record<string, LocalSourceState>>(() => {
+    const map: Record<string, LocalSourceState> = {}
+    for (const s of localSourcesData?.sources ?? []) map[s.kind] = s as LocalSourceState
+    return map
+  }, [localSourcesData])
   const connections = useMemo(
-    () => deriveConnections(providerKeysMap, providersMetaMap),
-    [providerKeysMap, providersMetaMap],
+    () => deriveConnections(providerKeysMap, providersMetaMap, localSourcesByKind),
+    [providerKeysMap, providersMetaMap, localSourcesByKind],
   )
   const configuredKinds = useMemo(
     () => new Set(connections.map(c => c.kind)),
     [connections],
   )
 
-  // Per-workspace availability for connections is local-only for now —
-  // a key being saved means the connection exists, this toggle gates
-  // whether agents in this workspace see it. State resets on remount.
-  const [connectionsDisabledLocal, setConnectionsDisabledLocal] = useState<Set<string>>(new Set())
-  const connectionsView = useMemo(
-    () => connections.map(c => ({ ...c, enabled: !connectionsDisabledLocal.has(c.id) })),
-    [connections, connectionsDisabledLocal],
-  )
+  // The "enabled" flag is server state for every kind: API-key kinds
+  // store it in provider_meta[envKey].enabled; local-source kinds (Codex,
+  // future LM Studio / Ollama) store it via /me/providers/local. The
+  // runtime filters disabled providers before forwarding keys to the
+  // sandbox, so toggling actually hides the provider from the model
+  // picker (not just from this list).
+  const connectionsView = connections
 
   const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
   const [connectionsSearch, setConnectionsSearch]             = useState('')
@@ -1302,6 +1439,19 @@ export function SettingsModal({
   }
 
   const handleSaveConnection = async (conn: Connection) => {
+    // Local sources (Codex, future LM Studio / Ollama) are host-managed —
+    // there is no API key, no display name. Picking one from the picker
+    // is the user's opt-in signal.
+    if (isLocalSourceKind(conn.kind)) {
+      try {
+        await putLocalSource({ kind: conn.kind, enabled: true }).unwrap()
+      } catch (err) {
+        toast.error(`Could not enable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
+        return
+      }
+      setConnectionsFocus(null)
+      return
+    }
     // Persist the display name to /me/providers/meta if this is a
     // functional (API-key-backed) connection kind.
     const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
@@ -1322,12 +1472,25 @@ export function SettingsModal({
   const handleDeleteConnection = async (id: string) => {
     const conn = connections.find(c => c.id === id)
     if (!conn) { setConnectionsFocus(null); return }
+    if (isLocalSourceKind(conn.kind)) {
+      try {
+        await putLocalSource({ kind: conn.kind, enabled: false }).unwrap()
+      } catch (err) {
+        toast.error(`Could not disable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
+        return
+      }
+      setConnectionsFocus(null)
+      return
+    }
     const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
     if (envKey) {
       try {
-        // Sending an empty string clears the key on the server — the row
-        // disappears from the list because deriveConnections() drops it.
-        await putProviderKeys({ [envKey]: '' }).unwrap()
+        // null deletes the key server-side; "" would store an empty string
+        // and the masked echo keeps the row visible.
+        await putProviderKeys({ [envKey]: null }).unwrap()
+        // Drop any persisted display name so re-adding the connection
+        // starts from the catalog default.
+        await putProvidersMeta({ [envKey]: null }).unwrap()
       } catch (err) {
         toast.error('Could not remove connection', { description: describeApiError(err) })
         return
@@ -1336,12 +1499,36 @@ export function SettingsModal({
     setConnectionsFocus(null)
   }
 
+  const handleToggleLocalSource = async (kind: string, enabled: boolean) => {
+    try {
+      await putLocalSource({ kind, enabled }).unwrap()
+    } catch (err) {
+      toast.error('Could not update connection', { description: describeApiError(err) })
+    }
+  }
+
   const handleToggleConnectionEnabled = (id: string) => {
-    setConnectionsDisabledLocal(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+    const conn = connections.find(c => c.id === id)
+    if (!conn) return
+    if (isLocalSourceKind(conn.kind)) {
+      const next = !(localSourcesByKind[conn.kind]?.enabled === true)
+      void putLocalSource({ kind: conn.kind, enabled: next })
+        .unwrap()
+        .catch((err) => toast.error(
+          next ? 'Could not enable connection' : 'Could not disable connection',
+          { description: describeApiError(err) },
+        ))
+      return
+    }
+    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    if (!envKey) return
+    const next = !conn.enabled
+    void putProvidersMeta({ [envKey]: { enabled: next } })
+      .unwrap()
+      .catch((err) => toast.error(
+        next ? 'Could not enable connection' : 'Could not disable connection',
+        { description: describeApiError(err) },
+      ))
   }
 
   const handleSaveProviderKey = async (envKey: string, value: string) => {
@@ -1562,6 +1749,7 @@ export function SettingsModal({
               ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
                 <ConnectionsPicker
                   configuredKinds={configuredKinds}
+                  localSources={localSourcesByKind}
                   onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
                 />
               ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
@@ -1570,12 +1758,20 @@ export function SettingsModal({
                   focus={connectionsFocus}
                   providerKeys={providerKeysMap}
                   providerMeta={providersMetaMap}
+                  localSource={(() => {
+                    const k = connectionsFocus.mode === 'edit'
+                      ? connectionsView.find(c => c.id === connectionsFocus.id)?.kind
+                      : connectionsFocus.kind
+                    return k ? localSourcesByKind[k] : undefined
+                  })()}
                   busySaveKey={savingKey}
                   busySaveMeta={savingMeta}
+                  busyLocalSource={savingLocalSource}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
                   onDelete={handleDeleteConnection}
                   onSaveProviderKey={handleSaveProviderKey}
+                  onToggleLocalSource={handleToggleLocalSource}
                 />
               ) : (
                 <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">

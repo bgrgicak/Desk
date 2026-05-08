@@ -29,6 +29,8 @@ caller.
 | POST   | /me/password  | Change password          |
 | GET    | /me/providers | Get AI provider keys (masked) |
 | PUT    | /me/providers | Set / update / delete AI provider keys |
+| GET    | /me/providers/local | List host-detected local sources (Codex, future LM Studio / Ollama) |
+| PUT    | /me/providers/local/{kind} | Toggle a local source's per-user opt-in |
 
 ## Workspaces
 
@@ -281,6 +283,32 @@ present in the body are left untouched. Unknown names return 400.
 The set of known names is `PROVIDER_KEY_VARS` in `@agent-desk/shared`. In
 dev, values seed from the repo's `.env` once per user (gated by `DESK_DEV=1`);
 in prod, the UI is the only way to populate them.
+
+### GET /me/providers/local
+
+Lists every host-detected local model source — providers Desk auto-detects
+on the user's host machine and bridges into the sandbox via env vars rather
+than API keys. The first such source is **Codex** (the ChatGPT-subscription
+auth blob the Codex CLI stores at `~/.codex/auth.json`); LM Studio and
+Ollama can register the same way later without changing the wire shape.
+
+Response: `{ sources: Array<{ kind, available, enabled, reason?, detail? }> }`.
+
+- `available` — a usable instance is currently detected on the host.
+- `enabled` — the user has opted in (persisted in `provider_meta[<kind>]`).
+- `reason` — populated when `available=false` (`missing`, `wrong_mode`,
+  `no_tokens`, `expired_no_refresh`, …).
+- `detail` — display-only metadata (Codex surfaces `email`, `plan`,
+  `expiresAt`). Never includes credential material.
+
+### PUT /me/providers/local/{kind}
+
+Body `{ enabled: boolean }`. Toggles the user's opt-in for the given
+local source. When opted in, the runtime calls each source's `loadEnv()`
+on every sandbox spawn / exec and forwards the resulting env vars (e.g.
+`OPENCODE_AUTH_CONTENT` for Codex). Returns the updated source state.
+
+`404` for unknown kinds; `400` for missing/non-boolean `enabled`.
 
 ## Library
 

@@ -35,6 +35,8 @@ interface WorkspaceReflectionInput {
   userTimezone?: string;
   agent: { id: string; name: string; model: string };
   providerKeys?: Record<string, string>;
+  /** Codex-bridge env (`OPENCODE_AUTH_CONTENT`), injected into the reflection sandbox exec. */
+  extraEnv?: Record<string, string>;
   date: string;
   activity: Array<{
     chatId: string;
@@ -202,6 +204,8 @@ async function callReflection(
     input.workspaceSlug,
     input.home,
     input.providerKeys,
+    undefined,
+    input.extraEnv,
   );
   const result = await execRun(input.pool, handle, {
     runId,
@@ -218,6 +222,7 @@ async function callReflection(
       runMode: "reflection",
     },
     providerKeys: input.providerKeys,
+    extraEnv: input.extraEnv,
     onLog: (event) => {
       if (event.kind === "stdout") stdout += `${event.payload}\n`;
       if (event.kind === "stderr") stderr += `${event.payload}\n`;

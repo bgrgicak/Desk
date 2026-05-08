@@ -107,6 +107,38 @@ describe("user_settings queries", () => {
     });
   });
 
+  it("getActiveProviderKeys filters out keys whose provider_meta.enabled is false", async () => {
+    const id = await makeUser("disabled-user");
+    await userSettings.setProviderKeys(pool, id, {
+      ANTHROPIC_API_KEY: "ant",
+      OPENAI_API_KEY: "oai",
+    });
+    // Disable just OpenAI; Anthropic stays on.
+    await userSettings.mergeProviderMeta(pool, id, {
+      OPENAI_API_KEY: { enabled: false },
+    });
+
+    expect(await userSettings.getActiveProviderKeys(pool, id)).toEqual({
+      ANTHROPIC_API_KEY: "ant",
+    });
+
+    // Re-enable: explicit `true` should also surface, as should any non-false value.
+    await userSettings.mergeProviderMeta(pool, id, {
+      OPENAI_API_KEY: { enabled: true },
+    });
+    expect(await userSettings.getActiveProviderKeys(pool, id)).toEqual({
+      ANTHROPIC_API_KEY: "ant",
+      OPENAI_API_KEY: "oai",
+    });
+
+    // Missing meta entry means "active by default".
+    const id2 = await makeUser("default-active-user");
+    await userSettings.setProviderKeys(pool, id2, { OPENAI_API_KEY: "oai" });
+    expect(await userSettings.getActiveProviderKeys(pool, id2)).toEqual({
+      OPENAI_API_KEY: "oai",
+    });
+  });
+
   it("cascades on user delete", async () => {
     const id = await makeUser("cascade-user");
     await userSettings.setProviderKeys(pool, id, { GEMINI_API_KEY: "x" });

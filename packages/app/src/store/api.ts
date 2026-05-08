@@ -152,6 +152,7 @@ export const api = createApi({
     "ChatArtifact",
     "ProviderKeys",
     "ProvidersMeta",
+    "LocalSources",
     "Models",
   ],
   endpoints: (build) => ({
@@ -196,26 +197,65 @@ export const api = createApi({
       invalidatesTags: ["ProviderKeys", "Models"],
     }),
     getProvidersMeta: build.query<
-      Record<string, { name?: string }>,
+      Record<string, { name?: string; enabled?: boolean }>,
       void
     >({
       query: () => "/me/providers/meta",
-      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+      transformResponse: (r: { meta: Record<string, { name?: string; enabled?: boolean }> }) =>
         r.meta,
       providesTags: ["ProvidersMeta"],
     }),
     putProvidersMeta: build.mutation<
-      Record<string, { name?: string }>,
-      Record<string, { name?: string } | null>
+      Record<string, { name?: string; enabled?: boolean }>,
+      Record<string, { name?: string; enabled?: boolean } | null>
     >({
       query: (meta) => ({
         url: "/me/providers/meta",
         method: "PUT",
         body: { meta },
       }),
-      transformResponse: (r: { meta: Record<string, { name?: string }> }) =>
+      transformResponse: (r: { meta: Record<string, { name?: string; enabled?: boolean }> }) =>
         r.meta,
-      invalidatesTags: ["ProvidersMeta"],
+      // Disabling a provider also has to retire it from the model picker
+      // and any cached sandbox model lists, so invalidate Models too.
+      invalidatesTags: ["ProvidersMeta", "Models"],
+    }),
+    /**
+     * Lists every host-detected local source (Codex today; LM Studio /
+     * Ollama in the future), with the user's per-source opt-in flag.
+     */
+    getLocalSources: build.query<
+      {
+        sources: Array<{
+          kind: string
+          available: boolean
+          enabled: boolean
+          reason?: string
+          detail?: Record<string, string | number | boolean>
+        }>
+      },
+      void
+    >({
+      query: () => "/me/providers/local",
+      providesTags: ["LocalSources"],
+    }),
+    /** Toggles the per-user opt-in for a single local source. */
+    putLocalSource: build.mutation<
+      {
+        kind: string
+        available: boolean
+        enabled: boolean
+        reason?: string
+        detail?: Record<string, string | number | boolean>
+      },
+      { kind: string; enabled: boolean }
+    >({
+      query: ({ kind, enabled }) => ({
+        url: `/me/providers/local/${encodeURIComponent(kind)}`,
+        method: "PUT",
+        body: { enabled },
+      }),
+      invalidatesTags: ["LocalSources", "Models"],
     }),
 
     // ── Workspaces ────────────────────────────────────────────────────
@@ -840,6 +880,8 @@ export const {
   usePutProviderKeysMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
+  useGetLocalSourcesQuery,
+  usePutLocalSourceMutation,
   useGetWorkspacesQuery,
   useCreateWorkspaceMutation,
   usePatchWorkspaceMutation,

@@ -58,3 +58,16 @@ export type { TokenizableMessage } from "./tokenize.js";
 export {
   productionReflectWorkspace,
 } from "./reflectFn.js";
+export {
+  LOCAL_SOURCES,
+  LOCAL_SOURCE_KINDS,
+  detectLocalSource,
+  listLocalSourceStatuses,
+  loadLocalSourceEnv,
+  resolveLocalSourceEnv,
+} from "./localSources/index.js";
+export type {
+  LocalSource,
+  LocalSourceKind,
+  LocalSourceStatus,
+} from "./localSources/types.js";

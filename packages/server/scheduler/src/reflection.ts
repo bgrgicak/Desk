@@ -6,6 +6,7 @@ import type { Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
+import { resolveLocalSourceEnv } from "@agent-desk/runtime";
 
 /**
  * Memory-system Phase 5 — daily reflection.
@@ -43,6 +44,7 @@ export interface WorkspaceReflectionInput {
   userTimezone?: string;
   agent: { id: string; name: string; model: string };
   providerKeys?: Record<string, string>;
+  extraEnv?: Record<string, string>;
   date: string;          // yesterday, "YYYY-MM-DD"
   /** Yesterday's user + agent messages, oldest first. */
   activity: Array<{ chatId: string; role: string; createdAt: string; body: string }>;
@@ -203,6 +205,7 @@ export async function runWorkspaceReflection(
     userTimezone?: string;
     agent: { id: string; name: string; model: string };
     providerKeys?: Record<string, string>;
+    extraEnv?: Record<string, string>;
   },
 ): Promise<string | null> {
   const date = opts.date ?? yesterdayDateLocal();
@@ -221,6 +224,7 @@ export async function runWorkspaceReflection(
     userTimezone: opts.userTimezone,
     agent: opts.agent,
     providerKeys: opts.providerKeys,
+    extraEnv: opts.extraEnv,
     date,
     activity,
     priorJournals,
@@ -253,7 +257,8 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
 
   for (const user of users) {
     const userId = user.id;
-    const providerKeys = await queries.userSettings.getProviderKeys(opts.pool, userId);
+    const providerKeys = await queries.userSettings.getActiveProviderKeys(opts.pool, userId);
+    const extraEnv = await resolveLocalSourceEnv(opts.pool, userId);
     const workspaces = await queries.workspaces.listByUser(opts.pool, userId);
     for (const ws of workspaces) {
       const [workspaceAgent] = await queries.workspaceAgents.listForWorkspace(opts.pool, ws.id);
@@ -271,6 +276,7 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
         userTimezone: user.timezone ?? undefined,
         agent: { id: agent.id, name: agent.name, model: agent.model },
         providerKeys,
+        extraEnv,
       });
     }
   }

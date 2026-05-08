@@ -32,6 +32,7 @@ import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
+import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
 import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
@@ -870,10 +871,24 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers/meta" && method === "PUT") {
-      const body = await parseBody(req) as { meta: Record<string, { name?: string } | null> };
+      const body = await parseBody(req) as { meta: Record<string, { name?: string; enabled?: boolean } | null> };
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
       sendJson(res, 200, result);
       return;
+    }
+    if (path === "/me/providers/local" && method === "GET") {
+      const result = await localSourceRoutes.listLocalSources(pool, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    {
+      const m = path.match(/^\/me\/providers\/local\/([A-Za-z0-9_-]+)$/);
+      if (m && method === "PUT") {
+        const body = await parseBody(req) as { enabled: boolean };
+        const result = await localSourceRoutes.setLocalSourceEnabled(pool, userId, m[1], body);
+        sendJson(res, 200, result);
+        return;
+      }
     }
 
     // Workspace routes — all scoped to the authenticated user. Non-owned
@@ -1388,6 +1403,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/tools/models" && method === "GET") {
       const result = await toolRoutes.listModels(pool, {
         provider: query.get("provider") ?? undefined,
+        userId,
       });
       sendJson(res, 200, result);
       return;
