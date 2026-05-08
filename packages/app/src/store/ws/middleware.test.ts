@@ -118,6 +118,170 @@ describe('applyEventToCache', () => {
       expect(hasChatInvalidation).toBe(false)
     })
 
+    it('does NOT invalidate Chat tags for an artifactRef message', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_ar', chatId: 'cht_1', role: 'agent',
+          content: { type: 'artifactRef', path: 'artifacts/test.md', name: 'test.md' },
+          createdAt: new Date().toISOString(),
+        },
+      })
+
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_1"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(false)
+    })
+
+    it('does NOT invalidate Chat tags for a message with kind="summary"', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_sk', chatId: 'cht_1', role: 'agent',
+          content: { type: 'events', log: [] },
+          kind: 'summary',
+          createdAt: new Date().toISOString(),
+        },
+      })
+
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_1"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(false)
+    })
+
+    it('does NOT invalidate Chat tags for the currently-viewed chat', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_vc', chatId: 'cht_viewed', role: 'agent',
+          content: { type: 'text', text: 'hello from agent' },
+          createdAt: new Date().toISOString(),
+        },
+      }, 'cht_viewed')
+
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_viewed"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(false)
+    })
+
+    it('DOES invalidate Chat tags for a non-viewed chat with regular message', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_nv', chatId: 'cht_other', role: 'agent',
+          content: { type: 'text', text: 'hello from agent' },
+          createdAt: new Date().toISOString(),
+        },
+      }, 'cht_viewed')
+
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_other"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(true)
+    })
+
+    it('fires markChatReadQuietly (no Chat tag invalidation) for a viewed-chat non-internal message', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      // Mock fetch — markChatReadQuietly calls it but we can't easily
+      // verify the call without mocking the auth module; just verify
+      // no Chat tag invalidation and that the cache was patched.
+      const origFetch = globalThis.fetch
+      globalThis.fetch = () => Promise.resolve(new Response('{}', { status: 200 }))
+
+      try {
+        applyEventToCache(dispatch, {
+          type: 'message.appended',
+          payload: {
+            id: 'msg_qm', chatId: 'cht_viewed', role: 'agent',
+            content: { type: 'events', log: [{ kind: 'stderr', line: 'hi' }] },
+            createdAt: new Date().toISOString(),
+          },
+        }, 'cht_viewed')
+
+        // Should NOT invalidate Chat tags
+        const hasChatInvalidation = dispatched.some((a) => {
+          try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_viewed"') }
+          catch { return false }
+        })
+        expect(hasChatInvalidation).toBe(false)
+
+        // markChatReadQuietly dispatches updateQueryData patches (thunks)
+        // which appear as functions or objects with endpointName.
+        // The Message CROSS invalidation is always dispatched, so we check
+        // that MORE actions were dispatched than the baseline (message cache
+        // update + CROSS invalidation = 2).
+        expect(dispatched.length).toBeGreaterThan(2)
+      } finally {
+        globalThis.fetch = origFetch
+      }
+    })
+
+    it('uses getState to patch workspace-scoped caches when unscoped cache is empty', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      const origFetch = globalThis.fetch
+      globalThis.fetch = () => Promise.resolve(new Response('{}', { status: 200 }))
+
+      // Mock getState to simulate a workspace-scoped getChats cache
+      // containing the target chat with unread=true.
+      const mockGetState = () => ({
+        api: {
+          queries: {
+            'getChats({"workspaceId":"wks_1"})': {
+              data: [
+                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', updatedAt: new Date().toISOString(), awaitingUser: false },
+              ],
+            },
+          },
+        },
+      })
+
+      try {
+        applyEventToCache(dispatch, {
+          type: 'message.appended',
+          payload: {
+            id: 'msg_gs', chatId: 'cht_viewed', role: 'agent',
+            content: { type: 'events', log: [{ kind: 'event', event: { type: 'text', part: { text: 'hi' } } }] },
+            createdAt: new Date().toISOString(),
+          },
+        }, 'cht_viewed', mockGetState)
+
+        // markChatReadQuietly should have dispatched updateQueryData for
+        // the workspace-scoped cache (found via getState). Verify we got
+        // more dispatches than the baseline (cache update + CROSS + unscoped patch).
+        // With getState, we should also get the workspace-scoped patch.
+        const updateActions = dispatched.filter(
+          (a) => typeof a === 'object' && a !== null && (a as { type?: string }).type?.includes('updateQueryData'),
+        )
+        // At minimum: 1 message cache update + 1 unscoped patch + 1 workspace-scoped patch
+        expect(dispatched.length).toBeGreaterThan(3)
+      } finally {
+        globalThis.fetch = origFetch
+      }
+    })
+
     it('does NOT invalidate Chat tags for a summary_request message', () => {
       const dispatched: unknown[] = []
       const dispatch = (action: unknown) => { dispatched.push(action); return action }
@@ -136,6 +300,110 @@ describe('applyEventToCache', () => {
         catch { return false }
       })
       expect(hasChatInvalidation).toBe(false)
+    })
+  })
+
+  describe('chat.updated', () => {
+    it('suppresses unread=true for the viewed chat', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'chat.updated',
+        payload: {
+          id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
+          title: 'Test', updatedAt: new Date().toISOString(),
+          awaitingUser: false, unread: true,
+        },
+      }, 'cht_viewed')
+
+      // Verify dispatch was called (for cache patches).
+      // The updateQueryData dispatches are thunks so we just verify
+      // something was dispatched and no Chat tag invalidation occurred.
+      expect(dispatched.length).toBeGreaterThanOrEqual(2)
+      // No Chat tag invalidation for chat.updated events.
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('invalidateTags') && s?.includes('"Chat"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(false)
+    })
+
+    it('dispatches extra cache patches via markChatReadQuietly for viewed chat with unread=true', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'chat.updated',
+        payload: {
+          id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
+          title: 'Test', updatedAt: new Date().toISOString(),
+          awaitingUser: false, unread: true,
+        },
+      }, 'cht_viewed')
+
+      // markChatReadQuietly dispatches patchChatUnreadInCache (1 unscoped
+      // thunk — the workspace-scoped branch can't resolve workspaceId from
+      // the mock dispatch), plus the chat.updated handler dispatches 2
+      // updateQueryData thunks (workspace-scoped + unscoped).
+      // Total: at least 3.
+      expect(dispatched.length).toBeGreaterThanOrEqual(3)
+
+      // Compared to the non-viewed case, the viewed case should dispatch
+      // MORE actions (the extra markChatReadQuietly patch).
+      const nonViewedDispatched: unknown[] = []
+      const nonViewedDispatch = (action: unknown) => { nonViewedDispatched.push(action); return action }
+      applyEventToCache(nonViewedDispatch, {
+        type: 'chat.updated',
+        payload: {
+          id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
+          title: 'Other', updatedAt: new Date().toISOString(),
+          awaitingUser: false, unread: true,
+        },
+      }, 'cht_viewed')
+      expect(dispatched.length).toBeGreaterThan(nonViewedDispatched.length)
+    })
+
+    it('does NOT fire markChatReadQuietly for viewed chat with unread=false', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+      const origFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = (async () => {
+        fetchCalled = true
+        return new Response(null, { status: 200 })
+      }) as typeof fetch
+      try {
+        applyEventToCache(dispatch, {
+          type: 'chat.updated',
+          payload: {
+            id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
+            title: 'Test', updatedAt: new Date().toISOString(),
+            awaitingUser: false, unread: false,
+          },
+        }, 'cht_viewed')
+
+        expect(fetchCalled).toBe(false)
+      } finally {
+        globalThis.fetch = origFetch
+      }
+    })
+
+    it('dispatches cache patches for non-viewed chats', () => {
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return action }
+
+      applyEventToCache(dispatch, {
+        type: 'chat.updated',
+        payload: {
+          id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
+          title: 'Other Chat', updatedAt: new Date().toISOString(),
+          awaitingUser: false, unread: true,
+        },
+      }, 'cht_viewed')
+
+      // Both workspace-scoped and unscoped cache patches
+      expect(dispatched.length).toBeGreaterThanOrEqual(2)
     })
   })
 

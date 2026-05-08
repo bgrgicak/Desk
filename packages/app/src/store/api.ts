@@ -347,10 +347,47 @@ export const api = createApi({
         method: "PATCH",
         body: patch,
       }),
-      invalidatesTags: (_r, _e, { id }) => [
-        { type: "Chat", id },
-        { type: "Chat", id: "LIST" },
-      ],
+      // The server emits `chat.updated` via WS after a successful PATCH,
+      // which the WS middleware handles by patching the RTK Query chat
+      // cache directly (both workspace-scoped and unscoped lists).
+      //
+      // We apply the patch optimistically in onQueryStarted and skip tag
+      // invalidation entirely. Invalidating Chat LIST would trigger a
+      // full getChats refetch that races the WS update: the refetch can
+      // arrive before the WS event and overwrite the optimistic patch,
+      // briefly flashing stale state (e.g. unread=true) in the sidebar.
+      // The WS chat.updated event is the authoritative follow-up.
+      async onQueryStarted({ id, patch }, { dispatch, queryFulfilled, getState }) {
+        // Optimistically patch every `getChats` cache variant that
+        // contains this chat. The app typically only subscribes to the
+        // workspace-scoped query, so the unscoped cache may be empty.
+        // We iterate RTK Query cache keys to find all live variants.
+        const patchFn = (draft: ServerChat[]) => {
+          const idx = draft.findIndex((c) => c.id === id);
+          if (idx >= 0) Object.assign(draft[idx], patch);
+        };
+        const undos: Array<{ undo(): void }> = [];
+        undos.push(dispatch(api.util.updateQueryData("getChats", undefined, patchFn)));
+
+        const state = getState() as Record<string, unknown>;
+        const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+        if (apiState?.queries) {
+          for (const [key, entry] of Object.entries(apiState.queries)) {
+            if (!key.startsWith("getChats(")) continue;
+            const chats = entry?.data;
+            if (!Array.isArray(chats)) continue;
+            const chat = chats.find((c: ServerChat) => c.id === id);
+            if (chat) {
+              undos.push(dispatch(api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patchFn)));
+            }
+          }
+        }
+        try {
+          await queryFulfilled;
+        } catch {
+          for (const u of undos) u.undo();
+        }
+      },
     }),
     deleteChat: build.mutation<{ ok: true }, string>({
       query: (id) => ({ url: `/chats/${id}`, method: "DELETE" }),
@@ -457,12 +494,14 @@ export const api = createApi({
       // full refetch that races with those WS patches — the refetch
       // response can overwrite a more-recent WS state transition, leaving
       // an agent_turn stuck in "pending" or "running" and the Thinking…
-      // indicator permanently visible. Chat tags are still invalidated so
-      // the sidebar picks up unread / title changes from the new message.
-      invalidatesTags: (_r, _e, { chatId }) => [
-        { type: "Chat", id: chatId },
-        { type: "Chat", id: "LIST" },
-      ],
+      // indicator permanently visible.
+      //
+      // Chat tags are NOT invalidated here either: the WS middleware
+      // already handles Chat cache updates for each message.appended event
+      // (tag invalidation for non-viewed chats, quiet markRead for the
+      // viewed chat). Invalidating Chat tags here races the markRead and
+      // causes a stale unread=true to flash in the sidebar.
+      invalidatesTags: [],
     }),
     patchMessage: build.mutation<
       ServerMessage,

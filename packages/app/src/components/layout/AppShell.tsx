@@ -628,7 +628,11 @@ export function AppShell({
                           className="pr-7 text-foreground/70"
                         >
                           <div className="relative shrink-0">
-                            <ChatIcon className="h-4 w-4" />
+                            {isRunning ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" data-testid="chat-running-spinner" />
+                            ) : (
+                              <ChatIcon className="h-4 w-4" />
+                            )}
                             {chat.unread && (
                               <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
                             )}
@@ -641,7 +645,7 @@ export function AppShell({
                             <SidebarMenuAction
                               showOnHover
                               onClick={e => e.stopPropagation()}
-                              className={cn("!right-2", isRunning && "peer/dots")}
+                              className="!right-2"
                             >
                               <MoreHorizontal />
                               <span className="sr-only">Chat options</span>
@@ -651,11 +655,6 @@ export function AppShell({
                             <ChatMenuItems chatId={chat.id} onDelete={onDeleteChat} />
                           </DropdownMenuContent>
                         </DropdownMenu>
-                        {isRunning && (
-                          <span className="absolute top-1.5 right-2 flex aspect-square w-5 items-center justify-center pointer-events-none transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0 peer-data-[state=open]/dots:opacity-0">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                          </span>
-                        )}
                       </SidebarMenuItem>
                     )
                   })}

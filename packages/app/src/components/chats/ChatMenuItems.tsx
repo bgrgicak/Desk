@@ -1,5 +1,5 @@
 /**
- * Shared dropdown-menu items for chat actions: "Copy chat" and "Delete chat".
+ * Shared dropdown-menu items for chat actions: "Copy messages" and "Delete chat".
  *
  * Rendered inside a `<DropdownMenuContent>` by both the sidebar chat-list
  * menu (AppShell) and the chat-header menu (ChatView).
@@ -39,9 +39,9 @@ export function ChatMenuItems({ chatId, onDelete }: ChatMenuItemsProps) {
         return
       }
       await navigator.clipboard.writeText(text)
-      toast.success('Chat copied to clipboard')
+      toast.success('Messages copied to clipboard')
     } catch {
-      toast.error('Failed to copy chat')
+      toast.error('Failed to copy messages')
     }
   }, [chatId, dispatch])
 
@@ -49,7 +49,7 @@ export function ChatMenuItems({ chatId, onDelete }: ChatMenuItemsProps) {
     <>
       <DropdownMenuItem onClick={handleCopy}>
         <Copy className="h-4 w-4 mr-2" />
-        Copy chat
+        Copy text
       </DropdownMenuItem>
       <DropdownMenuItem
         className="text-destructive focus:text-destructive"

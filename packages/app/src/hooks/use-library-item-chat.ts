@@ -5,9 +5,10 @@ export function useLibraryItemChat(
   workspaceId: string | undefined,
   itemPath: string,
 ): UseServerChatReturn {
+  const storageKey = workspaceId && itemPath ? `library-chat:${workspaceId}:${itemPath}` : ''
   return useServerChat(
     workspaceId,
-    '',
+    storageKey,
     itemPath,
     itemPath ? [{ path: itemPath, name: itemPath.split('/').pop() ?? itemPath }] : undefined,
   )

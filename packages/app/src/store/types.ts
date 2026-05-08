@@ -87,9 +87,10 @@ export interface ServerChat {
    */
   kind?: "chat" | "task" | "task_run";
   /**
-   * True when the chat has at least one message in `pending` or `running`
-   * state. Only populated by /chats list responses (derived from a
-   * subquery, not a persisted column). WS `chat.updated` events omit this.
+   * True when the chat's most recent `agent_turn` message is in `pending`
+   * or `running` state. Only populated by /chats list responses (derived
+   * from a subquery, not a persisted column). WS `chat.updated` events
+   * omit this.
    */
   running?: boolean;
 }

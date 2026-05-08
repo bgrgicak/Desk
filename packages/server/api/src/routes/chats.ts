@@ -103,9 +103,12 @@ export async function patchChat(
   id: string,
   data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ) {
-  // Handle unread separately — it uses a dedicated DB function.
+  // Handle unread separately — markRead uses RETURNING * for an atomic
+  // snapshot so a concurrent messages.insert can't sneak unread=1 between
+  // the UPDATE and the response.
+  let markedReadChat: Awaited<ReturnType<typeof queries.chats.markRead>> = null;
   if (data.unread === false) {
-    await queries.chats.markRead(pool, id);
+    markedReadChat = await queries.chats.markRead(pool, id);
   }
 
   // If there are other fields to update, delegate to updateMeta.
@@ -118,7 +121,9 @@ export async function patchChat(
     return chat;
   }
 
-  // unread-only patch — return the current chat state.
+  // unread-only patch — return the atomic snapshot from markRead.
+  if (markedReadChat) return markedReadChat;
+
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;

@@ -270,11 +270,19 @@ export async function insert(
   // updated_at — either change would create noise in the sidebar (unread
   // dot, reordering). Dev-mode users can see some of these but should get
   // the same treatment: no false unread signals.
+  //
+  // The check uses both content.type (the message payload discriminator)
+  // AND kind (the message-kind discriminator). Summary output children
+  // (including failed-run error output) carry kind="summary" so they're
+  // internal regardless of content.type.
   const contentType = (data.content as { type?: string } | null)?.type;
+  const kind = data.kind ?? "chat";
   const isInternal =
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
-    contentType === "summary";
+    contentType === "summary" ||
+    contentType === "artifactRef" ||
+    kind === "summary";
   if (!isInternal) {
     await db.query(
       "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",

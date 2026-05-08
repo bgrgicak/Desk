@@ -36,9 +36,8 @@ import {
   useRunMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
-  usePatchChatMutation,
 } from '@/store/api'
-import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
   setArtifactTransitionSource,
   setArtifactBackLabel,
@@ -49,6 +48,7 @@ import {
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
+import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
 import { taskMessageKindsForDeveloperMode, toUiTask } from '@/store/selectors/tasks'
@@ -125,6 +125,7 @@ function AppInner() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
+  const appStore = useAppStore()
 
   const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
   const activeWorkspaceId = wsId
@@ -174,7 +175,6 @@ function AppInner() {
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
-  const [patchChatMutation] = usePatchChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
@@ -340,10 +340,10 @@ function AppInner() {
 
   const handleSidebarChatClick = useCallback((chat: { id: string; unread?: boolean }) => {
     if (chat.unread) {
-      void patchChatMutation({ id: chat.id, patch: { unread: false } })
+      markChatReadQuietly(chat.id, dispatch, appStore.getState)
     }
     goTo({ chat: chat.id })
-  }, [patchChatMutation, goTo])
+  }, [dispatch, appStore, goTo])
 
   const handleNewChatFirstMessage = useCallback(async (
     message: string,

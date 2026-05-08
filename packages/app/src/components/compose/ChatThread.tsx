@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
+import { FailedRunBanner } from './FailedRunBanner'
 import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
 import type { AttachmentRef, ServerMessage } from '@/store/types'
@@ -11,6 +12,23 @@ import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 /** Distance from the top (px) at which we trigger loading older messages. */
 const SCROLL_TOP_THRESHOLD = 120
+
+/**
+ * Finds the most recent failed `agent_turn` in the message list.
+ * Returns the failed message, or `null` if the latest agent turn is not
+ * in a failed state (e.g. succeeded, running, or pending).
+ *
+ * Exported for testing.
+ */
+export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]
+    if (m.content.type === 'agent_turn') {
+      return m.state === 'failed' ? m : null
+    }
+  }
+  return null
+}
 
 export interface ChatThreadProps {
   chatId: string
@@ -108,6 +126,15 @@ export function ChatThread({
   )
   const isTyping = hasPendingTrigger || isSending
 
+  // Detect the most recent failed agent turn (if any) to show an inline
+  // error banner. Only show it when there is no newer pending/running turn
+  // (which would mean a retry is already in progress).
+  const failedAgentTurn = useMemo(() => {
+    if (isTyping) return null
+    return findFailedAgentTurn(allItems)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, isTyping])
+
   const messages: ServerMessage[] = useMemo(
     () => {
       const visible = allItems.filter(m => isMessageVisible(m, developerMode))
@@ -160,7 +187,7 @@ export function ChatThread({
     if (isAtBottomRef.current) {
       el.scrollTop = el.scrollHeight
     }
-  }, [messages, isTyping, highlightMessageId])
+  }, [messages, isTyping, failedAgentTurn, highlightMessageId])
 
   // On initial load, scroll to bottom.
   const hasInitialScrolled = useRef(false)
@@ -260,6 +287,14 @@ export function ChatThread({
           {isTyping && (
             <div className={resolvedStatusClassName}>
               <StatusIndicator text={null} isTyping={isTyping} />
+            </div>
+          )}
+          {failedAgentTurn && (
+            <div className={resolvedStatusClassName}>
+              <FailedRunBanner
+                chatId={failedAgentTurn.chatId}
+                messageId={failedAgentTurn.id}
+              />
             </div>
           )}
         </div>

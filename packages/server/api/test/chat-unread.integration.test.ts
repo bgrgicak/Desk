@@ -8,6 +8,7 @@
  * 4. New messages after marking read re-set unread to true
  * 5. Internal messages (summary, summary_request, agent_turn) do NOT
  *    set chat.unread = true
+ * 6. End-to-end summary fire does not flip unread or bump updated_at
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
@@ -15,7 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Pool, runMigrations, queries, hashPassword } from "@agent-desk/db";
 import { ensureLayout, type StorageContext } from "@agent-desk/storage";
-import { generateId } from "@agent-desk/shared";
+import { generateId, type WsEvent } from "@agent-desk/shared";
+import { createRunManager } from "@agent-desk/scheduler";
 import {
   sendMessage,
   patchChat,
@@ -114,6 +116,24 @@ describe("chat unread status", () => {
     // Verify in DB
     const after = await queries.chats.findById(pool, chatId);
     expect(after!.unread).toBe(false);
+  });
+
+  it("markRead returns the full chat atomically with unread=false", async () => {
+    const chatId = await freshChat();
+    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
+
+    // markRead should return the full Chat with unread=false in a single
+    // atomic RETURNING * query.
+    const result = await queries.chats.markRead(pool, chatId);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(chatId);
+    expect(result!.unread).toBe(false);
+  });
+
+  it("markRead returns null for a missing chat", async () => {
+    const result = await queries.chats.markRead(pool, "nonexistent");
+    expect(result).toBeNull();
   });
 
   it("PATCH with unread=false and other fields works correctly", async () => {
@@ -232,6 +252,36 @@ describe("chat unread status", () => {
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(false);
   });
 
+  it("inserting an artifactRef message does not set unread or bump updated_at", async () => {
+    const chatId = await freshChat();
+    const before = await queries.chats.findById(pool, chatId);
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: { type: "artifactRef", path: "artifacts/test.md", name: "test.md" },
+    });
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(before!.updatedAt);
+  });
+
+  it("inserting a message with kind='summary' does not set unread regardless of content type", async () => {
+    const chatId = await freshChat();
+    const before = await queries.chats.findById(pool, chatId);
+    // Failed summary runs produce events content with kind="summary"
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: { type: "events", log: [] },
+      kind: "summary",
+    });
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(before!.updatedAt);
+  });
+
   it("agent text response still sets unread", async () => {
     const chatId = await freshChat();
     await queries.messages.insert(pool, {
@@ -266,5 +316,247 @@ describe("chat unread status", () => {
     // It's the raw JSON string from the DB.
     const parsed = JSON.parse(found!.lastMessageContent!);
     expect(parsed.type).not.toBe("summary");
+  });
+
+  // ── End-to-end: firing a summary through the run manager ───────────────────
+
+  it("firing a summary_request via run manager does NOT flip unread or bump updated_at", async () => {
+    const chatId = await freshChat();
+    // Record the baseline state.
+    const baseline = await queries.chats.findById(pool, chatId);
+
+    // Collect all WS events emitted during the fire.
+    const events: WsEvent[] = [];
+    const rm = createRunManager({
+      pool,
+      emit: (e) => events.push(e),
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: '{"type":"text","part":{"text":"# Summary\\nTest."}}' });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Insert a summary_request the same way scheduleSummary does.
+    const reqId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: reqId,
+      chatId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      kind: "summary",
+      executeAt: new Date().toISOString(),
+    });
+
+    // Fire the summary.
+    const { fired, childIds } = await rm.fireMessage(reqId);
+    expect(fired).toBe(true);
+    expect(childIds.length).toBe(1);
+
+    // The chat's unread and updated_at should not have changed.
+    const after = await queries.chats.findById(pool, chatId);
+    expect(after!.unread).toBe(false);
+    expect(after!.updatedAt).toBe(baseline!.updatedAt);
+
+    // Verify the child message is type=summary with kind=summary.
+    const child = await queries.messages.findById(pool, childIds[0]);
+    expect(child!.content.type).toBe("summary");
+    expect(child!.kind).toBe("summary");
+
+    // Verify no emitted message.appended event has a non-internal content
+    // type (which would trigger Chat tag invalidation on the client).
+    const appendedEvents = events.filter((e) => e.type === "message.appended");
+    for (const evt of appendedEvents) {
+      const msg = evt.payload as { content?: { type?: string }; kind?: string };
+      const ct = msg.content?.type;
+      const mk = msg.kind ?? "chat";
+      const isInternal =
+        ct === "agent_turn" ||
+        ct === "summary_request" ||
+        ct === "summary" ||
+        ct === "artifactRef" ||
+        mk === "summary";
+      expect(isInternal).toBe(true);
+    }
+  });
+
+  it("firing a regular agent_turn via run manager sets unread but summary afterwards does NOT", async () => {
+    const chatId = await freshChat();
+    const events: WsEvent[] = [];
+    const rm = createRunManager({
+      pool,
+      emit: (e) => events.push(e),
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: '{"type":"text","part":{"text":"Hello!"}}' });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Send a regular chat message which creates an agent_turn trigger.
+    const { triggerId } = await sendMessage(pool, chatId, { content: "hi" }, (e) => events.push(e));
+
+    // The user text message sets unread=1.
+    expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
+
+    // Mark read (simulating the user viewing the chat).
+    await patchChat(pool, chatId, { unread: false });
+    expect((await queries.chats.findById(pool, chatId))!.unread).toBe(false);
+
+    // Fire the agent_turn — produces an events output child.
+    await rm.fireMessage(triggerId);
+
+    // The events output child IS visible → should set unread=1.
+    expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
+
+    // Mark read again.
+    await patchChat(pool, chatId, { unread: false });
+    const afterRead = await queries.chats.findById(pool, chatId);
+    expect(afterRead!.unread).toBe(false);
+
+    // Now fire a summary — should NOT flip unread.
+    const reqId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: reqId,
+      chatId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      kind: "summary",
+      executeAt: new Date().toISOString(),
+    });
+    await rm.fireMessage(reqId);
+
+    // Unread should still be false after the summary fire.
+    const afterSummary = await queries.chats.findById(pool, chatId);
+    expect(afterSummary!.unread).toBe(false);
+    // updated_at should not have changed from the mark-read snapshot.
+    expect(afterSummary!.updatedAt).toBe(afterRead!.updatedAt);
+  });
+
+  it("listWithLatestMessage returns unread=false after a summary fire on a read chat", async () => {
+    const chatId = await freshChat();
+    const rm = createRunManager({
+      pool,
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: '{"type":"text","part":{"text":"# Summary\\nDone."}}' });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Send a user message (sets unread=1) then mark read.
+    await sendMessage(pool, chatId, { content: "test" }, () => {});
+    await patchChat(pool, chatId, { unread: false });
+
+    // Fire the agent turn to produce visible output (sets unread=1).
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages WHERE chat_id = ? AND json_extract(content, '$.type') = 'agent_turn'`,
+      [chatId],
+    );
+    if (rows.length > 0) await rm.fireMessage(rows[0].id);
+
+    // Mark read again.
+    await patchChat(pool, chatId, { unread: false });
+
+    // Now fire a summary.
+    const reqId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: reqId,
+      chatId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      kind: "summary",
+      executeAt: new Date().toISOString(),
+    });
+    await rm.fireMessage(reqId);
+
+    // The sidebar query should still show unread=false.
+    const list = await queries.chats.listWithLatestMessage(pool, workspaceId);
+    const found = list.find((c) => c.id === chatId);
+    expect(found!.unread).toBe(false);
+  });
+
+  // ── End-to-end: WS event payloads for internal messages ────────────────────
+
+  it("all WS events emitted during a summary fire carry internal content types", async () => {
+    const chatId = await freshChat();
+    const events: WsEvent[] = [];
+    const rm = createRunManager({
+      pool,
+      emit: (e) => events.push(e),
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: '{"type":"text","part":{"text":"# Summary\\nTest summary."}}' });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Insert and fire a summary_request.
+    const reqId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: reqId,
+      chatId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      kind: "summary",
+      executeAt: new Date().toISOString(),
+    });
+    await rm.fireMessage(reqId);
+
+    // Every message.appended event must be internal:
+    // The client-side isInternal check mirrors the server-side one.
+    const appendedEvents = events.filter((e) => e.type === "message.appended");
+    expect(appendedEvents.length).toBeGreaterThan(0);
+    for (const evt of appendedEvents) {
+      const msg = evt.payload as { content?: { type?: string }; kind?: string };
+      const ct = msg.content?.type;
+      const mk = msg.kind ?? "chat";
+      const isInternal =
+        ct === "agent_turn" ||
+        ct === "summary_request" ||
+        ct === "summary" ||
+        ct === "artifactRef" ||
+        mk === "summary";
+      expect(isInternal).toBe(true);
+    }
+
+    // No chat.updated events should have been emitted (summary doesn't
+    // change the chat row at all).
+    const chatUpdatedEvents = events.filter((e) => e.type === "chat.updated");
+    expect(chatUpdatedEvents.length).toBe(0);
+  });
+
+  it("all WS events emitted during a regular agent_turn fire include non-internal output", async () => {
+    const chatId = await freshChat();
+    const events: WsEvent[] = [];
+    const rm = createRunManager({
+      pool,
+      emit: (e) => events.push(e),
+      execRunFn: async (runId, _a, _p, onLog) => {
+        onLog({ runId, seq: 0, kind: "stdout", payload: '{"type":"text","part":{"text":"Hello!"}}' });
+        return { exitCode: 0 };
+      },
+    });
+
+    // Send a message (creates agent_turn trigger).
+    const { triggerId } = await sendMessage(pool, chatId, { content: "hi" }, (e) => events.push(e));
+    await rm.fireMessage(triggerId);
+
+    // The events output child should NOT be internal.
+    const appendedEvents = events.filter((e) => e.type === "message.appended");
+    const nonInternalAppended = appendedEvents.filter((evt) => {
+      const msg = evt.payload as { content?: { type?: string }; kind?: string };
+      const ct = msg.content?.type;
+      const mk = msg.kind ?? "chat";
+      return !(
+        ct === "agent_turn" ||
+        ct === "summary_request" ||
+        ct === "summary" ||
+        ct === "artifactRef" ||
+        mk === "summary"
+      );
+    });
+    // At least the user text message and the events output are non-internal.
+    expect(nonInternalAppended.length).toBeGreaterThanOrEqual(2);
   });
 });

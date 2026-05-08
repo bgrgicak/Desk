@@ -49,6 +49,13 @@ export interface DerivedState {
    * spinning indicator.
    */
   runningChatIds: string[]
+  /**
+   * The chat the user is currently viewing. Set by ChatView on mount,
+   * cleared on unmount. The WS middleware uses this to suppress the
+   * unread-dot flash: messages arriving for the viewed chat don't flip
+   * `unread` in the RTK Query cache because the user is already reading.
+   */
+  viewingChatId: string | null
 }
 
 const initialState: DerivedState = {
@@ -56,6 +63,7 @@ const initialState: DerivedState = {
   fileChangeCounters: {},
   workspaceChangeCounters: {},
   runningChatIds: [],
+  viewingChatId: null,
 }
 
 const slice = createSlice({
@@ -90,22 +98,58 @@ const slice = createSlice({
     markChatIdle(state, action: PayloadAction<string>) {
       state.runningChatIds = state.runningChatIds.filter(id => id !== action.payload)
     },
+    /** Called by ChatView on mount/unmount to track which chat the user is viewing. */
+    setViewingChat(state, action: PayloadAction<string | null>) {
+      state.viewingChatId = action.payload
+    },
   },
   extraReducers: (builder) => {
-    // Hydrate running state from fetched messages (cold-start path).
-    // When getChatMessages fulfills, check if any agent_turn is active.
+    // ── Cold-start hydration from chat list ────────────────────────────
+    // The /chats endpoint includes a derived `running` boolean per chat.
+    // When getChats fulfills (app boot, refetch), seed `runningChatIds`
+    // from the server response so the sidebar spinner appears immediately
+    // without waiting for WS events.
+    builder.addMatcher(
+      api.endpoints.getChats.matchFulfilled,
+      (state, action) => {
+        const chats = action.payload as Array<{ id: string; running?: boolean }>
+        const serverRunning = new Set(
+          chats.filter((c) => c.running).map((c) => c.id),
+        )
+        // Add newly-running chats the slice didn't know about yet.
+        for (const id of serverRunning) {
+          if (!state.runningChatIds.includes(id)) {
+            state.runningChatIds.push(id)
+          }
+        }
+        // Remove chats the server says are no longer running, unless a
+        // more-recent WS event already marked them running again (which
+        // would be odd but defensive).
+        state.runningChatIds = state.runningChatIds.filter(
+          (id) => serverRunning.has(id),
+        )
+      },
+    )
+
+    // ── Per-chat hydration from message fetch ─────────────────────────
+    // When a user opens a chat, getChatMessages fulfills. Check the most
+    // recent agent_turn to correct stale running state (e.g. if a WS
+    // event was missed). Only the latest agent_turn matters — older
+    // orphaned turns shouldn't light up the spinner.
     builder.addMatcher(
       api.endpoints.getChatMessages.matchFulfilled,
       (state, action) => {
         const chatId = action.meta.arg.originalArgs.chatId
-        const hasRunning = action.payload.items.some(
-          (m) =>
-            m.content?.type === 'agent_turn' &&
-            (m.state === 'pending' || m.state === 'running'),
+        const agentTurns = action.payload.items.filter(
+          (m) => m.content?.type === 'agent_turn',
         )
-        if (hasRunning && !state.runningChatIds.includes(chatId)) {
+        // Messages are ordered by created_at; the last one is the newest.
+        const latest = agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null
+        const isRunning = latest !== null &&
+          (latest.state === 'pending' || latest.state === 'running')
+        if (isRunning && !state.runningChatIds.includes(chatId)) {
           state.runningChatIds.push(chatId)
-        } else if (!hasRunning && state.runningChatIds.includes(chatId)) {
+        } else if (!isRunning && state.runningChatIds.includes(chatId)) {
           state.runningChatIds = state.runningChatIds.filter(
             (id) => id !== chatId,
           )
@@ -115,7 +159,7 @@ const slice = createSlice({
   },
 })
 
-export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle } = slice.actions
+export const { pushArtifactUpdate, clearArtifactUpdates, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, setViewingChat } = slice.actions
 export default slice.reducer
 
 // ── Selectors ────────────────────────────────────────────────────────────────
@@ -131,6 +175,9 @@ export const selectWorkspaceChangeCounter = (s: RootState, wsId: string): number
 
 export const selectRunningChatIds = (s: RootState): string[] =>
   s.derived.runningChatIds
+
+export const selectViewingChatId = (s: RootState): string | null =>
+  s.derived.viewingChatId
 
 /**
  * Folders view of the library.

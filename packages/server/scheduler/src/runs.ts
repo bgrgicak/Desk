@@ -525,6 +525,9 @@ export function createRunManager(opts: RunManagerOptions) {
           }
         }
 
+        // Summary runs carry kind="summary" on the output child so the
+        // insert path treats them as internal (no unread flip).
+        const childKind = outputKind === "summary" ? "summary" : undefined;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
           chatId: msg.chatId,
@@ -533,6 +536,7 @@ export function createRunManager(opts: RunManagerOptions) {
           parentId: runId,
           agentId,
           model: agentFileInput.model,
+          ...(childKind ? { kind: childKind } : {}),
         });
         // Summary output: also write the body to the notes/ dir so the
         // agent (and any other filesystem consumer) can see the latest
@@ -571,12 +575,16 @@ export function createRunManager(opts: RunManagerOptions) {
       if (!content) {
         return { fired: true, childIds: [] };
       }
+      // Failed summary runs: tag the error output child with
+      // kind="summary" so it doesn't flip unread.
+      const errorChildKind = outputContentTypeFor(msg) === "summary" ? "summary" : undefined;
       const child = await queries.messages.insert(pool, {
         id: generateId("message"),
         chatId: msg.chatId,
         role: "agent",
         content,
         parentId: runId,
+        ...(errorChildKind ? { kind: errorChildKind } : {}),
       });
       emit({ type: "message.appended", payload: child });
       return { fired: true, childIds: [child.id] };
