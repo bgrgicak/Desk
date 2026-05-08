@@ -39,10 +39,10 @@ export interface AgentFileInput {
    */
   goal?: GoalKey | null;
   /**
-   * Summary runs are internal summary refreshes. They get a narrow prompt that
-   * returns markdown only and never writes artifacts.
+   * Summary and reflection runs are internal. They get narrow prompts instead
+   * of the full chat/task/artifact instruction set.
    */
-  runMode?: "chat" | "summary";
+  runMode?: "chat" | "summary" | "reflection";
   /**
    * DESK_HOME root, threaded through so the prompt renderer can read the
    * user `.memory/memory.md` index and the workspace `.memory/workspace.md`
@@ -51,6 +51,11 @@ export interface AgentFileInput {
   home?: string;
   /** Workspace slug for resolving the workspace memory index. */
   workspaceSlug?: string;
+  /**
+   * When false, the goal-autodetect fragment is omitted from the prompt.
+   * Defaults to true.
+   */
+  includeGoalAutodetect?: boolean;
 }
 
 /**
@@ -74,6 +79,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     runMode: input.runMode ?? "chat",
     home: input.home,
     workspaceSlug: input.workspaceSlug,
+    includeGoalAutodetect: input.includeGoalAutodetect,
   });
 
   return `${frontmatter}\n\n${body}\n`;

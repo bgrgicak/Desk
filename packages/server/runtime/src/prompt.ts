@@ -59,7 +59,8 @@ export interface RenderPromptInput {
   userTimezone?: string;
   chatId?: string;
   goal?: GoalKey | null;
-  runMode?: "chat" | "summary";
+  includeGoalAutodetect?: boolean;
+  runMode?: "chat" | "summary" | "reflection";
   /**
    * DESK_HOME root used to read the user / workspace memory index files.
    * When unset, memory injection is skipped (lets unit tests render the
@@ -120,6 +121,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         : "";
       return loadAndSub("summary.md", { chatPaths });
     }
+    if (input.runMode === "reflection") return null;
     const chatPaths = input.chatId
       ? `\nChat artifacts:   ~/.chats/${input.chatId}/artifacts/\n` +
         `Chat attachments: ~/.chats/${input.chatId}/attachments/\n` +
@@ -130,9 +132,9 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
-  (input) => input.runMode === "summary" ? null : loadAndSub("task-context.md", {}),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("task-context.md", {}),
   (input) =>
-    input.runMode === "summary"
+    input.runMode === "summary" || input.runMode === "reflection"
       ? null
       : input.userTimezone
       ? loadAndSub("scheduling-tz-known.md", {
@@ -140,21 +142,21 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
           userTimezone: input.userTimezone,
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
-
-  (input) => input.runMode === "summary" ? null : loadAndSub("persistence.md", {}),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("persistence.md", {}),
   // Memory rules + retrieval pointers, then the user and workspace memory
   // indexes. Order: rules → user index → workspace index. The agent
   // resolves conflicts itself; workspace wins on workspace-specific
   // topics, user wins on cross-cutting style.
   (input) => input.runMode === "summary" ? null : loadAndSub("context.md", {}),
-  (input) => input.runMode === "summary" || !input.home ? null : userMemoryFragment(input.home),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" || !input.home ? null : userMemoryFragment(input.home),
   (input) =>
     input.runMode === "summary" || !input.home || !input.workspaceSlug
       ? null
       : workspaceMemoryFragment(input.home, input.workspaceSlug),
   (input) =>
-    input.runMode !== "summary" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
-  (input) => input.runMode === "summary" ? null : loadAndSub("desk-skills.md", {}),
+    input.runMode !== "summary" && input.runMode !== "reflection" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
+  (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("desk-skills.md", {}),
 ];
 
 /**

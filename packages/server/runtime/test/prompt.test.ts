@@ -437,6 +437,18 @@ describe("memory injection", () => {
     expect(body).not.toContain("## Memory and recall");
     expect(body).not.toContain("<!-- Desk user memory index -->");
   });
+
+  it("reflection mode injects only workspace memory", () => {
+    const body = renderPromptBody({
+      ...baseInput,
+      runMode: "reflection",
+      home,
+      workspaceSlug: "alpha",
+    });
+    expect(body).toContain("## Memory and recall");
+    expect(body).not.toContain("<!-- Desk user memory index -->");
+    expect(body).toContain("<!-- Desk workspace memory index -->");
+  });
 });
 
 describe("Desk reference skills", () => {

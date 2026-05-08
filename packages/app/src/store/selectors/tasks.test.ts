@@ -22,6 +22,39 @@ describe('task selectors', () => {
     expect(taskMessageKindsForDeveloperMode(true)).toEqual(['task', 'summary'])
   })
 
+  it('maps reflection requests as readable developer tasks', () => {
+    const task = toUiTask(message({
+      id: 'msg_reflection_request',
+      content: { type: 'reflection_request', workspaceId: 'wks_test' },
+      kind: 'task',
+      title: 'Daily workspace memory reflection',
+      cron: '0 3 * * *',
+    }), [], [], [{
+      id: 'wks_test',
+      userId: 'usr_test',
+      name: 'Launch Workspace',
+      description: '',
+      icon: '',
+      color: '',
+      createdAt: '2099-05-07T10:00:00.000Z',
+    }])
+
+    expect(task.name).toBe('Reflect - Launch Workspace')
+    expect(task.status).toBe('scheduled')
+    expect(task.messageKind).toBe('task')
+    expect(task.messageContentType).toBe('reflection_request')
+  })
+
+  it('falls back to a generic reflection task name when the workspace is unavailable', () => {
+    const task = toUiTask(message({
+      id: 'msg_reflection_request',
+      content: { type: 'reflection_request', workspaceId: 'wks_missing' },
+      kind: 'task',
+    }), [], [], [])
+
+    expect(task.name).toBe('Reflect')
+  })
+
   it('maps scheduled summary requests as readable scheduled tasks', () => {
     const task = toUiTask(message(), [], [{
       id: 'cht_test',

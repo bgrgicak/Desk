@@ -2,6 +2,7 @@ import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
+import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 
 const DEFAULT_AGENT_NAME = "Desk";
 const DEFAULT_AGENT_MODEL = "opencode/big-pickle";
@@ -52,6 +53,12 @@ export async function createWorkspace(
     ...data,
   });
   await ensureWorkspaceAgent(pool, ws.id, userId);
+  if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
+    await ensureDailyReflectionTasks({
+      pool,
+      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+    });
+  }
   return ws;
 }
 

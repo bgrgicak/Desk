@@ -138,6 +138,16 @@ export const MessageContentSummaryRequestSchema = z.object({
 });
 
 /**
+ * Scheduled request for the workspace agent to run the daily memory
+ * reflection pass. Stored as a recurring internal task so the normal
+ * scheduler owns retries, run history, pause/resume, and next-run updates.
+ */
+export const MessageContentReflectionRequestSchema = z.object({
+  type: z.literal("reflection_request"),
+  workspaceId: z.string(),
+});
+
+/**
  * A pending execution slot attached to a user message. Created alongside a
  * user message so fireMessage has a row to claim; carries no textual copy
  * of the user's prompt — the prompt is resolved from the referenced
@@ -156,6 +166,7 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentEventsSchema,
   MessageContentSummarySchema,
   MessageContentSummaryRequestSchema,
+  MessageContentReflectionRequestSchema,
   MessageContentAgentTurnSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
@@ -184,7 +195,7 @@ export type MessageState = (typeof MESSAGE_STATES)[number];
  * Discriminates a message's role on non-chat surfaces. `chat` is the default
  * conversational message; `task` is a user-defined task surfaced on the Tasks
  * page; `summary` is the system-scheduled summary refresh trigger; `task_run`
- * is one firing of a task (parent_id points at the task definition, state
+ * is one firing of a task-like row (parent_id points at the definition, state
  * tracks that single execution). See:
  *   - packages/server/docs/plans/message-as-task.md
  *   - packages/server/docs/plans/task-runs-as-messages.md

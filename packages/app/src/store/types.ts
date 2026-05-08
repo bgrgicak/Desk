@@ -36,6 +36,7 @@ export type MessageContent =
   | { type: "events"; log: AgentLogEntry[] }
   | { type: "summary"; body: string }
   | { type: "summary_request" }
+  | { type: "reflection_request"; workspaceId: string }
   | { type: "agent_turn"; userMessageId: string };
 
 export interface ServerUser {

@@ -55,3 +55,6 @@ export {
   transcriptExceedsBudget,
 } from "./tokenize.js";
 export type { TokenizableMessage } from "./tokenize.js";
+export {
+  productionReflectWorkspace,
+} from "./reflectFn.js";

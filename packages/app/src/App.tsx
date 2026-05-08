@@ -198,7 +198,7 @@ function AppInner() {
     { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
     { skip: !activeWorkspaceId },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? []))
+  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? [], serverWorkspaces ?? []))
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()

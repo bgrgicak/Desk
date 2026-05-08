@@ -3,6 +3,7 @@ import type { AgentLogEntry, MessageContent, ServerMessage } from '@/store/types
 const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
   'agent_turn',
   'summary_request',
+  'reflection_request',
 ])
 
 const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([

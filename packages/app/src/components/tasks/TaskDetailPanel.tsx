@@ -338,13 +338,14 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const canCancel = task.status !== 'complete'
   const canRunNow = task.status === 'scheduled'
   const canEditDetails = task.messageKind === 'task' && task.messageContentType === 'text'
+  const canShowChat = !!task.chatId
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-background">
       {/* Header */}
       <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0 gap-2">
         <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
-          {(['details', 'chat'] as PanelTab[]).map(tab => (
+          {(['details', ...(canShowChat ? ['chat' as const] : [])] as PanelTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -428,7 +429,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
       {/* Chat tab */}
       {activeTab === 'chat' && (
-        task.chatId
+        canShowChat && task.chatId
           ? <ChatInPanel chatId={task.chatId} agentName={task.agentName} messageId={task.messageId} />
           : <div className="flex-1 flex items-center justify-center p-4">
               <p className="text-xs text-muted-foreground text-center">No chat linked to this task yet.</p>
