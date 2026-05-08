@@ -416,7 +416,7 @@ describe("hidden (dot-prefixed) paths — full CRUD", () => {
       [alpha.wsA],
     );
     const wsSlug = rows[0]!.path;
-    const wsRoot = path.join(home, "Desk", "workspaces", wsSlug);
+    const wsRoot = path.join(home, "workspaces", wsSlug);
 
     // Create .memory/workspace.md directly on disk (mimics agent-created files)
     const hiddenDir = path.join(wsRoot, ".memory");

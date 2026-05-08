@@ -414,11 +414,11 @@ describe("Summary versioning via summary-history", () => {
     const versionsA = (afterFirst.body as { versions: Array<{ body: string }> }).versions;
     expect(versionsA.length).toBe(1);
     expect(versionsA[0].body).toContain("vacation plans");
-    const historyDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", ".history");
+    const historyDir = path.join(home, "workspaces", "desk", ".chats", chatId, "notes", ".history");
     const historyFiles = await fs.readdir(historyDir);
     expect(historyFiles.some((name) => name.endsWith(`-${summaryId}.md`))).toBe(true);
     await expect(
-      fs.stat(path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "summary-history")),
+      fs.stat(path.join(home, "workspaces", "desk", ".chats", chatId, "summary-history")),
     ).rejects.toThrow();
 
     await userRequest(
@@ -455,8 +455,8 @@ describe("Summary versioning via summary-history", () => {
     const requestId = await insertPendingMessage({ type: "summary_request" });
     const { childIds } = await runManager.fireMessage(requestId);
     const summaryId = childIds[0];
-    const legacyNoteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "note-history");
-    const legacySummaryDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "summary-history");
+    const legacyNoteDir = path.join(home, "workspaces", "desk", ".chats", chatId, "note-history");
+    const legacySummaryDir = path.join(home, "workspaces", "desk", ".chats", chatId, "summary-history");
     await fs.mkdir(legacyNoteDir, { recursive: true });
     await fs.mkdir(legacySummaryDir, { recursive: true });
     await fs.writeFile(
