@@ -358,7 +358,7 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
     await Promise.all(
       drift.map(async (d) => {
         try {
-          await engine.remove(d.containerName, true);
+          await engine.remove(d.containerName);
         } catch {
           // Already removed or engine error — best-effort.
         }
