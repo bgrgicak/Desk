@@ -191,20 +191,40 @@ export async function listAgentContextByChat(
  * Returns the IDs of the re-queued chat messages so the caller can fire
  * them immediately rather than waiting for the next scheduler tick.
  */
+const MAX_REQUEUE_ATTEMPTS = 5;
+
 export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[]; failed: number }> {
-  // Re-queue chat agent turns and summaries so they are retried.
+  // Fail orphans that have already hit the retry cap before re-queuing the
+  // rest. Running the fail query first ensures a message that reaches
+  // requeue_count = MAX_REQUEUE_ATTEMPTS gets one final attempt (from the
+  // previous cycle) before being marked failed — rather than being failed on
+  // the same call that would have re-queued it.
+  const { rowCount: cappedCount } = await db.query(
+    `UPDATE messages
+     SET state = 'failed',
+         ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state IN ('running', 'pending')
+       AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
+       AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       AND requeue_count >= ?`,
+    [MAX_REQUEUE_ATTEMPTS],
+  );
+  // Re-queue remaining orphans that haven't exceeded the cap yet.
   const { rows: requeuedRows } = await db.query<{ id: string }>(
     `UPDATE messages
      SET state = 'pending',
          started_at = NULL,
          ended_at = NULL,
          execute_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         requeue_count = requeue_count + 1
      WHERE state IN ('running', 'pending')
        AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
        AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-     RETURNING id`,
-    [],
+       AND requeue_count < ?
+      RETURNING id`,
+    [MAX_REQUEUE_ATTEMPTS],
   );
   // Fail task_run orphans — their parent task handles rescheduling.
   const { rowCount: failedCount } = await db.query(
@@ -219,7 +239,7 @@ export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[
   );
   return {
     requeued: requeuedRows.map((r) => r.id),
-    failed: failedCount ?? 0,
+    failed: (cappedCount ?? 0) + (failedCount ?? 0),
   };
 }
 

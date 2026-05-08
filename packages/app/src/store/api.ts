@@ -37,6 +37,10 @@ const rawBaseQuery = fetchBaseQuery({
   },
 });
 
+const RETRY_STATUSES = new Set([502, 503]);
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 600;
+
 /**
  * If an authed call returns 401 the stored token is dead. Clear it and
  * reload so the App outer-render check sees no token and renders the
@@ -44,6 +48,10 @@ const rawBaseQuery = fetchBaseQuery({
  * token (the check runs once at mount and doesn't subscribe to
  * sessionStorage). The one-shot guard keeps a 401-storm from looping
  * the page.
+ *
+ * 502/503 responses indicate the backend is restarting (e.g. tsx hot-reload).
+ * Retry up to RETRY_ATTEMPTS times so in-flight requests survive a restart
+ * rather than silently failing.
  */
 let reloadingFor401 = false;
 const baseQuery: BaseQueryFn<
@@ -51,7 +59,29 @@ const baseQuery: BaseQueryFn<
   unknown,
   unknown
 > = async (args, api, extra) => {
-  const result = await rawBaseQuery(args, api, extra);
+  let result = await rawBaseQuery(args, api, extra);
+
+  // Only retry safe (idempotent read) methods. Retrying a POST/PUT/DELETE
+  // after a 502 could duplicate a mutation that the server already processed
+  // before crashing.
+  const method = (typeof args === "string" ? "GET" : (args as { method?: string }).method ?? "GET").toUpperCase();
+  const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(method);
+
+  let attempts = 0;
+  while (
+    isSafeMethod &&
+    attempts < RETRY_ATTEMPTS &&
+    result.error &&
+    typeof result.error === "object" &&
+    "status" in result.error &&
+    typeof result.error.status === "number" &&
+    RETRY_STATUSES.has(result.error.status)
+  ) {
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempts + 1)));
+    result = await rawBaseQuery(args, api, extra);
+    attempts++;
+  }
+
   if (
     result.error &&
     typeof result.error === "object" &&

@@ -8,7 +8,7 @@
  *   3. Mutate the chat copy.
  *   4. `POST /chats/:id/replace-library-app` swaps it back into the
  *      library; the prior library copy lands under
- *      `~/Desk/.trash/.app-versions/`.
+ *      `~/.trash/.app-versions/`.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -320,8 +320,7 @@ describe("modify-as-version flow", () => {
   });
 
   it("prunes .app-versions older than 30 days when a replace runs", async () => {
-    // Stage an old backup directly under Desk/.trash/.app-versions/.
-    // (The trashDir helper is `${home}/Desk/.trash`, not `${home}/.trash`.)
+    // Stage an old backup directly under .trash/.app-versions/.
     const versionsRoot = path.join(home, ".trash", ".app-versions");
     await fs.mkdir(versionsRoot, { recursive: true });
     const oldBackup = path.join(versionsRoot, "old-version.app-2025-12-01");

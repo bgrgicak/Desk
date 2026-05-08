@@ -3,6 +3,7 @@ export {
   stopSandbox,
   ensureImage,
   auditSandboxMounts,
+  pruneDriftedContainers,
   sandboxImage,
   providerKeyEnv,
 } from "./docker.js";

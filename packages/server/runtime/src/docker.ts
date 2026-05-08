@@ -343,3 +343,28 @@ export async function stopSandbox(handle: SandboxHandle): Promise<void> {
     // Container may already be stopped or engine unreachable.
   }
 }
+
+/**
+ * Removes containers reported by auditSandboxMounts as having stale bind
+ * mounts. Safe to call at startup: drifted containers are unusable (their
+ * workspace path no longer matches DESK_HOME), so removing them lets the
+ * next run create a fresh container with the correct mounts rather than
+ * waiting for getOrCreateSandbox to detect the mismatch at call time.
+ */
+export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise<void> {
+  if (drift.length === 0) return;
+  try {
+    const engine = await detectEngine();
+    await Promise.all(
+      drift.map(async (d) => {
+        try {
+          await engine.remove(d.containerName);
+        } catch {
+          // Already removed or engine error — best-effort.
+        }
+      }),
+    );
+  } catch {
+    // Engine not reachable.
+  }
+}
