@@ -49,9 +49,9 @@ when it is clear; otherwise use `--kind any`. Try alternate terms and, when
 needed, list all matching artifacts across the user's library:
 
 ```sh
-desk-agent find library --query "<user terms>" --kind <app|fragment|note|doc|any> --workspace "*"
-desk-agent find library --query "<alternate terms>" --kind <app|fragment|note|doc|any> --workspace "*"
-desk-agent find library --kind <app|fragment|note|doc|any> --workspace "*" --limit 100
+desk-agent find library --query "<user terms>" --kind <app|fragment|note|doc|any>
+desk-agent find library --query "<alternate terms>" --kind <app|fragment|note|doc|any>
+desk-agent find library --kind <app|fragment|note|doc|any> --limit 100
 ```
 
 If the user says a library item exists that you did not find, assume the search
@@ -61,18 +61,15 @@ When `desk-agent find library` returns a library item that satisfies the user's
 request, reuse it. Do not scaffold, rebuild, or create a duplicate app,
 fragment, note, doc, or artifact unless no suitable item exists or the user
 explicitly asks for a new one. If the item needs changes, update the existing
-item rather than starting over.
+item rather than starting over. Library discovery is scoped to the current
+chat/workspace; do not expect results from other workspaces.
 
 When returning a matching library item to the user, attach it in the same turn
 with `desk-agent chat attach-artifact` before replying. This applies to every
 library item kind: app, fragment, note, doc, image, file, directory, or any
 other reusable artifact. Only pass a hit's `path` directly to `attach-artifact`
-when it is in the current chat/workspace; if a broad `--workspace "*"` search
-finds the best item in a different workspace, do not pass that cross-workspace
-path directly. Copy or update the item into the current chat/workspace before
-attaching when a copy path is available; otherwise report the matched item and
-the attach limitation without rebuilding it. Do not merely describe a matching
-item or ask whether the user wants to see it; attach first when attachable, then
+when it is in the current chat/workspace. Do not merely describe a matching item
+or ask whether the user wants to see it; attach first when attachable, then
 summarize briefly.
 
 Show the smallest useful scope. When the user asks to see, open, inspect, or

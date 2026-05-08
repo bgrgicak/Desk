@@ -25,10 +25,9 @@ Reach for them when:
    file, app, directory, image, library item, or any other artifact. If the
    artifact is a directory, pass the directory path. Do not reply until the
    attach command has executed or you have determined no attachable
-   current-workspace path exists. A library hit from another workspace cannot be
-   attached by passing its cross-workspace path directly; copy or update it into
-   the current chat/workspace first when possible. If no attachable path exists,
-   report that limitation instead of silently skipping or rebuilding.
+   current-workspace path exists. Library discovery is scoped to the current
+   chat/workspace; do not expect hits from other workspaces. If no attachable
+   path exists, report that limitation instead of silently skipping or rebuilding.
 2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
@@ -108,10 +107,9 @@ Create an `artifactRef` message in the chat for an existing file or directory.
 Always use this as the last step of any turn in which you create,
 significantly update, or retrieve from the library an artifact before replying
 to the user. Only pass paths that exist in the current chat/workspace; a
-cross-workspace library hit must be copied or updated into the current
-chat/workspace before attachment when possible. If the command fails or no
-attachable current-workspace path exists, report the limitation inline instead
-of silently skipping.
+library hit should already be scoped there. If the command fails or no attachable
+current-workspace path exists, report the limitation inline instead of silently
+skipping.
 
 ```
 desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
@@ -191,17 +189,16 @@ desk-agent chat search-messages --query "passwords"
 ## desk-agent find library
 
 Discover reusable apps, fragments, notes, and docs in the user's library. Use
-this before building something new. If a returned library item satisfies the
-task, attach it with `desk-agent chat attach-artifact` in the same turn instead
-of creating a duplicate. Do not scaffold or rebuild an app, fragment, note, doc,
-or artifact when a suitable library item already exists unless the user
-explicitly asks for a new one. Only pass a hit's `path` directly when the item
-is in the current chat/workspace; cross-workspace hits need a current-workspace
-copy or another attachable path before `chat attach-artifact` can surface them.
+this before building something new. Discovery is scoped to the current
+chat/workspace; cross-workspace library search is not available yet. If a
+returned library item satisfies the task, attach it with `desk-agent chat
+attach-artifact` in the same turn instead of creating a duplicate. Do not
+scaffold or rebuild an app, fragment, note, doc, or artifact when a suitable
+library item already exists unless the user explicitly asks for a new one.
 
 ```
 desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any]
-                        [--workspace <slug>|*] [--limit N]
+                        [--workspace <current-slug>] [--limit N]
 ```
 
 When `--query` is omitted, the command returns recent library items. App and

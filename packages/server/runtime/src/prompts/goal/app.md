@@ -6,8 +6,7 @@ or workflow surface. Keep prior app decisions consistent across turns.
 Workflow:
 
 1. Before scaffolding, offering to build, or saying an app does not exist,
-   search the user's library with `desk-agent find library`. For broad library
-   checks, use `--workspace "*"`.
+   search the current workspace library with `desk-agent find library`.
 
    If a matching app or fragment satisfies the request, reuse it and attach it
    immediately with `desk-agent chat attach-artifact`; do not scaffold, rebuild,
@@ -15,8 +14,7 @@ Workflow:
    the user explicitly asks for a new one. If the existing item needs changes,
    update that item in place rather than starting from a new scaffold. Only pass
    a matching app/fragment path directly to `attach-artifact` when it is in the
-   current chat/workspace; cross-workspace matches need a current-workspace copy
-   or another attachable path first.
+   current chat/workspace; library discovery does not return other workspaces.
 
 2. Scaffold once per app:
 

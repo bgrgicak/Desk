@@ -3,7 +3,7 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <slug>|*] [--limit N]";
+  "desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <current-slug>] [--limit N]";
 
 export const help = `\
 desk-agent find library — discover reusable library apps, fragments, notes, and docs.
@@ -11,9 +11,10 @@ desk-agent find library — discover reusable library apps, fragments, notes, an
 Optional:
   --query <text>           Free-text query. When omitted, returns recent hits.
   --kind app|fragment|note|doc|any
-                           Filter by artifact type. Default: any.
-  --workspace <slug>|*     Defaults to the current workspace; pass "*" for
-                           all workspaces owned by the user.
+                            Filter by artifact type. Default: any.
+  --workspace <current-slug>
+                           Optional assertion for the current workspace.
+                           Cross-workspace library search is not available yet.
   --limit N                Default: 25. Capped at 100.
 
 Output:
