@@ -223,7 +223,7 @@ export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[
        AND json_extract(content, '$.type') IN ('agent_turn', 'summary_request')
        AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        AND requeue_count < ?
-     RETURNING id`,
+      RETURNING id`,
     [MAX_REQUEUE_ATTEMPTS],
   );
   // Fail task_run orphans — their parent task handles rescheduling.
