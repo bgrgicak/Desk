@@ -59,8 +59,10 @@ import { MergeEditor } from './MergeEditor'
 import {
   AppPreview,
   parseChatAppDirPath,
+  parseChatAppFragmentPath,
   parseChatAppManifestPath,
   parseLibraryAppDirPath,
+  parseLibraryAppFragmentPath,
   parseLibraryAppManifestPath,
 } from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
@@ -76,25 +78,30 @@ import { previewBlobFor } from '@/lib/preview-blob'
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
 type ContextDetailAppPreviewRef =
-  | { scope: 'chat'; chatId: string; appName: string }
-  | { scope: 'library'; appName: string }
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
+  | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; fragment?: string }
 
 export function appPreviewRefForContextItem(
   item: Pick<ContextItem, 'id' | 'type'>,
 ): ContextDetailAppPreviewRef | null {
   const chatAppManifestRef = parseChatAppManifestPath(item.id)
   const chatAppDirRef = item.type === 'app' ? parseChatAppDirPath(item.id) : null
+  const chatFragmentRef = parseChatAppFragmentPath(item.id)
+  if (chatFragmentRef) return { scope: 'chat', chatId: chatFragmentRef.chatId, appName: chatFragmentRef.appName, fragment: chatFragmentRef.fragment }
   const chatAppRef = chatAppManifestRef ?? chatAppDirRef
   if (chatAppRef) return { scope: 'chat', chatId: chatAppRef.chatId, appName: chatAppRef.appName }
 
+  const libraryFragmentRef = parseLibraryAppFragmentPath(item.id)
+  if (libraryFragmentRef) return { scope: 'library', appName: libraryFragmentRef.appName, appPath: libraryFragmentRef.appPath, fragment: libraryFragmentRef.fragment }
+
   const libraryManifestRef = parseLibraryAppManifestPath(item.id)
-  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName }
+  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName, appPath: item.id.slice(0, -'/desk.app.json'.length) }
 
   const libraryAppDirRef =
     item.type === 'app' && !libraryManifestRef
       ? parseLibraryAppDirPath(item.id)
       : null
-  if (libraryAppDirRef) return { scope: 'library', appName: libraryAppDirRef.appName }
+  if (libraryAppDirRef) return { scope: 'library', appName: libraryAppDirRef.appName, appPath: item.id }
 
   return null
 }
@@ -110,6 +117,7 @@ interface ContextDetailProps {
   /** Called after a successful rename (note title auto-rename or file
    * rename modal) so the parent can update the URL to the new path. */
   onRenameItem?: (newPath: string) => void
+  previewParams?: Record<string, string>
 }
 
 function canPreview(item: ContextItem): boolean {
@@ -118,7 +126,7 @@ function canPreview(item: ContextItem): boolean {
   return k !== 'unknown' && k !== 'app'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem, previewParams }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
@@ -159,7 +167,14 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   // PR-E extends this to library apps: clicking either the `<name>.app/`
   // library directory or its inner `desk.app.json` opens the same live
   // preview.
-  const appPreviewRef = appPreviewRefForContextItem(item)
+  const baseAppPreviewRef = appPreviewRefForContextItem(item)
+  const appPreviewRef = baseAppPreviewRef
+    ? {
+        ...baseAppPreviewRef,
+        ...(baseAppPreviewRef.scope === 'library' ? { workspaceId: activeWorkspaceId } : {}),
+        ...(previewParams ? { params: previewParams } : {}),
+      }
+    : null
 
   // Refs that mirror the latest editorValue / previewText so the async fetch
   // callback can read current values without stale closures, and without

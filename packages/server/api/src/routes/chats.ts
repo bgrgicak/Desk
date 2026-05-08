@@ -387,6 +387,7 @@ export async function attachArtifactRef(
     content: {
       type: "artifactRef",
       path: relPath,
+      workspaceId: chat.workspaceId,
       name: data.name?.trim() || path.basename(relPath),
       mime: data.mime?.trim() || inferredMime,
       ...(data.params ? { params: data.params } : {}),

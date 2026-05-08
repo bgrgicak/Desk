@@ -36,6 +36,7 @@ import {
 } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
+  validateLibrarySubpath,
   workspaceRootPath,
   type StorageContext,
 } from "@agent-desk/storage";
@@ -115,6 +116,17 @@ function chatCookieName(chatId: string, appName: string): string {
 // is `desk_libapp_<workspaceId>_<appName>`; the workspaceId is encoded
 // at request time so cross-workspace replay fails the verify step.
 const LIBRARY_COOKIE_PREFIX = "desk_libapp_";
+
+function normalizeLibraryAppPath(appPathOrName: string): { appPath: string; appName: string } | null {
+  const appPath = appPathOrName.endsWith(".app") || appPathOrName.includes("/")
+    ? appPathOrName
+    : `${appPathOrName}.app`;
+  validateLibrarySubpath(appPath);
+  if (!appPath.endsWith(".app")) return null;
+  const appName = path.basename(appPath, ".app");
+  if (!APP_NAME_PATTERN.test(appName)) return null;
+  return { appPath, appName };
+}
 
 interface AppStorageContext {
   scope: "chat" | "library";
@@ -204,6 +216,7 @@ async function resolveLibraryStorage(
   storage: StorageContext,
   req: IncomingMessage,
   appName: string,
+  appPath: string,
   expectedWorkspaceId?: string,
   expectedAssetToken?: string,
 ): Promise<AppStorageContext> {
@@ -232,7 +245,7 @@ async function resolveLibraryStorage(
   );
   if (rows.length === 0) throw new NotFoundError("Workspace not found");
   const wsRoot = workspaceRootPath(storage.home, rows[0].path);
-  const appRoot = path.join(wsRoot, `${appName}.app`);
+  const appRoot = path.join(wsRoot, appPath);
   const appRootReal = await resolveSafeAppRoot(appRoot, wsRoot, appName);
   const storageDir = path.join(appRoot, ".storage");
   return {
@@ -486,25 +499,27 @@ function matchAppStoragePath(
       resolveCtx: () => resolveChatStorage(pool, storage, req, chatId, appName),
     };
   }
-  // /apps/library/:workspaceId/:assetToken/:appName/storage/...
+  // /apps/library/:workspaceId/:assetToken/:appPath/storage/...
   // Mirrors the tokenized static-app URL so the HttpOnly cookie can stay
   // path-scoped to one library app and still cover storage calls.
+  const tokenizedLibraryStorageIndex = segments.findIndex((segment, index) => index >= 5 && segment === "storage");
   if (
     segments.length >= 7 &&
     segments[0] === "apps" &&
     segments[1] === "library" &&
     /^wks_[A-Za-z0-9_-]+$/.test(decodeURIComponent(segments[2])) &&
     /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3])) &&
-    segments[5] === "storage"
+    tokenizedLibraryStorageIndex !== -1
   ) {
     const workspaceId = decodeURIComponent(segments[2]);
     const assetToken = decodeURIComponent(segments[3]);
-    const appName = decodeURIComponent(segments[4]);
-    if (!APP_NAME_PATTERN.test(appName)) return null;
+    const appPath = segments.slice(4, tokenizedLibraryStorageIndex).map((s) => decodeURIComponent(s)).join("/");
+    const parsed = normalizeLibraryAppPath(appPath);
+    if (!parsed) return null;
     return {
       scope: "library",
-      segmentsAfterStorage: segments.slice(6),
-      resolveCtx: () => resolveLibraryStorage(pool, storage, req, appName, workspaceId, assetToken),
+      segmentsAfterStorage: segments.slice(tokenizedLibraryStorageIndex + 1),
+      resolveCtx: () => resolveLibraryStorage(pool, storage, req, parsed.appName, parsed.appPath, workspaceId, assetToken),
     };
   }
 
@@ -515,12 +530,12 @@ function matchAppStoragePath(
     segments[1] === "library" &&
     segments[3] === "storage"
   ) {
-    const appName = decodeURIComponent(segments[2]);
-    if (!APP_NAME_PATTERN.test(appName)) return null;
+    const parsed = normalizeLibraryAppPath(decodeURIComponent(segments[2]));
+    if (!parsed) return null;
     return {
       scope: "library",
       segmentsAfterStorage: segments.slice(4),
-      resolveCtx: () => resolveLibraryStorage(pool, storage, req, appName),
+      resolveCtx: () => resolveLibraryStorage(pool, storage, req, parsed.appName, parsed.appPath),
     };
   }
   return null;

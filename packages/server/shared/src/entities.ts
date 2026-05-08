@@ -81,6 +81,8 @@ export const MessageContentArtifactRefSchema = z.object({
   type: z.literal("artifactRef"),
   /** Workspace-relative path (forward-slash separated). */
   path: z.string(),
+  /** Workspace that owns the path. Older rows omit this and use the active chat workspace. */
+  workspaceId: z.string().optional(),
   /** Caller-facing display name, usually the basename. */
   name: z.string().optional(),
   mime: z.string().optional(),

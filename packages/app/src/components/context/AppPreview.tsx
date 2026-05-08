@@ -31,7 +31,7 @@ interface IssuedAppSession {
 
 type AppPreviewProps =
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
-  | { scope: 'library'; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
+  | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
 
 export type AppPreviewVariant = 'detail' | 'inline'
 
@@ -44,10 +44,15 @@ function appBasePathFromSessionUrl(rawUrl: string): string {
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
-  const url =
-    props.scope === 'chat'
-      ? `/api/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
-      : `/api/apps/library/${encodeURIComponent(props.appName)}/issue`
+  const url = props.scope === 'chat'
+    ? `/api/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
+    : (() => {
+        const params = new URLSearchParams()
+        if (props.workspaceId) params.set('workspaceId', props.workspaceId)
+        if (props.appPath) params.set('path', props.appPath)
+        const qs = params.toString()
+        return `/api/apps/library/${encodeURIComponent(props.appName)}/issue${qs ? `?${qs}` : ''}`
+      })()
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -206,6 +211,10 @@ export function parseLibraryAppManifestPath(p: string): { appName: string } | nu
   return { appName: m[1] }
 }
 
+function libraryAppPathFromManifestPath(p: string): string {
+  return p.slice(0, -'/desk.app.json'.length)
+}
+
 /**
  * Parses a workspace-relative path that points at a `<name>.app/`
  * directory itself (no `desk.app.json` suffix). Used when the user
@@ -240,21 +249,23 @@ export function parseChatAppFragmentPath(
 
 export function parseLibraryAppFragmentPath(
   p: string,
-): { appName: string; fragment: string } | null {
+): { appName: string; appPath: string; fragment: string } | null {
   if (p.startsWith('.chats/')) return null
   const m =
     /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
       p,
     )
   if (!m) return null
-  return { appName: m[1], fragment: m[2] }
+  const marker = `${m[1]}.app/dist/fragments/`
+  const markerIndex = p.indexOf(marker)
+  return { appName: m[1], appPath: p.slice(0, markerIndex + `${m[1]}.app`.length), fragment: m[2] }
 }
 
 export function appAttachmentToPreview(
   path: string,
 ):
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
-  | { scope: 'library'; appName: string; fragment?: string }
+  | { scope: 'library'; appName: string; appPath?: string; fragment?: string }
   | null {
   const chatFragment = parseChatAppFragmentPath(path)
   if (chatFragment) {
@@ -272,8 +283,8 @@ export function appAttachmentToPreview(
   const chatManifest = parseChatAppManifestPath(path)
   if (chatManifest) return { scope: 'chat', chatId: chatManifest.chatId, appName: chatManifest.appName }
   const libraryDir = parseLibraryAppDirPath(path)
-  if (libraryDir) return { scope: 'library', appName: libraryDir.appName }
+  if (libraryDir) return { scope: 'library', appName: libraryDir.appName, appPath: path }
   const libraryManifest = parseLibraryAppManifestPath(path)
-  if (libraryManifest) return { scope: 'library', appName: libraryManifest.appName }
+  if (libraryManifest) return { scope: 'library', appName: libraryManifest.appName, appPath: libraryAppPathFromManifestPath(path) }
   return null
 }

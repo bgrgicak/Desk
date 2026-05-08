@@ -126,13 +126,19 @@ function MessageContentView({
     case 'artifactRef':
       return (
         <ArtifactRefRow
-          workspaceId={workspaceId}
+          workspaceId={content.workspaceId ?? workspaceId}
           path={content.path}
           name={content.name}
           mime={content.mime}
           params={content.params}
           onClick={onAttachmentClick
-            ? () => onAttachmentClick({ path: content.path, name: content.name ?? basenamePath(content.path), mime: content.mime })
+            ? () => onAttachmentClick({
+                path: content.path,
+                name: content.name ?? basenamePath(content.path),
+                mime: content.mime,
+                workspaceId: content.workspaceId,
+                params: content.params,
+              })
             : undefined}
         />
       )

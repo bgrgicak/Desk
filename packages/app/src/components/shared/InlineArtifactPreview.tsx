@@ -45,8 +45,13 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const appPreviewRef = useMemo(() => {
     const base = inlineAppPreviewFor(path, name, mime)
-    return base && params ? { ...base, params } : base
-  }, [path, name, mime, params])
+    if (!base) return null
+    return {
+      ...base,
+      ...(base.scope === 'library' ? { workspaceId } : {}),
+      ...(params ? { params } : {}),
+    }
+  }, [path, name, mime, params, workspaceId])
   const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
   const shouldFetchFile = shouldTryPreview && guessedKind !== 'app'
