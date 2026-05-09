@@ -17,6 +17,7 @@ import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
 
 let pool: Pool;
 let server: http.Server;
@@ -239,7 +240,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /chats/:id/messages creates a user message and fires a trigger that produces an agent reply", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; path: string }>;
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
@@ -846,12 +847,53 @@ describe("API e2e (real Postgres)", () => {
     const titleResults = titleSearchRes.body as Array<{ type: string; id: string; snippet?: string }>;
     expect(titleResults.some((r) => r.type === "chat" && r.id === chat.id)).toBe(true);
 
+    const agentEventMessageId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, created_at)
+       VALUES (?, ?, 'agent', ?, ?)`,
+      [
+        agentEventMessageId,
+        chat.id,
+        JSON.stringify({
+          type: "events",
+          log: [{ kind: "event", event: { type: "text", part: { text: "SewmaReply appears in an AI response." } } }],
+        }),
+        new Date().toISOString(),
+      ],
+    );
+    const eventSearchRes = await request("GET", "/search?q=SewmaReply&scope=chats", token);
+    expect(eventSearchRes.status).toBe(200);
+    const eventResults = eventSearchRes.body as Array<{ type: string; id: string; messageId?: string }>;
+    expect(eventResults.some((r) => r.type === "message" && r.id === chat.id && r.messageId === agentEventMessageId)).toBe(true);
+
     // Search all
     const allRes = await request("GET", "/search?q=Searchable&scope=all", token);
     expect(allRes.status).toBe(200);
     const allResults = allRes.body as Array<{ id: string }>;
     expect(allResults.some((r) => r.id === file.path)).toBe(true);
     expect(allResults.some((r) => r.id === chat.id)).toBe(true);
+
+    // Search all should reserve room for chat hits even when many file hits
+    // score higher for the same query.
+    for (let i = 0; i < 45; i += 1) {
+      await pool.query(
+        `INSERT OR REPLACE INTO chat_search_index
+          (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
+         VALUES (?, ?, LOWER(?), NULL, ?, 'library_file', ?)`,
+        [
+          `test-all-crowd-${i}.md`,
+          `Searchable Searchable Searchable crowded file ${i}`,
+          `Searchable Searchable Searchable crowded file ${i}`,
+          workspaces[0].path,
+          new Date(Date.now() + i).toISOString(),
+        ],
+      );
+    }
+
+    const crowdedAllRes = await request("GET", "/search?q=Searchable&scope=all", token);
+    expect(crowdedAllRes.status).toBe(200);
+    const crowdedAllResults = crowdedAllRes.body as Array<{ id: string }>;
+    expect(crowdedAllResults.some((r) => r.id === chat.id)).toBe(true);
   });
 
   // Gap 11: Account PATCH email reflected
