@@ -149,11 +149,35 @@ export default function App() {
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
   const { defaultView, loaded: prefsLoaded } = usePrefs()
-  if (!serverWorkspaces || serverWorkspaces.length === 0 || !prefsLoaded) {
+  // Loading state: queries still in flight. Render a centered spinner
+  // instead of an empty div — an empty <div className="h-dvh"/> looks
+  // identical to a crashed app, and any tab-switch / WS-reconnect that
+  // briefly invalidates the cache flashes a full-screen white panel.
+  if (!serverWorkspaces || !prefsLoaded) {
     return (
       <TooltipProvider>
         <Toaster position="bottom-right" />
-        <div className="h-dvh" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+        </div>
+      </TooltipProvider>
+    )
+  }
+  // The user has zero workspaces (fresh install or all deleted). The
+  // app has no place to land — surface that explicitly instead of
+  // staying on a blank screen forever.
+  if (serverWorkspaces.length === 0) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <div className="max-w-sm text-center px-6">
+            <h1 className="text-lg font-semibold mb-2">No workspaces yet</h1>
+            <p className="text-sm text-muted-foreground">
+              Create a workspace from the top bar to get started.
+            </p>
+          </div>
+        </div>
       </TooltipProvider>
     )
   }
