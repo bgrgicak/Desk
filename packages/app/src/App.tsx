@@ -237,7 +237,6 @@ function AppInner() {
   // mid-flight loses its in-flight pendingFiles state).
   const {
     data: serverChats,
-    isFetching: chatsFetching,
     isLoading: chatsLoading,
     isUninitialized: chatsUninitialized,
     isError: chatsError,
@@ -534,7 +533,13 @@ function AppInner() {
   const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
   const chatsListLoading = !!activeWorkspaceId && !serverChats && !chatsError
-  const chatsListResolving = chatsListLoading || chatsLoading || chatsFetching || chatsUninitialized
+  // `chatsFetching` flips true on every background refetch (WS reconnect,
+  // tag invalidation, refetchOnMountOrArgChange). RTK Query keeps the
+  // cached data on screen during that window, so flagging it as
+  // "resolving" only causes the sidebar/main pane to flash a loader
+  // when we already have data — exactly the dev-server tab-switch
+  // flicker. Keep this signal scoped to the genuinely-no-data case.
+  const chatsListResolving = chatsListLoading || chatsLoading || chatsUninitialized
   const isResolvingSelectedChat = !!selectedChatId && !isNewChat && !selectedChat && chatsListResolving
   const isLoadingChatSurface = isResolvingSelectedChat || (activeView === 'pinned' && chatsListResolving)
 
