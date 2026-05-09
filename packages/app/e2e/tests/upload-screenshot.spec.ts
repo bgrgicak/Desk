@@ -105,7 +105,15 @@ test("chat: drop a screenshot → chip in composer → send rides on POST /messa
   await page.reload();
   await page.waitForLoadState("networkidle");
   await page.getByText("Screenshot upload chat").first().click();
-  await page.waitForLoadState("networkidle");
+  // Gate on the chat textarea AND give React one extra commit cycle —
+  // `networkidle` alone fires before ChatView's first paint settles, and
+  // a setInputFiles dispatched into a tree that's still re-rendering can
+  // have its onChange race the next render and lose the resulting setState.
+  await page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first()
+    .waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForTimeout(300);
 
   // Drop into the outer chat-pane dropzone — this is what a real drag
   // onto the conversation hits. It must NOT issue an upload request;
@@ -229,7 +237,11 @@ test("chat: drop multiple files + caption → one message bubble with N attachme
   await page.reload();
   await page.waitForLoadState("networkidle");
   await page.getByText("Multi-attach chat").first().click();
-  await page.waitForLoadState("networkidle");
+  await page
+    .getByPlaceholder(/ask anything|continue the conversation/i)
+    .first()
+    .waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForTimeout(300);
 
   const fileNames = ["one.png", "two.png", "three.png"];
   await page

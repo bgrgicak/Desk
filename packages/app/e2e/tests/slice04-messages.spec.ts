@@ -116,6 +116,10 @@ test("typing in the chat posts the message to the server", async ({
   // typed text and swaps placeholders), so we locate by element role.
   const textarea = loggedInPage.locator("textarea").last();
   await textarea.waitFor({ state: "visible", timeout: 10_000 });
+  // ChatView's first commit sometimes lags networkidle; an extra tick
+  // lets React flush the mount before we drive the textarea, otherwise
+  // the post-mount render can race the keypress and drop the message.
+  await loggedInPage.waitForTimeout(300);
   const body = "hello from the slice4 live-send spec";
   await textarea.fill(body);
   await textarea.press("Enter");
