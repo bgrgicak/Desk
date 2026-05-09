@@ -61,6 +61,7 @@ import {
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
+import { useCompactViewport } from '@/hooks/use-compact-viewport'
 
 interface LocalSourceState {
   kind: string
@@ -1313,6 +1314,7 @@ export function SettingsModal({
   initialSection,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
+  const isCompactViewport = useCompactViewport()
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -1679,17 +1681,17 @@ export function SettingsModal({
         <Button
           variant="ghost"
           size="icon"
-          className="absolute right-3 top-3 z-20 h-7 w-7 text-muted-foreground sm:hidden"
+          className={cn('absolute right-3 top-3 z-20 h-7 w-7 text-muted-foreground', !isCompactViewport && 'hidden')}
           onClick={() => onOpenChange(false)}
           aria-label="Close"
         >
           <X className="h-4 w-4" />
         </Button>
 
-        <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden sm:flex-row">
+        <div className={cn('flex h-full min-h-0 min-w-0 overflow-hidden', isCompactViewport ? 'flex-col' : 'flex-row')}>
           {/* Left nav */}
-          <div className="w-full shrink-0 flex flex-col border-b bg-muted/30 sm:h-full sm:w-52 sm:border-b-0 sm:border-r">
-            <div className="px-4 pt-4 pb-2 pr-12 sm:pt-5 sm:pb-3 sm:pr-4">
+          <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
+            <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
                 <div
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
@@ -1701,13 +1703,14 @@ export function SettingsModal({
               </div>
             </div>
 
-            <nav className="flex gap-1 overflow-x-auto px-2 pb-2 sm:flex-1 sm:flex-col sm:gap-0 sm:space-y-0.5 sm:overflow-x-visible sm:pb-0">
+            <nav className={cn('flex gap-1 px-2', isCompactViewport ? 'overflow-x-auto pb-2' : 'flex-1 flex-col gap-0 space-y-0.5 overflow-x-visible pb-0')}>
               {NAV.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    'flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors sm:w-full sm:shrink',
+                    'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    isCompactViewport ? 'shrink-0' : 'w-full shrink',
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
                       : 'text-foreground/70 hover:text-foreground hover:bg-muted/60',
@@ -1721,8 +1724,8 @@ export function SettingsModal({
           </div>
 
           {/* Right content */}
-          <div className="flex w-full flex-1 flex-col min-w-0 min-h-0 overflow-hidden sm:w-auto">
-            <div className="hidden min-h-[52px] items-center justify-between gap-3 border-b px-4 shrink-0 sm:flex">
+          <div className={cn('flex w-full flex-1 flex-col min-w-0 min-h-0 overflow-hidden', !isCompactViewport && 'w-auto')}>
+            <div className={cn('min-h-[52px] items-center justify-between gap-3 border-b px-4 shrink-0', isCompactViewport ? 'hidden' : 'flex')}>
               {renderHeaderBreadcrumb()}
               <Button
                 variant="ghost"
