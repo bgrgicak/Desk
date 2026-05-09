@@ -360,15 +360,17 @@ function AppInner() {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
 
-  // Workspace switch lands on the user's default view rather than carrying
-  // over the current one — the avatar click is a "go home in workspace X"
-  // action, not "navigate within this view to workspace X". `goTo` falls
-  // back to the activeView when no view is passed, so we explicitly pass
-  // the pref here.
+  // Click on the *current* workspace tab is "go home in this workspace" —
+  // always lands on the default view. Click on a *different* workspace tab
+  // is "switch and resume" — lands on whatever URL that workspace was last
+  // viewed at, falling back to its default view on first visit.
   const handleSelectWorkspace = useCallback((id: string) => {
     dispatch(setTodaySheetOpen(false))
-    navigate(getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView))
-  }, [navigate, dispatch, defaultView])
+    const target = id === activeWorkspaceId
+      ? buildDefaultViewPath(id, defaultView)
+      : (getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView))
+    navigate(target)
+  }, [activeWorkspaceId, navigate, dispatch, defaultView])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))

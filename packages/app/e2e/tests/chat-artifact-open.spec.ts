@@ -79,7 +79,7 @@ test("clicking a chat artifact file opens it in the detail view", async ({
     timeout: 10_000,
   });
   const chatButton = page
-    .getByRole("button", { name: /Artifact open test/ })
+    .getByRole("link", { name: /Artifact open test/ })
     .first();
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
   await chatButton.click();

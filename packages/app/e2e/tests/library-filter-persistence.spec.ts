@@ -104,7 +104,7 @@ test("type filter survives folder navigation", async ({
   await ensureFolder(serverUrl, token, ws[0].id, folder);
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   // Use the Folders filter so the row we want to click stays visible.
   await pickTypeFilter(loggedInPage, "Folders");
@@ -116,13 +116,13 @@ test("type filter survives folder navigation", async ({
 });
 
 test("type filter survives a hard refresh", async ({ loggedInPage }) => {
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   await pickTypeFilter(loggedInPage, "Files");
   await expectTypeFilter(loggedInPage, "Files");
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
   await expectTypeFilter(loggedInPage, "Files");
 });
 
@@ -144,7 +144,7 @@ test("Hidden filter survives a hard refresh when developer mode is on", async ({
   }, { uid: userId });
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   // Hidden is dev-only; if developerMode survives, it remains a valid choice.
   // If the persisted typeFilter survives, the trigger displays "Hidden".
@@ -152,27 +152,33 @@ test("Hidden filter survives a hard refresh when developer mode is on", async ({
 
   // A second refresh — the prior bug rewrote 'hidden' → 'all' on every load.
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
   await expectTypeFilter(loggedInPage, "Hidden");
 });
 
 test("Hidden filter includes normal and hidden library files", async ({
   loggedInPage,
   serverUrl,
+  serverHome,
   token,
 }) => {
   const ws = (await (
     await fetch(`${serverUrl}/workspaces`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-  ).json()) as Array<{ id: string }>;
+  ).json()) as Array<{ id: string; path: string }>;
   const userId = await getMyUserId(serverUrl, token);
   const stamp = Date.now();
   const visible = `hidden-filter-visible-${stamp}.md`;
   const hidden = `.hidden-filter-hidden-${stamp}.md`;
 
   await uploadLibraryFile(serverUrl, token, ws[0].id, visible, "visible\n");
-  await uploadLibraryFile(serverUrl, token, ws[0].id, hidden, "hidden\n");
+  // The upload API rejects dotfile names by design (`rejectHiddenName`),
+  // so write the hidden file directly via the host filesystem to mirror
+  // an agent-origin or external-tool drop.
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  await fs.writeFile(path.join(serverHome, ws[0].path, hidden), "hidden\n", "utf8");
 
   await loggedInPage.evaluate(({ uid }: { uid: string }) => {
     localStorage.setItem(
@@ -182,7 +188,7 @@ test("Hidden filter includes normal and hidden library files", async ({
   }, { uid: userId });
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   await pickTypeFilter(loggedInPage, "Hidden");
   await expect(loggedInPage.getByText(visible, { exact: true }).first()).toBeVisible({

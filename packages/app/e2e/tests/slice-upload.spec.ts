@@ -44,7 +44,7 @@ async function fillComposer(page: Page, text: string) {
 test("library upload via 'Choose file' button uploads to the server", async ({
   loggedInPage: page,
 }) => {
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
 
   const addBtn = page.locator('[data-testid="library-upload-button"]').first();
@@ -506,7 +506,7 @@ test("library detail's 'Use in chat' pins the file to chat attachments without a
   await page.reload();
   await page.waitForLoadState("networkidle");
 
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
   await page.getByText(fileName, { exact: true }).first().click();
   await page.waitForLoadState("networkidle");
@@ -611,7 +611,7 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
   await page.waitForLoadState("networkidle");
 
   // Open Library, find and open the file's detail view
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
   await page.getByText(fileName, { exact: true }).first().click();
   await page.waitForLoadState("networkidle");
@@ -624,7 +624,7 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
   await page.waitForLoadState("networkidle");
 
   // Switch to the "Files" tab in the right panel and click the pending file
-  await page.getByRole("button", { name: /^Files$/ }).first().click();
+  await page.getByRole("link", { name: /^Files$/ }).first().click();
   await page.getByText(fileName, { exact: true }).first().click();
 
   // Must navigate to the library context view showing the file's detail,
@@ -640,7 +640,7 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
 test("drop-zone overlay appears while files are being dragged", async ({
   loggedInPage: page,
 }) => {
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
 
   // Dispatch a real DragEvent with Files type to the ContextList drop zone.

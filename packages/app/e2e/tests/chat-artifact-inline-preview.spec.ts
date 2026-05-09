@@ -118,11 +118,10 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   await attachArtifactMessage({ path: htmlRelPath, name: 'Inline App', mime: 'text/html' })
   await attachArtifactMessage({ path: zipRelPath, name: zipName, mime: 'application/zip' })
 
-  await page.reload()
+  // Navigate directly to the chat — on mobile (390x844) the sidebar is
+  // collapsed by default, so the chat row isn't reachable via the sidebar.
+  await page.goto(`/w/${ws.id}/pinned?chat=${chat.id}`)
   await expect(page.getByTestId('account-avatar')).toBeVisible({ timeout: 10_000 })
-  const chatButton = page.getByRole('button', { name: /Inline artifact preview/ }).first()
-  await expect(chatButton).toBeVisible({ timeout: 10_000 })
-  await chatButton.click()
 
   const inlinePreview = page.getByTestId('artifact-inline-preview').first()
   await expect(inlinePreview).toBeVisible({ timeout: 10_000 })
@@ -210,7 +209,7 @@ test('clicking a directory artifact ref opens that directory in the Library', as
 
   await page.reload()
   await expect(page.getByTestId('account-avatar')).toBeVisible({ timeout: 10_000 })
-  const chatButton = page.getByRole('button', { name: /Directory artifact open/ }).first()
+  const chatButton = page.getByRole('link', { name: /Directory artifact open/ }).first()
   await expect(chatButton).toBeVisible({ timeout: 10_000 })
   await chatButton.click()
 
@@ -219,5 +218,5 @@ test('clicking a directory artifact ref opens that directory in the Library', as
   await expect(page).toHaveURL(new RegExp(`/context\\?folder=${encodeURIComponent(dirName)}(?:$|&)`), {
     timeout: 5_000,
   })
-  await expect(page.getByRole('button', { name: 'inside.md' })).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('inside.md').first()).toBeVisible({ timeout: 10_000 })
 })

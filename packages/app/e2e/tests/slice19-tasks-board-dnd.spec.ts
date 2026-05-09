@@ -59,7 +59,7 @@ test("moving a task to the Complete column persists as cancelled", async ({
   expect(move.status).toBeLessThan(300);
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
 
   // Card text appears on the page.
   await expect(loggedInPage.getByText("Slice19 board card").first()).toBeVisible({

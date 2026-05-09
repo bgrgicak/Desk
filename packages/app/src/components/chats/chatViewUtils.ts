@@ -7,8 +7,8 @@ import {
 
 export const DESKTOP_SIDEBAR_BREAKPOINT = DESKTOP_RIGHT_PANEL_BREAKPOINT
 
-export function shouldOpenChatSidebarsByDefault() {
-  return shouldOpenRightPanelsByDefault()
+export function shouldOpenChatSidebarsByDefault(viewportWidth?: number) {
+  return shouldOpenRightPanelsByDefault(viewportWidth)
 }
 
 export function isSmallChatViewport(viewportWidth?: number) {

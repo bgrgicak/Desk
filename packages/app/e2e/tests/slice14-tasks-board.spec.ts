@@ -51,7 +51,7 @@ test("tasks board view renders columns and places a scheduled message in the Sch
   expect(postRes.status).toBeLessThan(300);
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
 
   // Default view mode is board — make sure the four columns render.
   for (const label of ["To do", "Active", "Complete", "Scheduled"]) {

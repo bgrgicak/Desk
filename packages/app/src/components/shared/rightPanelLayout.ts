@@ -1,10 +1,11 @@
 export const DESKTOP_RIGHT_PANEL_BREAKPOINT = 768
 
-// Right panels (chat sidebars, context detail) start collapsed on every
-// viewport. Users open them per-chat / per-item via the toggle, and the
-// choice is persisted in localStorage by the caller.
-export function shouldOpenRightPanelsByDefault() {
-  return false
+// Right panels start open at desktop widths and collapsed below the
+// breakpoint, so phone/narrow-window users get the chat / preview pane
+// uncluttered. The caller persists the actual open state per chat / item.
+export function shouldOpenRightPanelsByDefault(viewportWidth?: number) {
+  const width = viewportWidth ?? (typeof window === 'undefined' ? DESKTOP_RIGHT_PANEL_BREAKPOINT : window.innerWidth)
+  return width >= DESKTOP_RIGHT_PANEL_BREAKPOINT
 }
 
 export function isSmallRightPanelViewport(viewportWidth?: number) {

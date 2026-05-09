@@ -45,7 +45,7 @@ test("library accepts a screenshot-style PNG (filename with spaces and dots)", a
 }) => {
   const workspaceId = await getFirstWorkspaceId(serverUrl, token);
 
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   await page.waitForLoadState("networkidle");
 
   await page.locator('[data-testid="library-upload-button"]').first().click();

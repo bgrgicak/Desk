@@ -41,8 +41,12 @@ describe('appPreviewRefForContextItem', () => {
 })
 
 describe('library item right panel layout', () => {
-  it('defaults library item sidebars closed like chat sidebars', () => {
-    expect(shouldOpenRightPanelsByDefault()).toBe(false)
+  it('defaults library item sidebars closed below the desktop breakpoint', () => {
+    expect(shouldOpenRightPanelsByDefault(767)).toBe(false)
+  })
+
+  it('defaults library item sidebars open at the desktop breakpoint', () => {
+    expect(shouldOpenRightPanelsByDefault(768)).toBe(true)
   })
 
   it('fully collapses the right panel without hiding it behind desktop-only classes', () => {
