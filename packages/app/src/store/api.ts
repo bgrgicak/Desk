@@ -113,6 +113,7 @@ function buildMessagesQuery(f: MessagesFilter): string {
   if (f.contentKind && f.contentKind.length > 0)
     params.set("contentKind", f.contentKind.join(","));
   if (f.kind && f.kind.length > 0) params.set("kind", f.kind.join(","));
+  if (f.parentId) params.set("parentId", f.parentId);
   if (f.since) params.set("since", f.since);
   if (f.limit !== undefined) params.set("limit", String(f.limit));
   if (f.cursor) params.set("cursor", f.cursor);
@@ -261,6 +262,7 @@ export const api = createApi({
     // ── Workspaces ────────────────────────────────────────────────────
     getWorkspaces: build.query<ServerWorkspace[], void>({
       query: () => "/workspaces",
+      keepUnusedDataFor: 30 * 60,
       providesTags: (result) =>
         result
           ? [
@@ -351,6 +353,7 @@ export const api = createApi({
     // ── Workspace ↔ Agent membership ──────────────────────────────────
     getWorkspaceAgents: build.query<ServerWorkspaceAgent[], string>({
       query: (workspaceId) => `/workspaces/${workspaceId}/agents`,
+      keepUnusedDataFor: 30 * 60,
       providesTags: (_r, _e, workspaceId) => [
         { type: "WorkspaceAgents", id: workspaceId },
         { type: "WorkspaceAgents", id: "LIST" },
@@ -390,6 +393,7 @@ export const api = createApi({
           ? `/chats?workspaceId=${encodeURIComponent(workspaceId)}`
           : "/chats";
       },
+      keepUnusedDataFor: 30 * 60,
       providesTags: (result) =>
         result
           ? [
@@ -403,7 +407,24 @@ export const api = createApi({
       { workspaceId: string; agentId: string; title: string; goal?: string }
     >({
       query: (body) => ({ url: "/chats", method: "POST", body }),
-      invalidatesTags: [{ type: "Chat", id: "LIST" }],
+      // Do not invalidate Chat/LIST here: the refetch can briefly return a
+      // stale list that does not include the just-created chat. Insert the
+      // fulfilled chat directly, then let WS/refetches converge later.
+      async onQueryStarted({ workspaceId }, { dispatch, queryFulfilled }) {
+        const insertCreatedChat = (created: ServerChat) => (draft: ServerChat[]) => {
+          if (draft.some((c) => c.id === created.id)) return;
+          draft.unshift(created);
+        };
+
+        try {
+          const { data: created } = await queryFulfilled;
+          dispatch(api.util.updateQueryData("getChats", { workspaceId }, insertCreatedChat(created)));
+          dispatch(api.util.updateQueryData("getChats", undefined, insertCreatedChat(created)));
+        } catch {
+          // The mutation error is surfaced by the caller; there is no cache
+          // update to roll back because we only insert after fulfillment.
+        }
+      },
     }),
     patchChat: build.mutation<
       ServerChat,
@@ -646,6 +667,7 @@ export const api = createApi({
     // ── Cross-chat messages (runs, today) ─────────────────────────────
     getMessages: build.query<ListMessagesResponse, MessagesFilter>({
       query: (filter) => buildMessagesQuery(filter),
+      keepUnusedDataFor: 30 * 60,
       providesTags: [{ type: "Message", id: "CROSS" }],
     }),
 
@@ -664,6 +686,7 @@ export const api = createApi({
         const qs = p.toString();
         return qs ? `/library?${qs}` : "/library";
       },
+      keepUnusedDataFor: 30 * 60,
       providesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
     getLibraryFile: build.query<

@@ -1,14 +1,26 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Routes,
   Route,
   Navigate,
   useNavigate,
+  useLocation,
   useParams,
   useSearchParams,
 } from 'react-router-dom'
 import { toast } from 'sonner'
-import { TooltipProvider, Toaster } from '@agent-desk/ui'
+import { Loader2 } from 'lucide-react'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  TooltipProvider,
+  Toaster,
+} from '@agent-desk/ui'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ContextList } from '@/components/context/ContextList'
@@ -27,6 +39,7 @@ import {
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
+  useGetMeQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
   usePinChatLibraryRefMutation,
@@ -51,12 +64,19 @@ import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
-import { taskMessageKindsForDeveloperMode, toUiTask } from '@/store/selectors/tasks'
+import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
+import type { PrefsShape } from '@/components/settings/SettingsModal'
+import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
+import {
+  acceptBrowserNotificationPermissionOffer,
+  markBrowserNotificationPermissionOffered,
+  shouldOfferBrowserNotificationPermissionOnce,
+} from '@/lib/account-notifications'
 
 // RTK Query rejects with `{ status, data: { code, message } }` from the
 // server, not Error instances — so the common `err instanceof Error ?
@@ -72,6 +92,12 @@ function extractApiError(err: unknown): string | undefined {
   }
   if (err instanceof Error) return err.message
   return undefined
+}
+
+function buildDefaultViewPath(wsId: string, defaultView: PrefsShape['defaultView']): string {
+  if (defaultView === 'new-chat') return buildPath(wsId, 'pinned', { chat: NEW_CHAT_ID })
+  if (defaultView === 'desk') return buildPath(wsId, 'pinned')
+  return buildPath(wsId, defaultView)
 }
 
 function parseArtifactParams(raw: string | null): Record<string, string> | undefined {
@@ -122,8 +148,8 @@ export default function App() {
 // first workspace's default view. Anything unrecognised also lands here.
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
-  const { defaultView } = usePrefs()
-  if (!serverWorkspaces || serverWorkspaces.length === 0) {
+  const { defaultView, loaded: prefsLoaded } = usePrefs()
+  if (!serverWorkspaces || serverWorkspaces.length === 0 || !prefsLoaded) {
     return (
       <TooltipProvider>
         <Toaster position="bottom-right" />
@@ -131,15 +157,17 @@ function AppBoot() {
       </TooltipProvider>
     )
   }
-  return <Navigate to={buildPath(serverWorkspaces[0].id, defaultView as RouteView)} replace />
+  return <Navigate to={buildDefaultViewPath(serverWorkspaces[0].id, defaultView)} replace />
 }
 
 function AppInner() {
   const { wsId = '', view: viewParam } = useParams<{ wsId: string; view: string }>()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const dispatch = useAppDispatch()
   const appStore = useAppStore()
+  const [notificationPromptOpen, setNotificationPromptOpen] = useState(false)
 
   const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
   const activeWorkspaceId = wsId
@@ -158,10 +186,11 @@ function AppInner() {
   const savedArtifactIds = new Set(savedArtifactIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
+  const { data: me } = useGetMeQuery()
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
-  const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
+  const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
 
   // If the wsId in the URL isn't one the user has, bounce to the first.
@@ -175,6 +204,25 @@ function AppInner() {
     navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
   }, [serverWorkspaces, wsFetching, activeWorkspaceId, activeView, navigate])
 
+  useEffect(() => {
+    if (!activeWorkspaceId) return
+    saveLastWorkspaceUrl(activeWorkspaceId, `${location.pathname}${location.search}${location.hash}`)
+  }, [activeWorkspaceId, location.pathname, location.search, location.hash])
+
+  useEffect(() => {
+    setNotificationPromptOpen(shouldOfferBrowserNotificationPermissionOnce(me?.id))
+  }, [me?.id])
+
+  const dismissNotificationPrompt = useCallback(() => {
+    markBrowserNotificationPermissionOffered(me?.id)
+    setNotificationPromptOpen(false)
+  }, [me?.id])
+
+  const enableDesktopNotifications = useCallback(async () => {
+    await acceptBrowserNotificationPermissionOffer(me?.id)
+    setNotificationPromptOpen(false)
+  }, [me?.id])
+
   // One-shot artifact-open animation hint: cleared once the artifact pane closes.
   useEffect(() => {
     if (!selectedArtifactPath && artifactTransitionSource !== null) {
@@ -183,22 +231,49 @@ function AppInner() {
     }
   }, [selectedArtifactPath, artifactTransitionSource, dispatch])
 
-  const { data: serverChats } = useGetChatsQuery(
+  const {
+    currentData: serverChats,
+    isFetching: chatsFetching,
+    isLoading: chatsLoading,
+    isUninitialized: chatsUninitialized,
+    isError: chatsError,
+  } = useGetChatsQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const chats: Chat[] = (serverChats ?? []).map(toUiChat)
+  const [locallyCreatedChats, setLocallyCreatedChats] = useState<Chat[]>([])
+  const serverUiChats: Chat[] = (serverChats ?? []).map(toUiChat)
+  const serverChatIds = new Set(serverUiChats.map(c => c.id))
+  const chats: Chat[] = [
+    ...locallyCreatedChats.filter(c => c.workspaceId === activeWorkspaceId && !serverChatIds.has(c.id)),
+    ...serverUiChats,
+  ]
+  useEffect(() => {
+    if (!serverChats?.length || locallyCreatedChats.length === 0) return
+    setLocallyCreatedChats(prev => prev.filter(c => !serverChats.some(sc => sc.id === c.id)))
+  }, [serverChats, locallyCreatedChats.length])
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
-  const { data: tasksResp } = useGetMessagesQuery(
+  const { currentData: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? [], serverWorkspaces ?? []))
+  const { currentData: summaryRequestTasksResp } = useGetMessagesQuery(
+    {
+      workspaceId: activeWorkspaceId,
+      kind: summaryRequestMessageKindsForDeveloperMode(developerMode),
+      contentKind: ['summary_request'],
+    },
+    { skip: !activeWorkspaceId || !developerMode, refetchOnMountOrArgChange: true },
+  )
+  const tasks = [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
+    .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
+    .map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? [], serverWorkspaces ?? []))
+  const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
@@ -222,6 +297,13 @@ function AppInner() {
       agentId: opts.agentId,
       title: opts.title,
     }).unwrap()
+    // Keep the just-created chat selectable even if the chat-list refetch lags
+    // or briefly returns a stale list. Without this local bridge, navigating to
+    // the new id can render the current default view until the sidebar cache
+    // catches up.
+    setLocallyCreatedChats(prev => (
+      prev.some(c => c.id === chat.id) ? prev : [toUiChat(chat), ...prev]
+    ))
     const msg = await postMessageMutation({
       chatId: chat.id,
       content: opts.content,
@@ -291,10 +373,6 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [dispatch, goTo])
 
-  const handleViewChange = useCallback((view: RouteView) => {
-    goTo({ view })
-  }, [goTo])
-
   const handleGlobalToday = useCallback(() => {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
@@ -306,8 +384,8 @@ function AppInner() {
   // the pref here.
   const handleSelectWorkspace = useCallback((id: string) => {
     dispatch(setTodaySheetOpen(false))
-    goTo({ wsId: id, view: defaultView as RouteView })
-  }, [goTo, dispatch, defaultView])
+    navigate(getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView))
+  }, [navigate, dispatch, defaultView])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))
@@ -441,13 +519,13 @@ function AppInner() {
   const unreadCount = awaitingResp?.items.length ?? 0
 
   const {
-    data: libraryResp,
+    currentData: libraryResp,
     isLoading: libraryLoading,
     isUninitialized: libraryUninitialized,
     isFetching: libraryFetching,
   } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
   const libraryItems: ContextItem[] = activeWorkspaceId
     ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? []))
@@ -466,6 +544,16 @@ function AppInner() {
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
+  const chatsListLoading = !!activeWorkspaceId && !serverChats && !chatsError
+  const chatsListResolving = chatsListLoading || chatsLoading || chatsFetching || chatsUninitialized
+  const isResolvingSelectedChat = !!selectedChatId && !isNewChat && !selectedChat && chatsListResolving
+  const isLoadingChatSurface = isResolvingSelectedChat || (activeView === 'pinned' && chatsListResolving)
+
+  useEffect(() => {
+    if (!selectedChat?.unread) return
+    markChatReadQuietly(selectedChat.id, dispatch, appStore.getState)
+  }, [selectedChat?.id, selectedChat?.unread, dispatch, appStore])
+
   const activeChat = isNewChat
     ? { ...NEW_CHAT_STUB, workspaceId: activeWorkspaceId || undefined }
     : selectedChat
@@ -486,7 +574,7 @@ function AppInner() {
   // by path so we can render the same ContextDetail view for them.
   const needsMetaFallback =
     !!effectiveItemPath && !libraryItem && !!activeWorkspaceId
-  const { data: fallbackFile } = useGetLibraryFileQuery(
+  const { data: fallbackFile, isFetching: fallbackFileFetching } = useGetLibraryFileQuery(
     { workspaceId: activeWorkspaceId ?? '', path: effectiveItemPath ?? '' },
     { skip: !needsMetaFallback },
   )
@@ -495,6 +583,11 @@ function AppInner() {
     (needsMetaFallback && fallbackFile && activeWorkspaceId
       ? toContextItem(fallbackFile, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? [])
       : null)
+  const isResolvingSelectedContextItem =
+    !!effectiveItemPath &&
+    !!activeWorkspaceId &&
+    !selectedContextItem &&
+    (!libraryResp || libraryLoading || libraryFetching || fallbackFileFetching)
 
 
   return (
@@ -513,7 +606,7 @@ function AppInner() {
         onNavigateSettings={(t) => {
           dispatch(setPendingSettingsSection(t.section))
         }}
-        onNavigateWorkspace={(id) => goTo({ wsId: id, view: defaultView as RouteView })}
+        onNavigateWorkspace={handleSelectWorkspace}
         onSelectChat={({ id, workspaceId }) => {
           goTo({ wsId: workspaceId || activeWorkspaceId, chat: id })
         }}
@@ -521,11 +614,27 @@ function AppInner() {
           goTo({ wsId: workspaceId || activeWorkspaceId, view: 'context', item: path })
         }}
       />
+      <Dialog open={notificationPromptOpen} onOpenChange={(open) => {
+        if (open) setNotificationPromptOpen(true)
+        else dismissNotificationPrompt()
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Enable desktop notifications?</DialogTitle>
+            <DialogDescription>
+              Desk can show browser notifications for the same new chat messages that get the sidebar unread dot.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={dismissNotificationPrompt}>Not now</Button>
+            <Button onClick={() => { void enableDesktopNotifications() }}>Enable notifications</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <AppShell
         activeView={activeView}
-        onViewChange={handleViewChange}
-        onCompose={enterCompose}
         chats={chats}
+        isChatsLoading={chatsListLoading}
         artifacts={artifacts}
         selectedChatId={selectedChatId}
         onChatClick={handleSidebarChatClick}
@@ -535,14 +644,15 @@ function AppInner() {
         onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
+        getWorkspaceHref={(id) => getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView)}
         onGlobalToday={handleGlobalToday}
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
         onChatWithAgent={handleChatWithAgent}
         pinnedItems={pinnedItems}
+        isPinnedLoading={!!activeWorkspaceId && !libraryResp && (libraryLoading || libraryFetching || libraryUninitialized)}
         selectedItemId={effectiveItemPath}
-        onPinnedItemClick={(item) => goTo({ view: 'context', item: item.id })}
         onPinItem={(itemId) => {
           if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: itemId })
         }}
@@ -598,12 +708,22 @@ function AppInner() {
           />
         )}
 
-        {!selectedContextItem && !activeChat && activeView === 'pinned' && (
+        {!selectedContextItem && !activeChat && (isLoadingChatSurface || isResolvingSelectedContextItem) && (
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{isLoadingChatSurface ? 'Loading chats…' : 'Loading workspace…'}</span>
+            </div>
+          </div>
+        )}
+
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && !chatsListResolving && activeView === 'pinned' && (
           <Navigate to={buildPath(activeWorkspaceId, 'context')} replace />
         )}
-        {!selectedContextItem && !activeChat && activeView === 'tasks' && (
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'tasks' && (
           <TasksPage
             tasks={tasks}
+            isLoading={tasksListLoading}
             onTaskMove={async (task, newStatus) => {
               if (!task.chatId || !task.messageId) return
               // UI column → server action:
@@ -701,7 +821,7 @@ function AppInner() {
             }}
           />
         )}
-        {!selectedContextItem && !activeChat && activeView === 'context' && !effectiveItemPath && (
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'context' && !effectiveItemPath && (
           <ContextList
             items={libraryItems}
             isLoading={libraryLoading || libraryUninitialized || !libraryResp || (libraryFetching && libraryItems.length === 0)}

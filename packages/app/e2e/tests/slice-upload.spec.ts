@@ -298,6 +298,15 @@ test("attach picker mentions a library file and the next message attaches it", a
 
   // Open the attach picker below the message input and pick the seeded file.
   await page.getByRole("button", { name: /^Add files$/ }).click();
+  const uploadButton = page.getByTestId("chat-upload-a-file");
+  const seededFileButton = page.getByRole("button", { name: fileName });
+  await expect(uploadButton).toBeVisible();
+  await expect(seededFileButton).toBeVisible();
+  const uploadBox = await uploadButton.boundingBox();
+  const seededFileBox = await seededFileButton.boundingBox();
+  expect(uploadBox).not.toBeNull();
+  expect(seededFileBox).not.toBeNull();
+  expect(uploadBox!.y).toBeLessThan(seededFileBox!.y);
   await page.getByRole("button", { name: fileName }).click();
 
   // Regression: library mentions were filtered out in ChatInput.handleSubmit

@@ -1053,7 +1053,7 @@ export function createApp(opts: AppOptions): Server {
       const body = ct.startsWith("multipart/form-data")
         ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
         : await parseBody(req);
-      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
+      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent, { actorUserId: userId });
 
       // Self-firing kinds (task / summary): execute_at is computed at insert
       // time; the DB poll loop fires them when due. Unscheduled tasks just sit.

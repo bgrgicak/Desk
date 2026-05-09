@@ -21,6 +21,7 @@ import {
 import type { ServerFile } from '@/store/types'
 
 interface GlobalPaletteSearchProps {
+  listMaxHeight?: number
   activeWorkspaceId?: string
   onNavigatePage: (target: NavTarget) => void
   onNavigateSettings: (target: SettingsTarget) => void
@@ -43,6 +44,7 @@ const PALETTE_SIZING = [
 ].join(' ')
 
 export function GlobalPaletteSearch({
+  listMaxHeight,
   activeWorkspaceId,
   onNavigatePage,
   onNavigateSettings,
@@ -119,24 +121,27 @@ export function GlobalPaletteSearch({
   }
 
   return (
-    <Command shouldFilter={false} className={PALETTE_SIZING}>
+    <Command shouldFilter={false} className={`${PALETTE_SIZING} min-h-0`}>
       <CommandInput
         placeholder="Ask a question or search across all workspaces"
         value={query}
         onValueChange={setQuery}
       />
-      <CommandList className="max-h-[576px]">
+      <CommandList className="min-h-0 max-h-[576px]" style={listMaxHeight ? { maxHeight: listMaxHeight } : undefined}>
         <CommandEmpty>No results found.</CommandEmpty>
 
-        {/* No-results path: lead with Ask AI */}
-        {isSearching && !hasAnyResults && (
+        {/* Lead with Ask AI so it is always visible while searching. */}
+        {isSearching && (
           <CommandGroup heading="Ask AI">
             <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
               <Sparkles className="text-muted-foreground" />
-              <span className="truncate">{trimmed}</span>
+              <span className="font-medium">Ask AI</span>
+              <span className="min-w-0 truncate text-muted-foreground">{trimmed}</span>
             </CommandItem>
           </CommandGroup>
         )}
+
+        {isSearching && hasAnyResults && <CommandSeparator />}
 
         {/* Default view ─ no query: recent global Ask AI chats. */}
         {!isSearching && recentChats && recentChats.length > 0 && (
@@ -254,18 +259,6 @@ export function GlobalPaletteSearch({
               </CommandItem>
             ))}
           </CommandGroup>
-        )}
-
-        {isSearching && hasAnyResults && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Ask AI">
-              <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
-                <Sparkles className="text-muted-foreground" />
-                <span className="truncate">{trimmed}</span>
-              </CommandItem>
-            </CommandGroup>
-          </>
         )}
       </CommandList>
     </Command>

@@ -48,6 +48,39 @@ async function ensureFolder(
   );
 }
 
+async function uploadLibraryFile(
+  serverUrl: string,
+  token: string,
+  workspaceId: string,
+  name: string,
+  body: string,
+): Promise<void> {
+  const boundary = `----desk-e2e-${Math.random().toString(16).slice(2)}`;
+  const bodyBuf = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="${name}"\r\n` +
+        `Content-Type: text/markdown\r\n\r\n`,
+    ),
+    Buffer.from(body, "utf8"),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const res = await fetch(
+    `${serverUrl}/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        "Content-Length": String(bodyBuf.length),
+      },
+      body: bodyBuf,
+    },
+  );
+  expect(res.status).toBeGreaterThanOrEqual(200);
+  expect(res.status).toBeLessThan(300);
+}
+
 async function getMyUserId(serverUrl: string, token: string): Promise<string> {
   const res = await fetch(`${serverUrl}/me`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -121,4 +154,41 @@ test("Hidden filter survives a hard refresh when developer mode is on", async ({
   await loggedInPage.reload();
   await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
   await expectTypeFilter(loggedInPage, "Hidden");
+});
+
+test("Hidden filter includes normal and hidden library files", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const ws = (await (
+    await fetch(`${serverUrl}/workspaces`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json()) as Array<{ id: string }>;
+  const userId = await getMyUserId(serverUrl, token);
+  const stamp = Date.now();
+  const visible = `hidden-filter-visible-${stamp}.md`;
+  const hidden = `.hidden-filter-hidden-${stamp}.md`;
+
+  await uploadLibraryFile(serverUrl, token, ws[0].id, visible, "visible\n");
+  await uploadLibraryFile(serverUrl, token, ws[0].id, hidden, "hidden\n");
+
+  await loggedInPage.evaluate(({ uid }: { uid: string }) => {
+    localStorage.setItem(
+      `desk.prefs.${uid}`,
+      JSON.stringify({ developerMode: true }),
+    );
+  }, { uid: userId });
+
+  await loggedInPage.reload();
+  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+
+  await pickTypeFilter(loggedInPage, "Hidden");
+  await expect(loggedInPage.getByText(visible, { exact: true }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(loggedInPage.getByText(hidden, { exact: true }).first()).toBeVisible({
+    timeout: 10_000,
+  });
 });

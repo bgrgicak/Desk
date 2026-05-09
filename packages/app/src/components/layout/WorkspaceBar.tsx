@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Reorder } from 'framer-motion'
+import { Link } from 'react-router-dom'
 import {
-  Inbox, Sun, Moon, Search,
+  Inbox, Sun, Moon, Search, Sparkles,
   HelpCircle, LogOut, Monitor, Check, Settings2,
   Plus, Columns2, Pencil, Trash2,
 } from 'lucide-react'
@@ -102,6 +103,7 @@ interface WorkspaceBarProps {
   todayUnreadCount: number
   onGlobalToday: () => void
   onSelectWorkspace: (id: string) => void
+  getWorkspaceHref?: (id: string) => string
   onSignOut?: () => void
   onOpenMyAccount?: () => void
 }
@@ -114,6 +116,7 @@ export function WorkspaceBar({
   todayUnreadCount,
   onGlobalToday,
   onSelectWorkspace,
+  getWorkspaceHref,
   onSignOut,
   onOpenMyAccount,
 }: WorkspaceBarProps) {
@@ -190,7 +193,7 @@ export function WorkspaceBar({
 
   return (
     <>
-      <div className="h-[51px] shrink-0 flex items-center relative z-50 overflow-x-auto pr-4" style={{ paddingLeft: 'calc(var(--spacing) * 2)' }}>
+      <div className="h-[51px] shrink-0 flex items-center relative z-50 overflow-hidden pr-4" style={{ paddingLeft: 'calc(var(--spacing) * 2)' }}>
 
         {/* ── Centered logo ── */}
         <div className="pointer-events-none absolute inset-0 hidden items-center justify-center -mt-0.5 md:flex">
@@ -216,7 +219,7 @@ export function WorkspaceBar({
           axis="x"
           values={orderedWorkspaces}
           onReorder={setOrderedWorkspaces}
-          className="flex items-center gap-1 group/ws ml-1"
+          className="flex min-w-0 flex-1 items-center gap-1 group/ws ml-1 overflow-x-auto overflow-y-hidden"
         >
           {orderedWorkspaces.map(ws => {
             const isActive = !isGlobalToday && ws.id === activeWorkspaceId
@@ -232,8 +235,20 @@ export function WorkspaceBar({
               >
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
-                    <button
-                      onClick={() => onSelectWorkspace(ws.id)}
+                    <Link
+                      to={getWorkspaceHref?.(ws.id) ?? `/w/${ws.id}/pinned`}
+                      onClick={(event) => {
+                        if (
+                          event.defaultPrevented ||
+                          event.button !== 0 ||
+                          event.metaKey ||
+                          event.altKey ||
+                          event.ctrlKey ||
+                          event.shiftKey
+                        ) return
+                        event.preventDefault()
+                        onSelectWorkspace(ws.id)
+                      }}
                       data-testid={`workspace-tab-${ws.id}`}
                       className={`relative flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors cursor-pointer select-none ${
                         isActive
@@ -252,7 +267,7 @@ export function WorkspaceBar({
                           {ws.unreadCount}
                         </span>
                       )}
-                    </button>
+                    </Link>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
                     <ContextMenuItem onSelect={() => onSelectWorkspace(ws.id)}>
@@ -295,10 +310,12 @@ export function WorkspaceBar({
           {/* Global search · Ask AI */}
           <button
             onClick={() => openGlobalPalette()}
-            className="flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
+            aria-label="Search · Ask AI"
+            className="relative flex items-center justify-center rounded-md h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-background/40 transition-colors"
             title="Search · Ask AI (⌘K)"
           >
             <Search className="h-4 w-4" />
+            <Sparkles className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 text-primary" aria-hidden="true" />
           </button>
 
           {/* Help */}

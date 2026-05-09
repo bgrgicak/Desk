@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Search } from 'lucide-react'
+import { Loader2, Search } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
@@ -10,6 +10,7 @@ import type { Task } from '@/data/ui-types'
 
 interface TasksPageProps {
   tasks: Task[]
+  isLoading?: boolean
   /** Called when a board drop moves a task to a different column. Wires
    * through to PATCH /chats/:id/messages/:id in App.tsx. Intra-column
    * reorders don't fire this hook — the server has no ordering field. */
@@ -17,7 +18,7 @@ interface TasksPageProps {
   onCreateTask?: (input: TaskCreateInput) => Promise<void> | void
 }
 
-export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
+export function TasksPage({ tasks, isLoading = false, onTaskMove, onCreateTask }: TasksPageProps) {
   const [createSheetOpen, setCreateSheetOpen] = useState(false)
   const [defaultCreateStatus, setDefaultCreateStatus] = useState<Task['status']>('todo')
   const [selectedTask, setSelectedTask]   = useState<Task | null>(null)
@@ -46,7 +47,7 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
     setPanelCollapsed(false)
   }
 
-  const showPanel = selectedTask && !panelCollapsed
+  const showPanel = !isLoading && selectedTask && !panelCollapsed
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -77,16 +78,23 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          <BoardView
-            tasks={filteredTasks}
-            selectedTaskId={selectedTask?.id ?? null}
-            onSelectTask={handleSelectTask}
-            onTaskMove={(task, newStatus) => onTaskMove?.(task, newStatus)}
-            onAddTask={status => {
-              setDefaultCreateStatus(status)
-              setCreateSheetOpen(true)
-            }}
-          />
+          {isLoading ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading tasks…
+            </div>
+          ) : (
+            <BoardView
+              tasks={filteredTasks}
+              selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
+              onTaskMove={(task, newStatus) => onTaskMove?.(task, newStatus)}
+              onAddTask={status => {
+                setDefaultCreateStatus(status)
+                setCreateSheetOpen(true)
+              }}
+            />
+          )}
         </div>
 
         <AnimatePresence>

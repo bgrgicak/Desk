@@ -49,6 +49,7 @@ import { getRelativeTime } from '@/data/ui-types'
 import { buildPath } from '@/router/nav'
 import {
   useGetAgentsQuery,
+  useGetMessagesQuery,
   usePatchMessageMutation,
   useRunMessageMutation,
   usePostChatMessageMutation,
@@ -62,6 +63,7 @@ import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
 import { describeCron } from './schedule-utils'
+import { taskOccurrenceFromMessage, taskRunMessageKinds } from '@/store/selectors/tasks'
 
 type PanelTab = 'details' | 'chat'
 
@@ -165,6 +167,12 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   const { data: agents } = useGetAgentsQuery()
+  const { data: taskRuns } = useGetMessagesQuery(
+    task.chatId && task.messageId
+      ? { chatId: task.chatId, parentId: task.messageId, kind: taskRunMessageKinds(), limit: 200 }
+      : {},
+    { skip: !task.chatId || !task.messageId },
+  )
   const [patchMessage, patchState] = usePatchMessageMutation()
   const [runMessage, runState] = useRunMessageMutation()
   const [deleteChat] = useDeleteChatMutation()
@@ -197,7 +205,10 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   // "History" is past-only — filter the synthesized upcoming preview
   // occurrences (id ends with `-upcoming`) that the calendar uses to
   // place scheduled tasks on their future date. Newest-first.
-  const history = (task.history ?? [])
+  const runHistory = (taskRuns?.items ?? [])
+    .map(taskOccurrenceFromMessage)
+    .filter((occ): occ is TaskOccurrence => !!occ)
+  const history = [...runHistory, ...(task.history ?? [])]
     .filter(occ => !occ.id.endsWith('-upcoming'))
     .slice()
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())

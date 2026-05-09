@@ -4,7 +4,8 @@ import { api } from "../api";
 import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
-import type { ServerChat, ServerMessage, WsEvent } from "../types";
+import type { ServerChat, ServerMessage, ServerUser, WsEvent } from "../types";
+import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
 
 /**
  * Optimistic cache patcher: sets `unread: false` for a chat in every
@@ -54,6 +55,30 @@ function patchChatUnreadInCache(
       }
     }
   }
+}
+
+function findChatInCache(state: unknown, chatId: string): Pick<ServerChat, "workspaceId" | "title"> | undefined {
+  const root = state as Record<string, unknown>;
+  const apiState = root[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+  if (!apiState?.queries) return undefined;
+  for (const entry of Object.values(apiState.queries)) {
+    const chats = entry?.data;
+    if (!Array.isArray(chats)) continue;
+    const chat = chats.find((c: ServerChat) => c.id === chatId);
+    if (chat?.workspaceId) return { workspaceId: chat.workspaceId, title: chat.title };
+  }
+  return undefined;
+}
+
+function findCurrentUserIdInCache(state: unknown): string | undefined {
+  const root = state as Record<string, unknown>;
+  const apiState = root[api.reducerPath] as { queries?: Record<string, { data?: ServerUser }> } | undefined;
+  if (!apiState?.queries) return undefined;
+  for (const [key, entry] of Object.entries(apiState.queries)) {
+    if (!key.startsWith("getMe(")) continue;
+    if (typeof entry?.data?.id === "string") return entry.data.id;
+  }
+  return undefined;
 }
 
 /**
@@ -341,19 +366,23 @@ export function applyEventToCache(
       // PATCH that clears unread on the server without triggering RTK
       // Query tag invalidation, avoiding the flash entirely.
       if (event.type === "message.appended") {
-        const ct = msg.content?.type;
-        const mk = (msg as { kind?: string }).kind ?? "chat";
-        const isInternal =
-          ct === "agent_turn" ||
-          ct === "summary_request" ||
-          ct === "summary" ||
-          ct === "artifactRef" ||
-          mk === "summary";
+        const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
             markChatReadQuietly(msg.chatId, dispatch, getState);
           } else {
+            const state = getState?.();
+            const notificationChat = state ? findChatInCache(state, msg.chatId) : undefined;
+            const userId = state ? findCurrentUserIdInCache(state) : undefined;
+            maybeShowChatBrowserNotification(
+              msg,
+              viewingChatId,
+              event.workspaceId ?? notificationChat?.workspaceId,
+              event.chatTitle ?? notificationChat?.title,
+              userId,
+              event.actorUserId,
+            );
             dispatch(
               api.util.invalidateTags([
                 { type: "Chat", id: msg.chatId },

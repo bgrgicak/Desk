@@ -26,6 +26,9 @@ export const ChatDeletedEventSchema = z.object({
 export const MessageAppendedEventSchema = z.object({
   type: z.literal("message.appended"),
   payload: MessageSchema,
+  workspaceId: z.string().optional(),
+  chatTitle: z.string().optional(),
+  actorUserId: z.string().optional(),
 });
 
 /**

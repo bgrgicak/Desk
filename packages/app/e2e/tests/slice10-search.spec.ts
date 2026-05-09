@@ -8,7 +8,9 @@ test("search palette returns server results", async ({
   serverUrl,
   token,
 }) => {
-  // Seed: create a chat whose title is a distinctive search target.
+  // Seed: create a chat whose message body is a distinctive search target.
+  // The title intentionally does not include the token so we cover body-only
+  // chat hits; the palette must not hide server results with client filtering.
   const ws = (await (
     await fetch(`${serverUrl}/workspaces`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -20,7 +22,7 @@ test("search palette returns server results", async ({
     })
   ).json()) as Array<{ id: string }>;
 
-  const title = "ZZZ searchableMoose chat";
+  const title = "ZZZ unrelated chat";
   const chatRes = await fetch(`${serverUrl}/chats`, {
     method: "POST",
     headers: {
@@ -64,7 +66,16 @@ test("search palette returns server results", async ({
   // Type enough to trigger the server query.
   await loggedInPage.getByPlaceholder(/Ask a question or search/).fill("searchableMoose");
 
+  // Ask AI remains visible even while async search results are loading.
   await expect(
-    loggedInPage.getByText("ZZZ searchableMoose chat").first(),
+    loggedInPage.getByRole("option", { name: /Ask AI.*searchableMoose/i }),
+  ).toBeVisible();
+
+  await expect(
+    loggedInPage.getByRole("option", { name: /searchableMoose/i }).first(),
+  ).toBeVisible();
+
+  await expect(
+    loggedInPage.getByText("ZZZ unrelated chat").first(),
   ).toBeVisible({ timeout: 10_000 });
 });

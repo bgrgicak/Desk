@@ -50,9 +50,9 @@ export function MessageBubble({
       return <TaskRunChip prompt={message.content.text} />
     }
     return (
-      <div className="flex flex-col items-end gap-1.5">
+      <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">
         {hasAttachments && (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden">
             {message.attachments!.map(att => (
               <AttachmentCard
                 key={att.path}
@@ -63,7 +63,7 @@ export function MessageBubble({
           </div>
         )}
         {message.content.type === 'text' && message.content.text && (
-          <div className="max-w-[80%] bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px] whitespace-pre-wrap">
+          <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px] whitespace-pre-wrap">
             {message.content.text}
           </div>
         )}
@@ -72,7 +72,7 @@ export function MessageBubble({
   }
 
   return (
-    <div className={isFirstInGroup ? 'space-y-1.5' : '-mt-4'}>
+    <div className={`min-w-0 max-w-full ${isFirstInGroup ? 'space-y-1.5' : '-mt-4'}`}>
       {isFirstInGroup && !hideAgentHeader && (
         <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
           <div className="flex items-center gap-1">
@@ -89,7 +89,7 @@ export function MessageBubble({
         </div>
       )}
       {hasAttachments && (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden">
           {message.attachments!.map(att => (
             <AttachmentCard key={att.path} attachment={att} />
           ))}
@@ -141,6 +141,7 @@ function MessageContentView({
                 path: content.path,
                 name: content.name ?? basenamePath(content.path),
                 mime: content.mime,
+                kind: isDirectoryArtifact(content.mime) ? 'directory' : 'file',
                 workspaceId: content.workspaceId,
                 params: content.params,
               })
@@ -251,14 +252,19 @@ function basenamePath(path: string) {
   return parts[parts.length - 1] ?? path
 }
 
+function isDirectoryArtifact(mime?: string | null) {
+  return mime === 'inode/directory'
+}
+
 function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string; params?: Record<string, string>; onClick?: () => void }) {
   const label = name ?? basenamePath(path)
-  const className = 'inline-flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs'
+  const Icon = isDirectoryArtifact(mime) ? Folder : FileText
+  const className = 'inline-flex max-w-full min-w-0 items-center gap-2 self-start overflow-hidden rounded-md border bg-background px-2.5 py-1.5 text-left text-xs align-top'
   const inner = (
     <>
-      <FileText className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
-      <span className="truncate font-medium">{label}</span>
-      {name && <span className="text-muted-foreground truncate">{path}</span>}
+      <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+      <span className="min-w-0 flex-1 truncate font-medium sm:flex-none">{label}</span>
+      {name && <span className="hidden min-w-0 truncate text-muted-foreground sm:inline">{path}</span>}
     </>
   )
   const fallback = !onClick ? <div className={className} data-testid="artifact-inline-fallback">{inner}</div> : (
@@ -296,7 +302,7 @@ function AttachmentCard({
   if (appPreview) return <AppPreview {...appPreview} variant="inline" />
 
   const className =
-    'inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs max-w-[320px] text-left'
+    'inline-flex min-w-0 max-w-full items-center gap-2 self-start overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]'
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
   // Subtext: byte count when known, falling back to the workspace path.
   // Directories don't carry a useful size, so we keep the path there.

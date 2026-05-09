@@ -7,13 +7,15 @@
  *      lands on `/w/<wsId>/<defaultView>`, regardless of the view the user
  *      was on a moment ago.
  *
+ * With no saved preference, the default landing state is a new chat.
+ *
  * The pref previously offered a "chats" value that didn't map to any
  * route — `loadPrefs` now sanitises it back to the default
  * (PREFS_DEFAULTS.defaultView), which is also covered here.
  */
 import { test, expect } from "../fixtures";
 
-type DefaultView = "desk" | "tasks" | "context";
+type DefaultView = "new-chat" | "desk" | "tasks" | "context";
 
 async function setDefaultViewPref(
   page: import("@playwright/test").Page,
@@ -50,7 +52,21 @@ async function getWorkspaceId(serverUrl: string, token: string): Promise<string>
   return ws[0].id;
 }
 
-test("post-login redirect lands on the default view", async ({
+test("post-login redirect defaults to a new chat", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const wsId = await getWorkspaceId(serverUrl, token);
+
+  await loggedInPage.goto("/");
+  await expect(loggedInPage).toHaveURL(
+    new RegExp(`/w/${wsId}/pinned\\?chat=new$`),
+    { timeout: 10_000 },
+  );
+});
+
+test("post-login redirect lands on the selected default view", async ({
   loggedInPage,
   serverUrl,
   token,
@@ -70,6 +86,13 @@ test("post-login redirect lands on the default view", async ({
   await loggedInPage.goto("/");
   await expect(loggedInPage).toHaveURL(
     new RegExp(`/w/${wsId}/context($|\\?)`),
+    { timeout: 10_000 },
+  );
+
+  await setDefaultViewPref(loggedInPage, serverUrl, token, "new-chat");
+  await loggedInPage.goto("/");
+  await expect(loggedInPage).toHaveURL(
+    new RegExp(`/w/${wsId}/pinned\\?chat=new$`),
     { timeout: 10_000 },
   );
 });
@@ -118,12 +141,13 @@ test("stale 'chats' value is sanitised back to the default view", async ({
   const wsId = await getWorkspaceId(serverUrl, token);
 
   // 'chats' was a valid pref value in an earlier release. The shape has
-  // since narrowed to RouteView (pinned|desk|tasks|context); loadPrefs
-  // must not propagate the stale value into the URL — it falls back to
-  // PREFS_DEFAULTS.defaultView (currently 'tasks').
+  // since narrowed to RouteView (pinned|desk|tasks|context) plus query-backed
+  // destinations; loadPrefs must not propagate the stale value into the URL —
+  // it falls back to PREFS_DEFAULTS.defaultView (currently 'new-chat').
   await setDefaultViewPref(loggedInPage, serverUrl, token, "chats");
   await loggedInPage.goto("/");
-  await expect(loggedInPage).toHaveURL(new RegExp(`/w/${wsId}/tasks($|\\?)`), {
-    timeout: 10_000,
-  });
+  await expect(loggedInPage).toHaveURL(
+    new RegExp(`/w/${wsId}/pinned\\?chat=new$`),
+    { timeout: 10_000 },
+  );
 });
