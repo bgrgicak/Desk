@@ -64,7 +64,7 @@ test("opening a chat shows its persisted messages", async ({
 
   // Click the chat in the sidebar.
   await loggedInPage
-    .getByRole("button", { name: /Slice4 history/ })
+    .getByRole("link", { name: /Slice4 history/ })
     .first()
     .click();
 
@@ -107,7 +107,7 @@ test("typing in the chat posts the message to the server", async ({
   await loggedInPage.reload();
 
   await loggedInPage
-    .getByRole("button", { name: /Slice4 live send/ })
+    .getByRole("link", { name: /Slice4 live send/ })
     .first()
     .click();
 

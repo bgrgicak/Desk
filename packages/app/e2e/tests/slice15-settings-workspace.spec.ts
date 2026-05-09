@@ -28,7 +28,7 @@ test("editing workspace name + icon + color from Settings → Workspace persists
 
   // Re-render reflects the new name.
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice15 Renamed/ }).first(),
+    loggedInPage.getByRole("link", { name: /Slice15 Renamed/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
 
   // Server actually stored the values.
@@ -45,6 +45,6 @@ test("editing workspace name + icon + color from Settings → Workspace persists
   // Reload — values stick.
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice15 Renamed/ }).first(),
+    loggedInPage.getByRole("link", { name: /Slice15 Renamed/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 });

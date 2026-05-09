@@ -77,7 +77,7 @@ test("sidebar shows spinner for running chat on page load (cold-start hydration)
 
   // Wait for the sidebar to render with the chat
   const chatButton = loggedInPage
-    .getByRole("button", { name: /Running spinner test/ })
+    .getByRole("link", { name: /Running spinner test/ })
     .first();
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
 

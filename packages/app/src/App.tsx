@@ -188,7 +188,7 @@ function AppInner() {
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
-  const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
+  const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
@@ -231,8 +231,12 @@ function AppInner() {
     }
   }, [selectedArtifactPath, artifactTransitionSource, dispatch])
 
+  // Use `data` (not `currentData`) so the chat list keeps showing the last
+  // fulfilled value during arg-change refetches. `currentData` would briefly
+  // return undefined and unmount ChatView mid-interaction (a file drop
+  // mid-flight loses its in-flight pendingFiles state).
   const {
-    currentData: serverChats,
+    data: serverChats,
     isFetching: chatsFetching,
     isLoading: chatsLoading,
     isUninitialized: chatsUninitialized,
@@ -248,11 +252,11 @@ function AppInner() {
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
-  const { currentData: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
+  const { data: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const { currentData: summaryRequestTasksResp } = useGetMessagesQuery(
+  const { data: summaryRequestTasksResp } = useGetMessagesQuery(
     {
       workspaceId: activeWorkspaceId,
       kind: summaryRequestMessageKindsForDeveloperMode(developerMode),
@@ -504,7 +508,7 @@ function AppInner() {
   const unreadCount = awaitingResp?.items.length ?? 0
 
   const {
-    currentData: libraryResp,
+    data: libraryResp,
     isLoading: libraryLoading,
     isUninitialized: libraryUninitialized,
     isFetching: libraryFetching,

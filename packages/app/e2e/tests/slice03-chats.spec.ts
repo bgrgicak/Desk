@@ -44,7 +44,7 @@ test("chats the user has are listed in the sidebar", async ({
   await createChat(serverUrl, token, "Slice3 persistent chat");
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice3 persistent chat/ }).first(),
+    loggedInPage.getByRole("link", { name: /Slice3 persistent chat/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 });
 
@@ -56,7 +56,7 @@ test("deleting a chat via the API removes it from the sidebar", async ({
   const chatId = await createChat(serverUrl, token, "Slice3 doomed chat");
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice3 doomed chat/ }).first(),
+    loggedInPage.getByRole("link", { name: /Slice3 doomed chat/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 
   const del = await fetch(`${serverUrl}/chats/${chatId}`, {
@@ -66,6 +66,6 @@ test("deleting a chat via the API removes it from the sidebar", async ({
   expect(del.status).toBe(200);
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice3 doomed chat/ }),
+    loggedInPage.getByRole("link", { name: /Slice3 doomed chat/ }),
   ).toHaveCount(0);
 });

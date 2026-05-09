@@ -288,7 +288,7 @@ test("new-chat: drop a file before first message → first message carries it", 
 }) => {
   const fileName = `new-chat-upload-${Date.now()}.png`;
 
-  await page.getByRole("button", { name: /^New chat$/i }).first().click();
+  await page.getByRole("link", { name: /^New chat$/i }).first().click();
   await page.waitForLoadState("networkidle");
 
   await page

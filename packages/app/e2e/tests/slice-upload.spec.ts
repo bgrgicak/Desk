@@ -196,7 +196,7 @@ test("uploads on the new-chat screen are held until send — never spill into th
   ).json()) as { items: Array<{ name: string }> };
   const namesBefore = new Set(libBefore.items.map((i) => i.name));
 
-  await page.getByRole("button", { name: /^New chat$/i }).first().click();
+  await page.getByRole("link", { name: /^New chat$/i }).first().click();
   await page.waitForLoadState("networkidle");
 
   const outerInput = page.locator('[data-testid="dropzone-file-input"]').first();
@@ -363,7 +363,7 @@ test("first message in a new chat carries @-mentioned library file", async ({
   // regression: the new-chat branch in ChatView dropped the uploads arg
   // when calling onFirstMessage, so attachments[] never reached the wire
   // for the first message even though the picker recorded the mention.
-  await page.getByRole("button", { name: /^New chat$/i }).first().click();
+  await page.getByRole("link", { name: /^New chat$/i }).first().click();
   await page.waitForLoadState("networkidle");
 
   await page.getByRole("button", { name: /^Add files$/ }).click();
@@ -624,7 +624,7 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
   await page.waitForLoadState("networkidle");
 
   // Switch to the "Files" tab in the right panel and click the pending file
-  await page.getByRole("link", { name: /^Files$/ }).first().click();
+  await page.getByRole("button", { name: /^Files$/ }).first().click();
   await page.getByText(fileName, { exact: true }).first().click();
 
   // Must navigate to the library context view showing the file's detail,
