@@ -186,18 +186,18 @@ export function LibraryCard({
             )}
           </div>
         </div>
-        <span className="text-xs text-muted-foreground shrink-0 w-20 text-right capitalize">
+        <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right capitalize sm:block">
           {item.type}
         </span>
-        <span className="text-xs text-muted-foreground shrink-0 w-20 text-right">
+        <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right sm:block">
           {getRelativeTime(item.addedAt)}
         </span>
-        <div className="flex items-center gap-1 justify-end shrink-0 w-[140px] ml-10">
+        <div className="flex items-center gap-1 justify-end shrink-0 sm:w-[140px] sm:ml-10">
           {onUseInChat && (
             <Button
               size="sm"
               variant="outline"
-              className="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+              className="hidden h-7 text-xs opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
               onClick={(e) => {
                 e.stopPropagation()
                 onUseInChat()

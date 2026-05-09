@@ -73,7 +73,7 @@ async function openLibraryFile(
 ): Promise<void> {
   await page.reload();
   await expect(page.getByTestId("account-avatar")).toBeVisible();
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   const row = page.getByText(filename).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();

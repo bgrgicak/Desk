@@ -97,7 +97,7 @@ test("POST /chats/:id/messages with kind=task creates a task and lists under ?ki
   // UI sanity: open Tasks page. The card text is m.title ?? firstLine(content),
   // so a task with `title='Audit Q2'` renders the title rather than the content body.
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
   await expect(
     loggedInPage.getByText("Audit Q2").first(),
   ).toBeVisible({ timeout: 10_000 });
@@ -110,7 +110,7 @@ test("Tasks view 'Create' button produces a kind=task row that the Tasks board r
 }) => {
   const taskName = `Slice20 UI task ${Date.now()}`;
 
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
   await loggedInPage.getByTestId("tasks-create").click();
 
   await loggedInPage.getByTestId("task-sheet-name").fill(taskName);

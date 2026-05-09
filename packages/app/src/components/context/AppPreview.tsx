@@ -161,7 +161,7 @@ export function AppPreview(props: AppPreviewProps) {
 
   if (variant === 'inline') {
     return (
-      <div className="max-w-[480px] overflow-hidden rounded-lg border bg-background">
+      <div className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-background sm:max-w-[480px]">
         <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
           <span className="truncate font-medium">{fragment ? `${appName}/${fragment}` : appName}</span>
           <button

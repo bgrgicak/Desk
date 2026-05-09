@@ -168,12 +168,12 @@ function InlinePreviewShell({
 }) {
   return (
     <div
-      className="mx-auto w-full max-w-5xl overflow-hidden rounded-xl border-2 border-border bg-background shadow-sm"
+      className="mx-auto w-full min-w-0 max-w-full overflow-hidden rounded-xl border-2 border-border bg-background shadow-sm sm:max-w-5xl"
       data-testid="artifact-inline-preview"
     >
       <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           {actions}
           {onOpen && (
             <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={onOpen}>
@@ -183,7 +183,7 @@ function InlinePreviewShell({
           )}
         </div>
       </div>
-      <div className="h-[460px] max-h-[75vh] min-h-[380px] bg-background sm:h-[640px]">
+      <div className="h-[460px] max-h-[75vh] min-h-[380px] min-w-0 max-w-full overflow-hidden bg-background sm:h-[640px]">
         {children}
       </div>
     </div>

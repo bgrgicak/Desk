@@ -288,7 +288,7 @@ export async function sendMessage(
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
-  opts?: { role?: "user" | "agent" | "system" },
+  opts?: { role?: "user" | "agent" | "system"; actorUserId?: string },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -334,7 +334,7 @@ export async function sendMessage(
       cron: data.cron ?? null,
       agentId: chat.agentId,
     });
-    emit({ type: "message.appended", payload: message });
+    emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
     return { userMessage: message, triggerId: messageId };
   }
 
@@ -346,7 +346,7 @@ export async function sendMessage(
     attachments,
   });
 
-  emit({ type: "message.appended", payload: userMessage });
+  emit({ type: "message.appended", payload: userMessage, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
 
   const triggerId = generateId("message");
   const trigger = await queries.messages.insert(pool, {
@@ -358,7 +358,7 @@ export async function sendMessage(
     parentId: userMessage.id,
     agentId: chat.agentId,
   });
-  emit({ type: "message.appended", payload: trigger });
+  emit({ type: "message.appended", payload: trigger, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
 
   return { userMessage, triggerId };
 }
@@ -410,7 +410,7 @@ export async function attachArtifactRef(
     agentId: opts?.agentId ?? chat.agentId,
     model: opts?.model ?? null,
   });
-  emit({ type: "message.appended", payload: message });
+  emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title });
   emit({ type: "workspace.synced", payload: { workspaceId: chat.workspaceId } });
   return message;
 }

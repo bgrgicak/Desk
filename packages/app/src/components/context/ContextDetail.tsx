@@ -74,8 +74,31 @@ import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
 import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 import { previewBlobFor } from '@/lib/preview-blob'
+import {
+  DESKTOP_RIGHT_PANEL_BREAKPOINT,
+  isSmallRightPanelViewport,
+  rightPanelClassName,
+  shouldOpenRightPanelsByDefault,
+} from '@/components/shared/rightPanelLayout'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
+
+function useIsSmallRightPanelScreen() {
+  const [smallScreen, setSmallScreen] = useState(() => isSmallRightPanelViewport())
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const query = window.matchMedia(`(max-width: ${DESKTOP_RIGHT_PANEL_BREAKPOINT - 1}px)`)
+    const update = () => setSmallScreen(isSmallRightPanelViewport())
+
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  return smallScreen
+}
 
 type ContextDetailAppPreviewRef =
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
@@ -131,7 +154,9 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
 
-  const [panelCollapsed, setPanelCollapsed] = usePersistedState<boolean>('desk.context.sidebarCollapsed', false)
+  const rightPanelOpenKey = `desk.library.${item.id}.rightPanelOpen`
+  const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenRightPanelsByDefault())
+  const isSmallViewport = useIsSmallRightPanelScreen()
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [showPreview, setShowPreview] = usePersistedState(
     `desk.library.${item.id}.previewMode`,
@@ -600,12 +625,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {panelCollapsed && (
+              {!panelOpen && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setPanelCollapsed(false)}
+                  onClick={() => setPanelOpen(true)}
                 >
                   <PanelRight className="h-4 w-4" />
                 </Button>
@@ -883,13 +908,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
       </div>
 
       {/* Right panel — conversation + details */}
-      <div className={`hidden lg:flex shrink-0 transition-all duration-300 overflow-hidden ${panelCollapsed ? 'w-0' : 'w-[380px]'}`}>
-        <ConversationPanel
-          initialMessages={[]}
-          item={item}
-          workspaceId={activeWorkspaceId}
-          onCollapse={() => setPanelCollapsed(true)}
-        />
+      <div className={rightPanelClassName(panelOpen, isSmallViewport, 'w-[380px]')}>
+        {panelOpen && (
+          <ConversationPanel
+            initialMessages={[]}
+            item={item}
+            workspaceId={activeWorkspaceId}
+            onCollapse={() => setPanelOpen(false)}
+          />
+        )}
       </div>
 
       {/* Delete confirmation dialog */}

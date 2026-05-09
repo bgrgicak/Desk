@@ -8,7 +8,7 @@ import { test, expect } from "../fixtures";
 
 test("seeded workspace is visible in the bar", async ({ loggedInPage }) => {
   // "Desk" is the seeded workspace name (see packages/server/db/src/seed.ts).
-  await expect(loggedInPage.getByRole("button", { name: /Desk/ }).first()).toBeVisible();
+  await expect(loggedInPage.getByRole("link", { name: /Desk/ }).first()).toBeVisible();
 });
 
 test("editing workspace name + description + color from the Customize modal persists", async ({
@@ -32,7 +32,7 @@ test("editing workspace name + description + color from the Customize modal pers
   }
 
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  await expect(loggedInPage.getByRole("button", { name: /Desk/ }).first()).toBeVisible();
+  await expect(loggedInPage.getByRole("link", { name: /Desk/ }).first()).toBeVisible();
 
   // Open the settings modal.
   await loggedInPage.getByRole("button", { name: /Customize/ }).click();
@@ -54,7 +54,7 @@ test("editing workspace name + description + color from the Customize modal pers
   // Bar re-renders with the new name and emoji after the mutation invalidates the list.
   // The top-bar button text is "{emoji} {name}", so both appear in its accessible name.
   await expect(
-    loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
+    loggedInPage.getByRole("link", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
 
   // Confirm the server actually stored it.
@@ -77,7 +77,7 @@ test("editing workspace name + description + color from the Customize modal pers
   // Reload and confirm the change sticks through a fresh boot.
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Updated Desk/ }).first(),
+    loggedInPage.getByRole("link", { name: /Updated Desk/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 });
 
@@ -103,7 +103,7 @@ test("creating a workspace from the top-bar form persists to the server", async 
   // Tab appears in the bar and the new workspace becomes active — URL
   // is the source of truth for active workspace (see AppShell routing).
   await expect(
-    loggedInPage.getByRole("button", { name: /From top bar/ }).first(),
+    loggedInPage.getByRole("link", { name: /From top bar/ }).first(),
   ).toBeVisible({ timeout: 5_000 });
   const urlWsId = await loggedInPage.evaluate(() => {
     const m = window.location.pathname.match(/\/w\/([^/]+)/);
@@ -133,7 +133,7 @@ test("creating a workspace from the top-bar form persists to the server", async 
   // Survives a reload.
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /From top bar/ }).first(),
+    loggedInPage.getByRole("link", { name: /From top bar/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 });
 
@@ -167,6 +167,6 @@ test("creating a workspace adds it to the bar on reload", async ({
   // Force a reload — the app doesn't have WS push yet (that's slice 12).
   await loggedInPage.reload();
   await expect(
-    loggedInPage.getByRole("button", { name: /Slice2 Scratch/ }).first(),
+    loggedInPage.getByRole("link", { name: /Slice2 Scratch/ }).first(),
   ).toBeVisible({ timeout: 10_000 });
 });

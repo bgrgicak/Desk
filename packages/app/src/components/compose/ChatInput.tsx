@@ -372,7 +372,7 @@ export function ChatInput({
         )}
 
         {/* Textarea + submit inline */}
-        <div className={`flex gap-2 px-3 ${compact ? 'py-2' : 'py-3'}`}>
+        <div className={`flex min-w-0 gap-2 px-3 ${compact ? 'py-2' : 'py-3'}`}>
           <textarea
             ref={textareaRef}
             rows={1}
@@ -381,7 +381,7 @@ export function ChatInput({
             onKeyDown={handleKeyDown}
             placeholder={activePlaceholder}
             disabled={disabled}
-            className={`flex-1 self-center resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 disabled:opacity-50`}
+            className="min-w-0 flex-1 self-center resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 disabled:opacity-50"
           />
           <div className="self-stretch flex flex-col justify-end">
             <button
@@ -399,7 +399,7 @@ export function ChatInput({
       </div>
 
       {/* Pickers row — below the input */}
-      <div className={`flex items-center gap-1.5 ${compact ? 'mt-1.5' : 'mt-2'}`}>
+      <div className={`flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden ${compact ? 'mt-1.5' : 'mt-2'}`}>
 
         <ComposerPickers
           ref={pickersRef}

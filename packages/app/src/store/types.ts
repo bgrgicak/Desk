@@ -35,7 +35,7 @@ export type MessageContent =
   | { type: "artifactRef"; path: string; workspaceId?: string; name?: string; mime?: string; params?: Record<string, string> }
   | { type: "events"; log: AgentLogEntry[] }
   | { type: "summary"; body: string }
-  | { type: "summary_request" }
+  | { type: "summary_request"; chatTitle?: string; messagePreview?: string }
   | { type: "reflection_request"; workspaceId: string }
   | { type: "agent_turn"; userMessageId: string };
 
@@ -194,10 +194,13 @@ export interface MessagesFilter {
   scheduled?: boolean;
   awaitingUser?: boolean;
   contentKind?: string[];
-  /** Message-kind discriminator (`task`, `summary`, `chat`). The Tasks
-   * page filters on `task`. Distinct from `contentKind` which targets
-   * `content.type`. */
-  kind?: ("chat" | "task" | "summary")[];
+  /** Message-kind discriminator (`task`, `task_run`, `summary`, `chat`). The Tasks
+   * page filters on `task`/`summary` definitions and separately fetches
+   * `task_run` rows for per-task history. Distinct from `contentKind` which
+   * targets `content.type`. */
+  kind?: ("chat" | "task" | "task_run" | "summary")[];
+  /** Restrict to child messages whose `parentId` matches a task definition. */
+  parentId?: string;
   since?: string;
   limit?: number;
   cursor?: string;
@@ -209,7 +212,7 @@ export type WsEvent =
       type: "chat.deleted";
       payload: { chatId: string; workspaceId: string };
     }
-  | { type: "message.appended"; payload: ServerMessage }
+  | { type: "message.appended"; payload: ServerMessage; workspaceId?: string; chatTitle?: string; actorUserId?: string }
   | { type: "message.updated"; payload: ServerMessage }
   | {
       type: "message.log_appended";

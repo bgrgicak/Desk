@@ -62,7 +62,7 @@ test("tasks page shows scheduled server messages", async ({
 
   await loggedInPage.reload();
   // Navigate to tasks view — click the "Tasks" sidebar item.
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
 
   // The task's name is derived from the first line of content.
   await expect(

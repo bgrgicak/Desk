@@ -128,7 +128,7 @@ async function openTaskDetail(
   seeded: Seeded,
 ) {
   await page.reload();
-  await page.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await page.getByRole("link", { name: /^Tasks$/ }).first().click();
   await page.getByTestId(`task-row-${seeded.messageId}`).click();
   await expect(page.getByTestId("task-status-trigger")).toBeVisible({ timeout: 5_000 });
 }

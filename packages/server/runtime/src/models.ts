@@ -12,6 +12,12 @@ export interface ModelRef {
   id: string;
   /** Provider portion of `id`, denormalised so UIs can group/filter without parsing. */
   provider: string;
+  /** Maximum context window reported by `opencode models --verbose`, when available. */
+  contextWindow?: number;
+  /** Maximum input tokens reported by `opencode models --verbose`, when available. */
+  inputLimit?: number;
+  /** Maximum output tokens reported by `opencode models --verbose`, when available. */
+  outputLimit?: number;
 }
 
 export interface ListModelsOptions {
@@ -39,7 +45,7 @@ export class SandboxExecError extends Error {
 }
 
 const FAKE_DRIVER_MODELS: ModelRef[] = [
-  { id: "opencode/big-pickle", provider: "opencode" },
+  { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
 ];
 
 export async function listModels(
@@ -53,7 +59,7 @@ export async function listModels(
       : FAKE_DRIVER_MODELS;
   }
 
-  const argv = ["opencode", "models"];
+  const argv = ["opencode", "models", "--verbose"];
   if (opts.provider) argv.push(opts.provider);
 
   const result = await execInSandbox(workspaceId, workspaceSlug, {
@@ -74,10 +80,12 @@ export async function listModels(
   return parseModelsOutput(result.stdout);
 }
 
-/** Parses newline-delimited `provider/model` pairs, tolerating stray whitespace. */
+/** Parses `opencode models` output, including verbose JSON metadata when present. */
 export function parseModelsOutput(stdout: string): ModelRef[] {
   const models: ModelRef[] = [];
-  for (const raw of stdout.split("\n")) {
+  const lines = stdout.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.trim();
     if (!line) continue;
     const slash = line.indexOf("/");
@@ -85,7 +93,57 @@ export function parseModelsOutput(stdout: string): ModelRef[] {
     const provider = line.slice(0, slash);
     const rest = line.slice(slash + 1);
     if (!rest) continue;
-    models.push({ id: line, provider });
+
+    // Brace-counted block scan. Naive: doesn't account for braces inside
+    // strings, but `opencode models --verbose` doesn't currently emit
+    // any string values containing `{` or `}`. JSON.parse below catches
+    // mis-extracted blocks and falls back to no-metadata.
+    const jsonLines: string[] = [];
+    let depth = 0;
+    let sawJson = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = lines[j];
+      const trimmed = next.trim();
+      if (!sawJson && trimmed === "") continue;
+      if (!sawJson && !trimmed.startsWith("{")) break;
+      sawJson = true;
+      jsonLines.push(next);
+      for (const ch of next) {
+        if (ch === "{") depth++;
+        if (ch === "}") depth--;
+      }
+      if (sawJson && depth <= 0) {
+        i = j;
+        break;
+      }
+    }
+
+    if (!sawJson) {
+      models.push({ id: line, provider });
+      continue;
+    }
+
+    try {
+      const meta = JSON.parse(jsonLines.join("\n")) as {
+        limit?: { context?: unknown; input?: unknown; output?: unknown };
+      };
+      const contextWindow = positiveNumber(meta.limit?.context);
+      const inputLimit = positiveNumber(meta.limit?.input);
+      const outputLimit = positiveNumber(meta.limit?.output);
+      models.push({
+        id: line,
+        provider,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(inputLimit !== undefined ? { inputLimit } : {}),
+        ...(outputLimit !== undefined ? { outputLimit } : {}),
+      });
+    } catch {
+      models.push({ id: line, provider });
+    }
   }
   return models;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }

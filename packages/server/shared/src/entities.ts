@@ -135,6 +135,8 @@ export const MessageContentSummarySchema = z.object({
  */
 export const MessageContentSummaryRequestSchema = z.object({
   type: z.literal("summary_request"),
+  chatTitle: z.string().optional(),
+  messagePreview: z.string().optional(),
 });
 
 /**

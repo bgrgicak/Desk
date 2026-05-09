@@ -1,10 +1,11 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
 import type { ServerChat, ServerMessage, WsEvent } from "../types";
+import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
 
 /**
  * Optimistic cache patcher: sets `unread: false` for a chat in every
@@ -341,19 +342,28 @@ export function applyEventToCache(
       // PATCH that clears unread on the server without triggering RTK
       // Query tag invalidation, avoiding the flash entirely.
       if (event.type === "message.appended") {
-        const ct = msg.content?.type;
-        const mk = (msg as { kind?: string }).kind ?? "chat";
-        const isInternal =
-          ct === "agent_turn" ||
-          ct === "summary_request" ||
-          ct === "summary" ||
-          ct === "artifactRef" ||
-          mk === "summary";
+        const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
             markChatReadQuietly(msg.chatId, dispatch, getState);
           } else {
+            // Notification routing relies on the event carrying workspace
+            // context (chats.ts populates these on every chat-message emit).
+            // If a future emitter forgets to include workspaceId, the
+            // notification simply won't show — no silent fallback that
+            // depends on cache shape.
+            const userId = (getState?.() as RootState | undefined)
+              ? selectCurrentUserId(getState!() as RootState)
+              : null;
+            maybeShowChatBrowserNotification(
+              msg,
+              viewingChatId,
+              event.workspaceId,
+              event.chatTitle,
+              userId,
+              event.actorUserId,
+            );
             dispatch(
               api.util.invalidateTags([
                 { type: "Chat", id: msg.chatId },

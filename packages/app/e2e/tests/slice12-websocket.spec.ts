@@ -55,7 +55,7 @@ test("chat.deleted WS event removes the sidebar entry without reload", async ({
   await loggedInPage.reload();
 
   const chatButton = loggedInPage
-    .getByRole("button", { name: /Slice12 websocket removal/ })
+    .getByRole("link", { name: /Slice12 websocket removal/ })
     .first();
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
 

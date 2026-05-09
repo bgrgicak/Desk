@@ -98,8 +98,11 @@ export function ChatThread({
     setBeforeCursor(undefined)
   }
 
-  // Initial load — newest page (no cursor).
-  const { data, isLoading } = useGetChatMessagesQuery(
+  // Initial load — newest page (no cursor). Use `data` (not `currentData`)
+  // so we keep showing the previous chat's messages while the next chat's
+  // request is in flight, instead of blanking out and remounting the
+  // textarea/dropzone mid-interaction.
+  const { data, isError } = useGetChatMessagesQuery(
     { chatId },
     { skip: skipQuery },
   )
@@ -120,6 +123,7 @@ export function ChatThread({
 
   const allItems = data?.items ?? []
   const prevCursor = data?.prevCursor
+  const isInitialLoading = !skipQuery && !data && !isError
 
   const hasPendingTrigger = allItems.some(
     m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
@@ -192,13 +196,13 @@ export function ChatThread({
   // On initial load, scroll to bottom.
   const hasInitialScrolled = useRef(false)
   useEffect(() => {
-    if (!isLoading && messages.length > 0 && !hasInitialScrolled.current) {
+    if (!isInitialLoading && messages.length > 0 && !hasInitialScrolled.current) {
       hasInitialScrolled.current = true
       if (scrollRef.current) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight
       }
     }
-  }, [isLoading, messages.length])
+  }, [isInitialLoading, messages.length])
 
   // Reset initial scroll flag when chat changes.
   useEffect(() => {
@@ -231,11 +235,25 @@ export function ChatThread({
     }
   }, [loadOlderMessages])
 
+  if (isInitialLoading) {
+    return (
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
+        {headerSlot}
+        <div className="flex flex-1 min-h-0 items-center justify-center text-sm text-muted-foreground" data-testid="chat-thread-loading">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Loading chat…</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
       {headerSlot}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
-        <div className={innerClassName}>
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden" onScroll={handleScroll}>
+        <div className={`min-w-0 max-w-full ${innerClassName}`}>
           {/* Loading-older indicator */}
           {isFetchingOlder && (
             <div className="flex justify-center py-2">
@@ -243,12 +261,12 @@ export function ChatThread({
             </div>
           )}
           {/* "Beginning of conversation" marker */}
-          {!prevCursor && messages.length > 0 && !isLoading && (
+          {!prevCursor && messages.length > 0 && !isInitialLoading && (
             <p className="text-xs text-muted-foreground text-center pt-1 pb-2">
               Beginning of conversation
             </p>
           )}
-          {messages.length === 0 && !isLoading && (
+          {messages.length === 0 && !isInitialLoading && (
             emptySlot ?? (
               <p className="text-xs text-muted-foreground text-center pt-4" data-testid="task-chat-empty">
                 No messages yet. Ask a question or request changes.
@@ -258,13 +276,14 @@ export function ChatThread({
           {messages.map((msg, i) => (
             <div
               key={msg.id}
+              className="min-w-0 max-w-full"
               data-message-id={msg.id}
               ref={(el) => {
                 if (el) messageRefs.current.set(msg.id, el)
                 else messageRefs.current.delete(msg.id)
               }}
             >
-              <div className={typeof messageClassName === 'function' ? messageClassName(msg) : messageClassName}>
+              <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}

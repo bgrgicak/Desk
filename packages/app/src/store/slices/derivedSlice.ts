@@ -43,6 +43,12 @@ export interface DerivedState {
    */
   wsKnownChatIds: string[]
   viewingChatId: string | null
+  /**
+   * Current user ID, mirrored from the most recent fulfilled `getMe` query.
+   * Lets the WS middleware identify the local user without poking RTK
+   * Query's internal cache shape.
+   */
+  currentUserId: string | null
 }
 
 const initialState: DerivedState = {
@@ -52,6 +58,7 @@ const initialState: DerivedState = {
   runningChatIds: [],
   wsKnownChatIds: [],
   viewingChatId: null,
+  currentUserId: null,
 }
 
 const slice = createSlice({
@@ -117,6 +124,13 @@ const slice = createSlice({
     )
 
     builder.addMatcher(
+      api.endpoints.getMe.matchFulfilled,
+      (state, action) => {
+        state.currentUserId = action.payload?.id ?? null
+      },
+    )
+
+    builder.addMatcher(
       api.endpoints.getChatMessages.matchFulfilled,
       (state, action) => {
         // Skip scrollback (before-cursor) loads: older pages don't contain the
@@ -168,6 +182,9 @@ export const selectRunningChatIds = (s: RootState): string[] =>
 
 export const selectViewingChatId = (s: RootState): string | null =>
   s.derived.viewingChatId
+
+export const selectCurrentUserId = (s: RootState): string | null =>
+  s.derived.currentUserId
 
 export const selectFolders = (_s: RootState): Folder[] => []
 export const selectInboxItems = (_s: RootState): InboxItem[] => []

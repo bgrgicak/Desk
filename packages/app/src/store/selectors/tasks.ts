@@ -1,8 +1,22 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
 import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
 
-export function taskMessageKindsForDeveloperMode(developerMode: boolean): Array<"task" | "summary"> {
-  return developerMode ? ["task", "summary"] : ["task"];
+export function taskMessageKindsForDeveloperMode(_developerMode: boolean): Array<"task" | "summary"> {
+  return ["task"];
+}
+
+export function summaryRequestMessageKindsForDeveloperMode(developerMode: boolean): Array<"summary"> {
+  return developerMode ? ["summary"] : [];
+}
+
+export function isTaskListMessageForDeveloperMode(m: ServerMessage, developerMode: boolean): boolean {
+  if (m.kind === "task") return true;
+  if (!developerMode) return false;
+  return m.kind === "summary" && m.content.type === "summary_request";
+}
+
+export function taskRunMessageKinds(): Array<"task_run"> {
+  return ["task_run"];
 }
 
 const COLOR_PALETTE: Task["color"][] = [
@@ -23,7 +37,8 @@ function colorFor(id: string): Task["color"] {
 
 function nameFor(m: ServerMessage, chats: ServerChat[], workspaces: ServerWorkspace[]): string {
   if (m.content.type === "summary_request") {
-    const chatTitle = chats.find((chat) => chat.id === m.chatId)?.title.trim();
+    const embeddedTitle = m.content.chatTitle?.trim();
+    const chatTitle = embeddedTitle || chats.find((chat) => chat.id === m.chatId)?.title.trim();
     return chatTitle ? `Summarize - ${chatTitle}` : "Summarize";
   }
   if (m.content.type === "reflection_request") {
@@ -41,6 +56,10 @@ function nameFor(m: ServerMessage, chats: ServerChat[], workspaces: ServerWorksp
 }
 
 function descriptionFor(m: ServerMessage): string | undefined {
+  if (m.content.type === "summary_request") {
+    const preview = m.content.messagePreview?.trim();
+    return preview && preview !== m.content.chatTitle?.trim() ? preview : undefined;
+  }
   if (m.content.type !== "text") return undefined;
   const text = m.content.text.trim();
   if (!text) return undefined;
@@ -80,6 +99,27 @@ function statusTextFor(m: ServerMessage): string {
   return "Pending";
 }
 
+export function taskOccurrenceFromMessage(m: ServerMessage): TaskOccurrence | undefined {
+  const startedAt = m.startedAt ? new Date(m.startedAt) : undefined;
+  if (!startedAt && !m.executeAt) return undefined;
+
+  const occStartedAt = startedAt ?? new Date(m.executeAt!);
+  const endedAt = m.endedAt ? new Date(m.endedAt) : occStartedAt;
+  const status: TaskOccurrence["status"] =
+    m.state === "running" ? "active"
+    : m.state === "failed" ? "failed"
+    : m.state === "pending" || m.state === "paused" ? "scheduled"
+    : "completed";
+
+  return {
+    id: m.kind === "task_run" ? m.id : `${m.id}-occ`,
+    startedAt: occStartedAt,
+    endedAt,
+    status,
+    statusText: statusTextFor(m),
+  };
+}
+
 /**
  * Convert a scheduled/executing server Message into the trunk-derived
  * Task shape that the Tasks page renders. `priority`, `assigneeId`,
@@ -91,6 +131,7 @@ export function toUiTask(
   agents: ServerAgent[],
   chats: ServerChat[] = [],
   workspaces: ServerWorkspace[] = [],
+  runs: ServerMessage[] = [],
 ): Task {
   const agent = agents.find((a) => a.id === m.agentId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
@@ -98,18 +139,13 @@ export function toUiTask(
   const status = statusFor(m);
 
   const history: TaskOccurrence[] = [];
+  for (const run of runs) {
+    const occurrence = taskOccurrenceFromMessage(run);
+    if (occurrence) history.push(occurrence);
+  }
   if (realStartedAt) {
-    const occStatus: TaskOccurrence["status"] =
-      m.state === "running" ? "active"
-      : m.state === "succeeded" ? "completed"
-      : m.state === "failed" ? "failed"
-      : "completed";
-    history.push({
-      id: `${m.id}-occ`,
-      startedAt: realStartedAt,
-      endedAt: completedAt ?? realStartedAt,
-      status: occStatus,
-    });
+    const occurrence = taskOccurrenceFromMessage(m);
+    if (occurrence) history.push(occurrence);
   } else if (m.executeAt && m.state !== "cancelled") {
     const when = new Date(m.executeAt);
     history.push({

@@ -54,7 +54,7 @@ import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
-import { DESKTOP_SIDEBAR_BREAKPOINT, shouldOpenChatSidebarsByDefault, chatRightPanelClassName } from './chatViewUtils'
+import { DESKTOP_SIDEBAR_BREAKPOINT, chatRightPanelClassName, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
 
 function activateOnEnterOrSpace(e: KeyboardEvent<HTMLElement>, action: () => void) {
   if (e.currentTarget !== e.target) return
@@ -71,7 +71,7 @@ const STARTER_CHIPS = [
 ]
 
 function isSmallScreen() {
-  return !shouldOpenChatSidebarsByDefault()
+  return isSmallChatViewport()
 }
 
 function useIsSmallScreen() {
@@ -526,6 +526,20 @@ function FilesPanel({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
+            <div className="border-b">
+              <button
+                onClick={() => {
+                  setPickerOpen(false)
+                  openPicker()
+                }}
+                disabled={dropDisabled}
+                data-testid="files-panel-upload-a-file"
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <span>{uploading ? 'Uploading…' : 'Upload a file…'}</span>
+              </button>
+            </div>
             <div className="overflow-y-auto max-h-52">
               {available.length === 0 && (
                 <p className="px-3 py-4 text-xs text-muted-foreground text-center">
@@ -547,20 +561,6 @@ function FilesPanel({
                   </button>
                 )
               })}
-            </div>
-            <div className="border-t">
-              <button
-                onClick={() => {
-                  setPickerOpen(false)
-                  openPicker()
-                }}
-                disabled={dropDisabled}
-                data-testid="files-panel-upload-a-file"
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                <span>{uploading ? 'Uploading…' : 'Upload a file…'}</span>
-              </button>
             </div>
           </PopoverContent>
         </Popover>
@@ -687,19 +687,14 @@ export function ChatView({
   const focusInputRef = useRef<(() => void) | null>(null)
   const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
   const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
-  const [panelOpen, setPanelOpen] = useState(shouldOpenChatSidebarsByDefault)
+  const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightPanelOpen` : null
+  const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
   const isSmallViewport = useIsSmallScreen()
-  const panelInteractedRef = useRef(false)
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
 
   const setPanelOpenFromUser = useCallback((open: boolean) => {
-    panelInteractedRef.current = true
     setPanelOpen(open)
-  }, [])
-
-  useEffect(() => {
-    if (!panelInteractedRef.current) setPanelOpen(!isSmallViewport)
-  }, [isSmallViewport])
+  }, [setPanelOpen])
 
   const isNewChat = chat.id === NEW_CHAT_ID
 
@@ -920,7 +915,7 @@ export function ChatView({
     agents?.find(a => a.id === chat.agentId)?.name ?? 'Agent'
 
   return (
-    <div className="relative flex flex-1 min-h-0 overflow-hidden">
+    <div className="relative flex w-full max-w-full flex-1 min-w-0 min-h-0 overflow-hidden">
 
       {/* ── Left column: header + messages + input ──
           Dropzone stays enabled even before the first message is
@@ -931,10 +926,10 @@ export function ChatView({
       <FileDropZone
         onFiles={handleUpload}
         overlayLabel={hasRealChatId ? 'Drop to attach to chat' : 'Drop to attach to your first message'}
-        className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden"
+        className="flex flex-1 flex-col min-w-0 min-h-0 w-full max-w-full overflow-hidden"
       >
         {({ openPicker }) => (
-      <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
+      <div className="flex flex-1 flex-col min-w-0 min-h-0 w-full max-w-full overflow-hidden">
 
         {/* Header */}
         <PageHeader
@@ -970,14 +965,14 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="px-6 py-8 space-y-6"
+          innerClassName="px-4 sm:px-6 py-8 space-y-6"
           messageClassName={message => {
-            if (message.content.type !== 'artifactRef') return 'max-w-2xl mx-auto'
-            return 'w-full'
+            if (message.content.type !== 'artifactRef') return 'max-w-2xl min-w-0 mx-auto'
+            return 'max-w-2xl min-w-0 mx-auto'
           }}
-          statusClassName="max-w-2xl mx-auto"
-          agentHeaderClassName="max-w-2xl mx-auto"
-          lastAssistantSlotClassName="w-full"
+          statusClassName="max-w-2xl min-w-0 mx-auto"
+          agentHeaderClassName="max-w-2xl min-w-0 mx-auto"
+          lastAssistantSlotClassName="w-full min-w-0"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={
@@ -1018,8 +1013,8 @@ export function ChatView({
             </div>
           ) : undefined}
           footerSlot={
-            <div className="border-t shrink-0">
-              <div className="max-w-2xl mx-auto px-6 py-4">
+            <div className="border-t shrink-0 min-w-0 max-w-full overflow-hidden">
+              <div className="w-full max-w-2xl min-w-0 mx-auto px-4 sm:px-6 py-4">
                 <ChatInput
                   focusRef={focusInputRef}
                   onSend={(msg, uploads, options) => {

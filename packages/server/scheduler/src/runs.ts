@@ -19,6 +19,7 @@ import {
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
+  listModels,
   productionReflectWorkspace,
   resolveLocalSourceEnv,
   type LogEvent,
@@ -50,6 +51,14 @@ export interface RunManagerOptions {
   reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
   /** DESK_HOME root. Defaults to resolveDeskHome(). */
   home?: string;
+  /** Test hook for model metadata used by the adaptive summary trigger. */
+  summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
+}
+
+interface SummaryModelTokenLimits {
+  contextWindow: number;
+  inputLimit?: number;
+  outputLimit?: number;
 }
 
 export interface FireMessageOptions {
@@ -66,6 +75,7 @@ function computeNextRun(cronExpr: string): string {
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
   const home = opts.home ?? resolveDeskHome();
+  const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
@@ -401,10 +411,31 @@ export function createRunManager(opts: RunManagerOptions) {
     });
   }
 
-  async function logReflectionOutcome(runId: string, body: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
-    const text = body === null
-      ? "Daily workspace reflection skipped: no activity found for the reflection date."
-      : "Daily workspace reflection completed.";
+  // Convert the reflection journal into a brief task-run log entry. The prompt
+  // (`reflection-workspace.md`) is the source of truth for output shape — it
+  // asks the model for at most 3 plain bullets. We strip headings/leading
+  // bullet markers, drop blanks, and keep the first few lines verbatim so a
+  // bad model run is visible (and fixable in the prompt) instead of silently
+  // sanitised here.
+  function reflectionOutcomeText(journal: string | null): string {
+    if (journal === null) return "- No activity.";
+    if (journal.trim().length === 0) return "- Empty reflection.";
+
+    const bullets: string[] = [];
+    for (const rawLine of journal.split(/\r?\n/)) {
+      const line = rawLine
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^[-*]\s+/, "")
+        .trim();
+      if (!line) continue;
+      bullets.push(`- ${line}`);
+      if (bullets.length >= 3) break;
+    }
+    return bullets.length > 0 ? bullets.join("\n") : "- Empty reflection.";
+  }
+
+  async function logReflectionOutcome(runId: string, journal: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
+    const text = reflectionOutcomeText(journal);
     await onLog({
       runId,
       seq: 0,
@@ -568,40 +599,38 @@ export function createRunManager(opts: RunManagerOptions) {
       };
 
       let result: { exitCode: number };
-      if (opts.execRunFn) {
+      if (msg.content.type === "reflection_request") {
+        const journal = await fireReflectionTask(
+          msg,
+          workspaceId,
+          workspaceSlug,
+          workspaceName,
+          userId,
+          userName,
+          userTimezone,
+          fireOptions.manual === true,
+        );
+        await logReflectionOutcome(runId, journal, onLog);
+        result = { exitCode: 0 };
+      } else if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
-        if (msg.content.type === "reflection_request") {
-          const reflected = await fireReflectionTask(
-            msg,
-            workspaceId,
-            workspaceSlug,
-            workspaceName,
-            userId,
-            userName,
-            userTimezone,
-            fireOptions.manual === true,
-          );
-          await logReflectionOutcome(runId, reflected, onLog);
-          result = { exitCode: 0 };
-        } else {
-          const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
           ? { containerId: "fake-sandbox", workspaceId }
           : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
-          result = await runtimeExecRun(pool, handle, {
-            runId,
-            prompt,
-            home,
-            workspaceId,
-            workspaceSlug,
-            chatId: msg.chatId,
-            agent: agentFileInput,
-            attachments,
-            providerKeys,
-            extraEnv,
-            onLog,
-          });
-        }
+        result = await runtimeExecRun(pool, handle, {
+          runId,
+          prompt,
+          home,
+          workspaceId,
+          workspaceSlug,
+          chatId: msg.chatId,
+          agent: agentFileInput,
+          attachments,
+          providerKeys,
+          extraEnv,
+          onLog,
+        });
       }
 
       // Wait for pending writes to flush before reading the file back.
@@ -661,7 +690,7 @@ export function createRunManager(opts: RunManagerOptions) {
           const { materializeSummary } = await import("@agent-desk/storage");
           await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
-        emit({ type: "message.appended", payload: child });
+        emit({ type: "message.appended", payload: child, workspaceId });
         emit({ type: "workspace.synced", payload: { workspaceId } });
         return { fired: true, childIds: [child.id] };
       }
@@ -796,19 +825,21 @@ export function createRunManager(opts: RunManagerOptions) {
   /**
    * Hybrid summary trigger (memory-system spec, P2.2).
    *
-   * Counts tokens in the transcript-since-last-summary; if the token
-   * budget breaches `SUMMARY_TRIGGER_FRACTION` of the model context
-   * window, fire the summary immediately (executeAt = now). Otherwise
-   * the existing time-based 30-minute fallback applies.
+   * Counts tokens in the transcript-since-last-summary; if the transcript
+   * crosses an adaptive model-aware budget, fire the summary immediately
+   * (executeAt = now). Otherwise the existing time-based 30-minute fallback
+   * applies.
    *
-   * The model context window defaults to 200_000 tokens (Claude
-   * Sonnet/Opus and most modern frontier models) and can be overridden
-   * via `DESK_SUMMARY_MODEL_CONTEXT_WINDOW`. The fraction can be
-   * overridden via `DESK_SUMMARY_TRIGGER_FRACTION` (default `0.6`).
+   * The trigger uses the active chat agent's OpenCode-reported context window
+   * when available. Defaults follow long-context RAG/memory practice: summarize
+   * at a small fraction of the model window, but clamp the threshold so small
+   * local models keep enough working context and frontier models do not wait
+   * until chats become unwieldy. Env overrides remain available for ops.
    */
   async function scheduleSummary(chatId: string): Promise<void> {
     await cancelSummaryForChat(chatId);
     const urgent = await isSummaryBudgetExceeded(chatId);
+    const summaryContext = await summaryRequestDisplayContext(chatId);
     const executeAt = urgent
       ? new Date().toISOString()
       : new Date(Date.now() + 30 * 60 * 1000).toISOString();
@@ -817,28 +848,173 @@ export function createRunManager(opts: RunManagerOptions) {
       id: messageId,
       chatId,
       role: "system",
-      content: { type: "summary_request" },
+      content: {
+        type: "summary_request",
+        ...(summaryContext.chatTitle ? { chatTitle: summaryContext.chatTitle } : {}),
+        ...(summaryContext.messagePreview ? { messagePreview: summaryContext.messagePreview } : {}),
+      },
       state: "pending",
       kind: "summary",
+      title: summaryContext.title,
       executeAt,
     });
   }
 
-  function summaryModelContextWindow(): number {
+  async function summaryRequestDisplayContext(chatId: string): Promise<{
+    chatTitle?: string;
+    messagePreview?: string;
+    title: string;
+  }> {
+    const chat = await queries.chats.findById(pool, chatId);
+    const chatTitle = chat?.title?.trim() || undefined;
+    const messagePreview = await latestUserMessagePreview(chatId);
+    const titleParts = [chatTitle, messagePreview].filter((part): part is string => !!part);
+    return {
+      chatTitle,
+      messagePreview,
+      title: titleParts.length > 0 ? `Summarize - ${titleParts.join(": ")}` : "Summarize chat",
+    };
+  }
+
+  async function latestUserMessagePreview(chatId: string): Promise<string | undefined> {
+    const { rows } = await pool.query(
+      `SELECT content FROM messages
+       WHERE chat_id = ?
+         AND role = 'user'
+         AND json_extract(content, '$.type') = 'text'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [chatId],
+    );
+    if (rows.length === 0) return undefined;
+    const raw = rows[0].content;
+    const content = typeof raw === "string" ? JSON.parse(raw) as { text?: unknown } : raw as { text?: unknown };
+    if (typeof content.text !== "string") return undefined;
+    return summarizeMessagePreview(content.text);
+  }
+
+  function summarizeMessagePreview(text: string): string | undefined {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (!normalized) return undefined;
+    return normalized.length > 96 ? `${normalized.slice(0, 95).trimEnd()}…` : normalized;
+  }
+
+  function envPositiveInt(name: string): number | null {
     const fromEnv = Number.parseInt(
-      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW ?? "",
+      process.env[name] ?? "",
       10,
     );
-    // Default: 60 000 tokens. At the 0.6 trigger fraction this fires a
-    // summary when the transcript reaches ~36 000 tokens. Kept well below
-    // the frontier model maximum (200 K) so context stays focused and the
-    // agent doesn't get confused by very long transcripts.
-    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : null;
   }
 
   function summaryTriggerFraction(): number {
     const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
-    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.6;
+    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.15;
+  }
+
+  function summaryTriggerBudget(limits: SummaryModelTokenLimits): number {
+    const explicit = envPositiveInt("DESK_SUMMARY_TRIGGER_TOKENS");
+    if (explicit !== null) return explicit;
+
+    const min = envPositiveInt("DESK_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
+    const max = envPositiveInt("DESK_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
+    const effectiveInputWindow = limits.inputLimit ?? limits.contextWindow;
+    const fractional = Math.floor(effectiveInputWindow * summaryTriggerFraction());
+    const safeUpperBound = Math.floor(effectiveInputWindow * 0.6);
+    return Math.max(1, Math.min(Math.max(fractional, min), max, safeUpperBound));
+  }
+
+  async function chatAgentModel(chatId: string): Promise<string> {
+    const { rows } = await pool.query(
+      `SELECT c.agent_id AS chat_agent_id
+       FROM chats c
+       WHERE c.id = ?`,
+      [chatId],
+    );
+    const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
+    const agent = await queries.agents.findById(pool, agentId as string);
+    return agent?.model ?? "opencode/big-pickle";
+  }
+
+  function normalizeModelLimits(value: number | SummaryModelTokenLimits | null): SummaryModelTokenLimits | null {
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value > 0 ? { contextWindow: value } : null;
+    }
+    if (value === null) return null;
+    if (!Number.isFinite(value.contextWindow) || value.contextWindow <= 0) return null;
+    return {
+      contextWindow: value.contextWindow,
+      ...(value.inputLimit !== undefined && Number.isFinite(value.inputLimit) && value.inputLimit > 0 ? { inputLimit: value.inputLimit } : {}),
+      ...(value.outputLimit !== undefined && Number.isFinite(value.outputLimit) && value.outputLimit > 0 ? { outputLimit: value.outputLimit } : {}),
+    };
+  }
+
+  function modelLimitsFromRef(model: {
+    id: string;
+    provider: string;
+    contextWindow?: number;
+    inputLimit?: number;
+    outputLimit?: number;
+  }): SummaryModelTokenLimits | null {
+    return normalizeModelLimits({
+      contextWindow: model.contextWindow ?? model.inputLimit ?? 0,
+      ...(model.inputLimit !== undefined ? { inputLimit: model.inputLimit } : {}),
+      ...(model.outputLimit !== undefined ? { outputLimit: model.outputLimit } : {}),
+    });
+  }
+
+  async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
+    const fromEnv = envPositiveInt("DESK_SUMMARY_MODEL_CONTEXT_WINDOW");
+    if (fromEnv !== null) return { contextWindow: fromEnv };
+
+    if (opts.summaryModelContextWindowFn) {
+      const resolved = normalizeModelLimits(await opts.summaryModelContextWindowFn(chatId, modelId).catch(() => null));
+      if (resolved !== null) return resolved;
+    }
+
+    const { rows } = await pool.query(
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.user_id AS user_id
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+       WHERE c.id = ?`,
+      [chatId],
+    );
+    const row = rows[0];
+    const workspaceId = row?.workspace_id as string | undefined;
+    const workspaceSlug = row?.workspace_path as string | undefined;
+    if (workspaceId && workspaceSlug) {
+      const cacheKey = `${workspaceId}:${row?.user_id ?? ""}`;
+      const cached = modelContextCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        const value = cached.values.get(modelId);
+        if (value !== undefined) return value;
+      }
+      try {
+        const userId = row?.user_id as string | undefined;
+        const providerKeys = userId ? await queries.userSettings.getActiveProviderKeys(pool, userId) : {};
+        const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
+        const models = await listModels(workspaceId, workspaceSlug, {
+          providerKeys,
+          env: extraEnv,
+          timeoutMs: 5_000,
+        });
+        const values = new Map<string, SummaryModelTokenLimits>();
+        for (const model of models) {
+          const limits = modelLimitsFromRef(model);
+          if (limits !== null) values.set(model.id, limits);
+        }
+        modelContextCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, values });
+        const value = values.get(modelId);
+        if (value !== undefined) return value;
+      } catch {
+        // Model metadata is best-effort. Scheduling must never fail because the
+        // sandbox or provider key lookup is temporarily unavailable.
+      }
+    }
+
+    // Conservative fallback for unknown/local models when OpenCode metadata is
+    // unavailable: enough room for a useful transcript, much lower than old 60K.
+    return { contextWindow: 60_000 };
   }
 
   async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
@@ -851,7 +1027,9 @@ export function createRunManager(opts: RunManagerOptions) {
       })
       .filter((m): m is { role: string; text: string } => m !== null);
     const used = estimateMessagesTokens(tokenized);
-    const budget = Math.floor(summaryModelContextWindow() * summaryTriggerFraction());
+    const modelId = await chatAgentModel(chatId);
+    const limits = await summaryModelTokenLimits(chatId, modelId);
+    const budget = summaryTriggerBudget(limits);
     return used >= budget;
   }
 

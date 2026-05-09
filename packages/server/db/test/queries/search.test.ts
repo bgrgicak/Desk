@@ -97,7 +97,7 @@ beforeAll(async () => {
     content: { type: "text", text: "Could you draft a poem about owls?" },
   });
 
-  // Non-indexable types should NOT show up.
+  // Empty event logs should not add searchable text.
   await messages.insert(pool, {
     id: generateId("message"),
     chatId: chatA,
@@ -199,6 +199,25 @@ describe("searchChatMessages", () => {
     const hits = await search.searchChatMessages(pool, { query: "kanban" });
     expect(hits[0].snippet).toContain("<mark>");
     expect(hits[0].snippet).toContain("</mark>");
+  });
+
+  it("indexes text from persisted agent event logs", async () => {
+    const messageId = generateId("message");
+    await messages.insert(pool, {
+      id: messageId,
+      chatId: chatA,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "text", part: { text: "The sewma reply is searchable." } } },
+        ],
+      },
+    });
+
+    const hits = await search.searchChatMessages(pool, { query: "sewma" });
+    expect(hits.map((h) => h.messageId)).toContain(messageId);
+    expect(hits.some((h) => h.snippet.includes("<mark>sewma</mark>"))).toBe(true);
   });
 
   it("returns an empty array for an empty query", async () => {

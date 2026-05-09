@@ -23,10 +23,18 @@ import {
   cn,
 } from '@agent-desk/ui'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
+import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
 import { initialsOf } from '@/lib/initials'
 import { useAvatarUrl, saveAvatarUrl, deleteAvatarUrl, resizeToDataUrl } from '@/hooks/use-avatar'
+import {
+  NOTIFICATIONS_DEFAULTS,
+  loadNotifications,
+  requestBrowserNotificationPermission,
+  saveNotifications,
+  type NotificationsShape,
+} from '@/lib/account-notifications'
 
 // ── Nav ──────────────────────────────────────────────────────────────────────
 
@@ -37,59 +45,6 @@ const NAV: { id: AccountSection; label: string; icon: typeof User }[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell    },
   { id: 'preferences',   label: 'Preferences',   icon: Sliders },
 ]
-
-// ── Notifications prefs (localStorage) ───────────────────────────────────────
-
-interface NotificationsShape {
-  chatMessages: boolean
-  mentions: boolean
-  taskUpdates: boolean
-  runCompletion: boolean
-  connectionIssues: boolean
-  artifactComments: boolean
-  workspaceInvitations: boolean
-  emailDigest: boolean
-  sounds: boolean
-  desktop: boolean
-}
-
-const NOTIFICATIONS_DEFAULTS: NotificationsShape = {
-  chatMessages: true,
-  mentions: true,
-  taskUpdates: true,
-  runCompletion: true,
-  connectionIssues: true,
-  artifactComments: true,
-  workspaceInvitations: true,
-  emailDigest: false,
-  sounds: false,
-  desktop: false,
-}
-
-function notificationsKey(userId: string): string {
-  return `desk.notifications.${userId}`
-}
-
-function loadNotifications(userId: string | undefined): NotificationsShape {
-  if (!userId) return NOTIFICATIONS_DEFAULTS
-  try {
-    const raw = localStorage.getItem(notificationsKey(userId))
-    if (!raw) return NOTIFICATIONS_DEFAULTS
-    const parsed = JSON.parse(raw) as Partial<NotificationsShape>
-    return { ...NOTIFICATIONS_DEFAULTS, ...parsed }
-  } catch {
-    return NOTIFICATIONS_DEFAULTS
-  }
-}
-
-function saveNotifications(userId: string | undefined, value: NotificationsShape): void {
-  if (!userId) return
-  try {
-    localStorage.setItem(notificationsKey(userId), JSON.stringify(value))
-  } catch {
-    /* ignore */
-  }
-}
 
 // ── User prefs (localStorage) ────────────────────────────────────────────────
 
@@ -275,13 +230,13 @@ function AccountSection_() {
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
+    <div className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4">
         {/* Avatar + profile fields side by side */}
-        <div className="flex gap-6">
+        <div className="flex min-w-0 max-w-full flex-col gap-4 sm:flex-row sm:gap-6">
           {/* Left: avatar */}
-          <div className="flex flex-col items-center gap-2 shrink-0">
-            <div className="h-32 w-32 rounded-full overflow-hidden bg-muted flex items-center justify-center text-2xl font-semibold text-muted-foreground border border-border">
+          <div className="flex shrink-0 flex-col items-center gap-2 sm:items-center">
+            <div className="h-24 w-24 rounded-full overflow-hidden bg-muted flex items-center justify-center text-xl font-semibold text-muted-foreground border border-border sm:h-32 sm:w-32 sm:text-2xl">
               {avatarUrl
                 ? <img src={avatarUrl} alt={name} className="h-full w-full object-cover" />
                 : initials
@@ -316,7 +271,7 @@ function AccountSection_() {
           </div>
 
           {/* Right: profile fields */}
-          <div className="flex-1 min-w-0 space-y-4">
+          <div className="flex-1 min-w-0 max-w-full space-y-4">
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">Name</p>
               <Input
@@ -445,7 +400,7 @@ function NotificationsSection() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-6">
+    <div className="flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
       <Alert className="mb-4">
         <Info className="h-4 w-4" />
         <AlertDescription>Notification preferences are saved on this device.</AlertDescription>
@@ -507,9 +462,17 @@ function NotificationsSection() {
         </PreferenceRow>
         <PreferenceRow
           title="Desktop notifications"
-          description="Show browser notifications when the app isn't focused."
+          description="Show browser notifications when a chat gets the sidebar new-message dot."
         >
-          <Switch checked={prefs.desktop} onCheckedChange={v => update({ desktop: v })} />
+          <Switch checked={prefs.desktop} onCheckedChange={v => {
+            if (!v) {
+              update({ desktop: false })
+              return
+            }
+            void requestBrowserNotificationPermission().then(permission => {
+              update({ desktop: permission === 'granted' })
+            })
+          }} />
         </PreferenceRow>
       </div>
     </div>
@@ -531,7 +494,7 @@ function PreferencesSection() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-6">
+    <div className="flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
       <div className="flex flex-col">
         <PreferenceRow
           title="Reduce motion"
@@ -578,6 +541,7 @@ export function MyAccountModal({
   const { data: me } = useGetMeQuery()
   const [activeSection, setActiveSection] = useState<AccountSection>(initialSection ?? 'account')
   const avatarUrl = useAvatarUrl(me?.id)
+  const isCompactViewport = useCompactViewport()
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -592,18 +556,27 @@ export function MyAccountModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="p-0 gap-0 sm:max-w-[900px] overflow-hidden"
+        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] p-0 gap-0 sm:max-w-[900px] overflow-hidden"
         showCloseButton={false}
-        style={{ height: '620px' }}
+        style={{ height: 'min(620px, calc(100dvh - 1rem))' }}
       >
         <DialogTitle className="sr-only">My account</DialogTitle>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn('absolute right-3 top-3 z-20 h-7 w-7 text-muted-foreground', !isCompactViewport && 'hidden')}
+          onClick={() => onOpenChange(false)}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </Button>
 
-        <div className="flex h-[620px]">
+        <div className={cn('flex h-full min-h-0 min-w-0 overflow-hidden', isCompactViewport ? 'flex-col' : 'flex-row')}>
           {/* Left nav */}
-          <div className="w-52 shrink-0 flex flex-col border-r bg-muted/30">
-            <div className="px-4 pt-5 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold overflow-hidden">
+          <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
+            <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
+              <div className="flex items-center gap-2">
+                <div className={cn('flex shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold overflow-hidden', isCompactViewport ? 'h-7 w-7' : 'h-8 w-8')}>
                   {avatarUrl
                     ? <img src={avatarUrl} alt={account.name} className="h-full w-full object-cover" />
                     : account.initials
@@ -616,13 +589,14 @@ export function MyAccountModal({
               </div>
             </div>
 
-            <nav className="flex-1 px-2 space-y-0.5">
+            <nav className={cn('flex gap-1 px-2', isCompactViewport ? 'overflow-x-auto pb-2' : 'flex-1 flex-col gap-0 space-y-0.5 overflow-x-visible pb-0')}>
               {NAV.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    isCompactViewport ? 'shrink-0' : 'w-full shrink',
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
                       : 'text-foreground/70 hover:text-foreground hover:bg-muted/60',
@@ -636,8 +610,8 @@ export function MyAccountModal({
           </div>
 
           {/* Right content */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="h-[52px] flex items-center justify-between gap-3 border-b px-4 shrink-0">
+          <div className={cn('flex w-full flex-1 flex-col min-w-0 min-h-0 overflow-hidden', !isCompactViewport && 'w-auto')}>
+            <div className={cn('min-h-[52px] items-center justify-between gap-3 border-b px-4 shrink-0', isCompactViewport ? 'hidden' : 'flex')}>
               <Breadcrumb className="min-w-0">
                 <BreadcrumbList>
                   <BreadcrumbItem>
@@ -663,7 +637,7 @@ export function MyAccountModal({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.15, ease: 'easeOut' }}
-              className="flex-1 flex flex-col min-h-0"
+              className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden"
             >
               {activeSection === 'account'       && <AccountSection_ />}
               {activeSection === 'notifications' && <NotificationsSection />}

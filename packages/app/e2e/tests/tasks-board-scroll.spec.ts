@@ -49,7 +49,7 @@ test("long task columns scroll inside the board", async ({
   }
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Tasks$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
   await expect(loggedInPage.getByText("Scroll regression task 01").first()).toBeVisible({
     timeout: 10_000,
   });

@@ -117,7 +117,7 @@ test("composer goal picker restores the chat's persisted goal", async ({
 
   await loggedInPage.reload();
   const row = loggedInPage
-    .getByRole("button", { name: /composer-goal-doc/ })
+    .getByRole("link", { name: /composer-goal-doc/ })
     .first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();
@@ -179,7 +179,7 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
     "icon-site",
   ]) {
     await expect(
-      loggedInPage.getByRole("button", { name: new RegExp(title) }).first(),
+      loggedInPage.getByRole("link", { name: new RegExp(title) }).first(),
     ).toBeVisible({ timeout: 10_000 });
   }
 
@@ -207,7 +207,7 @@ test("sidebar icon uses persisted goal, falls back to kind", async ({
 
   for (const { title, expected } of cases) {
     const row = loggedInPage
-      .getByRole("button", { name: new RegExp(title) })
+      .getByRole("link", { name: new RegExp(title) })
       .first();
     await expect(
       row.locator(`svg.${expected}`),

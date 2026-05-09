@@ -304,14 +304,39 @@ export async function search(
     for (const ws of workspaces) await refreshWorkspaceFileIndex(pool, storage, ws.path, { showHidden });
   }
 
+  const workspaceSlugs = workspaces.map((ws) => ws.path);
   const workspaceBySlug = new Map(workspaces.map((ws) => [ws.path, ws]));
-  const hits = await queries.search.searchChatMessages(pool, {
-    query: trimmedQuery,
-    chatId: opts?.chatId,
-    workspaceSlugs: workspaces.map((ws) => ws.path),
-    kinds: selectedKinds,
-    limit: 40,
-  });
+  const isDefaultAllSearch = scope === "all" && !(opts?.kinds && opts.kinds.length > 0);
+  const hits = isDefaultAllSearch
+    ? await Promise.all([
+        queries.search.searchChatMessages(pool, {
+          query: trimmedQuery,
+          chatId: opts?.chatId,
+          workspaceSlugs,
+          kinds: CHAT_KINDS,
+          limit: 40,
+        }),
+        queries.search.searchChatMessages(pool, {
+          query: trimmedQuery,
+          chatId: opts?.chatId,
+          workspaceSlugs,
+          kinds: FILE_KINDS,
+          limit: 40,
+        }),
+      ]).then(([chatHits, fileHits]) => {
+        const reservedChatHits = chatHits.slice(0, 20);
+        const reservedFileHits = fileHits.slice(0, 20);
+        const overflowHits = [...chatHits.slice(20), ...fileHits.slice(20)]
+          .sort((a, b) => b.score - a.score || (a.createdAt < b.createdAt ? 1 : -1));
+        return [...reservedChatHits, ...reservedFileHits, ...overflowHits].slice(0, 40);
+      })
+    : await queries.search.searchChatMessages(pool, {
+        query: trimmedQuery,
+        chatId: opts?.chatId,
+        workspaceSlugs,
+        kinds: selectedKinds,
+        limit: 40,
+      });
   const chatIds = [...new Set(hits.map((hit) => hit.chatId).filter((id): id is string => Boolean(id)))];
   const titleByChatId = new Map<string, string>();
   if (chatIds.length > 0) {

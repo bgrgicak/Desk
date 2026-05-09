@@ -61,6 +61,7 @@ import {
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
+import { useCompactViewport } from '@/hooks/use-compact-viewport'
 
 interface LocalSourceState {
   kind: string
@@ -220,13 +221,13 @@ function StatusFilterPills({
   value, onChange,
 }: { value: StatusFilter; onChange: (next: StatusFilter) => void }) {
   return (
-    <div className="flex items-center rounded-lg border p-0.5">
+    <div className="flex w-full items-center rounded-lg border p-0.5 sm:w-auto">
       {STATUS_FILTERS.map(f => (
         <button
           key={f.value}
           onClick={() => onChange(f.value)}
           className={cn(
-            'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+            'flex-1 rounded-md px-3 py-1 text-xs font-medium transition-colors sm:flex-none',
             value === f.value
               ? 'bg-muted text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -243,7 +244,7 @@ function SearchInput({
   value, onChange, placeholder,
 }: { value: string; onChange: (next: string) => void; placeholder?: string }) {
   return (
-    <div className="relative w-56">
+    <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       <Input
         value={value}
@@ -259,10 +260,10 @@ function Field({
   label, help, children,
 }: { label: string; help?: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 max-w-full space-y-1.5">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       {children}
-      {help && <p className="text-xs text-muted-foreground/80">{help}</p>}
+      {help && <p className="text-xs text-muted-foreground/80 break-words">{help}</p>}
     </div>
   )
 }
@@ -271,9 +272,9 @@ function EmptyState({
   title, body, action,
 }: { title: string; body: string; action?: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed px-6 py-10 text-center flex flex-col items-center gap-3">
+    <div className="min-w-0 max-w-full rounded-xl border border-dashed px-4 py-10 text-center flex flex-col items-center gap-3 sm:px-6">
       <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground max-w-sm">{body}</p>
+      <p className="text-xs text-muted-foreground max-w-sm break-words">{body}</p>
       {action}
     </div>
   )
@@ -347,9 +348,9 @@ function WorkspaceSection({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-        <div className="flex items-center gap-3">
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
           <div
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
             style={{ backgroundColor: color }}
@@ -360,13 +361,13 @@ function WorkspaceSection({
             placeholder="Workspace name"
             value={name}
             onChange={e => setName(e.target.value)}
-            className="flex-1"
+            className="w-full min-w-0 sm:flex-1"
           />
         </div>
 
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex min-w-0 flex-wrap gap-2">
             {COLOR_OPTIONS.map(({ value, label }) => (
               <button
                 key={value}
@@ -383,12 +384,12 @@ function WorkspaceSection({
 
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
-          <div className="grid grid-cols-8 gap-1">
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(2rem,1fr))] gap-1">
             {EMOJI_OPTIONS.map(e => (
               <button
                 key={e}
                 onClick={() => setEmoji(e)}
-                className={`flex items-center justify-center h-8 w-8 rounded-md text-lg transition-colors ${
+                className={`mx-auto flex h-8 w-8 items-center justify-center rounded-md text-lg transition-colors ${
                   emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted'
                 }`}
               >
@@ -412,7 +413,7 @@ function WorkspaceSection({
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -423,7 +424,7 @@ function WorkspaceSection({
               size="sm"
               disabled={!canDelete}
               title={canDelete ? undefined : "You need at least one workspace. Create another before deleting this one."}
-              className="text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground"
+              className="w-full min-w-0 justify-start text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground sm:w-auto"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete workspace
@@ -454,6 +455,7 @@ function WorkspaceSection({
           size="sm"
           disabled={!name.trim() || !isDirty}
           onClick={() => onUpdate({ ...workspace, name: name.trim(), emoji, bg: color, description })}
+          className="w-full shrink-0 sm:w-auto"
         >
           Save changes
         </Button>
@@ -553,7 +555,7 @@ function AgentsList({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       {filtered.map((a, i) => {
         const allModels: ModelRef[] = []
         for (const ms of modelIndex.values()) allModels.push(...ms)
@@ -566,7 +568,7 @@ function AgentsList({
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
-            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
+            className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
           >
             <Switch
               checked={enrolled}
@@ -581,11 +583,11 @@ function AgentsList({
                 <span className="truncate">{model?.label ?? a.model}</span>
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex shrink-0 items-center gap-1.5">
               <Button
                 variant="outline"
                 size="sm"
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                className="hidden opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                 onClick={() => onOpen(a.id)}
               >
                 Edit
@@ -660,8 +662,8 @@ function AgentDetail({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
         <Field label="Name">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
         </Field>
@@ -712,7 +714,7 @@ function AgentDetail({
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -747,9 +749,9 @@ function AgentDetail({
             </Popover>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button size="sm" onClick={handleSave} disabled={!canSave || busy}>
+        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={!canSave || busy}>
             {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add agent') : (busy ? 'Saving…' : 'Save')}
           </Button>
         </div>
@@ -805,7 +807,7 @@ function ConnectionsList({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       {filtered.map((c, i) => {
         const meta = CONNECTION_CATALOG[c.kind]
         return (
@@ -814,7 +816,7 @@ function ConnectionsList({
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
-            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
+            className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
           >
             <Switch
               checked={c.enabled}
@@ -830,7 +832,7 @@ function ConnectionsList({
               <Button
                 variant="outline"
                 size="sm"
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                className="hidden opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                 onClick={() => onOpen(c.id)}
               >
                 Edit
@@ -876,14 +878,14 @@ function ConnectionsPicker({
       || meta.description.toLowerCase().includes(q))
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-      <div className="flex items-center justify-end">
+    <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+      <div className="flex min-w-0 items-center justify-end">
         <SearchInput value={search} onChange={setSearch} placeholder="Search connections…" />
       </div>
       {entries.length === 0 ? (
         <EmptyState title="No matches" body={`No connections match “${q}”.`} />
       ) : (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {entries.map(([kind, meta], i) => {
             const functional = isFunctionalKind(kind, localSources)
             const alreadyAdded = configuredKinds.has(kind)
@@ -903,7 +905,7 @@ function ConnectionsPicker({
                 onClick={() => !disabled && onPick(kind)}
                 disabled={disabled}
                 className={cn(
-                  'group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors',
+                  'group flex min-w-0 flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors',
                   disabled
                     ? 'cursor-not-allowed opacity-60'
                     : 'hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none',
@@ -917,7 +919,7 @@ function ConnectionsPicker({
                     </span>
                   )}
                 </div>
-                <div className="min-w-0">
+                <div className="w-full min-w-0">
                   <p className="text-sm font-medium truncate">{meta.name}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
                 </div>
@@ -1001,13 +1003,13 @@ function ConnectionDetail({
     const expiry = expMs ? new Date(expMs) : undefined
     const reasonLabel = describeLocalSourceReason(kind, localSource?.reason)
     return (
-      <div className="flex-1 flex flex-col min-h-0">
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-          <div className="flex items-center gap-3">
+      <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+        <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+          <div className="flex min-w-0 max-w-full items-center gap-3">
             <ConnectionGlyph kind={kind} size="lg" />
-            <div>
-              <p className="text-sm font-medium">{catalogMeta.name}</p>
-              <p className="text-xs text-muted-foreground">{catalogMeta.description}</p>
+            <div className="min-w-0 max-w-full">
+              <p className="text-sm font-medium truncate">{catalogMeta.name}</p>
+              <p className="text-xs text-muted-foreground break-words">{catalogMeta.description}</p>
             </div>
           </div>
 
@@ -1054,13 +1056,13 @@ function ConnectionDetail({
 
         <div
           className={cn(
-            'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+            'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
             scrolledUnder && 'border-border',
           )}
         >
           <div />
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onCancel}>Close</Button>
+          <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+            <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel}>Close</Button>
           </div>
         </div>
       </div>
@@ -1068,15 +1070,15 @@ function ConnectionDetail({
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-        <div className="flex items-center gap-3">
-          <ConnectionGlyph kind={kind} size="lg" />
-          <div>
-            <p className="text-sm font-medium">{catalogMeta.name}</p>
-            <p className="text-xs text-muted-foreground">{catalogMeta.description}</p>
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+          <div className="flex min-w-0 max-w-full items-center gap-3">
+            <ConnectionGlyph kind={kind} size="lg" />
+            <div className="min-w-0 max-w-full">
+              <p className="text-sm font-medium truncate">{catalogMeta.name}</p>
+              <p className="text-xs text-muted-foreground break-words">{catalogMeta.description}</p>
+            </div>
           </div>
-        </div>
 
         <Field label="Display name" help="Optional custom label shown in the connections list.">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
@@ -1088,18 +1090,19 @@ function ConnectionDetail({
             ? 'Stored encrypted on the server. Saved keys appear masked on reload — submit a fresh value to overwrite.'
             : 'Stored locally. Used to authenticate against the service.'}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-col gap-2 sm:flex-row sm:items-center">
             <Input
               type="password"
               value={apiKey}
               onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
               data-testid={providerEnvKey ? `provider-key-${providerEnvKey}` : undefined}
               placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : 'Paste the API key or token'}
-              className="flex-1"
+              className="min-w-0 flex-1"
             />
             {providerEnvKey && (
               <Button
                 size="sm"
+                className="w-full sm:w-auto"
                 disabled={!apiKeyDirty || busySaveKey}
                 data-testid={`provider-save-${providerEnvKey}`}
                 onClick={handleSaveKey}
@@ -1113,7 +1116,7 @@ function ConnectionDetail({
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -1148,9 +1151,9 @@ function ConnectionDetail({
             </Popover>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
-          <Button size="sm" onClick={handleSave} disabled={busySaveMeta}>
+        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={busySaveMeta}>
             {focus.mode === 'new' ? (busySaveMeta ? 'Adding…' : 'Add connection') : (busySaveMeta ? 'Saving…' : 'Save')}
           </Button>
         </div>
@@ -1161,9 +1164,10 @@ function ConnectionDetail({
 
 // ── Preferences ──────────────────────────────────────────────────────────────
 
-// Mirrors `RouteView` from `@/router/nav`. 'desk' is kept as a valid stored
-// value during the deprecation window; `loadPrefs` normalises it to 'pinned'.
-type DefaultView = 'pinned' | 'desk' | 'tasks' | 'context'
+// Mirrors `RouteView` from `@/router/nav`, plus the special new-chat landing
+// state. 'desk' is kept as a valid stored value during the deprecation window;
+// `loadPrefs` normalises it to 'pinned'.
+type DefaultView = 'new-chat' | 'pinned' | 'desk' | 'tasks' | 'context'
 
 export interface PrefsShape {
   defaultView: DefaultView
@@ -1172,7 +1176,7 @@ export interface PrefsShape {
 }
 
 const PREFS_DEFAULTS: PrefsShape = {
-  defaultView: 'tasks',
+  defaultView: 'new-chat',
   showBadges: true,
   developerMode: false,
 }
@@ -1181,7 +1185,7 @@ function prefsKey(userId: string): string {
   return `desk.prefs.${userId}`
 }
 
-const VALID_VIEWS: readonly DefaultView[] = ['pinned', 'desk', 'tasks', 'context']
+const VALID_VIEWS: readonly DefaultView[] = ['new-chat', 'pinned', 'desk', 'tasks', 'context']
 
 export function loadPrefs(userId: string | undefined): PrefsShape {
   if (!userId) return PREFS_DEFAULTS
@@ -1227,12 +1231,13 @@ function PreferencesSection() {
   }
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
+    { value: 'new-chat', label: 'New chat' },
     { value: 'tasks',   label: 'Tasks'   },
     { value: 'context', label: 'Library' },
   ]
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       <PreferenceRow
         title="Show unread badges"
         description="Display unread counts on workspace tabs and nav items."
@@ -1248,14 +1253,14 @@ function PreferencesSection() {
         title="Default view"
         description="The view you land on after sign-in and when switching workspaces."
       >
-        <div className="flex rounded-md border overflow-hidden">
+        <div className="flex w-full min-w-0 max-w-full flex-wrap overflow-hidden rounded-md border sm:w-auto">
           {VIEW_OPTIONS.map(opt => (
             <button
               key={opt.value}
               data-testid={`prefs-default-view-${opt.value}`}
               onClick={() => update({ defaultView: opt.value })}
               className={cn(
-                'px-3 py-1.5 text-xs font-medium transition-colors',
+                'min-w-0 flex-1 px-3 py-1.5 text-xs font-medium transition-colors sm:flex-none',
                 prefs.defaultView === opt.value
                   ? 'bg-foreground text-background'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
@@ -1309,6 +1314,7 @@ export function SettingsModal({
   initialSection,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
+  const isCompactViewport = useCompactViewport()
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -1667,16 +1673,25 @@ export function SettingsModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="p-0 gap-0 sm:max-w-[900px] overflow-hidden"
+        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] p-0 gap-0 sm:max-w-[900px] overflow-hidden"
         showCloseButton={false}
-        style={{ height: '620px' }}
+        style={{ height: 'min(620px, calc(100dvh - 1rem))' }}
       >
         <DialogTitle className="sr-only">Workspace settings</DialogTitle>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn('absolute right-3 top-3 z-20 h-7 w-7 text-muted-foreground', !isCompactViewport && 'hidden')}
+          onClick={() => onOpenChange(false)}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </Button>
 
-        <div className="flex h-full">
+        <div className={cn('flex h-full min-h-0 min-w-0 overflow-hidden', isCompactViewport ? 'flex-col' : 'flex-row')}>
           {/* Left nav */}
-          <div className="w-52 shrink-0 flex flex-col border-r bg-muted/30">
-            <div className="px-4 pt-5 pb-3">
+          <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
+            <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
                 <div
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
@@ -1688,13 +1703,14 @@ export function SettingsModal({
               </div>
             </div>
 
-            <nav className="flex-1 px-2 space-y-0.5">
+            <nav className={cn('flex gap-1 px-2', isCompactViewport ? 'overflow-x-auto pb-2' : 'flex-1 flex-col gap-0 space-y-0.5 overflow-x-visible pb-0')}>
               {NAV.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    isCompactViewport ? 'shrink-0' : 'w-full shrink',
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
                       : 'text-foreground/70 hover:text-foreground hover:bg-muted/60',
@@ -1708,8 +1724,8 @@ export function SettingsModal({
           </div>
 
           {/* Right content */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="h-[52px] flex items-center justify-between gap-3 border-b px-4 shrink-0">
+          <div className={cn('flex w-full flex-1 flex-col min-w-0 min-h-0 overflow-hidden', !isCompactViewport && 'w-auto')}>
+            <div className={cn('min-h-[52px] items-center justify-between gap-3 border-b px-4 shrink-0', isCompactViewport ? 'hidden' : 'flex')}>
               {renderHeaderBreadcrumb()}
               <Button
                 variant="ghost"
@@ -1727,7 +1743,7 @@ export function SettingsModal({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.15, ease: 'easeOut' }}
-              className="flex-1 flex flex-col min-h-0"
+              className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden"
             >
               {activeSection === 'workspace' ? (
                 <WorkspaceSection
@@ -1774,12 +1790,12 @@ export function SettingsModal({
                   onToggleLocalSource={handleToggleLocalSource}
                 />
               ) : (
-                <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">
+                <div className="flex-1 w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
                   {activeSection === 'agents' && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 max-w-full space-y-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={agentsStatusFilter} onChange={setAgentsStatusFilter} />
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
                           <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search agents…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setAgentsFocusAndReset({ mode: 'new' })}>
                             <Plus className="h-3.5 w-3.5" />Add
@@ -1805,10 +1821,10 @@ export function SettingsModal({
                     </div>
                   )}
                   {activeSection === 'connections' && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 max-w-full space-y-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={connectionsStatusFilter} onChange={setConnectionsStatusFilter} />
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
                           <SearchInput value={connectionsSearch} onChange={setConnectionsSearch} placeholder="Search connections…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setConnectionsFocusAndReset({ mode: 'picker' })}>
                             <Plus className="h-3.5 w-3.5" />Add
