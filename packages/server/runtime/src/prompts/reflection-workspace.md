@@ -29,22 +29,35 @@ Base the journal only on yesterday's chat activity. Do not copy facts
 from prior journals into today's journal unless they were part of
 yesterday's activity too.
 
-One short paragraph capturing what was worked on yesterday. Then
-bullet points for:
-- decisions made (with the **why** in parentheses),
-- open threads / commitments,
-- anything the user pushed back on or corrected.
+Write an extremely brief list of concrete reflections. Name actual work,
+decisions, corrections, and open threads from the activity. Do not use a poetic,
+dreamy, atmospheric, or first-person AI voice. Do not pad the entry with
+ornamental metaphors, invented sensory language, or vague phrases about
+archives, mist, moonlight, glass, dreams, beacons, threads, signals, circuits,
+consoles, sensors, violet darkness, or memory glowing. Never emit
+slash-separated tag clouds, glyph-separated fragments, random-looking counters
+or IDs, or compressed labels such as `amber chat / activity / occurred` or
+`charted 4om · 20i · kQr`.
+
+If the activity section says `(no activity)`, make the journal a single bullet:
+`- No activity.` Do not invent work, and do not include internal labels,
+counters, IDs, random-looking tokens, slash-separated tag clouds,
+glyph-separated fragments, or decorative dream imagery.
+
+Return only the bullet list; no heading or paragraph. When there was activity:
+return 1–3 bullets total. Prefer one bullet for the main work; add another only
+for a concrete decision, open thread, or user correction. Keep each bullet under
+8 words.
 
 The journal is never injected back into the system prompt — it's a
-write-only log future you can read on demand. Optimize for re-reading
-later, not brevity.
+write-only log future you can read on demand. Optimize for fast scanning.
 
 ### What to memory-edit
 
-Use the current workspace memory plus the recent journal set like a
-local Dream: review the existing store against recent history, merge
-duplicates, replace stale or contradicted entries with the latest value,
-and add durable insights that recur or clearly matter long-term.
+Use the current workspace memory plus the recent journal set to review the
+existing store against recent history, merge duplicates, replace stale or
+contradicted entries with the latest value, and add durable insights that recur
+or clearly matter long-term.
 
 The prior journals are for memory curation only. The journal you return
 for today remains a daily log for yesterday's activity.

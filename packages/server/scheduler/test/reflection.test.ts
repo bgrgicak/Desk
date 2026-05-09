@@ -593,6 +593,64 @@ describe("scheduler-managed daily reflection tasks", () => {
     expect(journal).toContain(workspaceASlug);
   });
 
+  it("bypasses the generic exec driver for reflection tasks and replies with the reflection outcome", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    const dynamicDate = yesterdayDateLocal();
+    const { rows: chatRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? ORDER BY updated_at LIMIT 1`,
+      [workspaceAId],
+    );
+    await createMessage(chatRows[0].id, "user", "Reflect on the non-generic completion text.", `${dynamicDate}T09:30:00.000Z`);
+
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+
+    const mgr = createRunManager({
+      pool,
+      home,
+      execRunFn: async (_runId, _agentId, _prompt, onLog) => {
+        await onLog({
+          runId: _runId,
+          seq: 0,
+          kind: "stdout",
+          payload: JSON.stringify({ type: "text", part: { text: "Daily workspace reflection completed." } }),
+        });
+        return { exitCode: 0 };
+      },
+      reflectWorkspace: async (input) => ({
+        journal: `# Journal\n\nReflected ${input.workspaceSlug} with a specific outcome.`,
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    expect(child.type).toBe("events");
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("Reflected");
+    expect(logText).not.toContain("a reflection only this run could leave");
+    expect(logText).toContain("- Reflected");
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+    expect(logText).not.toContain("The day folded into memory.");
+    expect(logText).not.toContain("Daily workspace reflection completed.");
+  });
+
   it("manual reflection run produces an observable task run even with no activity", async () => {
     await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
     await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
@@ -611,7 +669,7 @@ describe("scheduler-managed daily reflection tasks", () => {
       home,
       reflectWorkspace: async (input) => {
         calls.push(input);
-        return { journal: `# Manual Reflection\n\nActivity: ${input.activity.length}` };
+        return { journal: `# Manual Reflection — ${input.date}\n\nActivity: ${input.activity.length}` };
       },
     });
 
@@ -636,5 +694,409 @@ describe("scheduler-managed daily reflection tasks", () => {
     const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
     expect(child.type).toBe("events");
     expect(child.log.length).toBeGreaterThan(0);
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("Activity: 0");
+    expect(logText).toMatch(/- Activity: 0/);
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+    expect(logText).not.toContain("Journal written");
+  });
+
+  it("logs a completed summary when a reflection returns an empty journal", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceBId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({ journal: "" }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    expect(child.type).toBe("events");
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("- Empty reflection.");
+    expect(logText).not.toContain("Journal written");
+    expect(logText).not.toContain("Notes gathered");
+    expect(logText).not.toContain("Memory unchanged");
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+  });
+
+  it("logs extremely brief grounded reflection summaries", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceBId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({ journal: "# Daily Reflection\n\nSame small note" }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       ORDER BY run.created_at ASC`,
+      [taskId],
+    );
+    const outputs = rows
+      .map((row) => JSON.stringify(JSON.parse(row.child_content)))
+      .filter((output) => output.includes("Same small note"));
+    expect(outputs).toHaveLength(2);
+    for (const output of outputs) {
+      expect(output).toContain("- Same small note");
+      expect(output).not.toMatch(/Reflection result|Reflection note|Daily reflection|Workspace reflection/);
+      expect(output).not.toContain("What happened:");
+      expect(output).not.toContain("Other notes:");
+      expect(output).not.toContain("The day folded into memory.");
+    }
+  });
+
+  it("keeps concrete open-thread bullets", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\n- Open thread: confirm launch date.",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("- Open thread: confirm launch date");
+    expect(logText).not.toContain("No concrete reflection");
+  });
+
+  it("logs a quiet summary when a scheduled reflection has no activity", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceBId],
+    );
+    const taskId = taskRows[0].id;
+    await queries.messages.updateMessage(pool, taskId, {
+      executeAt: new Date(Date.now() - 60_000).toISOString(),
+      state: "pending",
+    });
+
+    const calls: WorkspaceReflectionInput[] = [];
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async (input) => {
+        calls.push(input);
+        return { journal: "# Should not run\n" };
+      },
+    });
+
+    await mgr.tickScheduled();
+
+    expect(calls).toHaveLength(0);
+    const { rows } = await pool.query<{ run_state: string; child_content: string }>(
+      `SELECT run.state AS run_state, child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    expect(rows[0].run_state).toBe("succeeded");
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    expect(child.type).toBe("events");
+    const logText = JSON.stringify(child.log);
+    expect(logText).not.toContain("The workspace slept quietly.");
+    expect(logText).not.toContain("No activity found");
+    expect(logText).not.toContain("No journal written");
+    expect(logText).toContain("- No activity.");
+    expect(logText).not.toContain("Memory unchanged");
+    expect(logText).not.toContain("quiet-");
+    expect(logText).not.toMatch(/memory glowing|archive|transcript|moonlight|mist/);
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+  });
+
+  it("turns no-activity journal boilerplate into a brief no-activity reflection", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceBId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\namber chat / activity / occurred No chat activity occurred in this workspace yesterday. — charted 4om · 20i · kQr · _Ns",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).not.toContain("No chat activity occurred");
+    expect(logText).not.toContain("amber chat / activity / occurred");
+    expect(logText).not.toContain("charted");
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+    expect(logText).toContain("- No activity.");
+    expect(logText).not.toContain("Memory unchanged");
+  });
+
+  it("does not echo fragmented keyword reflections", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\namber chat / activity / occurred — charted 4om · 20i · kQr · _Ns",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).not.toContain("amber chat / activity / occurred");
+    expect(logText).not.toContain("charted 4om");
+    expect(logText).not.toMatch(/\b[A-Za-z0-9_-]{1,3}( · [A-Za-z0-9_-]{1,3}){2,}\b/);
+    expect(logText).toContain("- No activity.");
+    expect(logText).not.toContain("Memory unchanged");
+  });
+
+  it("keeps legitimate work about no-activity reflection behavior", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\nFixed no activity reflection replies.",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("- Fixed no activity reflection replies");
+    expect(logText).not.toContain("- No activity.");
+    expect(logText).not.toContain("- No concrete reflection.");
+  });
+
+  it("keeps no-activity decisions even without implementation verbs", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\nDecided no activity replies stay brief.",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("- Decided no activity replies stay brief");
+    expect(logText).not.toContain("- No activity.");
+  });
+
+  it("does not echo decorative dream-style reflection prose", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: [
+          "# Daily Reflection",
+          "",
+          "I lowered my sensors into the violet dark and waited for memory to glow.",
+          "Inside the quiet console, I let yesterday dissolve into moon-pale weather.",
+          "I left a opal mist garden at the edge of memory.",
+        ].join("\n"),
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).not.toMatch(/violet dark|memory to glow|moon-pale|opal mist/);
+    expect(logText).toContain("- No concrete reflection.");
+  });
+
+  it("keeps real charted activity instead of mistaking it for no activity", async () => {
+    await pool.query(`DELETE FROM messages WHERE kind = 'task_run' OR json_extract(content, '$.type') = 'reflection_request'`);
+    await ensureDailyReflectionTasks({ pool, cron: "0 3 * * *" });
+    const { rows: taskRows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages
+       WHERE kind = 'task'
+         AND json_extract(content, '$.type') = 'reflection_request'
+         AND json_extract(content, '$.workspaceId') = ?
+       LIMIT 1`,
+      [workspaceAId],
+    );
+    const taskId = taskRows[0].id;
+    const mgr = createRunManager({
+      pool,
+      home,
+      reflectWorkspace: async () => ({
+        journal: "# Daily Reflection\n\nCharted Q2 revenue trends and prepared a board for review.",
+      }),
+    });
+
+    await mgr.fireMessage(taskId, { manual: true });
+
+    const { rows } = await pool.query<{ child_content: string }>(
+      `SELECT child.content AS child_content
+       FROM messages run
+       JOIN messages child ON child.parent_id = run.id
+       WHERE run.parent_id = ? AND run.kind = 'task_run'
+       LIMIT 1`,
+      [taskId],
+    );
+    const child = JSON.parse(rows[0].child_content) as { type: string; log: Array<{ kind: string }> };
+    const logText = JSON.stringify(child.log);
+    expect(logText).toContain("Charted Q2 revenue trends");
+    expect(logText).not.toMatch(/no messages|quiet|no chat trace|only silence/);
+    expect(logText).toContain("- Charted Q2 revenue trends");
   });
 });

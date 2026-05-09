@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -857,22 +857,55 @@ describe("scheduleSummary", () => {
   }
 
   it("creates a pending summary_request message with a future execute_at", async () => {
+    const targetChatId = await createChat("Empty Summary Test");
     const mgr = createRunManager({
       pool,
       execRunFn: async () => ({ exitCode: 0 }),
     });
-    await clearSummaries();
 
-    await mgr.scheduleSummary(chatId);
+    await mgr.scheduleSummary(targetChatId);
 
     const { rows } = await pool.query(
-      `SELECT id, state, execute_at FROM messages
+      `SELECT id, state, execute_at, content, title FROM messages
        WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
-      [chatId],
+      [targetChatId],
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].state).toBe("pending");
     expect(new Date(rows[0].execute_at as string).getTime()).toBeGreaterThan(Date.now());
+    const content = JSON.parse(rows[0].content as string) as { chatTitle?: string };
+    expect(content.chatTitle).toBe("Empty Summary Test");
+    expect(rows[0].title).toBe("Summarize - Empty Summary Test");
+  });
+
+  it("labels scheduled summary requests with chat title and latest user message preview", async () => {
+    const targetChatId = await createChat("Launch planning");
+    await insertChatRow({
+      targetChatId,
+      role: "user",
+      content: { type: "text", text: "First old note that should not be used." },
+      createdAt: "2099-05-07T10:00:00.000Z",
+    });
+    await insertChatRow({
+      targetChatId,
+      role: "user",
+      content: { type: "text", text: "Draft the homepage hero copy and keep it concise for mobile cards." },
+      createdAt: "2099-05-07T10:01:00.000Z",
+    });
+    const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
+
+    await mgr.scheduleSummary(targetChatId);
+
+    const { rows } = await pool.query(
+      `SELECT content, title FROM messages
+       WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+      [targetChatId],
+    );
+    expect(rows).toHaveLength(1);
+    const content = JSON.parse(rows[0].content as string) as { chatTitle?: string; messagePreview?: string };
+    expect(content.chatTitle).toBe("Launch planning");
+    expect(content.messagePreview).toBe("Draft the homepage hero copy and keep it concise for mobile cards.");
+    expect(rows[0].title).toBe("Summarize - Launch planning: Draft the homepage hero copy and keep it concise for mobile cards.");
   });
 
   it("cancels the previous summary_request before scheduling a new one", async () => {
@@ -905,6 +938,14 @@ describe("scheduleSummary", () => {
     async function clearChatTranscript(): Promise<void> {
       await pool.query(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
     }
+
+    afterEach(() => {
+      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+      delete process.env.DESK_SUMMARY_TRIGGER_TOKENS;
+      delete process.env.DESK_SUMMARY_TRIGGER_MIN_TOKENS;
+      delete process.env.DESK_SUMMARY_TRIGGER_MAX_TOKENS;
+    });
 
     async function insertUserMessageBody(text: string): Promise<void> {
       await pool.query(
@@ -962,6 +1003,51 @@ describe("scheduleSummary", () => {
 
       delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
       delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+    });
+
+    it("adapts the token budget to the active model context window", async () => {
+      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+      delete process.env.DESK_SUMMARY_TRIGGER_TOKENS;
+      delete process.env.DESK_SUMMARY_TRIGGER_MIN_TOKENS;
+      delete process.env.DESK_SUMMARY_TRIGGER_MAX_TOKENS;
+
+      // ~28k chars / 4 = ~7k tokens: above a small 8k input window's safe
+      // budget (~4.8k after the 60% safety ceiling), but below a frontier
+      // model's capped 12k budget.
+      const mediumText = "the quick brown fox jumps over the lazy dog. ".repeat(620);
+
+      const localMgr = createRunManager({
+        pool,
+        execRunFn: async () => ({ exitCode: 0 }),
+        summaryModelContextWindowFn: async () => ({ contextWindow: 200_000, inputLimit: 8_000 }),
+      });
+      await clearChatTranscript();
+      await insertUserMessageBody(mediumText);
+
+      const before = Date.now();
+      await localMgr.scheduleSummary(chatId);
+
+      let rows = (await pool.query(
+        `SELECT execute_at FROM messages
+         WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+        [chatId],
+      )).rows;
+      expect(new Date(rows[0].execute_at as string).getTime() - before).toBeLessThan(60 * 1000);
+
+      const frontierMgr = createRunManager({
+        pool,
+        execRunFn: async () => ({ exitCode: 0 }),
+        summaryModelContextWindowFn: async () => 200_000,
+      });
+      await frontierMgr.scheduleSummary(chatId);
+
+      rows = (await pool.query(
+        `SELECT execute_at FROM messages
+         WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary_request'`,
+        [chatId],
+      )).rows;
+      expect(new Date(rows[0].execute_at as string).getTime() - Date.now()).toBeGreaterThan(20 * 60 * 1000);
     });
   });
 });
