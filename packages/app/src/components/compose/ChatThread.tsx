@@ -98,8 +98,11 @@ export function ChatThread({
     setBeforeCursor(undefined)
   }
 
-  // Initial load — newest page (no cursor).
-  const { currentData: data, isError } = useGetChatMessagesQuery(
+  // Initial load — newest page (no cursor). Use `data` (not `currentData`)
+  // so we keep showing the previous chat's messages while the next chat's
+  // request is in flight, instead of blanking out and remounting the
+  // textarea/dropzone mid-interaction.
+  const { data, isError } = useGetChatMessagesQuery(
     { chatId },
     { skip: skipQuery },
   )
