@@ -241,17 +241,7 @@ function AppInner() {
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const [locallyCreatedChats, setLocallyCreatedChats] = useState<Chat[]>([])
-  const serverUiChats: Chat[] = (serverChats ?? []).map(toUiChat)
-  const serverChatIds = new Set(serverUiChats.map(c => c.id))
-  const chats: Chat[] = [
-    ...locallyCreatedChats.filter(c => c.workspaceId === activeWorkspaceId && !serverChatIds.has(c.id)),
-    ...serverUiChats,
-  ]
-  useEffect(() => {
-    if (!serverChats?.length || locallyCreatedChats.length === 0) return
-    setLocallyCreatedChats(prev => prev.filter(c => !serverChats.some(sc => sc.id === c.id)))
-  }, [serverChats, locallyCreatedChats.length])
+  const chats: Chat[] = (serverChats ?? []).map(toUiChat)
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
@@ -297,13 +287,6 @@ function AppInner() {
       agentId: opts.agentId,
       title: opts.title,
     }).unwrap()
-    // Keep the just-created chat selectable even if the chat-list refetch lags
-    // or briefly returns a stale list. Without this local bridge, navigating to
-    // the new id can render the current default view until the sidebar cache
-    // catches up.
-    setLocallyCreatedChats(prev => (
-      prev.some(c => c.id === chat.id) ? prev : [toUiChat(chat), ...prev]
-    ))
     const msg = await postMessageMutation({
       chatId: chat.id,
       content: opts.content,

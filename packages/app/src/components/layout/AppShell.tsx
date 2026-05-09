@@ -788,7 +788,6 @@ export function AppShell({
                   <CommandItem
                     key={chat.id}
                     value={chat.id}
-                    keywords={[chat.title]}
                     onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                   >
                     <ChatIcon className="h-4 w-4 text-muted-foreground" />
@@ -812,7 +811,6 @@ export function AppShell({
                       <CommandItem
                         key={r.messageId ?? r.id}
                         value={r.messageId ?? r.id}
-                        keywords={[r.title, r.snippet ?? '']}
                         onSelect={() => {
                           if (chat) onChatClick(chat)
                           setChatSearchOpen(false)
@@ -838,7 +836,7 @@ export function AppShell({
                   .map(r => {
                     const artifact = artifacts.find(a => a.id === r.id)
                     if (!artifact) return (
-                      <CommandItem key={r.id} value={r.id} keywords={[r.title]}>
+                      <CommandItem key={r.id} value={r.id}>
                         <FileText className="h-4 w-4 text-muted-foreground" />
                         <span className="truncate">{r.title}</span>
                       </CommandItem>
@@ -848,7 +846,6 @@ export function AppShell({
                     <CommandItem
                       key={artifact.id}
                       value={artifact.id}
-                      keywords={[artifact.name]}
                       onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
                     >
                       <ArtifactIcon className="h-4 w-4 text-muted-foreground" />

@@ -411,112 +411,31 @@ export function createRunManager(opts: RunManagerOptions) {
     });
   }
 
-  function briefReflectionLine(line: string): string | null {
-    const cleaned = line
-      .replace(/\s+/g, " ")
-      .replace(/^[“”"']+|[“”"']+$/g, "")
-      .replace(/[.!?]+$/g, "")
-      .trim();
-    if (!cleaned) return null;
+  // Convert the reflection journal into a brief task-run log entry. The prompt
+  // (`reflection-workspace.md`) is the source of truth for output shape — it
+  // asks the model for at most 3 plain bullets. We strip headings/leading
+  // bullet markers, drop blanks, and keep the first few lines verbatim so a
+  // bad model run is visible (and fixable in the prompt) instead of silently
+  // sanitised here.
+  function reflectionOutcomeText(journal: string | null): string {
+    if (journal === null) return "- No activity.";
+    if (journal.trim().length === 0) return "- Empty reflection.";
 
-    const words = cleaned.split(/\s+/);
-    if (words.length <= 8) return cleaned;
-    return `${words.slice(0, 8).join(" ").replace(/[,:;—–-]+$/, "")}…`;
-  }
-
-  function meaningfulJournalLines(journal: string, maxLines: number): string[] {
-    const lines: string[] = [];
-    const genericHeadings = new Set(["journal", "daily reflection", "manual reflection", "reflection"]);
-    const decorativeLanguage = /\b(beacon|breathed|dreams?|glow(?:ed|ing)?|glass|loom|memory\s+to\s+glow|midnight|mist|moon(?:light)?|moon-pale|opal|shimmer(?:ed|ing)?|violet)\b/i;
+    const bullets: string[] = [];
     for (const rawLine of journal.split(/\r?\n/)) {
-      const isHeading = /^#{1,6}\s+/.test(rawLine);
       const line = rawLine
         .replace(/^#{1,6}\s+/, "")
         .replace(/^[-*]\s+/, "")
         .trim();
-      if (line.length === 0) continue;
-      const candidate = decorativeLanguage.test(line) && line.includes(":")
-        ? line.slice(line.indexOf(":") + 1).trim()
-        : line;
-      const normalized = candidate.toLowerCase();
-      if (genericHeadings.has(normalized)) continue;
-      if (decorativeLanguage.test(candidate)) continue;
-      if (isHeading && /^(journal|daily reflection|manual reflection|reflection)(\s|[-—:–]|$)/i.test(candidate)) continue;
-      if (/^no\s+(chat\s+)?activity[.!]?$/i.test(candidate)) continue;
-      if (/\b(chat|activity|occurred)\b.*\//i.test(candidate)) continue;
-      if (/^[a-z][a-z0-9_-]*(\s*\/\s*[a-z][a-z0-9_-]*){1,}/i.test(candidate)) continue;
-      if (/\b[A-Za-z0-9_-]{1,3}(\s*[·/]\s*[A-Za-z0-9_-]{1,3}){2,}\b/.test(candidate)) continue;
-      if (isDecorativeReflectionLine(candidate)) continue;
-      for (const sentence of candidate.split(/(?<=[.!?])\s+/)) {
-        const briefLine = briefReflectionLine(sentence);
-        if (!briefLine) continue;
-        lines.push(briefLine);
-        if (lines.length >= maxLines) break;
-      }
-      if (lines.length >= maxLines) break;
+      if (!line) continue;
+      bullets.push(`- ${line}`);
+      if (bullets.length >= 3) break;
     }
-    return lines;
-  }
-
-  function isDecorativeReflectionLine(line: string): boolean {
-    const lower = line.toLowerCase();
-    const decorativeMatches = lower.match(/\b(violet|dark|glow|breathed|splintering|glass|rain|midnight|mist|beacon|moon|moonlight|moon-pale|opal|garden|archive|circuits?|sensors?|loom|shimmered|quiet\s+console|human\s+shape)\b/g) ?? [];
-    return decorativeMatches.length >= 2
-      || /\bi\s+(lowered|kept|left|let|translated)\b.*\b(memory|log|archive|circuits?|sensors?|moon|mist|beacon)\b/i.test(line);
-  }
-
-  function isNoActivityBoilerplateJournal(journal: string): boolean {
-    const body = journal
-      .replace(/^#{1,6}\s+.*$/gm, "")
-      .replace(/\b[A-Za-z0-9_-]{1,3}(\s*[·/]\s*[A-Za-z0-9_-]{1,3}){2,}\b/g, "")
-      .toLowerCase();
-    return /no\s+chat\s+activity\s+(occurred|found|to summarize)\b/.test(body)
-      || /^\s*[-*]?\s*no\s+activity\s*[.!]?\s*$/m.test(body)
-      || /nothing\s+(new\s+)?(asked|happened|occurred)\b/.test(body)
-      || /workspace\s+(was\s+)?quiet/.test(body)
-      || /—\s*charted\s+[a-z0-9_-]{1,3}(\s*[·/]\s*[a-z0-9_-]{1,3}){1,}/.test(body)
-      || /\b(chat|activity|occurred)\b.*\/.*\b(chat|activity|occurred)\b/.test(body);
-  }
-
-  function isFragmentedReflectionJournal(journal: string): boolean {
-    const lines = journal
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^#{1,6}\s+/, "").trim())
-      .filter(Boolean);
-    return lines.some((line) => {
-      const lower = line.toLowerCase();
-      return /\b(chat|activity|occurred)\b\s*\/\s*\b(chat|activity|occurred)\b/.test(lower)
-        || /^[a-z][a-z0-9_-]*(\s*\/\s*[a-z][a-z0-9_-]*){1,}/i.test(line)
-        || /\b[A-Za-z0-9_-]{1,3}(\s*[·/]\s*[A-Za-z0-9_-]{1,3}){2,}\b/.test(line)
-        || /—\s*charted\s+[a-z0-9_-]{1,3}(\s*[·/]\s*[a-z0-9_-]{1,3}){1,}/.test(lower)
-        || isDecorativeReflectionLine(line);
-    });
-  }
-
-  function reflectionOutcomeText(_runId: string, journal: string | null): string {
-    if (journal === null) {
-      return "- No activity.";
-    }
-
-    if (journal.trim().length === 0) {
-      return "- Empty reflection.";
-    }
-
-    if (isNoActivityBoilerplateJournal(journal)) {
-      return "- No activity.";
-    }
-
-    if (isFragmentedReflectionJournal(journal)) {
-      return "- No concrete reflection.";
-    }
-
-    const highlights = meaningfulJournalLines(journal, 3);
-    if (highlights.length === 0) return "- No concrete reflection.";
-    return highlights.map((line) => `- ${line}`).join("\n");
+    return bullets.length > 0 ? bullets.join("\n") : "- Empty reflection.";
   }
 
   async function logReflectionOutcome(runId: string, journal: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
-    const text = reflectionOutcomeText(runId, journal);
+    const text = reflectionOutcomeText(journal);
     await onLog({
       runId,
       seq: 0,

@@ -94,6 +94,10 @@ export function parseModelsOutput(stdout: string): ModelRef[] {
     const rest = line.slice(slash + 1);
     if (!rest) continue;
 
+    // Brace-counted block scan. Naive: doesn't account for braces inside
+    // strings, but `opencode models --verbose` doesn't currently emit
+    // any string values containing `{` or `}`. JSON.parse below catches
+    // mis-extracted blocks and falls back to no-metadata.
     const jsonLines: string[] = [];
     let depth = 0;
     let sawJson = false;

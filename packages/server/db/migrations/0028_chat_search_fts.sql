@@ -75,13 +75,14 @@ BEGIN
 END;
 
 -- INSERT trigger: index new chat-message rows whose JSON content is
--- type='text', type='summary', or type='events'. Event logs are the persisted
--- shape for agent replies, so text events must participate in chat search.
+-- type='text' or type='summary'. Other types (events, toolCall,
+-- artifactRef, etc.) are skipped — they're either internal plumbing or
+-- structured data without a user-meaningful body.
 CREATE TRIGGER messages_ai_chat_search
 AFTER INSERT ON messages
 WHEN
   json_valid(NEW.content)
-  AND json_extract(NEW.content, '$.type') IN ('text', 'summary', 'events')
+  AND json_extract(NEW.content, '$.type') IN ('text', 'summary')
 BEGIN
   INSERT OR REPLACE INTO chat_search_index
     (ref_id, body, body_lc, chat_id, workspace_slug, kind, created_at)
@@ -90,21 +91,11 @@ BEGIN
     COALESCE(
       json_extract(NEW.content, '$.text'),
       json_extract(NEW.content, '$.body'),
-      (SELECT group_concat(COALESCE(
-        json_extract(value, '$.event.part.text'),
-        json_extract(value, '$.line'),
-        ''
-      ), '') FROM json_each(NEW.content, '$.log')),
       ''
     ),
     LOWER(COALESCE(
       json_extract(NEW.content, '$.text'),
       json_extract(NEW.content, '$.body'),
-      (SELECT group_concat(COALESCE(
-        json_extract(value, '$.event.part.text'),
-        json_extract(value, '$.line'),
-        ''
-      ), '') FROM json_each(NEW.content, '$.log')),
       ''
     )),
     NEW.chat_id,
@@ -129,21 +120,11 @@ BEGIN
     COALESCE(
       json_extract(NEW.content, '$.text'),
       json_extract(NEW.content, '$.body'),
-      (SELECT group_concat(COALESCE(
-        json_extract(value, '$.event.part.text'),
-        json_extract(value, '$.line'),
-        ''
-      ), '') FROM json_each(NEW.content, '$.log')),
       ''
     ),
     LOWER(COALESCE(
       json_extract(NEW.content, '$.text'),
       json_extract(NEW.content, '$.body'),
-      (SELECT group_concat(COALESCE(
-        json_extract(value, '$.event.part.text'),
-        json_extract(value, '$.line'),
-        ''
-      ), '') FROM json_each(NEW.content, '$.log')),
       ''
     )),
     NEW.chat_id,
@@ -152,7 +133,7 @@ BEGIN
     NEW.created_at
   WHERE
     json_valid(NEW.content)
-    AND json_extract(NEW.content, '$.type') IN ('text', 'summary', 'events');
+    AND json_extract(NEW.content, '$.type') IN ('text', 'summary');
 END;
 
 -- DELETE trigger: drop from the index.
@@ -199,21 +180,11 @@ SELECT
   COALESCE(
     json_extract(m.content, '$.text'),
     json_extract(m.content, '$.body'),
-    (SELECT group_concat(COALESCE(
-      json_extract(value, '$.event.part.text'),
-      json_extract(value, '$.line'),
-      ''
-    ), '') FROM json_each(m.content, '$.log')),
     ''
   ),
   LOWER(COALESCE(
     json_extract(m.content, '$.text'),
     json_extract(m.content, '$.body'),
-    (SELECT group_concat(COALESCE(
-      json_extract(value, '$.event.part.text'),
-      json_extract(value, '$.line'),
-      ''
-    ), '') FROM json_each(m.content, '$.log')),
     ''
   )),
   m.chat_id,
@@ -225,4 +196,4 @@ JOIN chats c ON c.id = m.chat_id
 JOIN workspaces w ON w.id = c.workspace_id
 WHERE
   json_valid(m.content)
-  AND json_extract(m.content, '$.type') IN ('text', 'summary', 'events');
+  AND json_extract(m.content, '$.type') IN ('text', 'summary');

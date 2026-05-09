@@ -1,7 +1,9 @@
 export const DESKTOP_RIGHT_PANEL_BREAKPOINT = 768
 
-export function shouldOpenRightPanelsByDefault(viewportWidth?: number) {
-  void viewportWidth
+// Right panels (chat sidebars, context detail) start collapsed on every
+// viewport. Users open them per-chat / per-item via the toggle, and the
+// choice is persisted in localStorage by the caller.
+export function shouldOpenRightPanelsByDefault() {
   return false
 }
 

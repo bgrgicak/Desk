@@ -34,10 +34,6 @@ export function desktopNotificationPromptOfferedKey(userId: string): string {
   return `desk.notifications.desktopPromptOffered.${userId}`
 }
 
-function isNotificationsPrefsStorageKey(key: string): boolean {
-  return key.startsWith('desk.notifications.') && !key.startsWith('desk.notifications.desktopPromptOffered.')
-}
-
 export function loadNotifications(userId: string | undefined): NotificationsShape {
   if (!userId) return NOTIFICATIONS_DEFAULTS
   try {
@@ -57,23 +53,6 @@ export function saveNotifications(userId: string | undefined, value: Notificatio
   } catch {
     /* ignore */
   }
-}
-
-function loadCurrentDeviceNotifications(userId: string | undefined): NotificationsShape {
-  if (userId) return loadNotifications(userId)
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key || !isNotificationsPrefsStorageKey(key)) continue
-      const raw = localStorage.getItem(key)
-      if (!raw) continue
-      const parsed = JSON.parse(raw) as Partial<NotificationsShape>
-      return { ...NOTIFICATIONS_DEFAULTS, ...parsed }
-    }
-  } catch {
-    /* ignore */
-  }
-  return NOTIFICATIONS_DEFAULTS
 }
 
 export function isInternalChatMessage(msg: ServerMessage): boolean {
@@ -185,7 +164,7 @@ export function maybeShowChatBrowserNotification(
 ): void {
   if (!shouldShowChatBrowserNotification(msg, viewingChatId, userId, actorUserId)) return
   if (!userId) return
-  const prefs = loadCurrentDeviceNotifications(userId)
+  const prefs = loadNotifications(userId)
   if (!prefs.chatMessages || !prefs.desktop) return
   if (typeof window === 'undefined' || !('Notification' in window)) return
   if (Notification.permission === 'granted') {

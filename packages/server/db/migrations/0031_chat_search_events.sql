@@ -20,7 +20,7 @@ BEGIN
         json_extract(value, '$.event.part.text'),
         json_extract(value, '$.line'),
         ''
-      ), '') FROM json_each(NEW.content, '$.log')),
+      ), ' ') FROM json_each(NEW.content, '$.log')),
       ''
     ),
     LOWER(COALESCE(
@@ -30,7 +30,7 @@ BEGIN
         json_extract(value, '$.event.part.text'),
         json_extract(value, '$.line'),
         ''
-      ), '') FROM json_each(NEW.content, '$.log')),
+      ), ' ') FROM json_each(NEW.content, '$.log')),
       ''
     )),
     NEW.chat_id,
@@ -56,7 +56,7 @@ BEGIN
         json_extract(value, '$.event.part.text'),
         json_extract(value, '$.line'),
         ''
-      ), '') FROM json_each(NEW.content, '$.log')),
+      ), ' ') FROM json_each(NEW.content, '$.log')),
       ''
     ),
     LOWER(COALESCE(
@@ -66,7 +66,7 @@ BEGIN
         json_extract(value, '$.event.part.text'),
         json_extract(value, '$.line'),
         ''
-      ), '') FROM json_each(NEW.content, '$.log')),
+      ), ' ') FROM json_each(NEW.content, '$.log')),
       ''
     )),
     NEW.chat_id,
@@ -89,7 +89,7 @@ SELECT
       json_extract(value, '$.event.part.text'),
       json_extract(value, '$.line'),
       ''
-    ), '') FROM json_each(m.content, '$.log')),
+    ), ' ') FROM json_each(m.content, '$.log')),
     ''
   ),
   LOWER(COALESCE(
@@ -99,7 +99,7 @@ SELECT
       json_extract(value, '$.event.part.text'),
       json_extract(value, '$.line'),
       ''
-    ), '') FROM json_each(m.content, '$.log')),
+    ), ' ') FROM json_each(m.content, '$.log')),
     ''
   )),
   m.chat_id,

@@ -1,10 +1,10 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
-import type { ServerChat, ServerMessage, ServerUser, WsEvent } from "../types";
+import type { ServerChat, ServerMessage, WsEvent } from "../types";
 import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
 
 /**
@@ -55,30 +55,6 @@ function patchChatUnreadInCache(
       }
     }
   }
-}
-
-function findChatInCache(state: unknown, chatId: string): Pick<ServerChat, "workspaceId" | "title"> | undefined {
-  const root = state as Record<string, unknown>;
-  const apiState = root[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
-  if (!apiState?.queries) return undefined;
-  for (const entry of Object.values(apiState.queries)) {
-    const chats = entry?.data;
-    if (!Array.isArray(chats)) continue;
-    const chat = chats.find((c: ServerChat) => c.id === chatId);
-    if (chat?.workspaceId) return { workspaceId: chat.workspaceId, title: chat.title };
-  }
-  return undefined;
-}
-
-function findCurrentUserIdInCache(state: unknown): string | undefined {
-  const root = state as Record<string, unknown>;
-  const apiState = root[api.reducerPath] as { queries?: Record<string, { data?: ServerUser }> } | undefined;
-  if (!apiState?.queries) return undefined;
-  for (const [key, entry] of Object.entries(apiState.queries)) {
-    if (!key.startsWith("getMe(")) continue;
-    if (typeof entry?.data?.id === "string") return entry.data.id;
-  }
-  return undefined;
 }
 
 /**
@@ -372,14 +348,19 @@ export function applyEventToCache(
           if (isViewedChat) {
             markChatReadQuietly(msg.chatId, dispatch, getState);
           } else {
-            const state = getState?.();
-            const notificationChat = state ? findChatInCache(state, msg.chatId) : undefined;
-            const userId = state ? findCurrentUserIdInCache(state) : undefined;
+            // Notification routing relies on the event carrying workspace
+            // context (chats.ts populates these on every chat-message emit).
+            // If a future emitter forgets to include workspaceId, the
+            // notification simply won't show — no silent fallback that
+            // depends on cache shape.
+            const userId = (getState?.() as RootState | undefined)
+              ? selectCurrentUserId(getState!() as RootState)
+              : null;
             maybeShowChatBrowserNotification(
               msg,
               viewingChatId,
-              event.workspaceId ?? notificationChat?.workspaceId,
-              event.chatTitle ?? notificationChat?.title,
+              event.workspaceId,
+              event.chatTitle,
               userId,
               event.actorUserId,
             );
