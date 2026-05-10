@@ -68,6 +68,7 @@ function descriptionFor(m: ServerMessage): string | undefined {
     const withoutTitle = text.slice(m.title.length).trim();
     return withoutTitle.length > 0 ? withoutTitle : undefined;
   }
+  if (m.title) return text;
   const [, ...rest] = text.split("\n");
   const description = rest.join("\n").trim();
   return description.length > 0 ? description : undefined;

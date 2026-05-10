@@ -189,4 +189,18 @@ describe('task selectors', () => {
     expect(task.messageKind).toBe('task')
     expect(task.messageContentType).toBe('text')
   })
+
+  it('uses the whole task message body as the description when the title is stored separately', () => {
+    const task = toUiTask(message({
+      id: 'msg_task_separate_title',
+      role: 'agent',
+      kind: 'task',
+      title: 'Show fallback for tool-only chat runs',
+      content: { type: 'text', text: 'Add a visible fallback reply when a chat run only emits tool calls.' },
+      executeAt: undefined,
+    }), [])
+
+    expect(task.name).toBe('Show fallback for tool-only chat runs')
+    expect(task.description).toBe('Add a visible fallback reply when a chat run only emits tool calls.')
+  })
 })

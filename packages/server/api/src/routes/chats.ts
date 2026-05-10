@@ -160,6 +160,13 @@ const SendMessageSchema = z.object({
   goal: z.string().nullable().optional(),
 });
 
+export function validateSendMessageBody(rawData: unknown): void {
+  const parsed = SendMessageSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid message body: ${parsed.error.message}`);
+  }
+}
+
 const AttachArtifactRefSchema = z.object({
   chatId: z.string(),
   path: z.string(),
