@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isMessageVisible } from './messageVisibility'
-import { findFailedAgentTurn } from './ChatThread'
+import { findFailedAgentTurn, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -107,5 +107,58 @@ describe('findFailedAgentTurn', () => {
     const result = findFailedAgentTurn(items)
     expect(result).not.toBeNull()
     expect(result!.id).toBe('2')
+  })
+})
+
+describe('shouldShowToolOnlyRunFallback', () => {
+  it('shows a fallback when the latest successful turn has only hidden tool output', () => {
+    const items = [
+      message({ type: 'text', text: 'Please do it' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'succeeded' }),
+      message({ type: 'toolCall', toolName: 'file.read', args: { path: 'x' } }, { role: 'agent', id: '3' }),
+      message({ type: 'toolResult', toolName: 'file.read', result: 'ok' }, { role: 'agent', id: '4' }),
+    ]
+
+    expect(shouldShowToolOnlyRunFallback(items, false)).toBe(true)
+  })
+
+  it('does not show a fallback when the run produced visible assistant text', () => {
+    const items = [
+      message({ type: 'text', text: 'Please do it' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'succeeded' }),
+      message({ type: 'text', text: 'Done.' }, { role: 'agent', id: '3' }),
+    ]
+
+    expect(shouldShowToolOnlyRunFallback(items, false)).toBe(false)
+  })
+
+  it('does not show a fallback in developer mode because tool output is visible', () => {
+    const items = [
+      message({ type: 'text', text: 'Please do it' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'succeeded' }),
+      message({ type: 'toolCall', toolName: 'file.read', args: { path: 'x' } }, { role: 'agent', id: '3' }),
+    ]
+
+    expect(shouldShowToolOnlyRunFallback(items, true)).toBe(false)
+  })
+
+  it('waits for hidden tool output before showing the fallback', () => {
+    const items = [
+      message({ type: 'text', text: 'Please do it' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'succeeded' }),
+    ]
+
+    expect(shouldShowToolOnlyRunFallback(items, false)).toBe(false)
+  })
+
+  it('does not show a stale fallback after a later visible message', () => {
+    const items = [
+      message({ type: 'text', text: 'Please do it' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'succeeded' }),
+      message({ type: 'toolCall', toolName: 'file.read', args: { path: 'x' } }, { role: 'agent', id: '3' }),
+      message({ type: 'text', text: 'One more thing' }, { role: 'user', id: '4' }),
+    ]
+
+    expect(shouldShowToolOnlyRunFallback(items, false)).toBe(false)
   })
 })

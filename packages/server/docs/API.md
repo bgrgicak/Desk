@@ -210,6 +210,8 @@ forward and backward (scrollback) directions.
 |----------|--------|-------------|
 | `cursor` | string | Page forward: return messages after this cursor (chronological). |
 | `before` | string | Page backward (scrollback): return messages older than this cursor. |
+| `limit` | number | Page size, clamped to 200. Defaults to 50. |
+| `view` | `full` \| `compact` \| `timeline` | `compact` strips hidden tool/event payloads while keeping normal chat text; `timeline` also drops old rows that cannot render in the normal chat stream while preserving typing/error/tool-only fallback markers; `full` returns stored message content for developer/debug views. Defaults to `full`. |
 
 When neither `cursor` nor `before` is given, returns the **newest** 50
 messages so the chat opens at the bottom. The response includes
