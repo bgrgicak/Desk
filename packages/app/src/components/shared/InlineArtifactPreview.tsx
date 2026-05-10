@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { ExternalLink } from 'lucide-react'
-import { Button } from '@agent-desk/ui'
+import { Button, buttonVariants, cn } from '@agent-desk/ui'
 import { isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
@@ -18,6 +18,7 @@ interface InlineArtifactPreviewProps {
   mime?: string | null
   params?: Record<string, string>
   onOpen?: () => void
+  openHref?: string
   actions?: ReactNode
   fallback: ReactNode
 }
@@ -41,7 +42,7 @@ export function inlineAppPreviewFor(
   return appAttachmentToPreview(path)
 }
 
-export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, actions, fallback }: InlineArtifactPreviewProps) {
+export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, openHref, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const appPreviewRef = useMemo(() => {
     const base = inlineAppPreviewFor(path, name, mime)
@@ -115,7 +116,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
 
   if (state.status === 'loading') {
     return (
-      <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
+      <InlinePreviewShell name={name} onOpen={onOpen} openHref={openHref} actions={actions}>
         <div className="flex h-full items-center justify-center bg-muted/20 text-xs text-muted-foreground">
           Loading preview...
         </div>
@@ -124,7 +125,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
   }
 
   return (
-    <InlinePreviewShell name={name} onOpen={onOpen} actions={actions}>
+    <InlinePreviewShell name={name} onOpen={onOpen} openHref={openHref} actions={actions}>
       {state.kind === 'app' && appPreviewRef ? (
         <AppPreview {...appPreviewRef} />
       ) : state.kind === 'html' && state.blobUrl ? (
@@ -158,14 +159,21 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
 function InlinePreviewShell({
   name,
   onOpen,
+  openHref,
   actions,
   children,
 }: {
   name: string
   onOpen?: () => void
+  openHref?: string
   actions?: ReactNode
   children: ReactNode
 }) {
+  const handleOpenLinkClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+    onOpen?.()
+  }
+
   return (
     <div
       className="mx-auto w-full min-w-0 max-w-full overflow-hidden rounded-xl border-2 border-border bg-background shadow-sm sm:max-w-5xl"
@@ -175,12 +183,21 @@ function InlinePreviewShell({
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</span>
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
-          {onOpen && (
+          {openHref ? (
+            <a
+              href={openHref}
+              onClick={handleOpenLinkClick}
+              className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'h-6 gap-1 px-2 text-xs')}
+            >
+              Open
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          ) : onOpen ? (
             <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={onOpen}>
               Open
               <ExternalLink className="h-3 w-3" />
             </Button>
-          )}
+          ) : null}
         </div>
       </div>
       <div className="h-[460px] max-h-[75vh] min-h-[380px] min-w-0 max-w-full overflow-hidden bg-background sm:h-[640px]">

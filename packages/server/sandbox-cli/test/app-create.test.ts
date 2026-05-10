@@ -17,17 +17,22 @@ const SCAFFOLD_PATH = path.resolve(here, "..", "..", "..", "app-scaffold");
 
 let homeDir: string;
 let prevHome: string | undefined;
+let prevDeskChatId: string | undefined;
 
 beforeEach(async () => {
   outputMock.mockReset();
   homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-create-"));
   prevHome = process.env.HOME;
+  prevDeskChatId = process.env.DESK_CHAT_ID;
   process.env.HOME = homeDir;
+  delete process.env.DESK_CHAT_ID;
 });
 
 afterEach(async () => {
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
+  if (prevDeskChatId === undefined) delete process.env.DESK_CHAT_ID;
+  else process.env.DESK_CHAT_ID = prevDeskChatId;
   await fs.rm(homeDir, { recursive: true, force: true });
 });
 
@@ -93,6 +98,15 @@ describe("desk-agent app create", () => {
     await expect(
       run(["--chat", "cht_typo", "--template", SCAFFOLD_PATH, "my-todos"]),
     ).rejects.toMatchObject({ code: "CHAT_NOT_FOUND" });
+  });
+
+  it("rejects creating app artifacts outside the sandbox run chat", async () => {
+    process.env.DESK_CHAT_ID = "cht_current";
+    await makeChatDir("cht_other");
+
+    await expect(
+      run(["--chat", "cht_other", "--template", SCAFFOLD_PATH, "my-todos"]),
+    ).rejects.toMatchObject({ code: "WRONG_CHAT" });
   });
 
   it("refuses to clobber an existing app directory", async () => {

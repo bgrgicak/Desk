@@ -193,4 +193,37 @@ describe("GET /chats/:id/attachments — `<name>.app/` chat artifacts (PR-B)", (
     const items = res.body as AttachmentRow[];
     expect(items.find((it) => it.name === "my-app.app")).toBeUndefined();
   });
+
+  it("does not surface loose artifact files unless an artifactRef message attached them", async () => {
+    const artDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artDir, { recursive: true });
+    await fs.writeFile(path.join(artDir, "scratch-report.md"), "# Scratch\n", "utf8");
+    await fs.writeFile(path.join(artDir, "attached-report.md"), "# Attached\n", "utf8");
+
+    const attachedPath = `.chats/${chatId}/artifacts/attached-report.md`;
+    await pool.query(
+      "INSERT INTO messages (id, chat_id, role, content) VALUES (?, ?, 'agent', ?)",
+      [
+        generateId("message"),
+        chatId,
+        JSON.stringify({
+          type: "artifactRef",
+          path: attachedPath,
+          workspaceId,
+          name: "attached-report.md",
+        }),
+      ],
+    );
+
+    const res = await httpJson(
+      "GET",
+      `/chats/${chatId}/attachments?includeArtifacts=true`,
+      authToken,
+    );
+
+    expect(res.status).toBe(200);
+    const items = res.body as AttachmentRow[];
+    expect(items.find((it) => it.name === "scratch-report.md")).toBeUndefined();
+    expect(items.find((it) => it.name === "attached-report.md")?.path).toBe(attachedPath);
+  });
 });

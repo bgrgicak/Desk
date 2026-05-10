@@ -21,6 +21,8 @@ export interface RunOptions {
   attachments?: string[];
   /** On-disk slug for the workspace this run belongs to — feeds the mount plan + container name. */
   workspaceSlug: string;
+  /** Chat this run belongs to. Exported so in-sandbox CLIs can reject cross-chat writes. */
+  chatId?: string;
   /** DESK_HOME root. When omitted, runtime storage resolution is used. */
   home?: string;
   /**
@@ -206,6 +208,7 @@ function createRealDriver(): SandboxDriver {
             : [`DESK_PROMPT=${fullPrompt}`]),
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
+          ...(opts.chatId ? [`DESK_CHAT_ID=${opts.chatId}`] : []),
           // Inject provider keys per-exec so a key added after the container
           // was created takes effect immediately without recreation.
           ...providerKeyEnv(opts.providerKeys, opts.extraEnv),

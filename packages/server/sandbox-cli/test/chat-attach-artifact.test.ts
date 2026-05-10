@@ -14,6 +14,7 @@ vi.mock("../src/index.js", () => ({
 beforeEach(() => {
   postJsonMock.mockReset();
   postJsonMock.mockResolvedValue({ id: "msg_artifact" });
+  delete process.env.DESK_CHAT_ID;
 });
 
 describe("desk-agent chat attach-artifact", () => {
@@ -58,5 +59,14 @@ describe("desk-agent chat attach-artifact", () => {
       path: "notes.app/dist/fragments/editor",
       params: { note_id: "abc", mode: "edit" },
     });
+  });
+
+  it("rejects attaching to a different chat than the sandbox run chat", async () => {
+    process.env.DESK_CHAT_ID = "cht_current";
+
+    await expect(
+      run(["--chat", "cht_other", ".chats/cht_other/artifacts/report.md"]),
+    ).rejects.toMatchObject({ code: "WRONG_CHAT" });
+    expect(postJsonMock).not.toHaveBeenCalled();
   });
 });
