@@ -85,6 +85,13 @@ describe("desk-agent task schedule", () => {
     expect(postJsonMock).not.toHaveBeenCalled();
   });
 
+  it("rejects --new-chat with a non-task kind", async () => {
+    await expect(
+      run(["--chat", "ch_a", "--new-chat", "--kind", "chat", "x"]),
+    ).rejects.toThrow(/--kind must be omitted or task/);
+    expect(postJsonMock).not.toHaveBeenCalled();
+  });
+
   it("rejects missing --chat", async () => {
     await expect(run(["hello"])).rejects.toThrow(/Missing --chat/);
     expect(postJsonMock).not.toHaveBeenCalled();

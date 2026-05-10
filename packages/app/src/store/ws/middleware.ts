@@ -4,13 +4,47 @@ import { api } from "../api";
 import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
-import type { ServerChat, ServerMessage, WsEvent } from "../types";
+import type { ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
 import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
+
+function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
+  if (msg.content.type === "summary" || msg.content.type === "summary_request" || msg.content.type === "reflection_request") {
+    return null;
+  }
+
+  switch (msg.content.type) {
+    case "events": {
+      const log: typeof msg.content.log = [];
+      let sawStructuredEvent = false;
+      for (const entry of msg.content.log) {
+        if (entry.kind === "event") {
+          sawStructuredEvent = true;
+          if (entry.event.type === "text") {
+            const text = entry.event.part?.text;
+            if (typeof text === "string") {
+              log.push({ kind: "event", event: { type: "text", part: { text } } });
+            }
+          }
+        } else if (entry.kind === "unparsed" && !sawStructuredEvent) {
+          log.push(entry);
+        }
+      }
+      return { ...msg, content: { type: "events", log } };
+    }
+    case "toolCall":
+      return { ...msg, content: { type: "toolCall", toolName: msg.content.toolName, args: {} } };
+    case "toolResult":
+      return { ...msg, content: { type: "toolResult", toolName: msg.content.toolName, result: null } };
+    default:
+      return msg;
+  }
+}
 
 /**
  * Optimistic cache patcher: sets `unread: false` for a chat in every
  * `getChats` cache entry (both the unscoped and any workspace-scoped
- * variants).
+ * variants) and in the direct `getChat` cache used by hidden/internal
+ * chats opened from notification URLs.
  *
  * The app only calls `useGetChatsQuery({ workspaceId })`, so the
  * unscoped cache is typically empty. We iterate the RTK Query cache
@@ -30,8 +64,12 @@ function patchChatUnreadInCache(
       draft[idx] = { ...draft[idx], unread: false };
     }
   };
+  const patchSingle = (draft: ServerChat) => {
+    if (draft.unread) draft.unread = false;
+  };
   // Always try the unscoped cache (cheap no-op when it doesn't exist).
   dispatch(api.util.updateQueryData("getChats", undefined, patch));
+  dispatch(api.util.updateQueryData("getChat", chatId, patchSingle));
 
   // Also patch every workspace-scoped cache that exists. The RTK Query
   // state under `api.reducerPath` stores each query's `data` keyed by
@@ -55,6 +93,65 @@ function patchChatUnreadInCache(
       }
     }
   }
+}
+
+function messageMatchesFilter(msg: ServerMessage, filter: MessagesFilter, workspaceId?: string): boolean {
+  if (filter.chatId && filter.chatId !== msg.chatId) return false;
+  if (filter.workspaceId && workspaceId && filter.workspaceId !== workspaceId) return false;
+  if (filter.workspaceId && !workspaceId) return false;
+  if (filter.kind?.length && !filter.kind.includes(msg.kind ?? "chat")) return false;
+  if (filter.parentId && filter.parentId !== msg.parentId) return false;
+  if (filter.state?.length && !filter.state.includes(msg.state ?? "pending")) return false;
+  if (filter.contentKind?.length && !filter.contentKind.includes(msg.content.type)) return false;
+  if (filter.scheduled !== undefined) {
+    const scheduled = !!msg.executeAt || !!msg.cron;
+    if (filter.scheduled !== scheduled) return false;
+  }
+  return true;
+}
+
+function patchCrossMessageCaches(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+  msg: ServerMessage,
+  mode: "appended" | "updated",
+  workspaceId?: string,
+): void {
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ListMessagesResponse }> } | undefined;
+  if (!apiState?.queries) return;
+
+  for (const [key, entry] of Object.entries(apiState.queries)) {
+    if (!key.startsWith("getMessages(")) continue;
+    if (!entry?.data?.items) continue;
+    const argJson = key.slice("getMessages(".length, -1);
+    let filter: MessagesFilter;
+    try {
+      filter = JSON.parse(argJson) as MessagesFilter;
+    } catch {
+      continue;
+    }
+
+    const alreadyPresent = entry.data.items.some((m) => m.id === msg.id);
+    if (!alreadyPresent && (mode === "updated" || !messageMatchesFilter(msg, filter, workspaceId))) continue;
+
+    dispatch(
+      api.util.updateQueryData("getMessages", filter, (draft) => {
+        const idx = draft.items.findIndex((m) => m.id === msg.id);
+        if (idx >= 0) draft.items[idx] = msg;
+        else draft.items.unshift(msg);
+      }),
+    );
+  }
+}
+
+function patchPerChatMessageCaches(
+  dispatch: (a: unknown) => unknown,
+  chatId: string,
+  patch: (draft: ListMessagesResponse) => void,
+): void {
+  dispatch(api.util.updateQueryData("getChatMessages", { chatId, full: false }, patch));
+  dispatch(api.util.updateQueryData("getChatMessages", { chatId, full: true }, patch));
 }
 
 /**
@@ -273,8 +370,19 @@ export function applyEventToCache(
           { workspaceId: chatForCache.workspaceId },
           (draft) => {
             const idx = draft.findIndex((c) => c.id === chatForCache.id);
-            if (idx >= 0) draft[idx] = chatForCache;
-            else draft.unshift(chatForCache);
+            if (idx >= 0) {
+              // `chat.updated` carries the base chat row from GET/PATCH
+              // /chats/:id. Preserve list-only fields that are hydrated by
+              // GET /chats so a metadata/unread patch does not drop the
+              // sidebar icon or running spinner until the next list refetch.
+              draft[idx] = {
+                ...chatForCache,
+                kind: draft[idx].kind,
+                running: draft[idx].running,
+              };
+            } else {
+              draft.unshift({ ...chatForCache, kind: "chat", running: false });
+            }
           },
         ),
       );
@@ -282,8 +390,17 @@ export function applyEventToCache(
       dispatch(
         api.util.updateQueryData("getChats", undefined, (draft) => {
           const idx = draft.findIndex((c) => c.id === chatForCache.id);
-          if (idx >= 0) draft[idx] = chatForCache;
+          if (idx >= 0) {
+            draft[idx] = {
+              ...chatForCache,
+              kind: draft[idx].kind,
+              running: draft[idx].running,
+            };
+          }
         }),
+      );
+      dispatch(
+        api.util.updateQueryData("getChat", chatForCache.id, () => chatForCache),
       );
       break;
     }
@@ -309,17 +426,28 @@ export function applyEventToCache(
     case "message.appended":
     case "message.updated": {
       const msg: ServerMessage = event.payload;
-      dispatch(
-        api.util.updateQueryData(
-          "getChatMessages",
-          { chatId: msg.chatId },
-          (draft) => {
-            const idx = draft.items.findIndex((m) => m.id === msg.id);
-            if (idx >= 0) draft.items[idx] = msg;
-            else draft.items.push(msg);
-          },
-        ),
-      );
+      const timelineMsg = compactTimelineMessage(msg);
+      dispatch(api.util.updateQueryData("getChatMessages", { chatId: msg.chatId, full: false }, (draft) => {
+        const idx = draft.items.findIndex((m) => m.id === msg.id);
+        if (!timelineMsg) {
+          if (idx >= 0) draft.items.splice(idx, 1);
+        } else if (idx >= 0) draft.items[idx] = timelineMsg;
+        else draft.items.push(timelineMsg);
+      }));
+      dispatch(api.util.updateQueryData("getChatMessages", { chatId: msg.chatId, full: true }, (draft) => {
+        const idx = draft.items.findIndex((m) => m.id === msg.id);
+        if (idx >= 0) draft.items[idx] = msg;
+        else draft.items.push(msg);
+      }));
+      if (getState) {
+        patchCrossMessageCaches(
+          dispatch,
+          getState,
+          msg,
+          event.type === "message.appended" ? "appended" : "updated",
+          "workspaceId" in event ? event.workspaceId : undefined,
+        );
+      }
       dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }]));
       // Track running chats for the sidebar spinner.
       if (msg.content?.type === "agent_turn") {
@@ -377,21 +505,15 @@ export function applyEventToCache(
     }
     case "message.streaming": {
       const { chatId, messageId, delta } = event.payload;
-      dispatch(
-        api.util.updateQueryData(
-          "getChatMessages",
-          { chatId },
-          (draft) => {
-            const m = draft.items.find((x) => x.id === messageId);
-            if (m && m.content.type === "text") {
-              m.content = {
-                ...m.content,
-                text: (m.content.text ?? "") + delta,
-              };
-            }
-          },
-        ),
-      );
+      patchPerChatMessageCaches(dispatch, chatId, (draft) => {
+        const m = draft.items.find((x) => x.id === messageId);
+        if (m && m.content.type === "text") {
+          m.content = {
+            ...m.content,
+            text: (m.content.text ?? "") + delta,
+          };
+        }
+      });
       break;
     }
     case "artifact.created": {

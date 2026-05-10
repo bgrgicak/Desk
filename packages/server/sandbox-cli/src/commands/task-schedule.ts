@@ -96,6 +96,9 @@ export async function run(argv: string[]): Promise<void> {
   if (newChat && (typeof at === "string" || typeof cron === "string")) {
     throw new CliError("INVALID_ARGS", "--new-chat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
   }
+  if (newChat && typeof kind === "string" && kind !== "task") {
+    throw new CliError("INVALID_ARGS", "--new-chat is only for simple manual tasks; --kind must be omitted or task");
+  }
 
   const body: Record<string, unknown> = { chatId, content };
   if (newChat) body.newChat = true;

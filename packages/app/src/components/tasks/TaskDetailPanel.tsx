@@ -64,6 +64,7 @@ import { usePrefs } from '@/hooks/use-prefs'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
 import { describeCron } from './schedule-utils'
 import { taskOccurrenceFromMessage, taskRunMessageKinds } from '@/store/selectors/tasks'
+import { buildTaskLifecycleMove, buildTaskStatusMove } from '@/lib/task-status'
 
 type PanelTab = 'details' | 'chat'
 
@@ -214,39 +215,35 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
   const visibleHistory = showAllHistory ? history : history.slice(0, 5)
 
-  const isPaused = task.statusText.toLowerCase().includes('paused')
+  const isPaused = task.messageState === 'paused'
 
-  async function transition(nextState: 'paused' | 'pending' | 'cancelled', extra?: { executeAt?: string | null }) {
+  async function applyStatusMove(move: ReturnType<typeof buildTaskStatusMove>, errorTitle = 'Action failed') {
     if (!task.chatId || !task.messageId) {
       toast.error('This task is not wired to a server message yet')
       return
     }
+    if (move.kind === 'none') return
     try {
-      await patchMessage({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        patch: { state: nextState, ...(extra ?? {}) },
-      }).unwrap()
+      if (move.kind === 'run') {
+        await runMessage({ chatId: task.chatId, messageId: task.messageId }).unwrap()
+      } else {
+        await patchMessage({
+          chatId: task.chatId,
+          messageId: task.messageId,
+          patch: move.patch,
+        }).unwrap()
+      }
     } catch (err) {
-      toast.error('Action failed', { description: describeApiError(err) })
+      toast.error(errorTitle, { description: describeApiError(err) })
     }
   }
 
   function changeStatus(next: Task['status']) {
-    if (next === task.status && !isPaused) return
-    if (next === 'active') {
-      if (!task.chatId || !task.messageId) {
-        toast.error('This task is not wired to a server message yet')
-        return
-      }
-      void runMessage({ chatId: task.chatId, messageId: task.messageId })
-        .unwrap()
-        .catch(err => toast.error('Action failed', { description: describeApiError(err) }))
-      return
-    }
-    if (next === 'todo')      void transition('pending', { executeAt: null })
-    if (next === 'complete')  void transition('cancelled')
-    if (next === 'scheduled') void transition('pending')
+    void applyStatusMove(buildTaskStatusMove(task, next, 'user'))
+  }
+
+  function changeLifecycle(action: 'pause' | 'resume') {
+    void applyStatusMove(buildTaskLifecycleMove(task, action, 'user'))
   }
 
   async function runNow() {
@@ -392,7 +389,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-pause"
               title="Pause"
               disabled={busy}
-              onClick={() => void transition('paused')}
+              onClick={() => changeLifecycle('pause')}
             >
               <Pause className="h-4 w-4" />
             </Button>
@@ -405,7 +402,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-resume"
               title="Resume"
               disabled={busy}
-              onClick={() => void transition('pending')}
+              onClick={() => changeLifecycle('resume')}
             >
               <Play className="h-4 w-4" />
             </Button>
@@ -418,7 +415,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-cancel"
               title="Complete"
               disabled={busy}
-              onClick={() => void transition('cancelled')}
+              onClick={() => changeStatus('complete')}
             >
               <Check className="h-4 w-4" />
             </Button>

@@ -1,4 +1,5 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
+import { taskStatusFromTaskAndRuns } from "@/lib/task-status";
 import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
 
 export function taskMessageKindsForDeveloperMode(_developerMode: boolean): Array<"task" | "summary"> {
@@ -74,11 +75,11 @@ function descriptionFor(m: ServerMessage): string | undefined {
   return description.length > 0 ? description : undefined;
 }
 
-function statusFor(m: ServerMessage): Task["status"] {
-  if (m.state === "running") return "active";
-  if (m.state === "succeeded" || m.state === "failed" || m.state === "cancelled") return "complete";
-  if (m.executeAt || m.cron) return "scheduled";
-  return "todo";
+function statusFor(m: ServerMessage, runs: ServerMessage[] = []): Task["status"] {
+  return taskStatusFromTaskAndRuns(
+    { state: m.state ?? "pending", executeAt: m.executeAt, cron: m.cron },
+    runs.map(run => ({ state: run.state })),
+  );
 }
 
 function statusTextFor(m: ServerMessage): string {
@@ -137,7 +138,7 @@ export function toUiTask(
   const agent = agents.find((a) => a.id === m.agentId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
-  const status = statusFor(m);
+  const status = statusFor(m, runs);
 
   const history: TaskOccurrence[] = [];
   for (const run of runs) {
@@ -175,6 +176,8 @@ export function toUiTask(
     completedAt,
     messageKind: m.kind,
     messageContentType: m.content.type,
+    messageRole: m.role,
+    messageState: m.state ?? "pending",
     chatId: m.chatId,
     messageId: m.id,
     artifactIds: [],

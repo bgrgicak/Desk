@@ -8,6 +8,31 @@
  */
 import { test, expect } from "../fixtures";
 
+async function cancelTaskAndRuns(serverUrl: string, token: string, chatId: string, taskId: string) {
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  await expect.poll(async () => {
+    const runsRes = await fetch(`${serverUrl}/messages?chatId=${chatId}&kind=task_run&parentId=${taskId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const runs = (await runsRes.json()) as { items: Array<{ state?: string }> };
+    return runs.items.some(run => run.state === "pending" || run.state === "running");
+  }, { timeout: 30_000 }).toBe(false);
+
+  await fetch(`${serverUrl}/chats/${chatId}/messages/${taskId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ state: "cancelled" }),
+  });
+
+  await expect.poll(async () => {
+    const res = await fetch(`${serverUrl}/chats/${chatId}/messages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = (await res.json()) as { items: Array<{ id: string; state?: string }> };
+    return body.items.find(m => m.id === taskId)?.state;
+  }, { timeout: 10_000 }).toBe("cancelled");
+}
+
 test("moving a task to the Complete column persists as cancelled", async ({
   loggedInPage,
   serverUrl,
@@ -72,4 +97,214 @@ test("moving a task to the Complete column persists as cancelled", async ({
   });
   const body = (await recheck.json()) as { items: Array<{ id: string; state?: string }> };
   expect(body.items.find(m => m.id === userMsg.id)?.state).toBe("cancelled");
+});
+
+test("dragging a todo task to Active keeps the card there while the run starts", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+  const wsList = (await (
+    await fetch(`${serverUrl}/workspaces`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+  const agents = (await (
+    await fetch(`${serverUrl}/agents`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+
+  const chat = (await (
+    await fetch(`${serverUrl}/chats`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspaceId: wsList[0].id,
+        agentId: agents[0].id,
+        title: "Slice19 active drag",
+      }),
+    })
+  ).json()) as { id: string };
+
+  const post = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      content: "Slice19 drag to active",
+      kind: "task",
+      title: "Slice19 drag to active",
+    }),
+  });
+  const task = (await post.json()) as { id: string };
+
+  await loggedInPage.reload();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
+
+  const card = loggedInPage.getByTestId(`task-row-${task.id}`);
+  const activeColumn = loggedInPage.getByTestId("tasks-column-active-list");
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  const cardBox = await card.boundingBox();
+  const activeBox = await activeColumn.boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(activeBox).not.toBeNull();
+
+  await loggedInPage.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+  await loggedInPage.mouse.down();
+  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + 40, { steps: 12 });
+  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + activeBox!.height / 2, { steps: 12 });
+  await loggedInPage.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const res = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json()) as { items: Array<{ id: string; state?: string }> };
+      return body.items.find(m => m.id === task.id)?.state;
+    }, { timeout: 10_000 })
+    .toBe("running");
+  await expect(activeColumn.getByTestId(`task-row-${task.id}`)).toBeVisible({ timeout: 10_000 });
+
+  await cancelTaskAndRuns(serverUrl, token, chat.id, task.id);
+});
+
+test("dragging a todo task to the Active column header still starts the run", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+  const wsList = (await (
+    await fetch(`${serverUrl}/workspaces`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+  const agents = (await (
+    await fetch(`${serverUrl}/agents`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+
+  const chat = (await (
+    await fetch(`${serverUrl}/chats`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspaceId: wsList[0].id,
+        agentId: agents[0].id,
+        title: "Slice19 active drag header",
+      }),
+    })
+  ).json()) as { id: string };
+
+  const post = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      content: "Slice19 drag to active header",
+      kind: "task",
+      title: "Slice19 drag to active header",
+    }),
+  });
+  const task = (await post.json()) as { id: string };
+
+  await loggedInPage.reload();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
+
+  const card = loggedInPage.getByTestId(`task-row-${task.id}`);
+  const activeColumn = loggedInPage.getByTestId("tasks-column-active");
+  const activeList = loggedInPage.getByTestId("tasks-column-active-list");
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  const cardBox = await card.boundingBox();
+  const activeBox = await activeColumn.boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(activeBox).not.toBeNull();
+
+  await loggedInPage.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+  await loggedInPage.mouse.down();
+  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + 14, { steps: 12 });
+  await loggedInPage.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const res = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json()) as { items: Array<{ id: string; state?: string }> };
+      return body.items.find(m => m.id === task.id)?.state;
+    }, { timeout: 10_000 })
+    .toBe("running");
+  await expect(activeList.getByTestId(`task-row-${task.id}`)).toBeVisible({ timeout: 10_000 });
+
+  await cancelTaskAndRuns(serverUrl, token, chat.id, task.id);
+});
+
+test("dragging a todo task to Active works while the task detail sidebar is open", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+  const wsList = (await (
+    await fetch(`${serverUrl}/workspaces`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+  const agents = (await (
+    await fetch(`${serverUrl}/agents`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as Array<{ id: string }>;
+
+  const chat = (await (
+    await fetch(`${serverUrl}/chats`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspaceId: wsList[0].id,
+        agentId: agents[0].id,
+        title: "Slice19 active drag sidebar",
+      }),
+    })
+  ).json()) as { id: string };
+
+  const post = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      content: "Slice19 drag to active with sidebar",
+      kind: "task",
+      title: "Slice19 drag to active with sidebar",
+    }),
+  });
+  const task = (await post.json()) as { id: string };
+
+  await loggedInPage.reload();
+  await loggedInPage.getByRole("link", { name: /^Tasks$/ }).first().click();
+
+  const card = loggedInPage.getByTestId(`task-row-${task.id}`);
+  const activeColumn = loggedInPage.getByTestId("tasks-column-active-list");
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  await card.click();
+  await expect(loggedInPage.getByText("Not scheduled")).toBeVisible();
+  await loggedInPage.waitForTimeout(300);
+
+  const cardBox = await card.boundingBox();
+  const activeBox = await activeColumn.boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(activeBox).not.toBeNull();
+
+  await loggedInPage.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+  await loggedInPage.mouse.down();
+  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + 40, { steps: 12 });
+  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + activeBox!.height / 2, { steps: 12 });
+  await loggedInPage.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const res = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json()) as { items: Array<{ id: string; state?: string }> };
+      return body.items.find(m => m.id === task.id)?.state;
+    }, { timeout: 10_000 })
+    .toBe("running");
+  await expect(activeColumn.getByTestId(`task-row-${task.id}`)).toBeVisible({ timeout: 10_000 });
+  await cancelTaskAndRuns(serverUrl, token, chat.id, task.id);
 });

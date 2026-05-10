@@ -657,7 +657,7 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     await runStarted;
 
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.state).toBe("pending");
 
     await queries.messages.updateMessage(pool, taskId, { state: "cancelled" });
     allowFinish();
@@ -696,8 +696,8 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     await mgr.rescheduleMessage(taskId);
 
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
-    expect(duringRun?.executeAt).toBeUndefined();
+    expect(duringRun?.state).toBe("pending");
+    expect(duringRun?.executeAt).toBeDefined();
 
     allowFinish();
     await fire;
@@ -727,7 +727,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("failed");
   });
 
-  it("parent task state is running while task_run is in-flight and stays running after (user controls status)", async () => {
+  it("task_run state, not the scheduler, is the agent-owned Active signal", async () => {
     let resolveRun!: () => void;
     const runStarted = new Promise<void>((r) => { resolveRun = r; });
     let allowFinish!: () => void;
@@ -752,20 +752,24 @@ execRunFn: async () => ({ exitCode: 1 }),
     const fire = mgr.fireMessage(taskId);
     await runStarted;
 
-    // While the run is in-flight the parent task must be 'running'.
+    // While the run is in-flight the parent task stays user-owned; the child
+    // task_run is what makes the board display the parent as Active.
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.state).toBe("pending");
+    const runningRuns = await listTaskRuns(taskId);
+    expect(runningRuns).toHaveLength(1);
+    expect(runningRuns[0].state).toBe("running");
 
     allowFinish();
     await fire;
 
-    // After the run completes the parent stays 'running' — the user placed
-    // it in Active and owns its status from here.
+    // After the run completes the scheduler still has not claimed ownership of
+    // the parent status.
     const afterRun = await queries.messages.findById(pool, taskId);
-    expect(afterRun?.state).toBe("running");
+    expect(afterRun?.state).toBe("pending");
   });
 
-  it("user-created unscheduled task: parent stays running after run (user owns status)", async () => {
+  it("user-created unscheduled task: direct scheduler fire does not move the parent", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -782,7 +786,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("running");
+    expect(parent?.state).toBe("pending");
 
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);

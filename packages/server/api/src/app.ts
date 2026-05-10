@@ -650,6 +650,10 @@ export function createApp(opts: AppOptions): Server {
         if (typeof body.executeAt === "string" || typeof body.cron === "string") {
           throw new ValidationError("newChat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
         }
+        if (typeof body.kind === "string" && body.kind !== "task") {
+          throw new ValidationError("newChat is only for simple manual tasks; kind must be omitted or task");
+        }
+        sendBody.kind = "task";
         const sourceChat = await chatRoutes.getChat(pool, sourceChatId);
         const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
         const rawContent = typeof body.content === "string" ? body.content.trim() : "";
@@ -838,24 +842,29 @@ export function createApp(opts: AppOptions): Server {
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { session, agent } = await authenticateSandboxToken(pool, token);
       const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
-      if (!body.chatId || typeof body.chatId !== "string") {
-        throw new ValidationError("Missing chatId");
+      if (!session.runId) {
+        throw new ValidationError("Sandbox artifact attachment requires a live run token");
       }
-      const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
+      const runMessage = await queries.messages.findById(pool, session.runId);
+      if (!runMessage) {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      if (runMessage.state !== "running") {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      const runChatId = runMessage.chatId;
+      if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
+        throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
+      }
+      if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+        throw new ValidationError("Summary runs cannot attach artifacts");
+      }
+      const chat = await requireOwnedChat(pool, runChatId, agent.userId);
       if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
-        throw new NotFoundError(`Chat not found: ${body.chatId}`);
-      }
-      if (session.runId) {
-        const runMessage = await queries.messages.findById(pool, session.runId);
-        if (!runMessage) {
-          throw new ValidationError("Sandbox run is no longer active");
-        }
-        if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
-          throw new ValidationError("Summary runs cannot attach artifacts");
-        }
+        throw new NotFoundError(`Chat not found: ${runChatId}`);
       }
 
-      const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
+      const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emitEvent, {
         agentId: agent.id,
         model: agent.model,
       });
@@ -1088,7 +1097,26 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
       const before = query.get("before") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor, before });
+      const limitRaw = query.get("limit");
+      let limit: number | undefined;
+      if (limitRaw !== null && limitRaw !== "") {
+        const parsed = Number(limitRaw);
+        if (!Number.isInteger(parsed) || parsed <= 0) throw new ValidationError(`Invalid limit: ${limitRaw}`);
+        limit = Math.min(parsed, 200);
+      }
+      const viewRaw = query.get("view") ?? undefined;
+      if (viewRaw !== undefined && viewRaw !== "full" && viewRaw !== "compact" && viewRaw !== "timeline") {
+        throw new ValidationError(`Invalid view: ${viewRaw}`);
+      }
+      const result = await chatRoutes.listMessages(pool, segments[1], {
+        cursor,
+        before,
+        limit,
+        // Normal chat API reads should use the payload-trimmed timeline by
+        // default. Full hidden tool/event/summary payloads remain available to
+        // developer/debug callers that explicitly request `view=full`.
+        view: (viewRaw ?? "timeline") as "full" | "compact" | "timeline",
+      });
       sendJson(res, 200, result);
       return;
     }

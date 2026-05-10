@@ -131,7 +131,7 @@ export async function patchChat(
 export async function listMessages(
   pool: Pool,
   chatId: string,
-  opts?: { cursor?: string; before?: string },
+  opts?: { cursor?: string; before?: string; limit?: number; view?: "full" | "compact" | "timeline" },
 ) {
   return queries.messages.listByChat(pool, chatId, opts);
 }
@@ -602,22 +602,31 @@ export async function runMessage(
   if (!current || current.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
-  if (current.state === "running") return current;
+  if (current.state === "running" && current.kind !== "task") return current;
+
+  const userOwnedPlainTask =
+    current.kind === "task" &&
+    current.role === "user" &&
+    !current.executeAt &&
+    !current.cron;
 
   // Non-task messages are claimed in-place by fireMessage and must be reset
   // to pending before a manual re-fire. Task executions happen on a fresh
-  // task_run child, so preserving the parent state lets manual scheduled runs
-  // return to Scheduled/Paused instead of consuming the schedule.
+  // task_run child. A plain user task is the one durable board-status case:
+  // POST /run is an explicit user gesture (drag to Active / manual run), so the
+  // parent may move to Active and stay there until the user moves it again.
+  // Scheduled/cron tasks preserve their parent schedule; their in-flight child
+  // task_run makes them appear Active only while the agent is actually running.
   const rowToReturn = current.kind === "task"
-    ? current
+    ? userOwnedPlainTask
+      ? await queries.messages.updateMessage(pool, messageId, { state: "running" })
+      : current
     : await queries.messages.updateMessage(pool, messageId, { state: "pending" });
   if (!rowToReturn) throw new NotFoundError(`Message not found: ${messageId}`);
-  if (current.kind !== "task") emit({ type: "message.updated", payload: rowToReturn });
+  if (current.kind !== "task" || userOwnedPlainTask) emit({ type: "message.updated", payload: rowToReturn });
 
-  // Fire-and-forget. fireMessage's claimPending flips the row to
-  // 'running' and broadcasts message.updated; the kanban picks that up
-  // over WS and moves the card to the Active column. The full agent
-  // run continues in the background.
+  // Fire-and-forget. The full agent run continues on the message itself for
+  // non-task rows and on a task_run child for task rows.
   ops.fireMessage(messageId, { manual: true }).catch((err) => {
     // eslint-disable-next-line no-console
     console.error(`runMessage fireMessage failed for ${messageId}:`, err);
@@ -758,6 +767,27 @@ export async function listAttachments(
 
   if (opts?.includeArtifacts) {
     const artDir = chatArtifactsDir(storage.home, slug, chatId);
+    const attachedArtifactPaths = new Set<string>();
+    const { rows } = await storage.pool.query<{ content: string | unknown }>(
+      "SELECT content FROM messages WHERE chat_id = ?",
+      [chatId],
+    );
+    for (const row of rows) {
+      let content: unknown = row.content;
+      if (typeof row.content === "string") {
+        try {
+          content = JSON.parse(row.content) as unknown;
+        } catch {
+          continue;
+        }
+      }
+      const parsed = MessageContentSchema.safeParse(content);
+      if (!parsed.success || parsed.data.type !== "artifactRef") continue;
+      if (parsed.data.path.startsWith(`.chats/${chatId}/artifacts/`)) {
+        attachedArtifactPaths.add(parsed.data.path);
+      }
+    }
+
     const artNames = await fs.readdir(artDir).catch(() => [] as string[]);
     for (const name of artNames) {
       if (!showHidden && name.startsWith(".")) continue;
@@ -765,8 +795,11 @@ export async function listAttachments(
       const stat = await fs.stat(abs).catch(() => null);
       if (!stat) continue;
       const isDir = stat.isDirectory();
+      const relPath = path.relative(root, abs).split(path.sep).join("/");
+      const isAppArtifactDir = isDir && name.endsWith(".app");
+      if (!isAppArtifactDir && !attachedArtifactPaths.has(relPath)) continue;
       out.push({
-        path: path.relative(root, abs).split(path.sep).join("/"),
+        path: relPath,
         name,
         mime: isDir ? "inode/directory" : "application/octet-stream",
         size: stat.size,
