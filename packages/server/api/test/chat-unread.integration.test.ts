@@ -294,14 +294,11 @@ describe("chat unread status", () => {
     expect(chat!.unread).toBe(true);
   });
 
-  // ── lastMessageContent should skip internal messages ────────────────────────
+  // ── Chat list stays lean: no unused lastMessageContent projection ───────────
 
-  it("listWithLatestMessage skips internal messages for lastMessageContent", async () => {
+  it("listWithLatestMessage omits unused lastMessageContent", async () => {
     const chatId = await freshChat();
-    // Insert a visible user message
     await sendMessage(pool, chatId, { content: "hello from user" }, () => {});
-
-    // Insert a summary message (internal — newer, but should be skipped)
     await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
@@ -312,10 +309,9 @@ describe("chat unread status", () => {
     const list = await queries.chats.listWithLatestMessage(pool, workspaceId);
     const found = list.find((c) => c.id === chatId);
     expect(found).toBeDefined();
-    // The lastMessageContent should be from the user message, not the summary.
-    // It's the raw JSON string from the DB.
-    const parsed = JSON.parse(found!.lastMessageContent!);
-    expect(parsed.type).not.toBe("summary");
+    // The app never rendered this field, so /chats no longer pays the SQL,
+    // JSON extraction, or response-size cost to include it.
+    expect(Object.prototype.hasOwnProperty.call(found!, "lastMessageContent")).toBe(false);
   });
 
   // ── End-to-end: firing a summary through the run manager ───────────────────

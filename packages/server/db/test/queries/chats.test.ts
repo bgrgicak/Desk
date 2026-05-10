@@ -287,8 +287,9 @@ describe("chats queries", () => {
     const orphanChatId = generateId("chat");
     await chats.insert(pool, { id: orphanChatId, workspaceId: wsId, agentId, title: "Orphan chat" });
     // Old agent_turn stuck in 'pending' (e.g. from crash recovery re-queue)
+    const oldAgentTurnId = generateId("message");
     await messages.insert(pool, {
-      id: generateId("message"),
+      id: oldAgentTurnId,
       chatId: orphanChatId,
       role: "system",
       content: { type: "agent_turn", userMessageId: "old" },
@@ -296,16 +297,20 @@ describe("chats queries", () => {
       state: "pending",
     });
     // Newer agent_turn that already succeeded
-    // Use a small delay so created_at ordering is deterministic
-    await pool.query("SELECT 1"); // tiny pause
+    const newAgentTurnId = generateId("message");
     await messages.insert(pool, {
-      id: generateId("message"),
+      id: newAgentTurnId,
       chatId: orphanChatId,
       role: "system",
       content: { type: "agent_turn", userMessageId: "new" },
       kind: "chat",
       state: "succeeded",
     });
+    // Give the two rows deterministic timestamps: inserts can occur inside
+    // the same millisecond in SQLite, and the chat-list cache trigger orders
+    // by (created_at, id) to match message pagination.
+    await pool.query("UPDATE messages SET created_at = ? WHERE id = ?", ["2026-01-01T00:00:00.000Z", oldAgentTurnId]);
+    await pool.query("UPDATE messages SET created_at = ? WHERE id = ?", ["2026-01-01T00:00:01.000Z", newAgentTurnId]);
 
     const list = await chats.listWithLatestMessage(pool, wsId);
     // The latest agent_turn succeeded, so the chat should NOT show as running
