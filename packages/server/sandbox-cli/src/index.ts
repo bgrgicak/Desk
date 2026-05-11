@@ -8,6 +8,7 @@ import { COMMANDS } from "./commands.js";
  * entries.
  */
 
+
 export function output(data: unknown): void {
   const json = process.stdout.isTTY
     ? JSON.stringify(data, null, 2)

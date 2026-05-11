@@ -69,6 +69,8 @@ export interface RunDailyReflectionOptions {
   reflectWorkspace: ReflectFn<WorkspaceReflectionInput>;
   /** Manual runs should produce an observable run even when yesterday was quiet. */
   reflectOnEmptyActivity?: boolean;
+  /** Resolves active provider keys for a user. Returns {} when vault is locked. */
+  resolveProviderKeys?: (userId: string) => Promise<Record<string, string>>;
 }
 
 /**
@@ -257,7 +259,9 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
 
   for (const user of users) {
     const userId = user.id;
-    const providerKeys = await queries.userSettings.getActiveProviderKeys(opts.pool, userId);
+    const providerKeys = opts.resolveProviderKeys
+      ? await opts.resolveProviderKeys(userId)
+      : {};
     const extraEnv = await resolveLocalSourceEnv(opts.pool, userId);
     const workspaces = await queries.workspaces.listByUser(opts.pool, userId);
     for (const ws of workspaces) {

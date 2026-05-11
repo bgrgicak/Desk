@@ -1,6 +1,8 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
+import type { VaultStore } from "../vault/store.js";
+import { VaultLockedError } from "../vault/store.js";
 
 type ProviderMetaEntry = { name?: string; enabled?: boolean };
 type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
@@ -50,16 +52,21 @@ function maskKey(value: string): string {
 /**
  * Returns provider keys for the current user, masked. Every known
  * PROVIDER_KEY_VARS name appears in the response (null when unset) so the UI
- * can render a complete form.
+ * can render a complete form. Returns all-null when the vault is locked or
+ * not yet set up — vault status is surfaced separately via GET /vault/status.
  */
-export async function getProviders(
-  pool: Pool,
+export function getProviders(
+  vault: VaultStore,
   userId: string,
-): Promise<{ providers: Record<string, string | null> }> {
-  const stored = await queries.userSettings.getProviderKeys(pool, userId);
+): { providers: Record<string, string | null> } {
   const providers: Record<string, string | null> = {};
   for (const name of PROVIDER_KEY_VARS) {
-    providers[name] = name in stored ? maskKey(stored[name]) : null;
+    providers[name] = null;
+  }
+  if (vault.isLocked(userId)) return { providers };
+  for (const name of PROVIDER_KEY_VARS) {
+    const secret = vault.get(userId, name);
+    providers[name] = secret ? maskKey(secret.password) : null;
   }
   return { providers };
 }
@@ -67,15 +74,18 @@ export async function getProviders(
 /**
  * Partial-update provider keys. `null` deletes an entry; any string value
  * replaces it. Names not present in the body are left alone.
+ * Requires the vault to be unlocked — throws VaultLockedError (→ 423) otherwise.
  */
 export async function setProviders(
   pool: Pool,
+  vault: VaultStore,
   userId: string,
   data: { providers: Record<string, string | null> },
 ): Promise<{ providers: Record<string, string | null> }> {
   if (!data || typeof data.providers !== "object" || data.providers === null) {
     throw new ValidationError("Missing providers object");
   }
+  if (vault.isLocked(userId)) throw new VaultLockedError();
   const allowed = new Set<string>(PROVIDER_KEY_VARS);
   for (const name of Object.keys(data.providers)) {
     if (!allowed.has(name)) {
@@ -86,7 +96,14 @@ export async function setProviders(
       throw new ValidationError(`Provider key ${name} must be string or null`);
     }
   }
-  await queries.userSettings.mergeProviderKeys(pool, userId, data.providers);
+
+  for (const [name, value] of Object.entries(data.providers)) {
+    if (value === null) {
+      await vault.delete(userId, name);
+    } else {
+      await vault.upsert(userId, { title: name, password: value });
+    }
+  }
 
   const written = Object.entries(data.providers)
     .filter(([, v]) => v !== null)
@@ -101,7 +118,7 @@ export async function setProviders(
     await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "delete", deleted, "user_update");
   }
 
-  return getProviders(pool, userId);
+  return getProviders(vault, userId);
 }
 
 /**

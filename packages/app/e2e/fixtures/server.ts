@@ -104,6 +104,9 @@ export async function startDeskServer(
     DESK_FAKE_DRIVER_STEP_DELAY_MS: "500",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
     DESK_SCHEDULER_POLL_INTERVAL_MS: "2000",
+    // Auto-setup and unlock the per-user vault on boot so e2e tests can
+    // read and write provider keys without going through the vault UI flow.
+    DESK_VAULT_PASSWORD: "e2e-vault-password",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {

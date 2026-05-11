@@ -106,6 +106,9 @@ describe("PUT /me/providers — remove connection", () => {
       password: "prov-pass",
     });
     token = (res.body as { token: string }).token;
+    // Provider keys now live in the vault — set it up and unlock it so the
+    // PUT /me/providers tests can write keys.
+    await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
   });
 
   it("sending null removes the provider key so it no longer appears", async () => {
@@ -138,7 +141,7 @@ describe("PUT /me/providers — remove connection", () => {
       providers: { OPENAI_API_KEY: "sk-oai-test-key-5678" },
     });
 
-    // Send empty string — server stores it (non-null path in mergeProviderKeys)
+    // Send empty string — server stores it in the vault (non-null path)
     const emptyRes = await request("PUT", "/me/providers", token, {
       providers: { OPENAI_API_KEY: "" },
     });

@@ -49,6 +49,24 @@ export async function deleteAll(db: Pool): Promise<void> {
   await db.query(`DELETE FROM auth_sessions`);
 }
 
+/**
+ * Count active (non-expired) sessions for a user. Powers the
+ * "lock the vault when the last session logs out" check.
+ */
+export async function countActiveByUserId(
+  db: Pool,
+  userId: string,
+  ttlMs: number,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - ttlMs).toISOString();
+  const { rows } = await db.query(
+    `SELECT COUNT(*) AS n FROM auth_sessions
+     WHERE user_id = ? AND issued_at >= ?`,
+    [userId, cutoff],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 /** Bulk-delete rows older than the TTL. Cheap to run at boot. */
 export async function deleteExpired(
   db: Pool,

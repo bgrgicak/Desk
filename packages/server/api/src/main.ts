@@ -28,6 +28,8 @@ import {
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
+import { VaultStore } from "./vault/store.js";
+import { resolveProviderKeys } from "./providerKeys.js";
 import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
@@ -136,10 +138,41 @@ async function main(): Promise<void> {
   );
   const broadcastUserId: string | undefined = rows[0]?.id;
 
+  const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
+
+  // If DESK_VAULT_PASSWORD is explicitly set in the environment, use it as
+  // the vault master password so the vault is automatically unlocked on
+  // every boot — no UI prompt needed. Users who prefer an explicit vault
+  // master password leave DESK_VAULT_PASSWORD unset and unlock via the
+  // browser UI. Note: this is intentionally a separate env var from
+  // DESK_SECRET_KEY (the AES-256 key for SQLite at-rest encryption).
+  if (process.env.DESK_VAULT_PASSWORD) {
+    const vaultPassword = process.env.DESK_VAULT_PASSWORD;
+    const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
+    for (const user of allUsers) {
+      const { exists } = await vault.status(user.id);
+      try {
+        if (!exists) {
+          await vault.setup(user.id, vaultPassword);
+          // eslint-disable-next-line no-console
+          console.log(`vault: auto-setup for user ${user.id} via DESK_SECRET_KEY`);
+        } else {
+          await vault.unlock(user.id, vaultPassword);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`vault: auto-unlock failed for user ${user.id}:`, err);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log("vault: auto-unlocked via DESK_SECRET_KEY");
+  }
+
   const runManager = createRunManager({
     pool,
     home: DESK_HOME,
     reflectWorkspace: productionReflectWorkspace,
+    resolveProviderKeys: (userId) => resolveProviderKeys(pool, vault, userId),
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
@@ -176,6 +209,7 @@ async function main(): Promise<void> {
     pool,
     storage: { pool, home: DESK_HOME },
     runManager,
+    vault,
     broadcastUserId,
   });
 

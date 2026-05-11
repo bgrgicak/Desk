@@ -99,7 +99,16 @@ The DB stores derivatives, not raw secrets:
   DB or the encrypted blobs are unrecoverable.
 - **Internal API token** (at/cron jobs → `/internal/messages/fire`):
   generated on first boot if missing — no need to back up.
+- **Per-user secrets vault** (logins for sites the agent should sign
+  in to): a KDBX 4 file per user at `${DESK_HOME}/vaults/{userId}.kdbx`.
+  Encrypted with the user's master password (Argon2id KDF + AES-256).
+  The master password is **never** persisted on disk — it lives in
+  server memory only, dropped on restart and on logout. Back up the
+  KDBX files alongside the DB; the user keeps their master password
+  separately. If the master is lost, the file is unrecoverable.
 
 Persistence between restarts: everything except the in-memory WebSocket
-connection registry. User passwords, sessions, schedules, messages,
-provider keys all live in the SQLite file and survive any restart.
+connection registry and the per-user vault unlock state. User passwords,
+sessions, schedules, messages, provider keys all live in the SQLite file
+and survive any restart. Secrets vaults survive restarts on disk but
+require re-unlock from the SPA after each restart.

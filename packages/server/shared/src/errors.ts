@@ -43,3 +43,14 @@ export class InternalError extends DeskError {
     super("INTERNAL", message, cause);
   }
 }
+
+/**
+ * Returned when a per-user secrets vault is locked. Maps to HTTP 423
+ * (Locked); the client is expected to prompt the user for the master
+ * password and call POST /vault/unlock before retrying.
+ */
+export class VaultLockedError extends DeskError {
+  constructor(message = "Vault is locked", cause?: unknown) {
+    super("VAULT_LOCKED", message, cause);
+  }
+}

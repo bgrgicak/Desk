@@ -40,6 +40,8 @@ import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import * as vaultRoutes from "./routes/vault.js";
+import { VaultStore } from "./vault/store.js";
 import * as appsRoutes from "./routes/apps.js";
 import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
@@ -76,6 +78,12 @@ export interface AppOptions {
   pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
+  /**
+   * Shared vault instance. Pass this from the outer process so the scheduler
+   * and HTTP layer operate on the same in-memory unlock state. When omitted
+   * (tests, embedded usage) a fresh store is created from storage.home.
+   */
+  vault?: VaultStore;
   /** The userId to broadcast events to (v1: single user). */
   broadcastUserId?: string;
 }
@@ -256,6 +264,7 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
+  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
 
   function emitEvent(event: WsEvent): void {
     if (opts.broadcastUserId) {
@@ -488,6 +497,31 @@ export function createApp(opts: AppOptions): Server {
       pool.exec(`VACUUM INTO '${targetPath.replace(/'/g, "''")}'`);
       const stat = await fsStat(targetPath);
       sendJson(res, 200, { ok: true, path: targetPath, sizeBytes: stat.size });
+      return;
+    }
+
+    // Sandbox secrets — agent-side reads. The sandbox token resolves to
+    // (session, agent); the agent's userId is what we read from. There's
+    // no agent-side write path: secrets come in through the user UI.
+    if (path === "/sandbox/secrets" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const result = vaultRoutes.sandboxList(vault, agent.userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "sandbox" && segments[1] === "secrets" && segments.length === 3 && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const title = decodeURIComponent(segments[2]);
+      const result = vaultRoutes.sandboxGet(vault, agent.userId, title);
+      if (!result) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "No such secret" });
+        return;
+      }
+      sendJson(res, 200, result);
       return;
     }
 
@@ -880,7 +914,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/logout" && method === "POST") {
-      const result = await authRoutes.handleLogout(pool, req.headers.authorization);
+      const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
       sendJson(res, 200, result);
       return;
     }
@@ -909,13 +943,13 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers" && method === "GET") {
-      const result = await accountRoutes.getProviders(pool, userId);
+      const result = accountRoutes.getProviders(vault, userId);
       sendJson(res, 200, result);
       return;
     }
     if (path === "/me/providers" && method === "PUT") {
       const body = await parseBody(req) as { providers: Record<string, string | null> };
-      const result = await accountRoutes.setProviders(pool, userId, body);
+      const result = await accountRoutes.setProviders(pool, vault, userId, body);
       sendJson(res, 200, result);
       return;
     }
@@ -943,6 +977,54 @@ export function createApp(opts: AppOptions): Server {
         sendJson(res, 200, result);
         return;
       }
+    }
+
+    // Vault — per-user secrets vault setup/unlock/lock/status. Secrets
+    // themselves are read/written via /secrets and /sandbox/secrets.
+    if (path === "/vault/status" && method === "GET") {
+      const result = await vaultRoutes.getStatus(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/setup" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.setup(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/unlock" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.unlock(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/lock" && method === "POST") {
+      const result = vaultRoutes.lock(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Secrets — user side. Metadata-only on list/get; create + overwrite
+    // are the only mutations. There's deliberately no reveal endpoint:
+    // even a hijacked SPA session can't exfiltrate plaintext, only
+    // sandboxed agents (via /sandbox/secrets/:title) can.
+    if (path === "/secrets" && method === "GET") {
+      const result = vaultRoutes.listSecrets(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/secrets" && method === "POST") {
+      const body = await parseBody(req);
+      const result = await vaultRoutes.createSecret(vault, userId, body);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "secrets" && segments.length === 2 && method === "PUT") {
+      const body = await parseBody(req);
+      const title = decodeURIComponent(segments[1]);
+      const result = await vaultRoutes.updateSecret(vault, userId, title, body);
+      sendJson(res, 200, result);
+      return;
     }
 
     // Workspace routes — all scoped to the authenticated user. Non-owned
@@ -1474,7 +1556,7 @@ export function createApp(opts: AppOptions): Server {
 
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {
-      const result = await toolRoutes.listModels(pool, {
+      const result = await toolRoutes.listModels(pool, vault, {
         provider: query.get("provider") ?? undefined,
         userId,
       });

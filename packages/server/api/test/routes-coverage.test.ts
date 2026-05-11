@@ -209,6 +209,9 @@ describe("Routes coverage (real Postgres)", () => {
     });
     token = (res.body as { token: string }).token;
 
+    // Provider keys now live in the vault — set it up so PUT /me/providers works.
+    await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
+
     // Get seeded workspace and agent
     const wsRes = await request("GET", "/workspaces", token);
     workspaceId = (wsRes.body as Array<{ id: string }>)[0].id;
