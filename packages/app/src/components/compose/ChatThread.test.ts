@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, findFailedAgentTurn, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
+import { currentChatMessagesData, findFailedAgentTurn, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -23,8 +23,31 @@ describe('isMessageVisible', () => {
 
   it('keeps developer mode as a superset of regular chat-visible messages', () => {
     for (const msg of representativeMessages) {
+      expect(isRegularMessageVisible(msg)).toBe(true)
       expect(isMessageVisible(msg, false)).toBe(true)
       expect(isMessageVisible(msg, true)).toBe(true)
+    }
+  })
+
+  it('keeps developer mode visible for every regular-visible message by construction', () => {
+    const allContentKinds: ServerMessage[] = [
+      message({ type: 'text', text: 'Hello' }, { role: 'user', id: 'text' }),
+      message({ type: 'artifactRef', path: 'artifact.md' }, { id: 'artifact' }),
+      message({ type: 'events', log: [{ kind: 'event', event: { type: 'text', part: { text: 'Visible reply' } } }] }, { id: 'events-text' }),
+      message({ type: 'toolCall', toolName: 'file.read', args: { path: 'x' } }, { id: 'tool-call' }),
+      message({ type: 'toolResult', toolName: 'file.read', result: 'ok' }, { id: 'tool-result' }),
+      message({ type: 'events', log: [{ kind: 'stderr', line: 'boom' }] }, { id: 'events-stderr' }),
+      message({ type: 'summary', body: '# Chat Summary' }, { id: 'summary' }),
+      message({ type: 'summary_request' }, { role: 'system', id: 'summary-request' }),
+      message({ type: 'reflection_request', workspaceId: 'wks_test' }, { role: 'system', id: 'reflection-request' }),
+      message({ type: 'agent_turn', userMessageId: 'user-1' }, { role: 'system', id: 'agent-turn' }),
+    ]
+
+    for (const msg of allContentKinds) {
+      if (isRegularMessageVisible(msg)) {
+        expect(isMessageVisible(msg, true), msg.id).toBe(true)
+        expect(isDeveloperOnlyMessageVisible(msg), msg.id).toBe(false)
+      }
     }
   })
 
@@ -43,7 +66,19 @@ describe('isMessageVisible', () => {
     for (const msg of [toolCall, toolResult, stderrEvents]) {
       expect(isMessageVisible(msg, false)).toBe(false)
       expect(isMessageVisible(msg, true)).toBe(true)
+      expect(isDeveloperOnlyMessageVisible(msg)).toBe(true)
     }
+  })
+
+  it('shows task-run prompts only in developer mode', () => {
+    const taskRun = message(
+      { type: 'text', text: 'Run the task now' },
+      { role: 'user', id: 'task-run', kind: 'task_run' },
+    )
+
+    expect(isMessageVisible(taskRun, false)).toBe(false)
+    expect(isMessageVisible(taskRun, true)).toBe(true)
+    expect(isDeveloperOnlyMessageVisible(taskRun)).toBe(true)
   })
 
   it('keeps summary requests hidden even in developer mode', () => {
@@ -149,6 +184,24 @@ describe('findFailedAgentTurn', () => {
     const result = findFailedAgentTurn(items)
     expect(result).not.toBeNull()
     expect(result!.id).toBe('2')
+  })
+})
+
+describe('shouldShowNewAssistantBadge', () => {
+  it('shows the regular assistant new badge when the latest visible assistant message is unread', () => {
+    const assistantMessage = message({ type: 'text', text: 'Done' }, { id: 'agent-1' })
+
+    expect(shouldShowNewAssistantBadge(assistantMessage, 'agent-1', true, null)).toBe(true)
+  })
+
+  it('suppresses the regular blue new badge when the unread state is a failed run', () => {
+    const assistantMessage = message({ type: 'text', text: 'Working on it' }, { id: 'agent-1' })
+    const failedTurn = message(
+      { type: 'agent_turn', userMessageId: 'user-1' },
+      { role: 'system', id: 'turn-1', state: 'failed' },
+    )
+
+    expect(shouldShowNewAssistantBadge(assistantMessage, 'agent-1', true, failedTurn)).toBe(false)
   })
 })
 

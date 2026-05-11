@@ -240,9 +240,17 @@ export function createRunManager(opts: RunManagerOptions) {
     };
   }
 
-  function shouldIncludeInPromptContext(message: Message): boolean {
+  function shouldIncludeInPromptContext(message: Message, taskRunParentIds: Set<string> = new Set()): boolean {
     const type = message.content.type;
     if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
+    // Scheduled task definitions and their run children are operational records,
+    // not conversational turns. If included as normal Agent/User transcript text,
+    // a later agent run can misread an old task as a fresh instruction and
+    // schedule it again.
+    if (message.kind === "task" || message.kind === "task_run") return false;
+    // Task run output is stored as a normal agent chat child under the task_run
+    // row, so exclude those children too.
+    if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
     if (message.state === "pending" || message.state === "running") return false;
     return message.role === "user" || message.role === "agent" || type === "summary";
   }
@@ -260,9 +268,10 @@ export function createRunManager(opts: RunManagerOptions) {
     currentUserMessageId?: string,
   ): Promise<string> {
     const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
+    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
     const entries = items
       .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
-      .filter(shouldIncludeInPromptContext)
+      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
       .map(formatMessageForPrompt)
       .filter((entry): entry is { role: string; text: string } => entry !== null);
 
@@ -1158,8 +1167,9 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
     const items = await queries.messages.listAgentContextByChat(pool, chatId);
+    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
     const tokenized = items
-      .filter(shouldIncludeInPromptContext)
+      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
       .map((m) => {
         const formatted = formatMessageForPrompt(m);
         return formatted ? { role: formatted.role, text: formatted.text } : null;
@@ -1189,6 +1199,87 @@ export function createRunManager(opts: RunManagerOptions) {
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
     const msg = await queries.messages.findById(pool, messageId);
     if (msg) emit({ type: "message.updated", payload: msg });
+  }
+
+  /**
+   * If the chat's currently-running agent_turn has gone silent (no log
+   * activity for `staleAfterMs`), cancel it so a follow-up user message
+   * can be fired in its place. An active run — one whose opencode is
+   * still emitting events (tokens, tool calls, step boundaries) — is
+   * left untouched; a user follow-up sent while a healthy run is in
+   * flight will create a new agent_turn but won't interrupt the old one.
+   *
+   * The signal is *log mtime*, not wall-clock age of the row. Opencode
+   * writes to the per-message log file on every event via `onLog`, so a
+   * legitimately long-running step (large LLM stream, slow tool, chatty
+   * build) keeps the file growing and is never considered stalled. The
+   * file only stops growing when opencode is genuinely waiting on
+   * something that isn't coming back (deadlocked tool, dropped LLM
+   * connection, internal hang).
+   *
+   * Why this exists: the user noticed chats sitting in `state='running'`
+   * for very long stretches with no reply, and our previous behavior had
+   * no way to recover without a server restart. With this hook called
+   * from the POST /messages route, a follow-up like "Are you stuck?"
+   * unblocks the chat by preempting the hung run, while a follow-up to a
+   * healthy long task does nothing harmful.
+   */
+  async function preemptStalledChatRun(
+    chatId: string,
+    opts: { staleAfterMs?: number } = {},
+  ): Promise<{ preempted: string } | null> {
+    const staleAfterMs = opts.staleAfterMs
+      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+    // Only consider 'chat'-kind agent_turn rows: scheduled task_runs in the
+    // same chat have their own lifecycle and shouldn't be interrupted by a
+    // chat follow-up.
+    const { rows } = await pool.query<{
+      id: string;
+      workspace_slug: string;
+      started_at: string | null;
+    }>(
+      `SELECT m.id, w.path AS workspace_slug, m.started_at
+         FROM messages m
+         JOIN chats c ON c.id = m.chat_id
+         JOIN workspaces w ON w.id = c.workspace_id
+        WHERE m.chat_id = ?
+          AND m.state = 'running'
+          AND m.kind = 'chat'
+          AND json_valid(m.content)
+          AND json_extract(m.content, '$.type') = 'agent_turn'
+        ORDER BY m.created_at DESC
+        LIMIT 1`,
+      [chatId],
+    );
+    if (rows.length === 0) return null;
+    const running = rows[0];
+    const logPath = path.join(
+      home,
+      running.workspace_slug,
+      ".chats",
+      chatId,
+      "logs",
+      `${running.id}.log`,
+    );
+    let mtimeMs: number;
+    try {
+      const stat = await fsp.stat(logPath);
+      mtimeMs = stat.mtimeMs;
+    } catch {
+      // Deliberately conservative: a missing log file means opencode hasn't
+      // emitted its first event yet, which usually means the run is still
+      // in container-cold-start (entrypoint downloading deps, image pull,
+      // `.deskrc` running). Those legitimately take minutes; preempting
+      // there would abandon valid in-flight work. We only preempt when we
+      // have positive evidence of activity-then-silence — that's the
+      // "opencode wedged" signal. Stuck rows with no log ever are recovered
+      // by `recoverOrphanedRuns` at the requeue cap, not this hook.
+      return null;
+    }
+    const ageMs = Date.now() - mtimeMs;
+    if (ageMs < staleAfterMs) return null;
+    await cancelRun(running.id);
+    return { preempted: running.id };
   }
 
   /** Pauses a pending scheduled message: transitions state to 'paused'. */
@@ -1259,6 +1350,7 @@ export function createRunManager(opts: RunManagerOptions) {
     getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
+    preemptStalledChatRun,
     pauseMessage,
     resumeMessage,
     rescheduleMessage,

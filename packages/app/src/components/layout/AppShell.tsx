@@ -65,7 +65,7 @@ import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
-import { selectRunningChatIds } from '@/store/slices/derivedSlice'
+import { selectFailedChatIds, selectRunningChatIds } from '@/store/slices/derivedSlice'
 import { buildPath, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 
 export type View = 'today' | 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
@@ -248,6 +248,7 @@ export function AppShell({
 
   const { data: agents = [] } = useGetAgentsQuery()
   const runningChatIds = useAppSelector(selectRunningChatIds)
+  const failedChatIds = useAppSelector(selectFailedChatIds)
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -636,6 +637,7 @@ export function AppShell({
                   {!isChatsLoading && visibleChats.map(chat => {
                     const ChatIcon = getChatIcon(chat)
                     const isRunning = runningChatIds.includes(chat.id)
+                    const isFailed = failedChatIds.includes(chat.id) || !!chat.failed
                     return (
                       <SidebarMenuItem key={chat.id}>
                         <MobileDismissSidebarMenuButton
@@ -650,8 +652,8 @@ export function AppShell({
                               ) : (
                                 <ChatIcon className="h-4 w-4" />
                               )}
-                              {!isRunning && chat.unread ? (
-                                <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+                              {!isRunning && (isFailed || chat.unread) ? (
+                                <span className={`absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full ${isFailed ? 'bg-red-500' : 'bg-blue-500'}`} />
                               ) : null}
                             </div>
                             <span className="truncate">{chat.title}</span>

@@ -11,6 +11,12 @@ const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
   'toolResult',
 ])
 
+const DEVELOPER_ONLY_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
+  'summary',
+  'toolCall',
+  'toolResult',
+])
+
 function eventsHasUserText(log: AgentLogEntry[]): boolean {
   let sawEvent = false
   for (const entry of log) {
@@ -27,12 +33,24 @@ function eventsHasUserText(log: AgentLogEntry[]): boolean {
   return false
 }
 
-export function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
-  if (m.kind === 'task_run' && !developerMode) return false
-  if (m.content.type === 'summary') return developerMode
+export function isRegularMessageVisible(m: ServerMessage): boolean {
+  if (m.kind === 'task_run') return false
+  if (m.content.type === 'summary') return false
   if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
-  if (developerMode) return true
   if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
   if (m.content.type === 'events') return eventsHasUserText(m.content.log)
   return true
+}
+
+export function isDeveloperOnlyMessageVisible(m: ServerMessage): boolean {
+  if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
+  if (m.kind === 'task_run') return true
+  if (DEVELOPER_ONLY_CONTENT_TYPES.has(m.content.type)) return true
+  if (m.content.type === 'events') return !eventsHasUserText(m.content.log)
+  return false
+}
+
+export function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
+  if (isRegularMessageVisible(m)) return true
+  return developerMode && isDeveloperOnlyMessageVisible(m)
 }

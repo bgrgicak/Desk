@@ -436,17 +436,22 @@ export async function listAgentContextByChat(
        ORDER BY created_at DESC, id DESC
        LIMIT 1
      )
-     SELECT * FROM messages
-     WHERE chat_id = ?
-       AND (
-         NOT EXISTS (SELECT 1 FROM latest_summary)
-         OR created_at > (SELECT created_at FROM latest_summary)
-         OR (
-           created_at = (SELECT created_at FROM latest_summary)
-           AND id >= (SELECT id FROM latest_summary)
-         )
-       )
-      ORDER BY created_at, id
+     SELECT m.* FROM messages m
+      WHERE m.chat_id = ?
+        AND m.kind NOT IN ('task', 'task_run')
+        AND NOT EXISTS (
+          SELECT 1 FROM messages parent
+          WHERE parent.id = m.parent_id AND parent.kind = 'task_run'
+        )
+        AND (
+          NOT EXISTS (SELECT 1 FROM latest_summary)
+          OR m.created_at > (SELECT created_at FROM latest_summary)
+          OR (
+            m.created_at = (SELECT created_at FROM latest_summary)
+            AND m.id >= (SELECT id FROM latest_summary)
+          )
+        )
+       ORDER BY m.created_at, m.id
     `,
     [chatId, chatId],
   );

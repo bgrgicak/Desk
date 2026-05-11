@@ -442,3 +442,169 @@ describe("sweepIdleSandboxes", () => {
   });
 });
 
+// ── preempt stalled chat run ────────────────────────────────────────────────
+//
+// User-driven preemption: when a follow-up chat message comes in for a chat
+// whose previous agent_turn is still `running` but visibly hung (log file has
+// gone silent for `staleAfterMs`), cancel the old run so the new one can fire
+// without racing a zombie opencode. The signal is log mtime, not wall-clock
+// row age — a long-but-active stream keeps the file growing and is left alone.
+
+describe("preemptStalledChatRun", () => {
+  // Reuse the workspace pattern: each test stands up its own workspace + chat
+  // + on-disk path under `home` so a created log file lands where the
+  // preempt's `fsp.stat` will look for it.
+  async function makeWorkspaceWithChat(slug: string): Promise<{
+    workspaceId: string;
+    chatId: string;
+    workspaceSlug: string;
+  }> {
+    const workspaceId = generateId("workspace");
+    const newChatId = generateId("chat");
+    const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
+    const userId = userRows[0].id as string;
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+      [workspaceId, userId, "preempt test", slug],
+    );
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [newChatId, workspaceId, agentId, "preempt chat"],
+    );
+    return { workspaceId, chatId: newChatId, workspaceSlug: slug };
+  }
+
+  async function insertRunningAgentTurn(args: {
+    chatId: string;
+    startedSecondsAgo: number;
+  }): Promise<string> {
+    const msgId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, started_at)
+       VALUES (?, ?, 'system', ?, 'running', 'chat',
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?))`,
+      [
+        msgId,
+        args.chatId,
+        JSON.stringify({ type: "agent_turn", userMessageId: "msg_user" }),
+        `-${args.startedSecondsAgo} seconds`,
+      ],
+    );
+    return msgId;
+  }
+
+  async function writeLogWithMtime(
+    workspaceSlug: string,
+    chatId: string,
+    msgId: string,
+    mtimeMs: number,
+  ): Promise<void> {
+    const dir = path.join(home, workspaceSlug, ".chats", chatId, "logs");
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, `${msgId}.log`);
+    await fs.writeFile(file, "stdout\t{}\n", "utf8");
+    await fs.utimes(file, mtimeMs / 1000, mtimeMs / 1000);
+  }
+
+  it("preempts when the log file's mtime is older than the stale window", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-stale-${Date.now()}`;
+    const { chatId: cid, workspaceSlug } = await makeWorkspaceWithChat(slug);
+    const msgId = await insertRunningAgentTurn({ chatId: cid, startedSecondsAgo: 600 });
+    // Log mtime 5 minutes ago — well past a 30 s stale window.
+    await writeLogWithMtime(workspaceSlug, cid, msgId, Date.now() - 5 * 60 * 1000);
+
+    const result = await rm.preemptStalledChatRun(cid, { staleAfterMs: 30_000 });
+
+    expect(result).toEqual({ preempted: msgId });
+    const after = await queries.messages.findById(pool, msgId);
+    expect(after?.state).toBe("cancelled");
+  });
+
+  it("leaves a healthy run alone when the log file is still being written", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-active-${Date.now()}`;
+    const { chatId: cid, workspaceSlug } = await makeWorkspaceWithChat(slug);
+    const msgId = await insertRunningAgentTurn({ chatId: cid, startedSecondsAgo: 600 });
+    // Log mtime is "right now" — opencode emitted an event a moment ago, so
+    // this is an active long-running step, not a stuck one. Even though the
+    // row's been running for 10 minutes, the log says it's working.
+    await writeLogWithMtime(workspaceSlug, cid, msgId, Date.now());
+
+    const result = await rm.preemptStalledChatRun(cid, { staleAfterMs: 30_000 });
+
+    expect(result).toBeNull();
+    const after = await queries.messages.findById(pool, msgId);
+    expect(after?.state).toBe("running");
+  });
+
+  it("leaves a run alone when no log file exists (still in container cold-start)", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-no-log-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+    // Claimed 60 s ago, no log file on disk. The runtime may be inside
+    // `waitForEntrypointReady` (entrypoint downloading deps, `.deskrc`
+    // installing packages) which legitimately takes minutes on a fresh
+    // sandbox. Preempting based on row-age alone would yank work that
+    // is making real progress, just not progress visible to us yet.
+    // Stuck rows in this state are eventually recovered by the requeue
+    // cap, not by this hook.
+    const msgId = await insertRunningAgentTurn({ chatId: cid, startedSecondsAgo: 60 });
+
+    const result = await rm.preemptStalledChatRun(cid, { staleAfterMs: 30_000 });
+
+    expect(result).toBeNull();
+    const after = await queries.messages.findById(pool, msgId);
+    expect(after?.state).toBe("running");
+  });
+
+  it("returns null and does nothing when the chat has no running agent_turn", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-empty-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+
+    const result = await rm.preemptStalledChatRun(cid, { staleAfterMs: 30_000 });
+
+    expect(result).toBeNull();
+  });
+
+  it("ignores running rows that aren't kind='chat' agent_turns", async () => {
+    // Scheduled task_runs in the same chat have their own lifecycle. A
+    // follow-up chat message from the user shouldn't tear them down.
+    const rm = makeRunManager();
+    const slug = `preempt-task-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+    const taskRunId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, started_at)
+       VALUES (?, ?, 'system', ?, 'running', 'task_run',
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'))`,
+      [taskRunId, cid, JSON.stringify({ type: "text", text: "long task" })],
+    );
+
+    const result = await rm.preemptStalledChatRun(cid, { staleAfterMs: 30_000 });
+
+    expect(result).toBeNull();
+    const after = await queries.messages.findById(pool, taskRunId);
+    expect(after?.state).toBe("running");
+  });
+
+  it("only preempts rows in the supplied chat, not other chats", async () => {
+    const rm = makeRunManager();
+    const slugA = `preempt-iso-a-${Date.now()}`;
+    const slugB = `preempt-iso-b-${Date.now()}`;
+    const { chatId: chatA, workspaceSlug: slugAResolved } = await makeWorkspaceWithChat(slugA);
+    const { chatId: chatB, workspaceSlug: slugBResolved } = await makeWorkspaceWithChat(slugB);
+    const msgA = await insertRunningAgentTurn({ chatId: chatA, startedSecondsAgo: 600 });
+    const msgB = await insertRunningAgentTurn({ chatId: chatB, startedSecondsAgo: 600 });
+    await writeLogWithMtime(slugAResolved, chatA, msgA, Date.now() - 5 * 60 * 1000);
+    await writeLogWithMtime(slugBResolved, chatB, msgB, Date.now() - 5 * 60 * 1000);
+
+    const result = await rm.preemptStalledChatRun(chatA, { staleAfterMs: 30_000 });
+
+    expect(result).toEqual({ preempted: msgA });
+    expect((await queries.messages.findById(pool, msgA))?.state).toBe("cancelled");
+    expect((await queries.messages.findById(pool, msgB))?.state).toBe("running");
+  });
+});
+

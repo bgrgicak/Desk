@@ -5,6 +5,7 @@ import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { useGlobalPalette } from './GlobalPaletteProvider'
 import { useGlobalChat, type GlobalChatMessage } from './globalChatStore'
+import { usePrefs } from '@/hooks/use-prefs'
 import type { ServerMessage } from '@/store/types'
 
 /** Adapt a frontend-stub GlobalChatMessage to the ServerMessage shape that
@@ -22,6 +23,7 @@ function toServerMessage(m: GlobalChatMessage): ServerMessage {
 
 export function GlobalPaletteChat() {
   const { chatId, sendMessage, showSearch } = useGlobalPalette()
+  const { developerMode } = usePrefs()
   const chat = useGlobalChat(chatId)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -71,7 +73,7 @@ export function GlobalPaletteChat() {
               message={toServerMessage(m)}
               isFirstInGroup={i === 0 || visibleMessages[i - 1].role !== m.role}
               agentName="Desk AI"
-              developerMode={false}
+              developerMode={developerMode}
             />
           ))}
           <StatusIndicator text={null} isTyping={isTyping} />

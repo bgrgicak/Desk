@@ -163,10 +163,11 @@ function MessageContentView({
       if (!developerMode) return null
       return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'summary_request':
+    case 'reflection_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
-      // agent_turn drive the typing indicator. Render nothing if a stray row
-      // reaches this layer.
+      // reflection_request / agent_turn drive background runs and typing state.
+      // Render nothing if a stray row reaches this layer.
       return null
   }
 }
@@ -442,10 +443,17 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
       }
     } else if (entry.kind === 'stderr') {
       if (developerMode) appendStderr(entry.line)
-    } else if (!sawEvent) {
-      // Unparsed stdout from drivers that don't emit JSON events (fake
-      // driver, plain-text tests) — treat as text-like output.
-      appendText(entry.line)
+    } else if (entry.kind === 'unparsed') {
+      if (developerMode && sawEvent) {
+        // Once a structured event stream exists, raw stdout is diagnostic log
+        // material rather than assistant prose. Keep it in dev mode so malformed
+        // tool/error lines are not silently dropped.
+        appendStderr(entry.line)
+      } else if (!sawEvent) {
+        // Unparsed stdout from drivers that don't emit JSON events (fake
+        // driver, plain-text tests) — treat as text-like output.
+        appendText(entry.line)
+      }
     }
   }
 
@@ -505,7 +513,7 @@ function StderrBlock({ lines }: { lines: string[] }) {
         className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 transition-colors"
       >
         <AlertTriangle className="h-3 w-3" />
-        <span className="font-medium">{lines.length} stderr line{lines.length === 1 ? '' : 's'}</span>
+        <span className="font-medium">{lines.length} diagnostic/error line{lines.length === 1 ? '' : 's'}</span>
         <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (

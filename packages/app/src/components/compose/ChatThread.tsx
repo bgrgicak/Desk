@@ -65,6 +65,15 @@ export function chatMessagesQueryKey(chatId: string, developerMode: boolean): st
   return `${chatId}:${developerMode ? 'full' : 'timeline'}`
 }
 
+export function shouldShowNewAssistantBadge(
+  message: ServerMessage,
+  lastAssistantId: string | null,
+  showNewBadge: boolean,
+  failedAgentTurn: ServerMessage | null,
+): boolean {
+  return showNewBadge && !failedAgentTurn && message.id === lastAssistantId
+}
+
 /**
  * RTK Query's `data` intentionally keeps the previous successful result while a
  * new arg is loading. That is useful for same-view refetches, but it is wrong
@@ -355,7 +364,7 @@ export function ChatThread({
                   workspaceId={workspaceId}
                   agentName={agentName}
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
-                  isNew={showNewBadge && msg.id === lastAssistantId}
+                  isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}
                   onAttachmentClick={onAttachmentClick}
                   agentHeaderClassName={agentHeaderClassName}
                   hideAgentHeader={msg.content.type === 'artifactRef'}
@@ -384,6 +393,7 @@ export function ChatThread({
               <FailedRunBanner
                 chatId={failedAgentTurn.chatId}
                 messageId={failedAgentTurn.id}
+                isNew={showNewBadge}
               />
             </div>
           )}
