@@ -28,6 +28,7 @@ import {
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
+import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
@@ -79,6 +80,11 @@ async function main(): Promise<void> {
   }
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
+  // Per-user hub auto-create. Runs before the workspace layout backfill
+  // so a fresh hub immediately has its on-disk tree. Idempotent — does
+  // nothing for users that already have a hub.
+  await ensureHubsForAllUsers(pool, DESK_HOME);
+
   // Ensure every existing workspace has its on-disk tree, so a server
   // started after migration 0010 backfill still has folders for rows
   // that were created before per-workspace dirs existed.

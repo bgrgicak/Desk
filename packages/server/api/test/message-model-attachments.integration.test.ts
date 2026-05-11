@@ -36,6 +36,7 @@ let port: number;
 let home: string;
 let userToken: string;
 let chatId: string;
+let workspaceId: string;
 let agentModel: string;
 let runManager: ReturnType<typeof createRunManager>;
 let dbPath: string;
@@ -69,12 +70,13 @@ beforeAll(async () => {
   const broadcastUserId = userRows[0].id as string;
 
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
+  workspaceId = wsRows[0].id as string;
   const { rows: agentRows } = await pool.query("SELECT id, model FROM agents LIMIT 1");
   agentModel = agentRows[0].model as string;
   chatId = generateId("chat");
   await pool.query(
     `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
-    [chatId, wsRows[0].id, agentRows[0].id, "Attach Chat"],
+    [chatId, workspaceId, agentRows[0].id, "Attach Chat"],
   );
 
   server = createApp({ pool, storage: { pool, home }, runManager, broadcastUserId });
@@ -258,7 +260,10 @@ describe("GET /library/content for chat attachments", () => {
   });
 
   it("serves a chat-owned attachment file as inline content", async () => {
-    const res = await fetchPath(`/library/content?path=${encodeURIComponent(attachmentPath)}`, userToken);
+    const res = await fetchPath(
+      `/library/content?workspaceId=${workspaceId}&path=${encodeURIComponent(attachmentPath)}`,
+      userToken,
+    );
     expect(res.status).toBe(200);
     expect(res.body.toString()).toBe(fileBody);
     expect(res.headers["content-disposition"]).toMatch(/^inline/);
@@ -267,7 +272,7 @@ describe("GET /library/content for chat attachments", () => {
   it("returns metadata for a chat-owned attachment via /library/meta", async () => {
     const res = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(attachmentPath)}`,
+      `/library/meta?workspaceId=${workspaceId}&path=${encodeURIComponent(attachmentPath)}`,
       undefined,
       userToken,
     );
@@ -287,7 +292,7 @@ describe("GET /library/content for chat attachments", () => {
 
     const summaryRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(summaryPath)}`,
+      `/library/meta?workspaceId=${workspaceId}&path=${encodeURIComponent(summaryPath)}`,
       undefined,
       userToken,
     );
@@ -301,7 +306,7 @@ describe("GET /library/content for chat attachments", () => {
   it("still rejects other dot-prefixed paths (e.g. .chats/<id>/logs/) with 404", async () => {
     const logRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(`.chats/${chatId}/logs/anything.log`)}`,
+      `/library/meta?workspaceId=${workspaceId}&path=${encodeURIComponent(`.chats/${chatId}/logs/anything.log`)}`,
       undefined,
       userToken,
     );

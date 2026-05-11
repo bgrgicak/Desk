@@ -213,7 +213,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
       { recursive: true },
     );
 
-    const list = await httpRaw("GET", "/library", { bearer: authToken });
+    const list = await httpRaw("GET", `/library?workspaceId=${workspaceId}`, { bearer: authToken });
     expect(list.status).toBe(200);
     const body = list.bodyJson as {
       items: Array<{ path: string; name: string; isDir?: boolean; mime: string }>;
@@ -262,7 +262,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     expect(destStat.isDirectory()).toBe(true);
 
     // Library list should now include the promoted app
-    const list = await httpRaw("GET", "/library", { bearer: authToken });
+    const list = await httpRaw("GET", `/library?workspaceId=${workspaceId}`, { bearer: authToken });
     const items = (list.bodyJson as {
       items: Array<{ name: string; isDir?: boolean }>;
     }).items;

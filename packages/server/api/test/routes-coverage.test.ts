@@ -786,7 +786,7 @@ describe("Routes coverage (real Postgres)", () => {
     const content = "file to delete";
     const uploadRes = await requestMultipart(
       "POST",
-      "/library",
+      `/library?workspaceId=${workspaceId}`,
       token,
       [{ name: "file", filename: "to-delete.txt", contentType: "text/plain", body: Buffer.from(content) }],
     );
@@ -796,7 +796,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Delete moves the file to the trash.
     const delRes = await request(
       "DELETE",
-      `/library?path=${encodeURIComponent(file.path)}`,
+      `/library?workspaceId=${workspaceId}&path=${encodeURIComponent(file.path)}`,
       token,
     );
     expect(delRes.status).toBe(200);
@@ -805,7 +805,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Subsequent stat through the API fails (file was moved to .trash).
     const statRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(file.path)}`,
+      `/library/meta?workspaceId=${workspaceId}&path=${encodeURIComponent(file.path)}`,
       token,
     );
     expect(statRes.status).toBe(404);

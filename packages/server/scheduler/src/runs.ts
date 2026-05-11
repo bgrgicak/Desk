@@ -15,6 +15,7 @@ import {
 import { queries } from "@agent-desk/db";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
+  buildDefaultMountPlan,
   createOrReuse,
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
@@ -535,13 +536,15 @@ export function createRunManager(opts: RunManagerOptions) {
         workspace_id: string;
         workspace_path: string;
         workspace_name: string;
+        workspace_kind: string | null;
         agent_id: string | null;
         user_id: string | null;
         username: string | null;
         timezone: string | null;
         chat_goal: string | null;
       }>(
-        `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name, c.agent_id,
+        `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name,
+                w.kind AS workspace_kind, c.agent_id,
                 u.id AS user_id, u.username, u.timezone,
                 c.goal AS chat_goal
          FROM chats c
@@ -554,6 +557,8 @@ export function createRunManager(opts: RunManagerOptions) {
       const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
       const workspaceSlug = ctxRow?.workspace_path ?? "desk";
       const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
+      const workspaceKind: "project" | "hub" =
+        ctxRow?.workspace_kind === "hub" ? "hub" : "project";
       const chatAgentId = ctxRow?.agent_id ?? null;
       const userId = ctxRow?.user_id ?? null;
       const userName = ctxRow?.username ?? "User";
@@ -596,6 +601,7 @@ export function createRunManager(opts: RunManagerOptions) {
         chatId: msg.chatId,
         goal: chatGoal,
         runMode: outputKind === "summary" ? "summary" : "chat",
+        workspaceKind,
       };
 
       let result: { exitCode: number };
@@ -615,15 +621,35 @@ export function createRunManager(opts: RunManagerOptions) {
       } else if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
+        // Hub mounts every owned project workspace read-only at
+        // `~/workspaces/{slug}/`. Project-workspace runs get the default
+        // single-workspace mount plan (no siblings).
+        const siblingSlugs = workspaceKind === "hub" && userId
+          ? (await queries.workspaces.listByUser(pool, userId))
+              .filter((w) => w.id !== workspaceId)
+              .map((w) => w.path)
+          : [];
+        const mountPlan = workspaceKind === "hub"
+          ? buildDefaultMountPlan(home, workspaceSlug, siblingSlugs)
+          : undefined;
         const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
           ? { containerId: "fake-sandbox", workspaceId }
-          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
+          : await createOrReuse(
+              workspaceId,
+              workspaceSlug,
+              home,
+              providerKeys,
+              mountPlan,
+              extraEnv,
+              workspaceKind,
+            );
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,
           home,
           workspaceId,
           workspaceSlug,
+          workspaceKind,
           chatId: msg.chatId,
           agent: agentFileInput,
           attachments,

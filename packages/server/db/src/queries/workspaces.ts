@@ -1,5 +1,10 @@
 import { type Pool } from "../pool.js";
-import { WorkspaceSchema, slugifyWorkspaceName, type Workspace } from "@agent-desk/shared";
+import {
+  WorkspaceSchema,
+  slugifyWorkspaceName,
+  type Workspace,
+  type WorkspaceKind,
+} from "@agent-desk/shared";
 
 function rowToWorkspace(row: Record<string, unknown>): Workspace {
   return WorkspaceSchema.parse({
@@ -10,18 +15,26 @@ function rowToWorkspace(row: Record<string, unknown>): Workspace {
     icon: row.icon,
     color: row.color ?? "",
     path: row.path,
+    kind: (row.kind as WorkspaceKind | undefined) ?? "project",
     createdAt: row.created_at as string,
   });
 }
 
+/**
+ * Sort order for `listByUser`: hub first (one per user, the home base),
+ * then projects by created_at. Used by `GET /workspaces` so the client
+ * can identify the hub by index/`kind` on the first item.
+ */
+const LIST_SORT = `ORDER BY (kind = 'hub') DESC, created_at`;
+
 export async function list(db: Pool): Promise<Workspace[]> {
-  const { rows } = await db.query("SELECT * FROM workspaces ORDER BY created_at");
+  const { rows } = await db.query(`SELECT * FROM workspaces ${LIST_SORT}`);
   return rows.map(rowToWorkspace);
 }
 
 export async function listByUser(db: Pool, userId: string): Promise<Workspace[]> {
   const { rows } = await db.query(
-    "SELECT * FROM workspaces WHERE user_id = ? ORDER BY created_at",
+    `SELECT * FROM workspaces WHERE user_id = ? ${LIST_SORT}`,
     [userId],
   );
   return rows.map(rowToWorkspace);
@@ -29,6 +42,19 @@ export async function listByUser(db: Pool, userId: string): Promise<Workspace[]>
 
 export async function findById(db: Pool, id: string): Promise<Workspace | null> {
   const { rows } = await db.query("SELECT * FROM workspaces WHERE id = ?", [id]);
+  return rows.length ? rowToWorkspace(rows[0]) : null;
+}
+
+/**
+ * Returns the user's hub workspace, or null if it does not exist yet
+ * (e.g. before the boot-time auto-create runs). Hub uniqueness is
+ * enforced at the DB level via `workspaces_user_hub_unique`.
+ */
+export async function findHubByUser(db: Pool, userId: string): Promise<Workspace | null> {
+  const { rows } = await db.query(
+    "SELECT * FROM workspaces WHERE user_id = ? AND kind = 'hub' LIMIT 1",
+    [userId],
+  );
   return rows.length ? rowToWorkspace(rows[0]) : null;
 }
 
@@ -68,12 +94,16 @@ export async function insert(
     description?: string;
     icon?: string;
     color?: string;
+    /** Defaults to 'project'. Internal callers (createHub) pass 'hub'. The
+     * API never accepts a user-supplied kind, so production-path inserts
+     * from `POST /workspaces` always end up as 'project'. */
+    kind?: WorkspaceKind;
   },
 ): Promise<Workspace> {
   const path = data.path ?? (await reserveWorkspacePath(db, data.name));
   const { rows } = await db.query(
-    `INSERT INTO workspaces (id, user_id, name, path, description, icon, color)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO workspaces (id, user_id, name, path, description, icon, color, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING *`,
     [
       data.id,
@@ -83,6 +113,7 @@ export async function insert(
       data.description ?? "",
       data.icon ?? "",
       data.color ?? "",
+      data.kind ?? "project",
     ],
   );
   return rowToWorkspace(rows[0]);

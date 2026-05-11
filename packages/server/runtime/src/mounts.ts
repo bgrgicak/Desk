@@ -122,9 +122,22 @@ export type MountPlan = MountPlanEntry[];
  * $HOME and symlinked into OpenCode's skills path by the entrypoint. Custom
  * plans can be built by callers that need to expose additional directories
  * (e.g. ~/Projects) alongside.
+ *
+ * Optional `siblingWorkspaceSlugs` lists OTHER workspace slugs the user
+ * owns; each is added as a read-only bind under
+ * `~/workspaces/{slug}/`. The hub mounts every owned workspace this way
+ * so the hub agent can read any workspace's files without being able to
+ * write to them. The list never includes `workspaceSlug` itself
+ * (that's the rw $HOME mount).
  */
-export function buildDefaultMountPlan(home: string, workspaceSlug: string): MountPlan {
-  return [
+export const HUB_SIBLING_MOUNT_DIR = `${SANDBOX_HOME}/workspaces`;
+
+export function buildDefaultMountPlan(
+  home: string,
+  workspaceSlug: string,
+  siblingWorkspaceSlugs: string[] = [],
+): MountPlan {
+  const plan: MountPlan = [
     {
       sourcePath: workspaceRootPath(home, workspaceSlug),
       targetPath: SANDBOX_HOME,
@@ -138,6 +151,16 @@ export function buildDefaultMountPlan(home: string, workspaceSlug: string): Moun
       category: "external",
     },
   ];
+  for (const slug of siblingWorkspaceSlugs) {
+    if (slug === workspaceSlug) continue;
+    plan.push({
+      sourcePath: workspaceRootPath(home, slug),
+      targetPath: `${HUB_SIBLING_MOUNT_DIR}/${slug}`,
+      mode: "ro",
+      category: "external",
+    });
+  }
+  return plan;
 }
 
 /**

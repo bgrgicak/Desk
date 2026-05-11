@@ -227,14 +227,14 @@ describe("GET /chats?workspaceId=", () => {
     expect(bList.map((c) => c.id)).not.toContain(alpha.chatA);
   });
 
-  it("defaults to the caller's first workspace when workspaceId is absent", async () => {
+  it("returns an empty list when workspaceId is absent (no implicit fallback)", async () => {
+    // The hub-workspace work removed the implicit fallback to the
+    // caller's first workspace because, with the hub sorted first, the
+    // fallback would silently widen scope. Callers must now pass an
+    // explicit `?workspaceId=`; list endpoints return [] when omitted.
     const res = await request("GET", "/chats", alpha.token);
     expect(res.status).toBe(200);
-    const list = res.body as Array<{ id: string; workspaceId: string }>;
-    // Every row must belong to a single workspace (the first one).
-    const workspaceIds = new Set(list.map((c) => c.workspaceId));
-    expect(workspaceIds.size).toBe(1);
-    expect(workspaceIds.has(alpha.wsA) || workspaceIds.has(alpha.wsB)).toBe(true);
+    expect(res.body).toEqual([]);
   });
 
   it("returns 404 when asking for a peer's workspace", async () => {
@@ -276,19 +276,12 @@ describe("GET /library?workspaceId=", () => {
     expect(uploaded.path).toBe("root-relative.txt");
   });
 
-  it("defaults to the caller's first workspace when workspaceId is absent", async () => {
-    const up = await requestMultipart(
-      "POST",
-      `/library?workspaceId=${alpha.wsA}`,
-      alpha.token,
-      [{ name: "file", filename: "default-ws.txt", contentType: "text/plain", body: Buffer.from("default") }],
-    );
-    expect(up.status).toBe(201);
-
+  it("returns an empty list when workspaceId is absent (no implicit fallback)", async () => {
+    // See the matching `/chats` test above — the implicit fallback was
+    // removed when the hub workspace started sorting first.
     const res = await request("GET", "/library", alpha.token);
     expect(res.status).toBe(200);
-    const items = (res.body as { items: Array<{ path: string }> }).items;
-    expect(items.some((i) => i.path === "default-ws.txt")).toBe(true);
+    expect(res.body).toEqual({ items: [] });
   });
 
   it("returns 404 when asking for a peer's workspace", async () => {
