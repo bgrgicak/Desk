@@ -33,6 +33,18 @@ function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined
   }
 }
 
+export function buildSendOptions(
+  _persistedGoalKey: GoalKey,
+  goalOverride: GoalKey | undefined,
+  message: string,
+): SendOptions | undefined {
+  const explicitGoal = goalOverride
+  const taskOptions = optionsForGoal(explicitGoal ?? null, message)
+  return explicitGoal !== undefined || taskOptions
+    ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
+    : undefined
+}
+
 
 export interface UploadedFile {
   id: string
@@ -295,15 +307,7 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    const taskOptions = optionsForGoal(effectiveGoalKey, trimmed)
-    const explicitGoal = goalOverride !== undefined
-      ? goalOverride
-      : effectiveGoalKey !== null
-        ? effectiveGoalKey
-        : undefined
-    const options: SendOptions | undefined = explicitGoal !== undefined || taskOptions
-      ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
-      : undefined
+    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed)
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
