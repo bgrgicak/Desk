@@ -78,6 +78,14 @@ describe("renderPromptBody", () => {
     expect(idxSkills).toBeGreaterThan(idxGoal);
   });
 
+  it("nudges every assistant run to end with visible user-facing text", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    expect(body).toContain("Always finish each assistant run with a visible user-facing response");
+    expect(body).toContain("completed work mostly through tool calls");
+    expect(body).toContain("briefly say what failed and the next\nuseful step");
+  });
+
   it("includes persistence guidance in chat-mode prompts", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
     expect(body).toContain("## Persistence (~/.deskrc)");
