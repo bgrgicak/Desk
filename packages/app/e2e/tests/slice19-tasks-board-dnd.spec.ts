@@ -6,7 +6,31 @@
  * `onTaskMove` callback PATCHes the message; we PATCH the same way and
  * confirm the UI follows.
  */
-import { test, expect } from "../fixtures";
+import { test, expect, type Page } from "../fixtures";
+
+/**
+ * Drives a dnd-kit drag in a CI-friendly way. The PointerSensor activates after
+ * 5px of movement (BoardView.tsx), so we nudge before the long pull and let
+ * React commit the drag-active state between steps. Without the inter-step
+ * delays the GitHub Actions runner occasionally drops the over-target update
+ * and `handleDragEnd` short-circuits with the source column.
+ */
+async function dragCardToColumn(page: Page, cardBox: { x: number; y: number; width: number; height: number }, targetBox: { x: number; y: number; width: number; height: number }) {
+  const startX = cardBox.x + cardBox.width / 2;
+  const startY = cardBox.y + cardBox.height / 2;
+  const dropX = targetBox.x + targetBox.width / 2;
+  const dropY = targetBox.y + Math.max(40, targetBox.height / 2);
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  // Nudge to satisfy dnd-kit's activation distance.
+  await page.mouse.move(startX + 8, startY + 8, { steps: 4 });
+  await page.waitForTimeout(80);
+  await page.mouse.move(dropX, dropY, { steps: 16 });
+  // Let dnd-kit dispatch the final dragOver and commit the drop target.
+  await page.waitForTimeout(120);
+  await page.mouse.up();
+}
 
 async function cancelTaskAndRuns(serverUrl: string, token: string, chatId: string, taskId: string) {
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
@@ -142,17 +166,14 @@ test("dragging a todo task to Active keeps the card there while the run starts",
   const card = loggedInPage.getByTestId(`task-row-${task.id}`);
   const activeColumn = loggedInPage.getByTestId("tasks-column-active-list");
   await expect(card).toBeVisible({ timeout: 10_000 });
+  await expect(activeColumn).toBeVisible({ timeout: 10_000 });
 
   const cardBox = await card.boundingBox();
   const activeBox = await activeColumn.boundingBox();
   expect(cardBox).not.toBeNull();
   expect(activeBox).not.toBeNull();
 
-  await loggedInPage.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
-  await loggedInPage.mouse.down();
-  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + 40, { steps: 12 });
-  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + activeBox!.height / 2, { steps: 12 });
-  await loggedInPage.mouse.up();
+  await dragCardToColumn(loggedInPage, cardBox!, activeBox!);
 
   await expect
     .poll(async () => {
@@ -283,18 +304,19 @@ test("dragging a todo task to Active works while the task detail sidebar is open
 
   await card.click();
   await expect(loggedInPage.getByText("Not scheduled")).toBeVisible();
+  // Wait for layout to settle after the sidebar opens — without this the
+  // boundingBox below can capture pre-animation coordinates and the pointer
+  // ends up over the wrong column in CI.
+  await loggedInPage.waitForLoadState("networkidle");
   await loggedInPage.waitForTimeout(300);
+  await expect(activeColumn).toBeVisible({ timeout: 10_000 });
 
   const cardBox = await card.boundingBox();
   const activeBox = await activeColumn.boundingBox();
   expect(cardBox).not.toBeNull();
   expect(activeBox).not.toBeNull();
 
-  await loggedInPage.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
-  await loggedInPage.mouse.down();
-  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + 40, { steps: 12 });
-  await loggedInPage.mouse.move(activeBox!.x + activeBox!.width / 2, activeBox!.y + activeBox!.height / 2, { steps: 12 });
-  await loggedInPage.mouse.up();
+  await dragCardToColumn(loggedInPage, cardBox!, activeBox!);
 
   await expect
     .poll(async () => {
