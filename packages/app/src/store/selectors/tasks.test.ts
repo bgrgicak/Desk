@@ -218,6 +218,22 @@ describe('task selectors', () => {
     expect(task.status).toBe('todo')
   })
 
+  it('does not show errored parent tasks as complete', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_failed',
+      role: 'user',
+      kind: 'task',
+      title: 'Run check',
+      content: { type: 'text', text: 'Run check' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'failed',
+    }), [])
+
+    expect(task.status).toBe('todo')
+    expect(task.statusText).toBe('Failed')
+  })
+
   it('falls back to a generic summary task name when the chat title is unavailable', () => {
     const task = toUiTask(message({ title: 'Summary refresh' }), [], [])
 

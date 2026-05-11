@@ -437,7 +437,7 @@ export async function patchMessage(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; title?: string | null },
+  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: MessageKind; title?: string | null },
   emit: (event: WsEvent) => void,
   lifecycleOps: MessageLifecycleOps | null = null,
 ): Promise<Message> {
@@ -455,6 +455,14 @@ export async function patchMessage(
     throw new ValidationError(
       `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
     );
+  }
+  if (data.kind !== undefined) {
+    if (data.kind !== "chat") {
+      throw new ValidationError("kind can only be patched to 'chat' via this endpoint");
+    }
+    if (current.kind !== "task") {
+      throw new ValidationError("only task messages can be converted back to chat messages");
+    }
   }
   if (data.title !== undefined) {
     if (data.title !== null && typeof data.title !== "string") {
@@ -604,26 +612,18 @@ export async function runMessage(
   }
   if (current.state === "running" && current.kind !== "task") return current;
 
-  const userOwnedPlainTask =
-    current.kind === "task" &&
-    current.role === "user" &&
-    !current.executeAt &&
-    !current.cron;
-
   // Non-task messages are claimed in-place by fireMessage and must be reset
   // to pending before a manual re-fire. Task executions happen on a fresh
-  // task_run child. A plain user task is the one durable board-status case:
-  // POST /run is an explicit user gesture (drag to Active / manual run), so the
-  // parent may move to Active and stay there until the user moves it again.
-  // Scheduled/cron tasks preserve their parent schedule; their in-flight child
-  // task_run makes them appear Active only while the agent is actually running.
+  // task_run child. For unscheduled tasks, POST /run is also the kanban
+  // "move to Active" gesture, so persist that explicit user-owned status and
+  // let the scheduler record completion/failure only on the task_run child.
   const rowToReturn = current.kind === "task"
-    ? userOwnedPlainTask
+    ? (!current.executeAt && !current.cron
       ? await queries.messages.updateMessage(pool, messageId, { state: "running" })
-      : current
+      : current)
     : await queries.messages.updateMessage(pool, messageId, { state: "pending" });
   if (!rowToReturn) throw new NotFoundError(`Message not found: ${messageId}`);
-  if (current.kind !== "task" || userOwnedPlainTask) emit({ type: "message.updated", payload: rowToReturn });
+  if (current.kind !== "task" || rowToReturn !== current) emit({ type: "message.updated", payload: rowToReturn });
 
   // Fire-and-forget. The full agent run continues on the message itself for
   // non-task rows and on a task_run child for task rows.

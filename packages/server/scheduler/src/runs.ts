@@ -740,16 +740,16 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /**
    * After a task run completes: cron tasks advance execute_at to the next
-   * occurrence and stay pending; one-shot tasks transition to the terminal
-   * state and clear execute_at.
+   * occurrence and stay pending; successful one-shot tasks transition to done
+   * and clear execute_at. Failed one-shot runs clear the missed occurrence but
+   * keep the parent task pending so an error does not count as completion.
    */
-  function userOwnsUnscheduledTaskStatus(task: Message): boolean {
-    // User-created, unscheduled tasks are kanban cards first and execution
-    // prompts second. A completed agent run is history on a task_run child; it
-    // must not silently move the parent card out of Active. Agent-authored
-    // unscheduled tasks are different: their lifecycle is agent-owned, so the
-    // terminal run state may close the parent task automatically.
-    return task.kind === "task" && task.role === "user" && !task.executeAt && !task.cron;
+  function isUnscheduledTask(task: Message): boolean {
+    // Unscheduled tasks are kanban cards first and execution prompts second.
+    // A completed agent run is history on a task_run child; it must not
+    // silently move the parent card out of Todo/Active regardless of who
+    // authored the parent task.
+    return task.kind === "task" && !task.executeAt && !task.cron;
   }
 
   async function afterTaskRun(
@@ -784,9 +784,9 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    if (userOwnsUnscheduledTaskStatus(task)) return;
+    if (isUnscheduledTask(task)) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
-      state: terminal,
+      state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,
     });
     if (updated) emit({ type: "message.updated", payload: updated });

@@ -708,7 +708,7 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     expect(parent?.executeAt).toBeDefined();
   });
 
-  it("task run failure marks the run failed and the one-shot parent failed", async () => {
+  it("task run failure marks the run failed without completing the one-shot parent", async () => {
     const mgr = createRunManager({
       pool,
 execRunFn: async () => ({ exitCode: 1 }),
@@ -721,7 +721,8 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("failed");
+    expect(parent?.state).toBe("pending");
+    expect(parent?.executeAt).toBeUndefined();
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("failed");
@@ -793,7 +794,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("succeeded");
   });
 
-  it("agent-created unscheduled task: parent state transitions to terminal after run", async () => {
+  it("agent-created unscheduled task: direct scheduler fire does not move the parent", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -811,8 +812,36 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("succeeded");
+    expect(parent?.state).toBe("pending");
     expect(parent?.executeAt).toBeUndefined();
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("failed unscheduled task run does not complete the manually defined parent", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stderr", payload: "missing attachment" });
+        return { exitCode: 1 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual todo" },
+      // no executeAt, no cron — manually defined task
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("failed");
   });
 
   it("declines to start a second concurrent run for the same task", async () => {

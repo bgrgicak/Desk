@@ -620,6 +620,7 @@ export async function updateMessage(
     state?: string;
     executeAt?: string | null;
     cron?: string | null;
+    kind?: string;
     title?: string | null;
   },
 ): Promise<Message | null> {
@@ -640,6 +641,10 @@ export async function updateMessage(
   if (patch.cron !== undefined) {
     sets.push(`cron = ?`);
     params.push(patch.cron);
+  }
+  if (patch.kind !== undefined) {
+    sets.push(`kind = ?`);
+    params.push(patch.kind);
   }
   if (patch.title !== undefined) {
     sets.push(`title = ?`);

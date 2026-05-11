@@ -642,6 +642,7 @@ export const api = createApi({
           state: "cancelled" | "pending" | "paused";
           executeAt: string | null;
           cron: string | null;
+          kind: "chat";
           title: string | null;
           assigneeId: string | null;
         }>;
@@ -679,22 +680,17 @@ export const api = createApi({
         method: "POST",
       }),
       async onQueryStarted({ chatId, messageId }, { dispatch, queryFulfilled, getState }) {
-        // Dragging a plain user task to Active starts a background run and is
-        // also an explicit user-owned board-status change. Scheduled/cron tasks
-        // must not have their parent cache rewritten to running: their Active
-        // display is derived from the task_run child while the agent is in
-        // flight, then the parent remains Scheduled/Paused.
-        const undos = updateLiveMessageCaches(dispatch, getState, { chatId, messageId }, (msg) => {
-          if (msg.kind === "task" && msg.role === "user" && !msg.executeAt && !msg.cron) msg.state = "running";
-        });
+        // Task runs are represented by task_run children. The server response
+        // is authoritative for whether POST /run was also an explicit
+        // user-owned move to Active on the parent task.
+        const undos: Array<{ undo: () => void }> = [];
 
         try {
           const { data } = await queryFulfilled;
           updateLiveMessageCaches(dispatch, getState, { chatId, messageId }, (msg) => {
             Object.assign(msg, data);
           });
-          const userOwnedPlainTask = data.kind === "task" && data.role === "user" && !data.executeAt && !data.cron;
-          if (!userOwnedPlainTask) {
+          if (data.kind !== "task") {
             dispatch(api.util.invalidateTags([
               { type: "Message", id: `CHAT_${chatId}` },
               { type: "Message", id: "CROSS" },

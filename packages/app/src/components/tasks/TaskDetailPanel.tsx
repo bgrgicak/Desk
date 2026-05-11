@@ -53,7 +53,6 @@ import {
   usePatchMessageMutation,
   useRunMessageMutation,
   usePostChatMessageMutation,
-  useDeleteChatMutation,
 } from '@/store/api'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -176,7 +175,6 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   )
   const [patchMessage, patchState] = usePatchMessageMutation()
   const [runMessage, runState] = useRunMessageMutation()
-  const [deleteChat] = useDeleteChatMutation()
 
   useEffect(() => {
     setShowAllHistory(false)
@@ -331,6 +329,28 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     }
   }
 
+  async function removeTask() {
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: {
+          kind: 'chat',
+          executeAt: null,
+          cron: null,
+          title: null,
+        },
+      }).unwrap()
+      onCollapse()
+    } catch (err) {
+      toast.error('Could not remove task', { description: describeApiError(err) })
+    }
+  }
+
   // What the Schedule row shows when not editing.
   const scheduleLabel = task.schedule
     ? describeCron(task.schedule)
@@ -424,7 +444,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
-            title="Delete task"
+            title="Remove task"
             onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -721,22 +741,20 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete &ldquo;{task.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogTitle>Remove &ldquo;{task.name}&rdquo; from tasks?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deleting this task will cancel any scheduled runs and permanently
-              clear the conversation history with the AI. This action cannot be undone.
+              This will cancel any future schedule and turn the task-defining
+              message back into a regular chat message. Conversation history and
+              artifacts will be kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={async () => {
-                if (task.chatId) await deleteChat(task.chatId)
-                onCollapse()
-              }}
+              onClick={() => void removeTask()}
             >
-              Delete task
+              Remove task
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

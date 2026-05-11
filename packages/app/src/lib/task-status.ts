@@ -27,7 +27,7 @@ export function taskStatusFromMessage(input: {
   cron?: string | null
 }): Task['status'] {
   if (input.state === 'running') return 'active'
-  if (input.state === 'succeeded' || input.state === 'failed' || input.state === 'cancelled') return 'complete'
+  if (input.state === 'succeeded' || input.state === 'cancelled') return 'complete'
   if (input.executeAt || input.cron) return 'scheduled'
   return 'todo'
 }
