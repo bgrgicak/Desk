@@ -54,22 +54,26 @@ export async function authenticateSandboxToken(
   if (!agent) {
     throw new UnauthorizedError("Agent not found for sandbox session");
   }
-  let workspace: Workspace | undefined;
-  let scope: WorkspaceScope;
-  if (session.workspaceId) {
-    const ws = await queries.workspaces.findById(pool, session.workspaceId);
-    workspace = ws ?? undefined;
-    if (ws && ws.userId === agent.userId && ws.kind === "hub") {
-      scope = { kind: "owned", userId: agent.userId };
-    } else {
-      scope = { kind: "single", userId: agent.userId, workspaceId: session.workspaceId };
-    }
-  } else {
-    // Legacy session without a workspace pin. Treat as `owned` would
-    // widen scope unintentionally, so fall back to a placeholder
-    // single-scope that downstream code can detect via the missing
-    // workspace and reject if cross-workspace reach is required.
-    scope = { kind: "owned", userId: agent.userId };
+  if (!session.workspaceId) {
+    // Pre-multi-workspace sessions had no workspace pin. Granting any scope
+    // here would either silently widen access (`owned`) or hand out a
+    // single-scope with no target. Reject so the caller re-mints a current
+    // token instead of inheriting whatever the historical implementation
+    // happened to do.
+    throw new UnauthorizedError("Sandbox token has no workspace; re-authenticate");
   }
+  const ws = await queries.workspaces.findById(pool, session.workspaceId);
+  const workspace: Workspace | undefined = ws ?? undefined;
+  // Cross-user safety: a session must belong to a workspace owned by the
+  // session's agent's user. A workspace whose owner has diverged from the
+  // agent's user (e.g. workspace reassigned, agent moved between users)
+  // is treated as untrusted.
+  if (ws && ws.userId !== agent.userId) {
+    throw new UnauthorizedError("Sandbox token is for a workspace the agent no longer owns");
+  }
+  const scope: WorkspaceScope =
+    ws && ws.kind === "hub"
+      ? { kind: "owned", userId: agent.userId }
+      : { kind: "single", userId: agent.userId, workspaceId: session.workspaceId };
   return { session, agent, workspace, scope };
 }

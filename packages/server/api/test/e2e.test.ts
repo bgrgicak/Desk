@@ -215,14 +215,17 @@ describe("API e2e (real Postgres)", () => {
   });
 
   it("POST /chats creates a chat, GET /chats returns it", async () => {
-    // Get workspace and agent IDs
+    // Get workspace and agent IDs. The seeded "Desk" project workspace is
+    // the right home for ad-hoc chats — pick it explicitly so the test
+    // doesn't depend on which workspace happens to come back first.
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const createRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "E2E Test Chat",
     });
@@ -231,8 +234,9 @@ describe("API e2e (real Postgres)", () => {
     expect(chat.id).toMatch(/^cht_/);
     expect(chat.title).toBe("E2E Test Chat");
 
-    // Verify it appears in the list
-    const listRes = await request("GET", "/chats", token);
+    // Verify it appears in the list. GET /chats requires an explicit
+    // workspaceId now — no implicit fallback to the first workspace.
+    const listRes = await request("GET", `/chats?workspaceId=${projectWorkspace.id}`, token);
     expect(listRes.status).toBe(200);
     const chats = listRes.body as Array<{ id: string }>;
     expect(chats.some((c) => c.id === chat.id)).toBe(true);
@@ -415,12 +419,13 @@ describe("API e2e (real Postgres)", () => {
   // Gap 5: Chat artifact → library → download round-trip
   it("uploads artifact to chat, lists via chat artifacts, uploads to library, downloads identical bytes", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Artifact Round-Trip Chat",
     });
@@ -459,10 +464,11 @@ describe("API e2e (real Postgres)", () => {
     const chatArts = chatArtRes.body as Array<{ path: string }>;
     expect(chatArts.some((a) => a.path === chatFile.path)).toBe(true);
 
-    // Upload directly to library (multipart)
+    // Upload directly to library (multipart). Library endpoints now require
+    // an explicit workspaceId; the hub doesn't accept library writes.
     const libUploadRes = await requestMultipart(
       "POST",
-      "/library",
+      `/library?workspaceId=${projectWorkspace.id}`,
       token,
       [{ name: "file", filename: "lib-round-trip.txt", contentType: "text/plain", body: Buffer.from(content) }],
     );
@@ -472,7 +478,7 @@ describe("API e2e (real Postgres)", () => {
     expect(libFile.path).toBe(libFile.name);
 
     // GET /library returns the library file
-    const libRes = await request("GET", "/library", token);
+    const libRes = await request("GET", `/library?workspaceId=${projectWorkspace.id}`, token);
     expect(libRes.status).toBe(200);
     const lib = libRes.body as { items: Array<{ path: string }> };
     expect(lib.items.some((i) => i.path === libFile.path)).toBe(true);
@@ -483,7 +489,7 @@ describe("API e2e (real Postgres)", () => {
         {
           hostname: "127.0.0.1",
           port,
-          path: `/library/download?path=${encodeURIComponent(libFile.path)}`,
+          path: `/library/download?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent(libFile.path)}`,
           method: "GET",
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -498,14 +504,14 @@ describe("API e2e (real Postgres)", () => {
     });
     expect(dlBytes.toString()).toBe(content);
 
-    // GET /library/content?path= returns identical bytes with inline disposition
+    // GET /library/content?workspaceId=${projectWorkspace.id}&path= returns identical bytes with inline disposition
     // (used by the in-app preview panel instead of triggering a browser download).
     const previewResult = await new Promise<{ bytes: Buffer; disposition: string; contentType: string }>((resolve, reject) => {
       const req = http.request(
         {
           hostname: "127.0.0.1",
           port,
-          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          path: `/library/content?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent(libFile.path)}`,
           method: "GET",
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -529,7 +535,7 @@ describe("API e2e (real Postgres)", () => {
     // Verify stat metadata via /library/meta
     const metaRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(libFile.path)}`,
+      `/library/meta?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent(libFile.path)}`,
       token,
     );
     expect(metaRes.status).toBe(200);
@@ -546,7 +552,7 @@ describe("API e2e (real Postgres)", () => {
         {
           hostname: "127.0.0.1",
           port,
-          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          path: `/library/content?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent(libFile.path)}`,
           method: "PUT",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -579,7 +585,7 @@ describe("API e2e (real Postgres)", () => {
         {
           hostname: "127.0.0.1",
           port,
-          path: `/library/content?path=${encodeURIComponent(libFile.path)}`,
+          path: `/library/content?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent(libFile.path)}`,
           method: "GET",
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -603,7 +609,7 @@ describe("API e2e (real Postgres)", () => {
         {
           hostname: "127.0.0.1",
           port,
-          path: `/library/content?path=${encodeURIComponent("does-not-exist.txt")}`,
+          path: `/library/content?workspaceId=${projectWorkspace.id}&path=${encodeURIComponent("does-not-exist.txt")}`,
           method: "PUT",
           headers: {
             Authorization: `Bearer ${token}`,
