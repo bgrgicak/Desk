@@ -132,12 +132,13 @@ export class VaultStore {
     const p = this.vaultPath(userId);
     try {
       await fs.access(p);
+      // access() succeeded — file exists
       throw new Error("Vault already exists");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        if ((err as Error).message === "Vault already exists") throw err;
-        // fall through and try to create — `access` may fail for other reasons
-      }
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === undefined) throw err; // re-throw "Vault already exists" and other non-fs errors
+      if (code !== "ENOENT") throw err;  // unexpected fs error (EACCES, etc.) — don't overwrite
+      // ENOENT: file doesn't exist — proceed to create
     }
 
     await fs.mkdir(this.vaultsDir, { recursive: true });

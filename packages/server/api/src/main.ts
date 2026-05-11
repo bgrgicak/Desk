@@ -140,12 +140,14 @@ async function main(): Promise<void> {
 
   const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
 
-  // If DESK_SECRET_KEY is explicitly set in the environment, use it as the
-  // vault master password so the vault is automatically unlocked on every
-  // boot — no UI prompt needed. Users who prefer an explicit vault master
-  // password leave DESK_SECRET_KEY unset and unlock via the browser UI.
-  if (process.env.DESK_SECRET_KEY) {
-    const vaultPassword = process.env.DESK_SECRET_KEY;
+  // If DESK_VAULT_PASSWORD is explicitly set in the environment, use it as
+  // the vault master password so the vault is automatically unlocked on
+  // every boot — no UI prompt needed. Users who prefer an explicit vault
+  // master password leave DESK_VAULT_PASSWORD unset and unlock via the
+  // browser UI. Note: this is intentionally a separate env var from
+  // DESK_SECRET_KEY (the AES-256 key for SQLite at-rest encryption).
+  if (process.env.DESK_VAULT_PASSWORD) {
+    const vaultPassword = process.env.DESK_VAULT_PASSWORD;
     const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
     for (const user of allUsers) {
       const { exists } = await vault.status(user.id);

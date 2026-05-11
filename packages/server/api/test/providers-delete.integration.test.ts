@@ -141,7 +141,7 @@ describe("PUT /me/providers — remove connection", () => {
       providers: { OPENAI_API_KEY: "sk-oai-test-key-5678" },
     });
 
-    // Send empty string — server stores it (non-null path in mergeProviderKeys)
+    // Send empty string — server stores it in the vault (non-null path)
     const emptyRes = await request("PUT", "/me/providers", token, {
       providers: { OPENAI_API_KEY: "" },
     });

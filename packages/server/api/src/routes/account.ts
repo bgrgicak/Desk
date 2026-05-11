@@ -2,6 +2,7 @@ import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
+import { VaultLockedError } from "../vault/store.js";
 
 type ProviderMetaEntry = { name?: string; enabled?: boolean };
 type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
@@ -84,6 +85,7 @@ export async function setProviders(
   if (!data || typeof data.providers !== "object" || data.providers === null) {
     throw new ValidationError("Missing providers object");
   }
+  if (vault.isLocked(userId)) throw new VaultLockedError();
   const allowed = new Set<string>(PROVIDER_KEY_VARS);
   for (const name of Object.keys(data.providers)) {
     if (!allowed.has(name)) {

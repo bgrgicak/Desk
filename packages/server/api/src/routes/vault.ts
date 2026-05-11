@@ -74,8 +74,9 @@ export async function createSecret(
   const secret = parseSecret(body);
   await vault.upsert(userId, secret);
   // Return the metadata so the client can stitch into its list cache.
-  const list = vault.list(userId);
-  return list.find((s) => s.title === secret.title)!;
+  const created = vault.list(userId).find((s) => s.title === secret.title);
+  if (!created) throw new Error(`Failed to persist secret '${secret.title}'`);
+  return created;;
 }
 
 export async function updateSecret(
@@ -96,7 +97,9 @@ export async function updateSecret(
     throw new ConflictError(`No secret with title '${title}'`);
   }
   await vault.upsert(userId, secret);
-  return vault.list(userId).find((s) => s.title === title)!;
+  const updated = vault.list(userId).find((s) => s.title === title);
+  if (!updated) throw new Error(`Failed to persist secret '${title}'`);
+  return updated;;
 }
 
 // ── Sandbox-side handlers ────────────────────────────────────────────────
