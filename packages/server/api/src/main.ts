@@ -83,7 +83,19 @@ async function main(): Promise<void> {
   // Per-user hub auto-create. Runs before the workspace layout backfill
   // so a fresh hub immediately has its on-disk tree. Idempotent — does
   // nothing for users that already have a hub.
-  await ensureHubsForAllUsers(pool, DESK_HOME);
+  //
+  // Opt-out via `DESK_HUB_AUTO_CREATE=off` for environments whose tests
+  // still assume the seeded user has a single project workspace (e.g. the
+  // Playwright e2e harness). Production deployments leave it on so the
+  // hub is always available.
+  const hubAutoCreateDisabled =
+    (process.env.DESK_HUB_AUTO_CREATE ?? "on").toLowerCase() === "off";
+  if (!hubAutoCreateDisabled) {
+    await ensureHubsForAllUsers(pool, DESK_HOME);
+  } else {
+    // eslint-disable-next-line no-console
+    console.log("hub auto-create: disabled via DESK_HUB_AUTO_CREATE=off");
+  }
 
   // Ensure every existing workspace has its on-disk tree, so a server
   // started after migration 0010 backfill still has folders for rows
