@@ -29,7 +29,17 @@ export async function getProviderMeta(
   if (rows.length === 0) return {};
   const ciphertext = rows[0].provider_meta_encrypted as Buffer | null;
   if (!ciphertext || ciphertext.length === 0) return {};
-  return decryptJson<ProviderMetaMap>(ciphertext);
+  try {
+    return decryptJson<ProviderMetaMap>(ciphertext);
+  } catch {
+    // Decryption failed — likely a key rotation or corrupted data.
+    // Provider metadata is non-critical; treat it as absent so the
+    // caller gets a clean slate rather than a crash.
+    console.warn(
+      `[userSettings] provider_meta_encrypted for user ${userId} could not be decrypted; resetting to empty`,
+    );
+    return {};
+  }
 }
 
 /**

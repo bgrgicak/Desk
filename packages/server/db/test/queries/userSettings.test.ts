@@ -5,6 +5,7 @@ import * as userSettings from "../../src/queries/userSettings.js";
 import * as users from "../../src/queries/users.js";
 import { hashPassword } from "../../src/passwords.js";
 import type { Pool } from "../../src/pool.js";
+import * as crypto from "node:crypto";
 
 let pool: Pool;
 
@@ -49,6 +50,18 @@ describe("user_settings queries", () => {
     const updated = await userSettings.getProviderMeta(pool, id);
     expect(updated.OPENAI_API_KEY?.enabled).toBe(true);
     expect(updated.GEMINI_API_KEY?.enabled).toBe(true);
+  });
+
+  it("getProviderMeta returns empty object when ciphertext is undecryptable", async () => {
+    const id = await makeUser("bad-cipher-user");
+    // Write a plausible-looking but undecryptable blob (wrong key).
+    const garbage = crypto.randomBytes(12 + 16 + 16); // IV + data + GCM tag
+    await pool.query(
+      `INSERT INTO user_settings (user_id, provider_meta_encrypted, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+      [id, garbage],
+    );
+    expect(await userSettings.getProviderMeta(pool, id)).toEqual({});
   });
 
   it("cascades on user delete", async () => {
