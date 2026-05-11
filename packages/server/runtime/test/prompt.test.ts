@@ -141,6 +141,15 @@ describe("renderPromptBody", () => {
     expect(body).not.toContain("Chat artifacts:");
   });
 
+  it("artifacts fragment tells agents to reply inline unless a file is needed", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+    expect(body).toContain("Reply inline by default");
+    expect(body).toContain("Do not create a user-visible artifact just because");
+    expect(body).toContain("Most responses\nshould be direct chat messages");
+    expect(body).toContain("Create or attach files\nonly when the file itself is the deliverable");
+    expect(body).toContain("Prefer hidden dot-prefixed files for scratch notes\nand internal reasoning");
+  });
+
   it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
     expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
