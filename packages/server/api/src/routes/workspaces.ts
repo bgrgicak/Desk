@@ -4,6 +4,7 @@ import {
   generateId,
   hubSlugForUser,
   isReservedWorkspaceSlug,
+  ForbiddenError,
   NotFoundError,
   ValidationError,
   slugifyWorkspaceName,
@@ -216,7 +217,7 @@ export async function patchWorkspace(
   let newPath: string | undefined;
   if (data.name !== undefined && data.name !== current.name) {
     if (current.kind === "hub") {
-      throw new ValidationError("The hub workspace cannot be renamed.");
+      throw new ForbiddenError("The hub workspace cannot be renamed.");
     }
     const desired = slugifyWorkspaceName(data.name);
     if (desired !== current.path) {
@@ -256,7 +257,7 @@ export async function deleteWorkspace(
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
   if (ws.kind === "hub") {
-    throw new ValidationError("The hub workspace cannot be deleted.");
+    throw new ForbiddenError("The hub workspace cannot be deleted.");
   }
   const owned = await queries.workspaces.listByUser(pool, userId);
   const projectCount = owned.filter((w) => w.kind === "project").length;

@@ -212,12 +212,12 @@ describe("workspace CRUD guards", () => {
     const res = await request("PATCH", `/workspaces/${hub!.id}`, token, {
       name: "Renamed Hub",
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
   });
 
   it("rejects DELETE on the hub", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("DELETE", `/workspaces/${hub!.id}`, token);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
   });
 });
