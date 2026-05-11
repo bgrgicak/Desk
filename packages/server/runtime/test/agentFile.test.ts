@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { renderAgentFile } from "../src/agentFile.js";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { renderAgentFile, chatNeedsBrowser, writeWorkspaceMcpConfig } from "../src/agentFile.js";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 
 describe("renderAgentFile", () => {
   it("generates valid frontmatter and body", () => {
@@ -186,5 +190,55 @@ describe("renderAgentFile", () => {
       .toBeLessThan(result.indexOf("## User's goal: write a document"));
     expect(result.indexOf("## User's goal: write a document"))
       .toBeLessThan(result.indexOf("## Desk native skills"));
+  });
+});
+
+describe("chatNeedsBrowser", () => {
+  it("enables browser only for site/app goals", () => {
+    expect(chatNeedsBrowser("site")).toBe(true);
+    expect(chatNeedsBrowser("app")).toBe(true);
+    // Conservative on purpose: a `document` chat that occasionally needs the
+    // browser still doesn't get firefox preloaded; the user can flip it on
+    // explicitly. Anything else returns false.
+    expect(chatNeedsBrowser("document")).toBe(false);
+    expect(chatNeedsBrowser("data")).toBe(false);
+    expect(chatNeedsBrowser(null)).toBe(false);
+    expect(chatNeedsBrowser(undefined)).toBe(false);
+  });
+});
+
+describe("writeWorkspaceMcpConfig", () => {
+  it("writes playwright with enabled=true when the chat needs a browser", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "mcp-ws");
+      await writeWorkspaceMcpConfig(home, "mcp-ws", { enablePlaywright: true });
+      const cfg = JSON.parse(
+        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".opencode", "opencode.json"), "utf-8"),
+      );
+      expect(cfg.mcp.playwright.enabled).toBe(true);
+      expect(cfg.mcp.playwright.command).toEqual(["playwright-mcp", "--browser", "firefox"]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes playwright with enabled=false otherwise, so an older image with playwright in the global config doesn't keep firefox alive", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "mcp-ws");
+      await writeWorkspaceMcpConfig(home, "mcp-ws", { enablePlaywright: false });
+      const cfg = JSON.parse(
+        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".opencode", "opencode.json"), "utf-8"),
+      );
+      // The key still has to be present — `mcp: {}` would let a global
+      // `playwright.enabled=true` win the merge and keep firefox running.
+      expect(cfg.mcp.playwright).toBeDefined();
+      expect(cfg.mcp.playwright.enabled).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });

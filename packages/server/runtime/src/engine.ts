@@ -65,6 +65,14 @@ export interface RunSpec {
   /** mount-target → options string (empty for default). */
   tmpfs?: Record<string, string>;
   binds: BindMount[];
+  /**
+   * When true, pass `--init` to the engine CLI so PID 1 inside the
+   * container is a minimal reaper (Docker's bundled tini). Required for
+   * any image whose `CMD` is a non-reaping process (e.g. `sleep infinity`)
+   * that would otherwise leave `<defunct>` zombies whenever a grandchild
+   * is reparented to PID 1.
+   */
+  init?: boolean;
 }
 
 export interface ContainerInfo {
@@ -76,6 +84,15 @@ export interface ContainerInfo {
   /** Bind-mount strings in the form returned by `inspect` for parity comparisons. */
   binds: string[];
   running: boolean;
+  /**
+   * Current pids-cgroup limit. Reflects the value passed to `--pids-limit`
+   * at create time, but also picks up any later `docker update --pids-limit`
+   * — which is the auto-scale primitive we use to grow a hot sandbox in
+   * place without recreating it.
+   */
+  pidsLimit?: number;
+  /** Current memory-cgroup limit in bytes, with the same live-update semantics as `pidsLimit`. */
+  memoryBytes?: number;
 }
 
 export interface ExecSpec {
@@ -132,6 +149,19 @@ export interface Engine {
   create(spec: RunSpec): Promise<string>;
   start(nameOrId: string): Promise<void>;
   stop(nameOrId: string, graceSeconds?: number): Promise<void>;
+  /**
+   * Mutates cgroup limits on a *running* container — `docker update`-style.
+   * Returns true if the engine accepted the update, false if it isn't
+   * supported (e.g. an older nerdctl). The caller treats unsupported as
+   * "stay at the current size" rather than failing the run.
+   *
+   * This is the auto-scale primitive: an `xs` sandbox that hits a busy
+   * vite build can grow to `m` mid-run without restarting the in-flight
+   * opencode. We deliberately don't expose recreate as an alternative
+   * because recreating mid-run kills the live tree we just promised to
+   * keep alive in `cleanupRunProcessTree`.
+   */
+  update(nameOrId: string, opts: { pidsLimit?: number; memoryBytes?: number }): Promise<boolean>;
   remove(nameOrId: string, force?: boolean): Promise<void>;
   list(opts: { namePrefix?: string; all?: boolean }): Promise<Array<{ id: string; name: string }>>;
   /**
@@ -245,6 +275,15 @@ class CliEngine implements Engine {
       const resolved = await this.imageId(imageId);
       if (resolved) imageId = resolved;
     }
+    // pids/memory limits. Docker exposes the literal values that were
+    // most recently set (create-time or via `docker update`). `0` and
+    // negative values both mean "no limit" in the cgroup; surface
+    // undefined in that case so callers don't compare against bogus
+    // numbers when deciding whether to up-scale.
+    const rawPids = raw.HostConfig?.PidsLimit;
+    const pidsLimit = typeof rawPids === "number" && rawPids > 0 ? rawPids : undefined;
+    const rawMem = raw.HostConfig?.Memory;
+    const memoryBytes = typeof rawMem === "number" && rawMem > 0 ? rawMem : undefined;
     return {
       id: raw.Id,
       imageId,
@@ -252,11 +291,14 @@ class CliEngine implements Engine {
       labels: raw.Config?.Labels ?? {},
       binds,
       running: raw.State?.Running ?? false,
+      pidsLimit,
+      memoryBytes,
     };
   }
 
   async create(spec: RunSpec): Promise<string> {
     const args: string[] = ["run", "-d", "--name", spec.name];
+    if (spec.init) args.push("--init");
     if (spec.user) args.push("--user", spec.user);
     for (const e of spec.env) args.push("--env", e);
     for (const [key, value] of Object.entries(spec.labels ?? {})) {
@@ -309,6 +351,35 @@ class CliEngine implements Engine {
         stderr.includes("not found")
       ) {
         return;
+      }
+      throw err;
+    }
+  }
+
+  async update(
+    nameOrId: string,
+    opts: { pidsLimit?: number; memoryBytes?: number },
+  ): Promise<boolean> {
+    const args = ["update"];
+    if (opts.pidsLimit !== undefined) args.push("--pids-limit", String(opts.pidsLimit));
+    if (opts.memoryBytes !== undefined) args.push("--memory", String(opts.memoryBytes));
+    if (args.length === 1) return true; // nothing to change
+    args.push(nameOrId);
+    try {
+      await this.run(args);
+      return true;
+    } catch (err) {
+      const stderr = ((err as { stderr?: string }).stderr ?? "").toLowerCase();
+      // Older nerdctl builds don't implement `update`. Treat that as
+      // "size stays where it is" rather than failing the run — we can
+      // still serve the request at the old limits, the worst case is
+      // hitting pids-cgroup pressure that an upgrade would have relieved.
+      if (
+        stderr.includes("unknown command") ||
+        stderr.includes("not implemented") ||
+        stderr.includes("command not found")
+      ) {
+        return false;
       }
       throw err;
     }
@@ -437,7 +508,7 @@ interface ContainerInspect {
   Id: string;
   Image: string;
   Config?: { User?: string; Labels?: Record<string, string> };
-  HostConfig?: { Binds?: string[] };
+  HostConfig?: { Binds?: string[]; PidsLimit?: number; Memory?: number };
   Mounts?: Array<{ Type?: string; Source?: string; Destination?: string; Mode?: string }>;
   State?: { Running?: boolean };
 }

@@ -41,14 +41,178 @@ export interface SandboxHandle {
   workspaceId: string;
 }
 
-const SANDBOX_PIDS_LIMIT = 2048;
-const SANDBOX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
-const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=1g" };
+/**
+ * Sandbox resource sizing.
+ *
+ * Every sandbox starts at the baseline. When a run fails with a
+ * resource-shaped error (`spawn EAGAIN`, OOM-kill, etc.) the scheduler
+ * calls `growSandboxForResourceError` to double the pressured dimension
+ * in place via `docker update`, capped at the maximum. No profiles, no
+ * tiers — just two pairs of numbers and a "double on demand" rule.
+ *
+ * The numbers were measured from real sandbox baseline (5 PIDs / ~50 MB
+ * idle, ~20 PIDs / 300-400 MB during a chat run, ~50-100 PIDs / ~1 GB
+ * for site/app work with firefox). 512 / 512 MB is comfortably above
+ * idle, ~50 % headroom for chat work, and growth handles the rest.
+ */
+const SANDBOX_BASELINE_PIDS = 512;
+const SANDBOX_BASELINE_MEMORY_BYTES = 512 * 1024 * 1024;
+const SANDBOX_MAX_PIDS = 4096;
+const SANDBOX_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
+const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=512m" };
 const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
 const SANDBOX_AGENT_USER_LABEL = "agent-desk.sandbox-agent-user";
-const SANDBOX_RESOURCE_PROFILE = "pids=2048,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo";
 const SANDBOX_CONTAINER_USER = "0:0";
 const SANDBOX_READY_TIMEOUT_MS = 300_000;
+
+/**
+ * Identity tag for the sandbox runtime contract. Bumped whenever a
+ * runtime-fundamental feature changes (e.g. tini PID 1, mount layout,
+ * user model) so old containers fail drift and get recreated *once*.
+ *
+ * **Deliberately omits the size profile.** Size used to be encoded here
+ * and that turned out to be catastrophic: two chats with different goals
+ * in the same workspace would fight over the container size, drift-
+ * recreating on every alternation and racing all other concurrent runs
+ * into "container name already in use". A sandbox should be a stable
+ * shared resource that any chat in the workspace can exec through,
+ * regardless of size preference. Size is now a first-create-only
+ * decision; growing an existing sandbox is a follow-up (see
+ * `packages/server/docs/plans/sandbox-autoscaling.md`).
+ */
+const SANDBOX_RUNTIME_TAG = "tini-v1";
+
+function resourceProfileString(): string {
+  return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
+}
+
+/**
+ * Resource-shaped failure modes the scheduler can recover from by
+ * growing the sandbox and re-firing the message. Anything else is a
+ * real run failure that propagates to the user.
+ */
+export type ResourceFailureKind = "pids" | "memory";
+
+/**
+ * Classifies a finished run's exit code + stderr (or buffered log text)
+ * as a sandbox resource exhaustion, or null if the failure is something
+ * else we shouldn't retry. We're deliberately conservative: a bad regex
+ * here means we retry a non-resource error in a loop, which is worse
+ * than surfacing a one-off transient.
+ */
+export function classifyResourceError(
+  exitCode: number,
+  stderr: string,
+): ResourceFailureKind | null {
+  if (exitCode === 0) return null;
+  // SIGKILL exit code. The cgroup OOM-killer fires SIGKILL when memory
+  // is over limit; nothing else routinely produces 137 on a successful
+  // CLI binary, so we treat it as an OOM signal.
+  if (exitCode === 137) return "memory";
+  const s = stderr.toLowerCase();
+  // Bun and Node both surface fork-limit hits as "spawn ... EAGAIN" or
+  // "Resource temporarily unavailable". Both mean the pids cgroup is
+  // exhausted — `man 2 fork` lists EAGAIN as "system-imposed limit on
+  // the number of processes was reached."
+  if (/\bspawn\b[\s\S]*\beagain\b/i.test(s)) return "pids";
+  if (s.includes("resource temporarily unavailable")) return "pids";
+  if (s.includes("fork: retry") || /\bfork failed\b/.test(s)) return "pids";
+  // Out-of-memory pattern from Bun, Node, libc malloc, etc.
+  if (s.includes("enomem")) return "memory";
+  if (s.includes("out of memory")) return "memory";
+  if (s.includes("cannot allocate memory")) return "memory";
+  return null;
+}
+
+/**
+ * Per-container in-flight growth. When two runs fail simultaneously
+ * from the same OOM event, the first to call `growSandboxForResourceError`
+ * stores its in-progress Promise here; subsequent callers await it
+ * instead of double-growing the sandbox.
+ *
+ * Keyed by sandbox container name (stable across the run) rather than
+ * id, so concurrent fires before the second `inspect` agree on the
+ * lock target.
+ */
+const growthInFlight = new Map<string, Promise<GrowthResult>>();
+
+/** Test-only: clears the in-flight-growth lock and any related state. */
+export function _resetGrowthStateForTest(): void {
+  growthInFlight.clear();
+}
+
+export interface GrowthResult {
+  /** True if either limit was raised; false if the container was already at the max. */
+  grew: boolean;
+  /** Limit dimension that was actually raised; null when `grew=false`. */
+  dimension: ResourceFailureKind | null;
+  /** Post-update pids limit (current or new). */
+  pidsLimit: number;
+  /** Post-update memory limit in bytes (current or new). */
+  memoryBytes: number;
+  /** True when the sandbox is already at the max for the requested dimension. */
+  atMax: boolean;
+}
+
+/**
+ * Doubles the pressured dimension on `workspaceId`'s sandbox in place
+ * via `engine.update`. Coordinates concurrent failures so a single
+ * grow happens per OOM event even when multiple runs die at once.
+ *
+ * Returns a `GrowthResult` describing what happened. A `grew=false,
+ * atMax=true` result means the scheduler should surface the failure
+ * to the user instead of retrying.
+ */
+export async function growSandboxForResourceError(
+  workspaceId: string,
+  kind: ResourceFailureKind,
+): Promise<GrowthResult> {
+  const containerName = `desk-sandbox-${workspaceId}`;
+  const existing = growthInFlight.get(containerName);
+  if (existing) return existing;
+  const work = (async (): Promise<GrowthResult> => {
+    const engine = await detectEngine();
+    const info = await engine.inspect(containerName);
+    if (!info || !info.pidsLimit || !info.memoryBytes) {
+      // Container is gone (was removed mid-run) or has no cgroup limits
+      // configured. Either way, nothing useful to update — bail.
+      return {
+        grew: false,
+        dimension: null,
+        pidsLimit: info?.pidsLimit ?? 0,
+        memoryBytes: info?.memoryBytes ?? 0,
+        atMax: false,
+      };
+    }
+    if (kind === "pids") {
+      if (info.pidsLimit >= SANDBOX_MAX_PIDS) {
+        return { grew: false, dimension: "pids", pidsLimit: info.pidsLimit, memoryBytes: info.memoryBytes, atMax: true };
+      }
+      const next = Math.min(info.pidsLimit * 2, SANDBOX_MAX_PIDS);
+      const ok = await engine.update(containerName, { pidsLimit: next });
+      console.info(
+        `sandbox ${containerName} grew pids ${info.pidsLimit} → ${next} after resource failure (engine accepted=${ok})`,
+      );
+      return { grew: ok, dimension: "pids", pidsLimit: ok ? next : info.pidsLimit, memoryBytes: info.memoryBytes, atMax: false };
+    }
+    // memory
+    if (info.memoryBytes >= SANDBOX_MAX_MEMORY_BYTES) {
+      return { grew: false, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: info.memoryBytes, atMax: true };
+    }
+    const nextMem = Math.min(info.memoryBytes * 2, SANDBOX_MAX_MEMORY_BYTES);
+    const ok = await engine.update(containerName, { memoryBytes: nextMem });
+    console.info(
+      `sandbox ${containerName} grew memory ${info.memoryBytes} → ${nextMem} after resource failure (engine accepted=${ok})`,
+    );
+    return { grew: ok, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: ok ? nextMem : info.memoryBytes, atMax: false };
+  })();
+  growthInFlight.set(containerName, work);
+  try {
+    return await work;
+  } finally {
+    growthInFlight.delete(containerName);
+  }
+}
 
 /**
  * Ensures the sandbox image exists locally. If absent, attempts a pull —
@@ -103,6 +267,7 @@ export async function createOrReuse(
 ): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
+  const expectedResourceProfile = resourceProfileString();
 
   const deskHome = home ?? resolveDeskHome();
   const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
@@ -120,11 +285,16 @@ export async function createOrReuse(
     const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
     const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
-    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === SANDBOX_RESOURCE_PROFILE;
+    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
       await waitForEntrypointReady(engine, existing.id);
+      // Note: we never resize on plain reuse. Sandboxes start at the
+      // baseline and only grow when a run actually fails with a
+      // resource-shaped error — see `growSandboxForResourceError`. A
+      // re-use that *would* benefit from a larger sandbox surfaces that
+      // need by failing first, which is the correct signal.
       return { containerId: existing.id, workspaceId };
     }
     await engine.remove(containerName, true);
@@ -151,7 +321,7 @@ export async function createOrReuse(
         `DESK_SANDBOX_AGENT_USER=${agentUser}`,
       ],
       labels: {
-        [SANDBOX_RESOURCE_PROFILE_LABEL]: SANDBOX_RESOURCE_PROFILE,
+        [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
       network: "bridge",
@@ -160,14 +330,17 @@ export async function createOrReuse(
       // bridge default has no DNS name for the host, so the agent has no
       // route back to /sandbox/messages.
       extraHosts: ["host.docker.internal:host-gateway"],
-      // Modern JS tooling routinely uses worker threads and forked helper
-      // processes; keep a real blast-radius limit without blocking builds.
-      pidsLimit: SANDBOX_PIDS_LIMIT,
-      // 4 GiB — opencode + node + the LLM SDK plus enough headroom for Vite,
-      // Tailwind, Vitest, and package-manager subprocesses.
-      memoryBytes: SANDBOX_MEMORY_BYTES,
+      pidsLimit: SANDBOX_BASELINE_PIDS,
+      memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
+      // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
+      // children. The sandbox CMD is `sleep infinity`, which never reaps,
+      // so without this every npx/esbuild/playwright child that exits
+      // after its parent leaks a `<defunct>` slot until the container is
+      // restarted. The flag is part of the resource profile string above,
+      // so an old container created without it fails the drift check.
+      init: true,
     });
     await waitForEntrypointReady(engine, containerId);
     return { containerId, workspaceId };
@@ -177,12 +350,21 @@ export async function createOrReuse(
     // loser sees a name conflict. The winner has a usable container with
     // matching binds (we'd have reused it above otherwise), so reuse
     // it instead of failing the fire.
+    //
+    // The first inspect-after-conflict can briefly return null on dockerd
+    // when the winning `docker run` has registered the name but the
+    // container isn't fully created yet, so the loser sees neither
+    // "exists" nor a fresh slot. Poll for up to ~2 s before giving up.
     if ((err as { conflict?: boolean }).conflict) {
-      const winner = await engine.inspect(containerName);
-      if (winner) {
-        if (!winner.running) await engine.start(containerName);
-        await waitForEntrypointReady(engine, winner.id);
-        return { containerId: winner.id, workspaceId };
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const winner = await engine.inspect(containerName);
+        if (winner) {
+          if (!winner.running) await engine.start(containerName);
+          await waitForEntrypointReady(engine, winner.id);
+          return { containerId: winner.id, workspaceId };
+        }
+        await delay(100);
       }
     }
     throw err;

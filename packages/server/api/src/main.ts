@@ -156,6 +156,16 @@ async function main(): Promise<void> {
     void runManager.tickScheduled();
   }
 
+  // Sandbox auto-scaling is event-driven inside the scheduler's
+  // `fireMessage`: when a run fails with `spawn EAGAIN` / exit 137 /
+  // ENOMEM, the scheduler grows the sandbox in place and re-fires the
+  // same message. No timer-based pressure scanner here — we react to
+  // actual failures instead of probing cgroups every minute.
+  //
+  // No stale-run watchdog either: a single task may legitimately run
+  // for hours, and silently killing one to "tidy up" would hide
+  // whatever real bug stranded its row in `running` state.
+
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local
   // cron. Set DESK_DAILY_REFLECTION=off to skip seeding in dev / tests.

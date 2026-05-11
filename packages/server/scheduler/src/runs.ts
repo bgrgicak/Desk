@@ -17,6 +17,8 @@ import { resolveDeskHome } from "@agent-desk/storage";
 import {
   createOrReuse,
   execRun as runtimeExecRun,
+  classifyResourceError,
+  growSandboxForResourceError,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   listModels,
@@ -602,39 +604,83 @@ export function createRunManager(opts: RunManagerOptions) {
         runMode: outputKind === "summary" ? "summary" : "chat",
       };
 
+      // Event-driven resource auto-scaling: capture stderr per-attempt
+      // and, if a non-zero exit looks resource-shaped (`spawn EAGAIN`,
+      // OOM-killer, ENOMEM), grow the sandbox in place and re-run the
+      // same message. The user sees a delay, not an error. Capped at
+      // MAX_RESOURCE_RETRIES so a misclassified non-resource failure
+      // doesn't retry forever.
+      const MAX_RESOURCE_RETRIES = 2;
       let result: { exitCode: number };
-      if (msg.content.type === "reflection_request") {
-        const journal = await fireReflectionTask(
-          msg,
-          workspaceId,
-          workspaceSlug,
-          workspaceName,
-          userId,
-          userName,
-          userTimezone,
-          fireOptions.manual === true,
-        );
-        await logReflectionOutcome(runId, journal, onLog);
-        result = { exitCode: 0 };
-      } else if (opts.execRunFn) {
-        result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
-      } else {
-        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
-          ? { containerId: "fake-sandbox", workspaceId }
-          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
-        result = await runtimeExecRun(pool, handle, {
-          runId,
-          prompt,
-          home,
-          workspaceId,
-          workspaceSlug,
-          chatId: msg.chatId,
-          agent: agentFileInput,
-          attachments,
-          providerKeys,
-          extraEnv,
-          onLog,
+      let stderrCapture = "";
+      const onLogWithStderrCapture = async (evt: LogEvent) => {
+        if (evt.kind === "stderr") stderrCapture += evt.payload + "\n";
+        await onLog(evt);
+      };
+      let attempt = 0;
+      while (true) {
+        if (msg.content.type === "reflection_request") {
+          const journal = await fireReflectionTask(
+            msg,
+            workspaceId,
+            workspaceSlug,
+            workspaceName,
+            userId,
+            userName,
+            userTimezone,
+            fireOptions.manual === true,
+          );
+          await logReflectionOutcome(runId, journal, onLogWithStderrCapture);
+          result = { exitCode: 0 };
+        } else if (opts.execRunFn) {
+          result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
+        } else {
+          const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+            ? { containerId: "fake-sandbox", workspaceId }
+            : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
+          result = await runtimeExecRun(pool, handle, {
+            runId,
+            prompt,
+            home,
+            workspaceId,
+            workspaceSlug,
+            chatId: msg.chatId,
+            agent: agentFileInput,
+            attachments,
+            providerKeys,
+            extraEnv,
+            onLog: onLogWithStderrCapture,
+          });
+        }
+        if (result.exitCode === 0) break;
+        if (attempt >= MAX_RESOURCE_RETRIES) break;
+        const failure = classifyResourceError(result.exitCode, stderrCapture);
+        if (!failure) break;
+        // Stop the current logStream and truncate the file so the retry
+        // log doesn't tail-mix with the failed attempt's events. The user
+        // shouldn't see "agent crashed then succeeded"; they should see
+        // only the successful attempt's events.
+        await new Promise<void>((resolve) => {
+          logStream!.once("close", resolve);
+          logStream!.end();
         });
+        await fs.promises.truncate(logFile!, 0);
+        logStream = fs.createWriteStream(logFile!, { flags: "a" });
+        stderrCapture = "";
+        const growth = await growSandboxForResourceError(workspaceId, failure);
+        if (!growth.grew) {
+          // Already at the maximum — no point retrying. Fall through to
+          // finalise as failed; the user does see the failure in this case.
+          console.warn(
+            `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
+          );
+          break;
+        }
+        attempt++;
+        console.info(
+          `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
+            `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
+        );
       }
 
       // Wait for pending writes to flush before reading the file back.
@@ -827,6 +873,13 @@ export function createRunManager(opts: RunManagerOptions) {
     timer.unref();
     return timer;
   }
+  // Note: an earlier draft of this file shipped a stale-run watchdog that
+  // cancelled any `state='running'` row whose `started_at` was older than
+  // 30 minutes. That was the wrong shape of fix — a single task should be
+  // free to run for 24-48 hours, and silently killing valid long jobs
+  // masks the actual root cause of any stuck rows we may see. If we end
+  // up with stuck rows in practice, fix the path that left them stuck
+  // instead of adding a watchdog that reaps them.
 
   /** Permanently deletes a message row. Used for ephemeral rows (e.g. summary) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {

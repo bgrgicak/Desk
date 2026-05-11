@@ -344,3 +344,4 @@ describe("pause / resume / cancel", () => {
     expect(fired).toHaveLength(0);
   });
 });
+

@@ -105,3 +105,57 @@ export async function writeAgentFile(
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");
 }
+
+/**
+ * Goals where the agent will likely need to drive a browser. Only chats
+ * tagged with one of these get playwright-mcp wired up; everything else
+ * starts the sandbox without firefox/playwright in memory, which is the
+ * single largest baseline-resource saving on the sandbox.
+ *
+ * Conservative on purpose: a `document` or `data` chat that occasionally
+ * needs the browser can still spawn it via an explicit user action; we'd
+ * rather miss an edge case than start firefox for every chat.
+ */
+const BROWSER_GOALS: ReadonlySet<GoalKey> = new Set(["site", "app"]);
+
+export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
+  if (!goal) return false;
+  return BROWSER_GOALS.has(goal);
+}
+
+/**
+ * Writes the per-workspace OpenCode config that enables playwright-mcp
+ * only when the active chat goal warrants it. This is the "lazy MCP"
+ * mechanism: the global `/etc/opencode/opencode.json` ships with no MCP
+ * servers, and a workspace gets browser tooling only via this file.
+ *
+ * Always overwrites the workspace config rather than merging so the
+ * heuristic stays the source of truth — if a previous run enabled
+ * playwright for a `site` chat and the workspace's primary goal has
+ * since become `document`, the next write turns it off again so the
+ * next opencode start has no firefox child.
+ */
+export async function writeWorkspaceMcpConfig(
+  home: string,
+  workspaceSlug: string,
+  opts: { enablePlaywright: boolean },
+): Promise<void> {
+  // Always emit the playwright key. If we wrote `mcp: {}` and opencode merges
+  // with the global `/etc/opencode/opencode.json`, an older image still
+  // shipping playwright would survive the merge and start firefox anyway.
+  // Setting `enabled: false` explicitly disables it even when the global
+  // config wins the merge.
+  const config = {
+    $schema: "https://opencode.ai/config.json",
+    mcp: {
+      playwright: {
+        type: "local" as const,
+        command: ["playwright-mcp", "--browser", "firefox"],
+        enabled: opts.enablePlaywright,
+      },
+    },
+  };
+  const dir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
