@@ -120,13 +120,25 @@ export async function createHub(
  * server boot pass so existing users predating the hub feature get one
  * on next start, and any user whose hub was deleted via direct DB access
  * gets it re-created. Idempotent.
+ *
+ * Errors from one user's hub creation (slug collision with another user's
+ * existing workspace, FS permission issues, etc.) are logged and the loop
+ * continues — one bad row should not block every later user from getting
+ * a hub on this boot.
  */
 export async function ensureHubsForAllUsers(pool: Pool, home: string): Promise<void> {
   const { rows } = await pool.query<{ id: string; username: string }>(
     `SELECT id, username FROM users`,
   );
   for (const row of rows) {
-    await createHub(pool, home, row.id, row.username);
+    try {
+      await createHub(pool, home, row.id, row.username);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `ensureHubsForAllUsers: failed to create hub for user ${row.id} (${row.username}): ${(err as Error).message}`,
+      );
+    }
   }
 }
 
