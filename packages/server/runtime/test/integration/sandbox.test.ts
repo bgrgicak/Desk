@@ -71,7 +71,7 @@ describeIf("sandbox integration", () => {
     const engine = await detectEngine();
     const info = await engine.inspect(handle.containerId);
     expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
-      "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo",
+      "pids=2048,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo",
     );
   });
 

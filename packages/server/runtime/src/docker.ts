@@ -41,12 +41,12 @@ export interface SandboxHandle {
   workspaceId: string;
 }
 
-const SANDBOX_PIDS_LIMIT = 1024;
+const SANDBOX_PIDS_LIMIT = 2048;
 const SANDBOX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
 const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=1g" };
 const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
 const SANDBOX_AGENT_USER_LABEL = "agent-desk.sandbox-agent-user";
-const SANDBOX_RESOURCE_PROFILE = "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo";
+const SANDBOX_RESOURCE_PROFILE = "pids=2048,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo";
 const SANDBOX_CONTAINER_USER = "0:0";
 const SANDBOX_READY_TIMEOUT_MS = 300_000;
 
