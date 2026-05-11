@@ -7,7 +7,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type PinKind, type WsEvent } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
   ReplaceLibraryAppConflictError,
@@ -705,8 +705,11 @@ export function createApp(opts: AppOptions): Server {
           throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
         }
       } else if (workspaceParam === "*" || scope.kind === "owned") {
-        // Hub session default + explicit `*`: search across every owned
-        // workspace. Project sessions ignore the implicit broadening.
+        // Hub sessions (scope.kind === "owned") default to all owned workspaces,
+        // whether or not workspace=* is explicit. Project sessions that pass
+        // workspace=* enter this branch but the inner guard is false — they fall
+        // through with workspaceSlugFilter unchanged (session workspace only).
+        // This is correct: project tokens cannot broaden beyond their workspace.
         if (scope.kind === "owned") {
           const owned = await queries.workspaces.listByUser(pool, agent.userId);
           workspaceSlugsFilter = owned.map((w) => w.path);
@@ -1025,7 +1028,7 @@ export function createApp(opts: AppOptions): Server {
       const refId = typeof body.refId === "string" ? body.refId : "";
       const result = await pinRoutes.createPin(pool, segments[1], userId, {
         sourceWorkspaceId,
-        kind: kind as never,
+        kind: kind as PinKind,
         refId,
       });
       sendJson(res, 201, result);

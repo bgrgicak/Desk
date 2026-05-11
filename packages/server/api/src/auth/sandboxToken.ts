@@ -33,8 +33,9 @@ function hashToken(token: string): string {
 export interface SandboxAuth {
   session: SandboxSession;
   agent: Agent;
-  /** The workspace this run belongs to. Always present except for very
-   *  old historical sessions that predate the multi-workspace split. */
+  /** The workspace this run belongs to. Absent when the workspace has
+   *  been deleted after the token was minted, or for very old sessions
+   *  that predate the multi-workspace split. */
   workspace?: Workspace;
   scope: WorkspaceScope;
 }

@@ -68,43 +68,61 @@ export async function createHub(
   userId: string,
   userSlug: string,
 ): Promise<Workspace> {
+  // Step 1: workspace row — idempotent.
   const existing = await queries.workspaces.findHubByUser(pool, userId);
-  if (existing) return existing;
+  let ws: Workspace;
+  if (existing) {
+    ws = existing;
+  } else {
+    const slug = hubSlugForUser(userSlug);
+    await ensureWorkspaceLayout(home, slug);
+    ws = await queries.workspaces.insert(pool, {
+      id: generateId("workspace"),
+      userId,
+      name: HUB_NAME,
+      description: HUB_DESCRIPTION,
+      path: slug,
+      kind: "hub",
+    });
+    await ensureWorkspaceAgent(pool, ws.id, userId);
+  }
 
-  const slug = hubSlugForUser(userSlug);
-  await ensureWorkspaceLayout(home, slug);
-  const ws = await queries.workspaces.insert(pool, {
-    id: generateId("workspace"),
-    userId,
-    name: HUB_NAME,
-    description: HUB_DESCRIPTION,
-    path: slug,
-    kind: "hub",
-  });
-  await ensureWorkspaceAgent(pool, ws.id, userId);
-
-  // Seed an initial chat with one agent message so the user lands in an
-  // already-warm conversation. Wraps the chat insert + message insert in
-  // application code (no transaction) — both are idempotent at the row
-  // level via the unique constraints elsewhere; if the message insert
-  // fails the empty chat is harmless and the next boot won't re-seed
-  // (the hub already exists).
+  // Step 2: seed chat + message — each step is independently idempotent so
+  // a partially-completed previous boot pass is repaired on the next call.
+  // This avoids the failure mode where the workspace row exists but the chat
+  // or message insert failed, leaving the hub permanently unseeded.
   const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
   const agentId = memberships[0]?.agentId;
   if (agentId) {
-    const chat = await queries.chats.insert(pool, {
-      id: generateId("chat"),
-      workspaceId: ws.id,
-      agentId,
-      title: HUB_NAME,
-    });
-    await queries.messages.insert(pool, {
-      id: generateId("message"),
-      chatId: chat.id,
-      role: "agent",
-      content: { type: "text", text: HUB_INITIAL_AGENT_MESSAGE },
-      agentId,
-    });
+    const { rows: existingChats } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? LIMIT 1`,
+      [ws.id],
+    );
+    let chatId: string;
+    if (existingChats.length > 0) {
+      chatId = existingChats[0].id;
+    } else {
+      const chat = await queries.chats.insert(pool, {
+        id: generateId("chat"),
+        workspaceId: ws.id,
+        agentId,
+        title: HUB_NAME,
+      });
+      chatId = chat.id;
+    }
+    const { rows: existingMessages } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages WHERE chat_id = ? AND role = 'agent' LIMIT 1`,
+      [chatId],
+    );
+    if (existingMessages.length === 0) {
+      await queries.messages.insert(pool, {
+        id: generateId("message"),
+        chatId,
+        role: "agent",
+        content: { type: "text", text: HUB_INITIAL_AGENT_MESSAGE },
+        agentId,
+      });
+    }
   }
 
   if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {

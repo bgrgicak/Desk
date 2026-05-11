@@ -22,7 +22,7 @@ import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
-import { ensureHubsForAllUsers } from "../src/routes/workspaces.js";
+import { createHub, ensureHubsForAllUsers } from "../src/routes/workspaces.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
@@ -140,6 +140,33 @@ describe("hub workspace boot pass", () => {
     const visible = messages.items.filter((m) => m.kind !== "summary" && m.role === "agent");
     expect(visible.length).toBeGreaterThanOrEqual(1);
     expect(visible[0].content.type).toBe("text");
+  });
+
+  it("repairs a partially-seeded hub — workspace exists but chat was never created", async () => {
+    // Simulate the failure mode: workspace row written, but chat/message insert
+    // failed. createHub should detect the missing chat and seed it on the next call.
+    const partialUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: partialUserId,
+      username: "partialuser",
+      passwordHash: await hashPassword("pw"),
+      email: "partial@example.com",
+    });
+    // First call creates the hub workspace and seeds it.
+    const hub = await createHub(pool, home, partialUserId, "partialuser");
+    // Manually delete the chat to simulate a partial failure.
+    await pool.query(`DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE workspace_id = ?)`, [hub.id]);
+    await pool.query(`DELETE FROM chats WHERE workspace_id = ?`, [hub.id]);
+    // Second call should repair: hub workspace already exists, but chat is missing.
+    await createHub(pool, home, partialUserId, "partialuser");
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ?`,
+      [hub.id],
+    );
+    expect(rows.length).toBe(1);
+    const messages = await queries.messages.listByChat(pool, rows[0].id, {});
+    const agentMessages = messages.items.filter((m) => m.role === "agent");
+    expect(agentMessages.length).toBeGreaterThanOrEqual(1);
   });
 
   it("creates a hub for a freshly-inserted user when the boot pass runs", async () => {
