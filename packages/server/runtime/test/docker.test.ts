@@ -81,6 +81,24 @@ describe("providerKeyEnv", () => {
 });
 
 describe("providerKeyExecEnv", () => {
+  it("does not forward host GitHub tokens without explicit vault-backed keys", () => {
+    const previousGitHubToken = process.env.GITHUB_TOKEN;
+    const previousGhToken = process.env.GH_TOKEN;
+    process.env.GITHUB_TOKEN = "host-github-token";
+    process.env.GH_TOKEN = "host-gh-token";
+    try {
+      const env = providerKeyExecEnv();
+
+      expect(env).not.toContain("GITHUB_TOKEN=host-github-token");
+      expect(env).not.toContain("GH_TOKEN=host-gh-token");
+    } finally {
+      if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previousGitHubToken;
+      if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previousGhToken;
+    }
+  });
+
   it("forwards GitHub connection tokens per exec alongside model provider keys", () => {
     const env = providerKeyExecEnv({
       OPENAI_API_KEY: "sk-test",

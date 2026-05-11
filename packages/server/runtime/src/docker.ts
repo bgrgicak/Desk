@@ -518,7 +518,8 @@ function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void 
 
 function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
-  const source: Record<string, string | undefined> = keys ?? process.env;
+  if (!keys) return out;
+  const source: Record<string, string | undefined> = keys;
   for (const name of SANDBOX_CONNECTION_ENV_VARS) {
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
@@ -543,20 +544,7 @@ export function providerKeyExecEnv(
     ...sandboxConnectionEnv(keys),
   ];
   appendExtraEnv(out, extraEnv);
-  if (!keys) {
-    for (const definition of managedConnectionDefinitions()) {
-      const hostValue = [definition.envKey, ...(definition.envAliases ?? [])]
-        .map((name) => process.env[name])
-        .find((value): value is string => Boolean(value));
-      if (!hostValue) continue;
-      const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
-      if (!emitted.has(definition.envKey)) out.push(`${definition.envKey}=${hostValue}`);
-      for (const alias of definition.envAliases ?? []) {
-        if (!emitted.has(alias)) out.push(`${alias}=${hostValue}`);
-      }
-    }
-    return out;
-  }
+  if (!keys) return out;
 
   const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
   for (const name of CONNECTION_ENV_VARS) {
