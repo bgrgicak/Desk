@@ -10,22 +10,24 @@ import * as messages from "../../src/queries/messages.js";
 
 let pool: Pool;
 let chatId: string;
+let workspaceId: string;
+let agentId: string;
 
 beforeAll(async () => {
   pool = await setupTestDb();
   const userId = generateId("user");
   await users.insert(pool, { id: userId, username: "msgowner", passwordHash: "h", email: "msg@example.com" });
-  const agentId = generateId("agent");
+  agentId = generateId("agent");
   await agents.insert(pool, { id: agentId, userId, name: "MsgAgent" });
-  const wsId = generateId("workspace");
-  await workspaces.insert(pool, { id: wsId, userId, name: "MsgWS", path: `msgws-${wsId.slice(-6)}` });
+  workspaceId = generateId("workspace");
+  await workspaces.insert(pool, { id: workspaceId, userId, name: "MsgWS", path: `msgws-${workspaceId.slice(-6)}` });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id)
      VALUES (?, ?) ON CONFLICT DO NOTHING`,
-    [wsId, agentId],
+    [workspaceId, agentId],
   );
   chatId = generateId("chat");
-  await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "MsgChat" });
+  await chats.insert(pool, { id: chatId, workspaceId, agentId, title: "MsgChat" });
 });
 
 afterAll(async () => {
@@ -46,6 +48,22 @@ describe("messages queries", () => {
 
     const chat = await chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
+  });
+
+  it("inserts summary messages without marking chat unread", async () => {
+    const summaryChatId = generateId("chat");
+    await chats.insert(pool, { id: summaryChatId, workspaceId, agentId, title: "Summary noise" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: summaryChatId,
+      role: "agent",
+      content: { type: "summary", body: "# Summary\n\nCompacted context." },
+      state: "succeeded",
+      kind: "summary",
+    });
+
+    const chat = await chats.findById(pool, summaryChatId);
+    expect(chat!.unread).toBe(false);
   });
 
   it("lists by chat with cursor pagination (forward)", async () => {
