@@ -165,6 +165,15 @@ async function main(): Promise<void> {
   // No stale-run watchdog either: a single task may legitimately run
   // for hours, and silently killing one to "tidy up" would hide
   // whatever real bug stranded its row in `running` state.
+  //
+  // Idle-sandbox sweeper: removes the container for any workspace
+  // with no message activity for `DESK_SANDBOX_IDLE_MS` (default
+  // 30 min). The next fire creates a fresh sandbox at the baseline
+  // size, which also serves as the "reset grown sandbox back to
+  // small" path. One SQL query + one `docker ps` per minute.
+  const idleSweepTimer = runManager.startIdleSweeper(
+    parseInt(process.env.DESK_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
+  );
 
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local
@@ -212,6 +221,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);
     clearInterval(pollTimer);
+    clearInterval(idleSweepTimer);
     clearInterval(retentionTimer);
     clearConnections();
     server.close();

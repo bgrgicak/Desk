@@ -19,6 +19,7 @@ import {
   execRun as runtimeExecRun,
   classifyResourceError,
   growSandboxForResourceError,
+  reapIdleSandboxes,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   listModels,
@@ -873,6 +874,45 @@ export function createRunManager(opts: RunManagerOptions) {
     timer.unref();
     return timer;
   }
+
+  /**
+   * Removes sandbox containers for workspaces that have had no
+   * `state='running'` rows and no message activity in the last
+   * `idleMs`. Next fire for that workspace builds a fresh container
+   * at the baseline 512 / 512 MB — so this also serves as the
+   * "scale back to baseline" mechanism, free of charge.
+   *
+   * One SQL query, one `docker ps`, then one `docker rm -f` per
+   * idle workspace. Cheap enough to live alongside the existing
+   * 60 s `pollTimer` without measurable cost.
+   */
+  async function sweepIdleSandboxes(
+    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
+  ): Promise<string[]> {
+    const cutoff = new Date(Date.now() - idleMs).toISOString();
+    // Workspaces with *any* recent activity — running rows, just-fired
+    // pending rows, or just-edited rows — count as active and keep their
+    // sandbox. Joining through chats so we get workspace_id directly.
+    const { rows } = await pool.query<{ workspace_id: string }>(
+      `SELECT DISTINCT c.workspace_id
+       FROM messages m JOIN chats c ON c.id = m.chat_id
+       WHERE m.state = 'running'
+          OR m.updated_at >= ?`,
+      [cutoff],
+    );
+    const active = new Set(rows.map((r) => r.workspace_id));
+    return reapIdleSandboxes(active);
+  }
+
+  function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      void sweepIdleSandboxes().catch((err) => {
+        console.warn("idle sandbox sweep failed:", err);
+      });
+    }, intervalMs);
+    timer.unref();
+    return timer;
+  }
   // Note: an earlier draft of this file shipped a stale-run watchdog that
   // cancelled any `state='running'` row whose `started_at` was older than
   // 30 minutes. That was the wrong shape of fix — a single task should be
@@ -1179,6 +1219,8 @@ export function createRunManager(opts: RunManagerOptions) {
     fireMessage,
     tickScheduled,
     startPolling,
+    sweepIdleSandboxes,
+    startIdleSweeper,
     cancelMessage,
     cancelRun,
     pauseMessage,

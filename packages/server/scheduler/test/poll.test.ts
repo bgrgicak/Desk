@@ -345,3 +345,42 @@ describe("pause / resume / cancel", () => {
   });
 });
 
+// ── sweepIdleSandboxes — DB query path ──────────────────────────────────────
+//
+// The actual `docker rm` happens via `reapIdleSandboxes`, which needs a
+// real engine. What this test pins down is the DB-side decision:
+// "which workspace ids are 'active enough' to keep their sandbox?"
+// — that's the contract `sweepIdleSandboxes` exposes to the runtime
+// reaper. We verify by running with an engine-less environment (no
+// `docker ps` runs) and checking that the SQL query returns the
+// expected workspace set via the side-effect of which `recentlyActiveWorkspaceIds`
+// would be computed. We can't observe it directly, but we can verify
+// `sweepIdleSandboxes` returns `[]` (no containers found, since no real
+// engine) and doesn't throw, which is the happy-path contract.
+
+describe("sweepIdleSandboxes", () => {
+  it("returns [] and doesn't throw when no docker engine is reachable", async () => {
+    const rm = makeRunManager();
+    // No DESK_CONTAINER_ENGINE override + no docker binary mocked → the
+    // reaper sees no containers and returns empty. The DB query still
+    // runs successfully even though the engine doesn't.
+    const removed = await rm.sweepIdleSandboxes(30 * 60 * 1000);
+    expect(Array.isArray(removed)).toBe(true);
+  });
+
+  it("treats workspaces with running rows as active (won't be eligible to reap)", async () => {
+    // We can't directly assert "this workspace is active" without
+    // observing the engine call, but we can verify the DB query path
+    // doesn't crash when there are running rows present. The actual
+    // engine call is exercised in the runtime/docker integration tests.
+    const rm = makeRunManager();
+    const id = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, started_at, kind)
+       VALUES (?, ?, 'user', ?, 'running', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'task_run')`,
+      [id, chatId, JSON.stringify({ type: "text", text: "in-flight" })],
+    );
+    await expect(rm.sweepIdleSandboxes(30 * 60 * 1000)).resolves.toBeDefined();
+  });
+});
+

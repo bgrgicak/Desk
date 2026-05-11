@@ -539,6 +539,56 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
   return drift;
 }
 
+/**
+ * Removes any `desk-sandbox-*` container whose workspace has had no
+ * `state='running'` rows and no message activity in the last `idleMs`.
+ * The next fire's `createOrReuse` builds a fresh container at the
+ * baseline 512 / 512 MB — so this also naturally resets a grown
+ * sandbox back to the smallest size.
+ *
+ * `recentlyActiveWorkspaceIds` is supplied by the caller (typically
+ * from a DB query) so this module stays DB-agnostic. Returns the
+ * names of containers it removed so callers can log / test.
+ */
+export async function reapIdleSandboxes(
+  recentlyActiveWorkspaceIds: ReadonlySet<string>,
+): Promise<string[]> {
+  const removed: string[] = [];
+  let engine: Engine;
+  try {
+    engine = await detectEngine();
+  } catch {
+    return removed; // engine not reachable — best-effort
+  }
+  let containers: Array<{ id: string; name: string }>;
+  try {
+    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
+  } catch {
+    return removed;
+  }
+  for (const c of containers) {
+    if (!c.name.startsWith("desk-sandbox-")) continue;
+    // Skip transient reflection sandboxes — they have their own
+    // workspace ids and own short lifecycles; a reaper that catches
+    // them mid-reflection would kill the in-flight reflection.
+    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
+    const workspaceId = c.name.slice("desk-sandbox-".length);
+    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
+    // Coordinate with an in-flight grow on the same container: if
+    // someone is mid-`docker update`, don't yank the container out
+    // from under them. The grow lock is keyed by container name.
+    if (growthInFlight.has(c.name)) continue;
+    try {
+      await engine.remove(c.name, true);
+      removed.push(c.name);
+      console.info(`reaped idle sandbox ${c.name}`);
+    } catch (err) {
+      console.warn(`failed to reap ${c.name}:`, (err as Error).message);
+    }
+  }
+  return removed;
+}
+
 /** Stops a sandbox container. Idempotent. */
 export async function stopSandbox(handle: SandboxHandle): Promise<void> {
   try {
