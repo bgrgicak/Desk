@@ -30,12 +30,12 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build server packages for tests
+      - name: Build @agent-desk/api (+ deps) for tests
         # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
-        # spawns `node packages/server/api/dist/main.js`. Build every server
-        # workspace so each package has the `dist/` output resolved by Node's
-        # default `import` condition.
-        run: npm -ws --if-present run build
+        # spawns `node packages/server/api/dist/main.js`. Build the local server
+        # workspaces in dependency order so the spawned process resolves through
+        # Node's default `import` condition.
+        run: npm run build:server
 
       - name: Archive server build outputs
         run: tar -czf "$RUNNER_TEMP/server-dist.tar.gz" packages/server/*/dist
