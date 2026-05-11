@@ -221,3 +221,105 @@ describe("workspace CRUD guards", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("hub workspace — chats and library access", () => {
+  it("GET /chats?workspaceId=<hub-id> returns the hub's chats (not 400)", async () => {
+    const hub = await queries.workspaces.findHubByUser(pool, userId);
+    const res = await request("GET", `/chats?workspaceId=${hub!.id}`, token);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // The hub ships with one initial chat.
+    expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("GET /library?workspaceId=<hub-id> returns the hub's library (not 400)", async () => {
+    const hub = await queries.workspaces.findHubByUser(pool, userId);
+    const res = await request("GET", `/library?workspaceId=${hub!.id}`, token);
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("pins — hub capabilities", () => {
+  let hubId: string;
+  let projectId: string;
+
+  beforeAll(async () => {
+    const hub = await queries.workspaces.findHubByUser(pool, userId);
+    hubId = hub!.id;
+    const create = await request("POST", "/workspaces", token, { name: "Pin Source" });
+    projectId = (create.body as { id: string }).id;
+  });
+
+  it("GET /workspaces/{hub-id}/pins returns empty array initially", async () => {
+    const res = await request("GET", `/workspaces/${hubId}/pins`, token);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it("POST /workspaces/{hub-id}/pins creates a pin from an owned workspace", async () => {
+    const res = await request("POST", `/workspaces/${hubId}/pins`, token, {
+      sourceWorkspaceId: projectId,
+      kind: "chat",
+      refId: "cht_fake123",
+    });
+    expect(res.status).toBe(201);
+    const pin = res.body as { id: string; workspaceId: string; sourceWorkspaceId: string; kind: string; refId: string };
+    expect(pin.workspaceId).toBe(hubId);
+    expect(pin.sourceWorkspaceId).toBe(projectId);
+    expect(pin.kind).toBe("chat");
+    expect(pin.refId).toBe("cht_fake123");
+  });
+
+  it("POST /workspaces/{hub-id}/pins is idempotent on duplicate (same ref)", async () => {
+    const first = await request("POST", `/workspaces/${hubId}/pins`, token, {
+      sourceWorkspaceId: projectId,
+      kind: "chat",
+      refId: "cht_idempotent",
+    });
+    const second = await request("POST", `/workspaces/${hubId}/pins`, token, {
+      sourceWorkspaceId: projectId,
+      kind: "chat",
+      refId: "cht_idempotent",
+    });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect((first.body as { id: string }).id).toBe((second.body as { id: string }).id);
+  });
+
+  it("DELETE /workspaces/{hub-id}/pins/{pinId} removes a pin", async () => {
+    const create = await request("POST", `/workspaces/${hubId}/pins`, token, {
+      sourceWorkspaceId: projectId,
+      kind: "artifact",
+      refId: "art_todelete",
+    });
+    const pinId = (create.body as { id: string }).id;
+    const del = await request("DELETE", `/workspaces/${hubId}/pins/${pinId}`, token);
+    expect(del.status).toBe(200);
+    const list = await request("GET", `/workspaces/${hubId}/pins`, token);
+    const ids = (list.body as Array<{ id: string }>).map((p) => p.id);
+    expect(ids).not.toContain(pinId);
+  });
+});
+
+describe("pins — project workspaces cannot use hub-only pin endpoints", () => {
+  let projectId: string;
+
+  beforeAll(async () => {
+    const create = await request("POST", "/workspaces", token, { name: "No Pins Here" });
+    projectId = (create.body as { id: string }).id;
+  });
+
+  it("GET /workspaces/{project-id}/pins returns 403", async () => {
+    const res = await request("GET", `/workspaces/${projectId}/pins`, token);
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /workspaces/{project-id}/pins returns 403", async () => {
+    const res = await request("POST", `/workspaces/${projectId}/pins`, token, {
+      sourceWorkspaceId: projectId,
+      kind: "chat",
+      refId: "cht_shouldfail",
+    });
+    expect(res.status).toBe(403);
+  });
+});

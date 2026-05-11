@@ -72,11 +72,11 @@ export async function requireWorkspaceScope(
 
 /**
  * Compatibility helper for endpoints that operate on a single workspace
- * (library files, library pins, etc.). When the caller's scope is `owned`
- * (a hub request), the endpoint requires explicit narrowing — pin a file
- * in *which* workspace? — so we reject without an explicit param so the
- * client provides one. When the scope is `single`, returns the workspace
- * id directly.
+ * (chats, library files, etc.). Returns the explicit workspaceId from the
+ * query param, regardless of whether the workspace is a hub or project. The
+ * hub is a valid single workspace for CRUD purposes; `owned` (cross-workspace)
+ * scope is only meaningful for sandbox search endpoints, which derive scope
+ * from the sandbox token rather than from this helper.
  */
 export async function resolveWorkspaceId(
   pool: Pool,
@@ -86,9 +86,11 @@ export async function resolveWorkspaceId(
   const scope = await resolveWorkspaceScope(pool, userId, query);
   if (!scope) return null;
   if (scope.kind === "owned") {
-    throw new ValidationError(
-      "This endpoint requires a single workspace; pass an explicit ?workspaceId=.",
-    );
+    // Hub workspace: the caller explicitly supplied the hub's workspaceId.
+    // Return it so single-workspace endpoints (chats, library, …) operate on
+    // the hub's own data. Cross-workspace expansion only applies to sandbox
+    // endpoints, which derive scope from the sandbox token, not this helper.
+    return query.get("workspaceId")!;
   }
   return scope.workspaceId;
 }

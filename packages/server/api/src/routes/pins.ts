@@ -1,6 +1,7 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import {
+  ForbiddenError,
   generateId,
   NotFoundError,
   PIN_KINDS,
@@ -20,7 +21,7 @@ import { requireOwnedWorkspace } from "../auth/ownership.js";
 
 function ensureHubWorkspace(workspace: { kind: "project" | "hub" }): void {
   if (workspace.kind !== "hub") {
-    throw new ValidationError(
+    throw new ForbiddenError(
       "Cross-workspace pinning is only available on the hub workspace.",
     );
   }
