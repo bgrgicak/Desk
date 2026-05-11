@@ -372,12 +372,13 @@ class CliEngine implements Engine {
     if (opts.memoryBytes !== undefined) {
       args.push("--memory", String(opts.memoryBytes));
       // On cgroup v1, docker requires `--memory-swap >= --memory`; raising
-      // `--memory` alone is rejected with "Memory swap should be larger
-      // than memory limit". Passing -1 sets swap to "unlimited" which
-      // matches our create-time behavior (we never set --memory-swap) and
-      // works on cgroup v2 as well. Without this, auto-grow fails on any
-      // host still using cgroup v1.
-      args.push("--memory-swap", "-1");
+      // `--memory` alone is rejected with "memory+swap limit should be >=
+      // memory limit". Passing `-1` (unlimited) only works on the FIRST
+      // update: the daemon silently caps swap to the prior memory value
+      // rather than uncapping it, so the next grow hits the same validation
+      // error again. Setting swap equal to the new memory ("no extra swap")
+      // always satisfies the constraint and works identically on cgroup v2.
+      args.push("--memory-swap", String(opts.memoryBytes));
     }
     if (args.length === 1) return true; // nothing to change
     args.push(nameOrId);

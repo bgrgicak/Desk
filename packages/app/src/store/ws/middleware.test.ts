@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { applyEventToCache } from './middleware'
-import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle } from '../slices/derivedSlice'
+import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed } from '../slices/derivedSlice'
 
 describe('applyEventToCache', () => {
   describe('library.changed', () => {
@@ -456,7 +456,7 @@ describe('applyEventToCache', () => {
       expect(dispatched).toContainEqual(markChatIdle('cht_1'))
     })
 
-    it('dispatches markChatIdle when agent_turn fails', () => {
+    it('dispatches markChatFailed when agent_turn fails', () => {
       const dispatched: unknown[] = []
       const dispatch = (action: unknown) => { dispatched.push(action); return action }
 
@@ -470,7 +470,7 @@ describe('applyEventToCache', () => {
         },
       })
 
-      expect(dispatched).toContainEqual(markChatIdle('cht_1'))
+      expect(dispatched).toContainEqual(markChatFailed('cht_1'))
     })
 
     it('does not dispatch running actions for non-agent_turn messages', () => {

@@ -20,6 +20,7 @@ import {
   type MountPlan,
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
+import { killRunProcessTreeByRunId } from "./driver.js";
 
 /**
  * The sandbox container image used for every desk-agent run. Resolves
@@ -121,6 +122,16 @@ export function classifyResourceError(
   if (s.includes("enomem")) return "memory";
   if (s.includes("out of memory")) return "memory";
   if (s.includes("cannot allocate memory")) return "memory";
+  // setsid (util-linux) wraps the opencode exec for process-group cleanup.
+  // Older setsid versions report a signal-killed child as
+  //   `setsid: child <pid> did not exit normally: Success`
+  // and exit 1 — so a cgroup OOM-kill (SIGKILL) reaches the runtime as
+  // exit 1 + this stderr line, never as the canonical 137 above. Without
+  // recognising it, the auto-grow path never fires for OOMs under the
+  // setsid wrapper. The stderr line is specific enough to be unambiguous;
+  // a non-OOM signal kill that hits this path will at worst grow the
+  // sandbox once before the user-visible failure surfaces.
+  if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
   return null;
 }
 
@@ -643,4 +654,77 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
   } catch {
     // Engine not reachable.
   }
+}
+
+/**
+ * Kill opencode process trees left running in sandbox containers by a prior
+ * desk-server. Called once at startup, before `recoverOrphanedRuns` requeues
+ * the rows that owned those processes.
+ *
+ * Why this matters: when a desk-server dies (tsx-watch reload, hard crash),
+ * the in-container opencode that was mid-run survives because the runtime's
+ * post-`wait()` cleanup uses `skipIfLeaderAlive` to keep dev-time restarts
+ * from killing valid runs. The output stream is gone, but the process keeps
+ * holding `~/.local/share/opencode/opencode.db`. If the next desk-server
+ * requeues the same message and fires a *new* opencode in the same sandbox,
+ * the two contend on the SQLite DB — the second hits "Failed to run the
+ * query 'PRAGMA journal_mode = WAL'" and the run fails.
+ *
+ * Caller supplies the (workspaceId → runIds) map so this module stays
+ * DB-agnostic, same pattern as `reapIdleSandboxes`. Returns one entry per
+ * runId we attempted, with `killed=true` if a process group was signalled.
+ */
+export async function killClaimedRunsInContainers(
+  runsByWorkspace: ReadonlyMap<string, ReadonlyArray<string>>,
+  engineOverride?: Engine,
+): Promise<Array<{ workspaceId: string; runId: string; killed: boolean }>> {
+  const results: Array<{ workspaceId: string; runId: string; killed: boolean }> = [];
+  if (runsByWorkspace.size === 0) return results;
+  let engine: Engine;
+  if (engineOverride) {
+    engine = engineOverride;
+  } else {
+    try {
+      engine = await detectEngine();
+    } catch {
+      return results;
+    }
+  }
+  // Run one workspace at a time but parallel within a workspace: kills in
+  // the same container all hit the same docker exec endpoint, but different
+  // workspaces are independent docker exec targets, and cleanupRunProcessTree
+  // has a TERM→3s→KILL grace period per pidfile. Serial across all orphans
+  // would be O(N × 3s); per-workspace parallel keeps startup near 3 s no
+  // matter how many runs were stranded.
+  const perWorkspace = Array.from(runsByWorkspace, ([workspaceId, runIds]) =>
+    (async () => {
+      const containerName = `desk-sandbox-${workspaceId}`;
+      let containerExists = false;
+      try {
+        containerExists = (await engine.inspect(containerName)) !== null;
+      } catch {
+        containerExists = false;
+      }
+      if (!containerExists) {
+        // No container means no surviving opencode for this workspace; the
+        // re-fire builds a fresh sandbox and there's nothing to contend with.
+        return runIds.map((runId) => ({ workspaceId, runId, killed: false }));
+      }
+      const killed = await Promise.all(
+        runIds.map(async (runId) => {
+          try {
+            return await killRunProcessTreeByRunId(engine, containerName, runId);
+          } catch {
+            // Engine errors here are best-effort — recoverOrphanedRuns will
+            // still requeue, and worst case the user sees a transient PRAGMA
+            // failure on the re-fire. Logged at the caller.
+            return false;
+          }
+        }),
+      );
+      return runIds.map((runId, i) => ({ workspaceId, runId, killed: killed[i] }));
+    })(),
+  );
+  for (const ws of await Promise.all(perWorkspace)) results.push(...ws);
+  return results;
 }

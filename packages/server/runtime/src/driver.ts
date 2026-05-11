@@ -199,6 +199,26 @@ function runPidFile(runId: string): string {
   return `/tmp/desk-runs/${safe}.pid`;
 }
 
+/**
+ * Force-kill a previously-started run's process tree, given its runId. Used
+ * at desk-server startup to reap opencode processes left alive in a sandbox
+ * by a previous desk-server (e.g. tsx-watch reload, crash) so the re-fire
+ * doesn't spawn a second opencode that fights the first for the workspace's
+ * `~/.local/share/opencode/opencode.db`. Returns true if a process group
+ * was signalled. Idempotent: if the pidfile is absent, the leader is dead,
+ * or the container exec fails, it resolves to false without throwing.
+ */
+export async function killRunProcessTreeByRunId(
+  engine: Engine,
+  containerId: string,
+  runId: string,
+): Promise<boolean> {
+  return cleanupRunProcessTree(engine, containerId, runPidFile(runId), {
+    waitForPidFileMs: 0,
+    removePidFileWhenMissing: true,
+  });
+}
+
 export async function _cleanupRunProcessTreeForTest(
   engine: Engine,
   containerId: string,
@@ -215,16 +235,6 @@ async function cleanupRunProcessTree(
   opts: {
     waitForPidFileMs?: number;
     removePidFileWhenMissing?: boolean;
-    /**
-     * When true, return without signalling (and without removing the pidfile)
-     * if the leader PID recorded in the pidfile is still alive. Use this in
-     * the natural post-`wait()` finally so a host-side wrapper death — e.g.
-     * `tsx watch` SIGTERMing the desk-server on a source edit — doesn't reach
-     * into the container and kill an opencode run that's still progressing.
-     * cancelRun deliberately omits this so an explicit cancel always tears
-     * the tree down.
-     */
-    skipIfLeaderAlive?: boolean;
   } = {},
 ): Promise<boolean> {
   let sawPidFile = false;
@@ -239,18 +249,6 @@ async function cleanupRunProcessTree(
       if (Date.now() >= deadline) return false;
       await new Promise((r) => setTimeout(r, 100));
     }
-  };
-
-  const isLeaderAlive = async () => {
-    const script = [
-      `pidfile=${shSingleQuote(pidFile)}`,
-      'pid="$(cat "$pidfile" 2>/dev/null || true)"',
-      'case "$pid" in ""|*[!0-9]*) exit 1;; esac',
-      'kill -0 "$pid" 2>/dev/null && exit 0',
-      "exit 1",
-    ].join("; ");
-    const h = await engine.exec({ containerId, cmd: ["sh", "-c", script] });
-    return (await h.wait()) === 0;
   };
 
   const execCleanup = async (signal: "TERM" | "KILL") => {
@@ -278,13 +276,6 @@ async function cleanupRunProcessTree(
 
   try {
     sawPidFile = await waitForPidFile();
-    if (opts.skipIfLeaderAlive && sawPidFile && (await isLeaderAlive())) {
-      // wait() resolved but opencode is still running inside the container.
-      // The most common cause is the host-side `docker exec` subprocess being
-      // SIGTERMed (dev-server restart, tsx watch). Leave the run alone so it
-      // can finish on its own — same behavior as before the cleanup wrapper.
-      return false;
-    }
     const signalled = await execCleanup("TERM");
     if (signalled) {
       await new Promise((r) => setTimeout(r, 3000));
@@ -380,18 +371,19 @@ function createRealDriver(): SandboxDriver {
         return { exitCode };
       } finally {
         activeExecs.delete(opts.runId);
+        // Sweep the run's process group — opencode itself has exited (that's
+        // what made `wait()` resolve), but its descendants (playwright-mcp +
+        // firefox, npx wrappers, vite builds) may still be alive. Without
+        // this, every run leaks zombies into the long-lived sandbox until
+        // the container is recreated. We don't try to spare a still-alive
+        // leader: if the host wrapper died mid-run, the output stream is
+        // already gone, the work product is lost, and leaving the orphan
+        // alive just creates double-spawn contention on the next fire.
         await cleanupRunProcessTree(engine, handle.containerId, pidFile, {
           // If cancelRun had to kill the docker/nerdctl wrapper before the
           // in-container shell wrote its pidfile, wait briefly here so the
           // final cleanup still has a chance to address the process group.
           waitForPidFileMs: 2000,
-          // wait() resolves the moment the docker exec subprocess on the host
-          // dies — that includes dev-server restarts via tsx watch SIGTERMing
-          // its children. In that case opencode is still alive in the
-          // container; signalling its PGID here would kill a run the user
-          // wants to keep. So sweep only after the leader is actually gone
-          // (clean run end → kill stragglers like playwright-mcp).
-          skipIfLeaderAlive: true,
         }).catch(() => {});
       }
     },

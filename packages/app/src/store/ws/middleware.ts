@@ -1,7 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed, clearChatFailed, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
 import type { ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
@@ -379,9 +379,10 @@ export function applyEventToCache(
                 ...chatForCache,
                 kind: draft[idx].kind,
                 running: draft[idx].running,
+                failed: draft[idx].failed,
               };
             } else {
-              draft.unshift({ ...chatForCache, kind: "chat", running: false });
+              draft.unshift({ ...chatForCache, kind: "chat", running: false, failed: false });
             }
           },
         ),
@@ -395,6 +396,7 @@ export function applyEventToCache(
               ...chatForCache,
               kind: draft[idx].kind,
               running: draft[idx].running,
+              failed: draft[idx].failed,
             };
           }
         }),
@@ -453,8 +455,11 @@ export function applyEventToCache(
       if (msg.content?.type === "agent_turn") {
         if (msg.state === "pending" || msg.state === "running") {
           dispatch(markChatRunning(msg.chatId));
+        } else if (msg.state === "failed") {
+          dispatch(markChatFailed(msg.chatId));
         } else {
           dispatch(markChatIdle(msg.chatId));
+          dispatch(clearChatFailed(msg.chatId));
         }
       }
       // Non-internal messages update chat.unread and chat.updated_at on

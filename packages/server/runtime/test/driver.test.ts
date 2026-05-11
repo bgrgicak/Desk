@@ -147,56 +147,39 @@ describe("cleanupRunProcessTree", () => {
     };
   }
 
-  it("skips signalling when skipIfLeaderAlive is true and the leader is alive", async () => {
-    // pidfile present (returns 0 from `[ -s … ]`), `kill -0 $pid` returns 0
-    // (alive). The cleanup must NOT send TERM/KILL — otherwise a dev-server
-    // restart kills an opencode that the user wants to keep running.
-    const { engine, calls } = fakeEngine((script) => {
-      if (script.includes("[ -s ")) return 0; // pidfile exists
-      if (script.includes("kill -0")) return 0; // leader alive
-      if (script.includes("rm -f")) return 0;
-      // A `kill -TERM -- "-…"` call would land here — treat it as failure so
-      // the test catches a regression where signalling slips through.
-      if (script.includes("kill -")) return 99;
-      return 0;
-    });
-    const signalled = await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {
-      skipIfLeaderAlive: true,
-    });
-    expect(signalled).toBe(false);
-    expect(calls.some((c) => c.includes("kill -TERM"))).toBe(false);
-    expect(calls.some((c) => c.includes("kill -KILL"))).toBe(false);
-  });
-
-  it("signals the process group when the leader has already exited", async () => {
-    // pidfile present, but the leader PID is dead (kill -0 returns non-zero).
-    // We expect a TERM to land — the cleanup is what sweeps leftover
-    // playwright-mcp / npx descendants that outlived opencode.
+  it("signals the run's process group when the pidfile is present", async () => {
+    // The pidfile records the setsid leader PID; signalling the negative of
+    // that PID delivers to the whole process group, which is how leftover
+    // playwright-mcp / npx descendants get swept after opencode exits — and
+    // also how a tsx-watch-interrupted run is torn down so its zombie
+    // doesn't double-spawn with the requeued retry.
     const { engine, calls } = fakeEngine((script) => {
       if (script.includes("[ -s ")) return 0;
-      if (script.includes("kill -0")) return 1; // leader is gone
       if (script.includes("kill -TERM")) return 42; // PGID signalled
-      return 0;
-    });
-    const signalled = await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {
-      skipIfLeaderAlive: true,
-    });
-    expect(signalled).toBe(true);
-    expect(calls.some((c) => c.includes("kill -TERM"))).toBe(true);
-  });
-
-  it("always signals when skipIfLeaderAlive is omitted (cancelRun path)", async () => {
-    // cancelRun never sets skipIfLeaderAlive: an explicit cancel must tear
-    // the tree down even if the leader is still running.
-    const { engine, calls } = fakeEngine((script) => {
-      if (script.includes("[ -s ")) return 0;
-      if (script.includes("kill -TERM")) return 42;
       if (script.includes("kill -KILL")) return 42;
       return 0;
     });
     const signalled = await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {});
     expect(signalled).toBe(true);
     expect(calls.some((c) => c.includes("kill -TERM"))).toBe(true);
+    // No `kill -0` probe should run — the cleanup signals unconditionally
+    // now, instead of asking "is the leader alive?" first. A regression that
+    // adds an isLeaderAlive check would show up here.
     expect(calls.some((c) => c.includes("kill -0"))).toBe(false);
+  });
+
+  it("returns false and skips signalling when the pidfile is absent", async () => {
+    // No pidfile means either the run never wrote one (failed before exec)
+    // or a prior cleanup already removed it. Either way, there's no PGID to
+    // signal — return false without an unnecessary `kill -TERM 0`.
+    const { engine, calls } = fakeEngine((script) => {
+      if (script.includes("[ -s ")) return 1; // no pidfile
+      // The script for execCleanup is run anyway (the case in the script
+      // handles an empty/invalid pid), but should be a no-op.
+      if (script.includes("kill -TERM")) return 0;
+      return 0;
+    });
+    const signalled = await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {});
+    expect(signalled).toBe(false);
   });
 });

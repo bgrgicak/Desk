@@ -6,6 +6,7 @@ import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
 import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
+import type { ListMessagesResponse } from '@/store/types'
 import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 // ── ChatThread ────────────────────────────────────────────────────────────────
@@ -58,6 +59,27 @@ export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerM
   }
 
   return false
+}
+
+export function chatMessagesQueryKey(chatId: string, developerMode: boolean): string {
+  return `${chatId}:${developerMode ? 'full' : 'timeline'}`
+}
+
+/**
+ * RTK Query's `data` intentionally keeps the previous successful result while a
+ * new arg is loading. That is useful for same-view refetches, but it is wrong
+ * when switching regular ⇄ developer mode: compact/timeline payloads have
+ * redacted tools and no summaries, so rendering them under developer-mode
+ * visibility makes tool calls appear inconsistently until the full request wins.
+ */
+export function currentChatMessagesData(
+  queryKey: string,
+  lastResolvedQueryKey: string,
+  currentData: ListMessagesResponse | undefined,
+  cachedData: ListMessagesResponse | undefined,
+): ListMessagesResponse | undefined {
+  if (currentData) return currentData
+  return lastResolvedQueryKey === queryKey ? cachedData : undefined
 }
 
 export interface ChatThreadProps {
@@ -121,10 +143,14 @@ export function ChatThread({
   // ── Scrollback state ─────────────────────────────────────────────────
   const [beforeCursor, setBeforeCursor] = useState<string | undefined>(undefined)
 
-  // Reset scrollback state when chatId changes.
-  const prevChatIdRef = useRef(chatId)
-  if (prevChatIdRef.current !== chatId) {
-    prevChatIdRef.current = chatId
+  // Reset scrollback state when the message source changes. Regular and
+  // developer mode use different server views/cursors, so carrying a regular
+  // scrollback cursor into developer mode can make the full view briefly load
+  // the wrong page and surface tool rows inconsistently.
+  const threadKey = `${chatId}:${developerMode ? 'full' : 'timeline'}`
+  const prevThreadKeyRef = useRef(threadKey)
+  if (prevThreadKeyRef.current !== threadKey) {
+    prevThreadKeyRef.current = threadKey
     setBeforeCursor(undefined)
   }
 
@@ -132,10 +158,14 @@ export function ChatThread({
   // so we keep showing the previous chat's messages while the next chat's
   // request is in flight, instead of blanking out and remounting the
   // textarea/dropzone mid-interaction.
-  const { data, isError } = useGetChatMessagesQuery(
+  const queryKey = chatMessagesQueryKey(chatId, developerMode)
+  const lastResolvedQueryKeyRef = useRef(queryKey)
+  const { data, currentData, isError } = useGetChatMessagesQuery(
     { chatId, full: developerMode },
     { skip: skipQuery },
   )
+  if (currentData) lastResolvedQueryKeyRef.current = queryKey
+  const activeData = currentChatMessagesData(queryKey, lastResolvedQueryKeyRef.current, currentData, data)
 
   // Load older page when beforeCursor is set.
   const { isFetching: isFetchingOlder } = useGetChatMessagesQuery(
@@ -151,9 +181,9 @@ export function ChatThread({
    *  we can restore the scroll position after the DOM updates. */
   const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null)
 
-  const allItems = data?.items ?? []
-  const prevCursor = data?.prevCursor
-  const isInitialLoading = !skipQuery && !data && !isError
+  const allItems = activeData?.items ?? []
+  const prevCursor = activeData?.prevCursor
+  const isInitialLoading = !skipQuery && !activeData && !isError
 
   const hasPendingTrigger = allItems.some(
     m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
@@ -167,12 +197,12 @@ export function ChatThread({
     if (isTyping) return null
     return findFailedAgentTurn(allItems)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, isTyping])
+  }, [activeData, isTyping])
 
   const showToolOnlyFallback = useMemo(
     () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, developerMode, isTyping, failedAgentTurn],
+    [activeData, developerMode, isTyping, failedAgentTurn],
   )
 
   const messages: ServerMessage[] = useMemo(
@@ -181,7 +211,7 @@ export function ChatThread({
       return filterMessage ? visible.filter(filterMessage) : visible
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, developerMode, filterMessage],
+    [activeData, developerMode, filterMessage],
   )
 
   const lastAssistantId = useMemo(() => {
@@ -240,10 +270,10 @@ export function ChatThread({
     }
   }, [isInitialLoading, messages.length])
 
-  // Reset initial scroll flag when chat changes.
+  // Reset initial scroll flag when the chat or backing message view changes.
   useEffect(() => {
     hasInitialScrolled.current = false
-  }, [chatId])
+  }, [chatId, developerMode])
 
   // ── Load older messages on scroll-to-top ─────────────────────────────
   const loadOlderMessages = useCallback(() => {

@@ -552,4 +552,122 @@ describe("GET /chats/:id/messages — compact view", () => {
     const answer = timelineBody.items.find((m) => m.id === inserted.answer)!;
     expect(answer.content).toEqual({ type: "events", log: [{ kind: "unparsed", line: "Legacy visible line" }] });
   });
+
+  it("full/dev pages are a superset of regular timeline pages even when summaries are interleaved", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"], state?: Message["state"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      await queries.messages.insert(pool, { id, chatId: devChatId, role, content, state });
+      inserted[name] = id;
+    }
+
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("request1", "system", { type: "summary_request" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("tool", "agent", { type: "toolCall", toolName: "read", args: { filePath: "/home/agent/x" } });
+    await add("regular3", "user", { type: "text", text: "Regular 3" });
+
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", limit: 3 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", limit: 3 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular2, inserted.tool, inserted.regular3]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary2);
+    expect(full.items.length).toBeGreaterThan(timeline.items.length);
+    expect(full.prevCursor).toBe(timeline.prevCursor);
+  });
+
+  it("full/dev scrollback pages are a superset of regular timeline scrollback pages", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode scrollback superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    const created: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      const msg = await queries.messages.insert(pool, { id, chatId: devChatId, role, content });
+      inserted[name] = id;
+      created[name] = msg.createdAt;
+    }
+
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("tool", "agent", { type: "toolResult", toolName: "read", result: { ok: true } });
+    await add("before", "user", { type: "text", text: "Before cursor" });
+
+    const before = `${created.before}|${inserted.before}`;
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", before, limit: 2 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", before, limit: 2 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular2, inserted.tool]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary2);
+    expect(fullIds).not.toContain(inserted.before);
+    expect(full.prevCursor).toBe(timeline.prevCursor);
+  });
+
+  it("full/dev forward pages are a superset of regular timeline forward pages", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode forward superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    const created: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      const msg = await queries.messages.insert(pool, { id, chatId: devChatId, role, content });
+      inserted[name] = id;
+      created[name] = msg.createdAt;
+    }
+
+    await add("cursor", "user", { type: "text", text: "Before cursor" });
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("regular3", "user", { type: "text", text: "Regular 3" });
+
+    const cursor = `${created.cursor}|${inserted.cursor}`;
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", cursor, limit: 2 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", cursor, limit: 2 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular1, inserted.regular2]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary1);
+    expect(fullIds).not.toContain(inserted.regular3);
+    expect(full.nextCursor).toBe(timeline.nextCursor);
+  });
 });

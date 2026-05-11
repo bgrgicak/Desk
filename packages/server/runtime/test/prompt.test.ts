@@ -14,13 +14,14 @@ import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
 
 describe("loadAndSub", () => {
   it("substitutes {{name}} placeholders from vars", () => {
-    const out = loadAndSub("mandate.md", { agentName: "Jarvis", userName: "Desk" });
-    expect(out).toContain("You are Jarvis, a coworker of Desk.");
+    const out = loadAndSub("identity.md", { agentName: "Jarvis", userName: "Desk" });
+    expect(out).toContain("You are Jarvis, call me Desk.");
+    expect(out).toContain("Jarvis is a steady, useful presence in Desk's life");
   });
 
   it("throws when a referenced placeholder is missing, naming the fragment", () => {
-    expect(() => loadAndSub("mandate.md", {})).toThrow(/mandate\.md/);
-    expect(() => loadAndSub("mandate.md", {})).toThrow(/agentName/);
+    expect(() => loadAndSub("identity.md", {})).toThrow(/identity\.md/);
+    expect(() => loadAndSub("identity.md", {})).toThrow(/agentName/);
   });
 
   it("memoizes the raw read so disk content can change without re-reads", async () => {
@@ -51,7 +52,7 @@ describe("renderPromptBody", () => {
     userName: "Desk",
   };
 
-  it("orders mandate → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
+  it("orders identity → mandate → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -59,16 +60,19 @@ describe("renderPromptBody", () => {
       userTimezone: "America/Los_Angeles",
     });
 
+    const idxIdentity = body.indexOf("## Identity");
     const idxMandate = body.indexOf("Your mandate is to help");
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxTaskContext = body.indexOf("## Building task context");
-    const idxScheduling = body.indexOf("## Scheduling — act first, ask never");
+    const idxScheduling = body.indexOf("## Scheduling");
     const idxPersistence = body.indexOf("## Persistence (~/.deskrc)");
     const idxMemoryRules = body.indexOf("## Memory and recall");
     const idxGoal = body.indexOf("## User's goal: write a document");
     const idxSkills = body.indexOf("## Desk native skills");
 
+    expect(idxIdentity).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThanOrEqual(0);
+    expect(idxMandate).toBeGreaterThan(idxIdentity);
     expect(idxArtifacts).toBeGreaterThan(idxMandate);
     expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
     expect(idxScheduling).toBeGreaterThan(idxTaskContext);
@@ -84,6 +88,19 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Always finish each assistant run with a visible user-facing response");
     expect(body).toContain("completed work mostly through tool calls");
     expect(body).toContain("briefly say what failed and the next\nuseful step");
+  });
+
+  it("places Desk identity at the top of the system prompt", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    const idxIdentity = body.indexOf("## Identity");
+    const idxMandate = body.indexOf("Your mandate is to help");
+    expect(idxIdentity).toBeGreaterThanOrEqual(0);
+    expect(idxIdentity).toBeLessThan(idxMandate);
+    expect(body).toContain("a steady, useful presence");
+    expect(body).toContain("Be a thoughtful coworker and a good friend");
+    expect(body).toContain("Leave room for humor, playfulness");
+    expect(body).toContain("Let this identity shape every rule below");
   });
 
   it("includes persistence guidance in chat-mode prompts", () => {
@@ -146,22 +163,22 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Reply inline by default");
     expect(body).toContain("Do not create a user-visible artifact just because");
     expect(body).toContain("Most responses\nshould be direct chat messages");
-    expect(body).toContain("Create or attach files\nonly when the file itself is the deliverable");
-    expect(body).toContain("Prefer hidden dot-prefixed files for scratch notes\nand internal reasoning");
+    expect(body).toContain("Create or attach files only when the file itself\nis the deliverable");
+    expect(body).toContain("Prefer hidden dot-prefixed files\nfor scratch notes and internal reasoning");
   });
 
   it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
     expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
-    expect(body).toContain("as the last step of any turn");
+    expect(body).toContain("as the last step before replying");
     expect(body).toContain("create, significantly update, or retrieve from the current chat/workspace library");
-    expect(body).toContain("no exceptions for type");
+    expect(body).toContain("files, apps, directories, images, and library items");
     expect(body).toContain("library item");
     expect(body).toContain("Library search is scoped to the current chat/workspace");
     expect(body).toContain("pass the directory path");
-    expect(body).toContain("Do not reply to the user until the attach command has been executed or you have determined no attachable current-workspace path exists");
-    expect(body).toContain("If the command fails, report the error inline instead of silently skipping");
-    expect(body).toContain("Quote the path.");
+    expect(body).toContain("Reply only after the attach command succeeds, fails, or no attachable current-workspace path exists");
+    expect(body).toContain("report failures inline");
+    expect(body).toContain("Quote paths.");
     expect(body).toContain("desk-cli-chat-attach-artifact");
     expect(body).toContain("chat-xyz");
   });
@@ -245,6 +262,17 @@ describe("renderPromptBody", () => {
     expect(body).toContain("## Memory and recall");
     expect(body).toContain("search_chat_messages");
     expect(body).toContain("desk-cli-chat-search-messages");
+    expect(body.match(/## Memory and recall/g)).toHaveLength(1);
+  });
+
+  it("keeps scheduling guidance action-oriented without harsh wording", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc", userTimezone: "Europe/Zagreb" });
+
+    expect(body).toContain("## Scheduling");
+    expect(body).toContain("create the\nschedule instead of merely saying you'll remember");
+    expect(body).toContain("Do not ask for confirmation, list options, or restate the plan\nunless the request is genuinely incomplete");
+    expect(body).not.toContain("ask never");
+    expect(body).not.toContain("is a failure");
   });
 
   it("guides Library-file fallback when attachment symlinks are broken", () => {
@@ -306,32 +334,26 @@ describe("renderPromptBody", () => {
   it("requires library discovery before answering library availability", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
-    expect(body).toContain("Before answering whether the user's library already has");
-    expect(body).toContain("run\n`desk-agent find library`");
-    expect(body).toContain("Also run `desk-agent find library` before answering a\nrequest that looks like it could be satisfied by a reusable tool");
-    expect(body).toContain("even\nwhen the request could also be answered inline with a quick calculation");
-    expect(body).toContain("Never say that no matching library item exists\nunless you ran `desk-agent find library`");
-    expect(body).toContain("Do not say \"I checked\", \"I found\", or \"there is no app\"");
-    expect(body).toContain("Filesystem/search tools may supplement library discovery but do not\nreplace it for availability claims or tool-like request handling");
+    expect(body).toContain("Before answering whether the Library has a reusable app");
+    expect(body).toContain("run `desk-agent find library` and read the result");
+    expect(body).toContain("before handling a request that a\nreusable item could satisfy");
+    expect(body).toContain("Filesystem search may supplement current-turn discovery, not replace it");
   });
 
   it("requires current-workspace library fallback when targeted discovery is incomplete", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
-    expect(body).toContain("Use the requested library item kind\nwhen it is clear; otherwise use `--kind any`");
-    expect(body).toContain("desk-agent find library --kind <app|fragment|note|doc|any> --limit 100");
-    expect(body).toContain("assume the search\nquery was too narrow");
+    expect(body).toContain("Start with the user's terms and requested kind when clear; otherwise use\n`--kind any`");
+    expect(body).toContain("broaden the query before assuming they are mistaken");
   });
 
   it("requires matching library items to be reused and attached immediately", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
-    expect(body).toContain("When `desk-agent find library` returns a library item that satisfies the user's\nrequest, reuse it");
-    expect(body).toContain("Do not scaffold, rebuild, or create a duplicate app");
-    expect(body).toContain("Library discovery is scoped to the current\nchat/workspace; do not expect results from other workspaces");
-    expect(body).toContain("When returning a matching library item to the user, attach it in the same turn\nwith `desk-agent chat attach-artifact` before replying");
-    expect(body).toContain("Only pass a hit's `path` directly to `attach-artifact`\nwhen it is in the current chat/workspace");
-    expect(body).toContain("Do not merely describe a matching item\nor ask whether the user wants to see it");
+    expect(body).toContain("If discovery finds a satisfying current-workspace item, reuse or update it\ninstead of creating a duplicate");
+    expect(body).toContain("attach it in the same turn with `desk-agent chat\nattach-artifact` before replying");
+    expect(body).toContain("only pass paths that are in the current\nchat/workspace");
+    expect(body).toContain("Attach first when attachable, then summarize briefly");
   });
 
   it("the `app` goal searches existing library items before scaffolding", () => {

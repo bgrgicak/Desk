@@ -21,7 +21,7 @@ describe("renderAgentFile", () => {
     expect(result).toContain("mode: primary");
 
     // Identity framing
-    expect(result).toContain("You are Jarvis, a coworker of Desk.");
+    expect(result).toContain("You are Jarvis, call me Desk.");
 
     // Workspace-as-home framing
     expect(result).toContain("~/ is your workspace");
@@ -52,7 +52,7 @@ describe("renderAgentFile", () => {
     });
 
     expect(result).toContain("America/Los_Angeles (Desk's app client)");
-    expect(result).toContain("## Scheduling — act first, ask never");
+    expect(result).toContain("## Scheduling");
   });
 
   it("tells the agent to assume UTC + mention it when timezone is unknown", () => {
@@ -64,7 +64,7 @@ describe("renderAgentFile", () => {
     });
 
     expect(result).toContain("not reported — assume UTC");
-    expect(result).toContain("RUN `desk-agent task schedule`");
+    expect(result).toContain("run `desk-agent task schedule`");
   });
 
   it("includes goal autodetection instructions by default", () => {
@@ -164,7 +164,7 @@ describe("renderAgentFile", () => {
     });
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
     expect(result).toContain("## Your workspace");
-    expect(result).toContain("## Scheduling — act first, ask never");
+    expect(result).toContain("## Scheduling");
     expect(result).toContain("## Goal autodetection");
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("## Memory and recall");

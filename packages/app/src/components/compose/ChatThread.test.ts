@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isMessageVisible } from './messageVisibility'
-import { findFailedAgentTurn, shouldShowToolOnlyRunFallback } from './ChatThread'
-import type { ServerMessage } from '@/store/types'
+import { currentChatMessagesData, findFailedAgentTurn, shouldShowToolOnlyRunFallback } from './ChatThread'
+import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
   return {
@@ -15,11 +15,35 @@ function message(content: ServerMessage['content'], overrides: Partial<ServerMes
 }
 
 describe('isMessageVisible', () => {
+  const representativeMessages: ServerMessage[] = [
+    message({ type: 'text', text: 'Hello' }, { role: 'user', id: 'text' }),
+    message({ type: 'artifactRef', path: 'artifact.md' }, { id: 'artifact' }),
+    message({ type: 'events', log: [{ kind: 'event', event: { type: 'text', part: { text: 'Visible reply' } } }] }, { id: 'events-text' }),
+  ]
+
+  it('keeps developer mode as a superset of regular chat-visible messages', () => {
+    for (const msg of representativeMessages) {
+      expect(isMessageVisible(msg, false)).toBe(true)
+      expect(isMessageVisible(msg, true)).toBe(true)
+    }
+  })
+
   it('shows summary messages only in developer mode', () => {
     const summary = message({ type: 'summary', body: '# Chat Summary' })
 
     expect(isMessageVisible(summary, false)).toBe(false)
     expect(isMessageVisible(summary, true)).toBe(true)
+  })
+
+  it('shows tool rows and stderr-only event rows only in developer mode', () => {
+    const toolCall = message({ type: 'toolCall', toolName: 'file.read', args: { path: 'x' } })
+    const toolResult = message({ type: 'toolResult', toolName: 'file.read', result: 'ok' })
+    const stderrEvents = message({ type: 'events', log: [{ kind: 'stderr', line: 'boom' }] })
+
+    for (const msg of [toolCall, toolResult, stderrEvents]) {
+      expect(isMessageVisible(msg, false)).toBe(false)
+      expect(isMessageVisible(msg, true)).toBe(true)
+    }
   })
 
   it('keeps summary requests hidden even in developer mode', () => {
@@ -34,6 +58,24 @@ describe('isMessageVisible', () => {
 
     expect(isMessageVisible(request, false)).toBe(false)
     expect(isMessageVisible(request, true)).toBe(false)
+  })
+})
+
+describe('currentChatMessagesData', () => {
+  const compact: ListMessagesResponse = {
+    items: [message({ type: 'toolResult', toolName: 'read', result: null }, { id: 'compact-tool' })],
+  }
+  const full: ListMessagesResponse = {
+    items: [message({ type: 'summary', body: 'Full summary' }, { id: 'full-summary' })],
+  }
+
+  it('does not render a previous regular/timeline payload as developer-mode data while full is loading', () => {
+    expect(currentChatMessagesData('cht_test:full', 'cht_test:timeline', undefined, compact)).toBeUndefined()
+  })
+
+  it('keeps cached data for same-view refetches and prefers current data when available', () => {
+    expect(currentChatMessagesData('cht_test:timeline', 'cht_test:timeline', undefined, compact)).toBe(compact)
+    expect(currentChatMessagesData('cht_test:full', 'cht_test:timeline', full, compact)).toBe(full)
   })
 })
 

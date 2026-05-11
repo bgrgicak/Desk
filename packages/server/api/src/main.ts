@@ -21,6 +21,7 @@ import {
 import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
+  killClaimedRunsInContainers,
   productionReflectWorkspace,
   pruneDriftedContainers,
   writeGoalSkillFiles,
@@ -84,6 +85,40 @@ async function main(): Promise<void> {
   // that were created before per-workspace dirs existed.
   for (const ws of await queries.workspaces.list(pool)) {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
+  }
+
+  // Kill any opencode process trees left running in workspace sandboxes by
+  // the previous desk-server. The cleanup wrapper in `driver.ts` deliberately
+  // skips signalling when the leader is still alive (so a tsx-watch reload
+  // doesn't kill a valid run), which means the previous server's runs survive
+  // into this process — and if we requeue + re-fire them below, the new
+  // opencode contends with the survivor on `~/.local/share/opencode/opencode.db`
+  // and fails with "Failed to run the query 'PRAGMA journal_mode = WAL'".
+  // Reap once, then requeue.
+  const orphanRunRows = (await pool.query<{ run_id: string; workspace_id: string }>(
+    `SELECT m.id AS run_id, c.workspace_id
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+      WHERE m.state IN ('running', 'pending')
+        AND json_valid(m.content)
+        AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request')`,
+  )).rows;
+  if (orphanRunRows.length > 0) {
+    const runsByWorkspace = new Map<string, string[]>();
+    for (const r of orphanRunRows) {
+      const bucket = runsByWorkspace.get(r.workspace_id) ?? [];
+      bucket.push(r.run_id);
+      runsByWorkspace.set(r.workspace_id, bucket);
+    }
+    const killResults = await killClaimedRunsInContainers(runsByWorkspace);
+    const actuallyKilled = killResults.filter((r: { killed: boolean }) => r.killed).length;
+    if (actuallyKilled > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `killed ${actuallyKilled} orphaned opencode run(s) across ` +
+          `${runsByWorkspace.size} workspace(s) before requeue`,
+      );
+    }
   }
 
   // Re-queue agent_turn / summary_request messages that were interrupted
