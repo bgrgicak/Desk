@@ -925,17 +925,29 @@ export async function listCrossChat(
     conditions.push(`m.created_at > ?`);
     params.push(new Date(opts.since));
   }
-  // `awaitingUser=true`: a message is "awaiting user" when it's the latest row
-  // in a chat whose awaiting_user flag is set, authored by the agent in a
-  // succeeded state. `false` returns the complement.
+  // `awaitingUser=true`: a message is "awaiting user" when it's the latest
+  // user-visible row in a chat whose awaiting_user flag is set, authored by the
+  // agent in a succeeded state. Internal rows such as chat summaries are
+  // ignored for this latest-message check so background compaction does not
+  // create or clear user-facing new-message badges.
   // SQLite stores BOOLEAN as INTEGER 0/1.
+  const nonInternalClause = `(NOT (
+    (json_valid(m.content) AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    OR m.kind = 'summary'
+  ))`;
+  const nonInternalLatestClause = `(NOT (
+    (json_valid(m2.content) AND json_extract(m2.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    OR m2.kind = 'summary'
+  ))`;
   const awaitingClause = `(
     c.awaiting_user = 1
+    AND ${nonInternalClause}
     AND m.role = 'agent'
     AND m.state = 'succeeded'
     AND m.id = (
       SELECT m2.id FROM messages m2
       WHERE m2.chat_id = m.chat_id
+        AND ${nonInternalLatestClause}
       ORDER BY m2.created_at DESC, m2.id DESC
       LIMIT 1
     )
