@@ -13,13 +13,14 @@
 //
 // Pass-throughs (no SW interception):
 //   - Cross-origin requests.
-//   - /api/* and /ws — live data and the websocket upgrade must hit the
-//     network unmediated; caching API responses would silently serve
-//     stale data and the SW can't proxy a WS upgrade anyway.
+//   - /api/*, /apps/*, and /ws — live data, generated app iframes/assets,
+//     and the websocket upgrade must hit the network unmediated; caching
+//     API/app responses would silently serve stale or incorrect content and
+//     the SW can't proxy a WS upgrade anyway.
 //
 // Bump CACHE_NAME to force clients onto a new cache after a deploy whose
 // cache contents you no longer want to serve.
-const CACHE_NAME = 'desk-app-v1';
+const CACHE_NAME = 'desk-app-v2';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -48,7 +49,11 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws')) return;
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/apps/') ||
+    url.pathname.startsWith('/ws')
+  ) return;
 
   event.respondWith(
     fetch(req)

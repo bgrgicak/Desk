@@ -59,7 +59,7 @@ async function openLibraryFile(
 ): Promise<void> {
   await page.reload();
   await expect(page.getByTestId("account-avatar")).toBeVisible();
-  await page.getByRole("button", { name: /^Library$/ }).first().click();
+  await page.getByRole("link", { name: /^Library$/ }).first().click();
   const row = page.getByText(filename).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.click();
@@ -141,8 +141,6 @@ test("open library file auto-refreshes after workspace.synced when agent writes 
   // a re-fetch once the scheduled task below completes).
   const absPath = path.join(
     serverHome,
-    "Desk",
-    "workspaces",
     workspace.path,
     filePath,
   );

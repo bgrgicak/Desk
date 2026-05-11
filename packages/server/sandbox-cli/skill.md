@@ -5,17 +5,47 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have one command — `desk-agent task schedule` — and three reasons to reach
-for it:
+You have five commands:
+- `desk-agent app create` — clone the Desk app scaffold into a new chat
+  artifact directory so you can author a real `<name>.app/`.
+- `desk-agent chat attach-artifact` — surface a generated file **or directory**
+  as an `artifactRef` card in the current chat.
+- `desk-agent file to-markdown` — convert PDFs, DOCX, ODT, RTF, HTML, EPUB,
+  LaTeX, and plain text files into agent-readable Markdown/text.
+- `desk-agent find library` — discover reusable apps, fragments, notes, and
+  docs before building or answering whether a reusable item exists.
+- `desk-agent task schedule` — create or schedule Tasks board work.
 
-1. **The user asked for a reminder, recurring report, or follow-up.**
+Reach for them when:
+
+1. **You wrote, updated, or retrieved an artifact the user should see or open.**
+   Always call `desk-agent chat attach-artifact --chat <chatId> "<path>"`
+   as the last step of any turn in which you create, significantly update, or
+   retrieve from the library an artifact. There are no exceptions for type:
+   file, app, directory, image, library item, or any other artifact. If the
+   artifact is a directory, pass the directory path. Do not reply until the
+   attach command has executed or you have determined no attachable
+   current-workspace path exists. Library discovery is scoped to the current
+   chat/workspace; do not expect hits from other workspaces. If no attachable
+   path exists, report that limitation instead of silently skipping or rebuilding.
+2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
-2. **A piece of work needs to live on the user's Tasks board.** Manual
+3. **A piece of work needs to live on the user's Tasks board.** Manual
    tasks (no `--at`/`--cron`) sit there until the user runs them.
-3. **You need to fire your own future turn.** A scheduled task with
+4. **You need to fire your own future turn.** A scheduled task with
    `--at` or `--cron` re-enters the chat at fire time with your `<content>`
    as the prompt.
+
+5. **You need to read a document attachment that is not already text.** Run
+   `desk-agent file to-markdown "<path>"` before summarizing, extracting, or
+   transforming its contents. Use `--output <path>.md` when you need to inspect
+   or reuse the converted text across steps.
+
+6. **The user wants you to build an app.** Run
+   `desk-agent app create <name> --chat <chatId>` to scaffold a new
+   `<name>.app/` chat artifact, then load the `desk-app-scaffold`
+   skill for the development workflow.
 
 If you just need to reply to the user *now*, write to stdout — that's the
 chat reply channel. Don't use `desk-agent task schedule` for plain replies.
@@ -45,6 +75,173 @@ The runtime sets these for you. Don't echo, log, or alter them.
 
 - Success: JSON message row on stdout, exit 0.
 - Failure: JSON `{"code": "...", "message": "..."}` on stderr, non-zero exit.
+
+## desk-agent app create
+
+Clone the Desk app scaffold into a chat artifact directory for the
+current chat. This section documents the command contract only; the app
+architecture, fragment model, and test/build workflow live in the
+`desk-app-scaffold` skill that is copied into the generated app.
+
+```
+desk-agent app create --chat <id> [--template <path>] <name>
+```
+
+`<name>` must be kebab-case: lowercase letters, digits, and dashes,
+starting with a letter. The new directory lands at
+`~/.chats/<chatId>/artifacts/<name>.app/`. Refuses to clobber an
+existing directory at that path.
+
+After scaffolding, load the `desk-app-scaffold` skill from the generated
+app before editing files.
+
+### Examples
+
+```
+desk-agent app create --chat cht_abc my-todos
+```
+
+## desk-agent chat attach-artifact
+
+Create an `artifactRef` message in the chat for an existing file or directory.
+Always use this as the last step of any turn in which you create,
+significantly update, or retrieve from the library an artifact before replying
+to the user. Only pass paths that exist in the current chat/workspace; a
+library hit should already be scoped there. If the command fails or no attachable
+current-workspace path exists, report the limitation inline instead of silently
+skipping.
+
+```
+desk-agent chat attach-artifact --chat <id> [--name <text>] <workspace-relative-path>
+```
+
+`<workspace-relative-path>` is the workspace-relative path to any artifact type
+under `.chats/<chatId>/artifacts/`: file, app, directory, image, or another
+artifact. Directories are valid paths.
+Strip the leading `~/`: `~/.chats/cht_abc/artifacts/report.md` becomes
+`.chats/cht_abc/artifacts/report.md`.
+
+For `.app/` directories, pass the **directory** path — not a file inside it.
+The chat will render the app inline as an interactive iframe.
+
+### Examples
+
+Attach a file:
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    .chats/cht_abc/artifacts/report.md
+```
+
+Attach a `.app/` directory (renders as an interactive app in chat):
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    .chats/cht_abc/artifacts/my-todos.app
+```
+
+Attach with a custom display name:
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    --name "Weekly report" \
+    .chats/cht_abc/artifacts/report.md
+```
+
+Attach a parameterized fragment:
+```
+desk-agent chat attach-artifact --chat cht_abc \
+    --param note_id=abc-123 --param mode=edit \
+    notes.app/dist/fragments/note-editor
+```
+
+## desk-agent chat search-messages
+
+Full-text search the user's chat history. Use when the user references
+something that happened "before", "in another chat", "last week", etc., or
+when you need to recall a fact from earlier in this same chat that landed
+before the most recent summary.
+
+```
+desk-agent chat search-messages --query <text> [--chat <id>]
+                                [--workspace <current-slug>]
+                                [--kind any|message|summary]
+                                [--limit N]
+```
+
+`--query` is whitespace-tokenized; every token must appear in the indexed
+body. Wrap multi-word phrases in quotes at the shell level. Recall is scoped to
+the current sandbox session workspace. Do not use “other chats” as a reason to
+search other workspaces; cross-workspace recall is not available yet.
+`--workspace` is only an optional assertion for the current workspace slug.
+`--kind summary` returns only chat-summary bodies; `--kind message` returns only
+raw transcript lines.
+
+The response is a JSON object `{hits: [...]}`. Each hit has `chatId`,
+`messageId`, `workspaceSlug`, `kind`, a `snippet` with `<mark>…</mark>`
+highlights, `createdAt`, and a relevance `score`.
+
+### Examples
+
+```
+desk-agent chat search-messages --query "kanban board"
+desk-agent chat search-messages --query "deploy notes" --kind summary
+desk-agent chat search-messages --query "passwords"
+```
+
+## desk-agent find library
+
+Discover reusable apps, fragments, notes, and docs in the user's library. Use
+this before building something new. Discovery is scoped to the current
+chat/workspace; cross-workspace library search is not available yet. If a
+returned library item satisfies the task, attach it with `desk-agent chat
+attach-artifact` in the same turn instead of creating a duplicate. Do not
+scaffold or rebuild an app, fragment, note, doc, or artifact when a suitable
+library item already exists unless the user explicitly asks for a new one.
+
+```
+desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any]
+                        [--workspace <current-slug>] [--limit N]
+```
+
+When `--query` is omitted, the command returns recent library items. App and
+fragment hits may include `params_schema`; pass concrete values with repeated
+`--param key=value` flags when attaching a fragment.
+
+### Examples
+
+```
+desk-agent find library --query "note editor" --kind fragment
+desk-agent find library --query "todos"
+desk-agent find library --kind app
+```
+
+## desk-agent file to-markdown
+
+Convert a document to agent-readable Markdown/text. Use this before analyzing
+uploaded office documents, PDFs, ebooks, or HTML when raw file contents are not
+directly readable.
+
+```
+desk-agent file to-markdown [--output <path>] <workspace-relative-path>
+```
+
+Supported formats:
+- `.pdf` through `pdftotext -layout`
+- `.docx`, `.odt`, `.rtf`, `.html`, `.htm`, `.epub`, `.tex`, `.rst` through `pandoc`
+- `.md`, `.markdown`, `.txt`, `.csv`, `.tsv`, `.json`, `.xml`, `.yaml`, `.yml` as already-readable text
+
+This is text extraction/conversion, not OCR. Scanned PDFs and image-only pages
+need a separate OCR workflow.
+
+### Examples
+
+Convert a PDF to stdout:
+```
+desk-agent file to-markdown Reports/Q1.pdf
+```
+
+Write a DOCX conversion to a reusable Markdown file:
+```
+desk-agent file to-markdown --output Reports/Q1.md Reports/Q1.docx
+```
 
 ## desk-agent task schedule
 
@@ -115,7 +312,7 @@ strings — the parser will reject them.
 ### --kind
 
 Defaults to `task`. Override only if you have a reason — the other kinds
-(`ai_note`, `chat`) drive specialized internal flows that don't behave
+(`summary`, `chat`) drive specialized internal flows that don't behave
 like user-visible tasks.
 
 ### Failure modes worth knowing

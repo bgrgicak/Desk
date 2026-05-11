@@ -4,8 +4,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   pinLibraryFileToChat,
+  relativeSymlinkTarget,
   uploadArtifact,
   validateLibrarySubpath,
+  validateReadableSubpath,
 } from "../src/files.js";
 import {
   listLibrary,
@@ -218,20 +220,31 @@ describe("listLibrary gitignore", () => {
 });
 
 describe("validateLibrarySubpath", () => {
-  it("accepts simple and nested paths and normalizes leading/trailing slashes", () => {
+  it("accepts simple, nested, and dot-prefixed paths and normalizes leading/trailing slashes", () => {
     expect(validateLibrarySubpath(undefined)).toBe("");
     expect(validateLibrarySubpath("")).toBe("");
     expect(validateLibrarySubpath("foo")).toBe("foo");
     expect(validateLibrarySubpath("foo/bar/baz")).toBe("foo/bar/baz");
     expect(validateLibrarySubpath("/foo/bar/")).toBe("foo/bar");
+    // Dot-prefixed (hidden) segments are allowed — hidden files are
+    // regular files; visibility is controlled at the listing/search layer.
+    expect(validateLibrarySubpath(".hidden")).toBe(".hidden");
+    expect(validateLibrarySubpath(".memory/workspace.md")).toBe(".memory/workspace.md");
+    expect(validateLibrarySubpath(".hidden/nested/.deep")).toBe(".hidden/nested/.deep");
   });
 
-  it("rejects traversal, dotfile, backslash, and empty segments", () => {
+  it("rejects traversal, backslash, null bytes, and empty segments", () => {
     expect(() => validateLibrarySubpath("../etc")).toThrow();
     expect(() => validateLibrarySubpath("foo/../bar")).toThrow();
-    expect(() => validateLibrarySubpath(".hidden")).toThrow();
     expect(() => validateLibrarySubpath("foo//bar")).toThrow();
     expect(() => validateLibrarySubpath("foo\\bar")).toThrow();
+    expect(() => validateLibrarySubpath("foo\0bar")).toThrow();
+  });
+});
+
+describe("validateReadableSubpath", () => {
+  it("is an alias for validateLibrarySubpath", () => {
+    expect(validateReadableSubpath).toBe(validateLibrarySubpath);
   });
 });
 
@@ -331,7 +344,7 @@ describe("moveLibraryEntry", () => {
     const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
 
     expect(await fs.readlink(oldLinkPath)).toBe(
-      path.join(root, "Symlinks/File/linked-original.txt"),
+      relativeSymlinkTarget(oldLinkPath, path.join(root, "Symlinks/File/linked-original.txt")),
     );
 
     await moveLibraryEntry(
@@ -345,7 +358,7 @@ describe("moveLibraryEntry", () => {
     // "In this chat" row reflects the new filename.
     await expect(fs.lstat(oldLinkPath)).rejects.toThrow();
     expect(await fs.readlink(newLinkPath)).toBe(
-      path.join(root, "Symlinks/File/linked-renamed.txt"),
+      relativeSymlinkTarget(newLinkPath, path.join(root, "Symlinks/File/linked-renamed.txt")),
     );
     const stat = await fs.stat(newLinkPath);
     expect(stat.isFile()).toBe(true);
@@ -386,7 +399,10 @@ describe("moveLibraryEntry", () => {
     expect(occupant).toBe("occupant");
     const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
     expect(await fs.readlink(path.join(attDir, "collide-target-1.txt"))).toBe(
-      path.join(root, "Collide/collide-target.txt"),
+      relativeSymlinkTarget(
+        path.join(attDir, "collide-target-1.txt"),
+        path.join(root, "Collide/collide-target.txt"),
+      ),
     );
   });
 
@@ -413,7 +429,7 @@ describe("moveLibraryEntry", () => {
     await moveLibraryEntry(ctx, ctx.workspaceSlug, "SymlinkDir", "RenamedDir");
 
     expect(await fs.readlink(linkPath)).toBe(
-      path.join(root, "RenamedDir/Inner/deep-pinned.txt"),
+      relativeSymlinkTarget(linkPath, path.join(root, "RenamedDir/Inner/deep-pinned.txt")),
     );
     const stat = await fs.stat(linkPath);
     expect(stat.isFile()).toBe(true);
@@ -456,7 +472,7 @@ describe("moveLibraryEntry", () => {
     );
 
     expect(await fs.readlink(linkPath)).toBe(before);
-    expect(before).toBe(path.join(root, "SymOther/Stable/untouched.txt"));
+    expect(before).toBe(relativeSymlinkTarget(linkPath, path.join(root, "SymOther/Stable/untouched.txt")));
   });
 });
 

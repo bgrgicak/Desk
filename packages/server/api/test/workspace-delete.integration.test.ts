@@ -125,7 +125,7 @@ describe("DELETE /workspaces/:id — last-workspace guard", () => {
     // Row still present and on-disk directory untouched.
     const rows = await pool.query("SELECT id FROM workspaces WHERE id = ?", [onlyId]);
     expect(rows.rowCount).toBe(1);
-    const dirStat = await fs.stat(path.join(home, "Desk", "workspaces", onlySlug));
+    const dirStat = await fs.stat(path.join(home, onlySlug));
     expect(dirStat.isDirectory()).toBe(true);
   });
 
@@ -137,17 +137,17 @@ describe("DELETE /workspaces/:id — last-workspace guard", () => {
     const names = (listRes.body as Array<{ name: string }>).map(w => w.name);
     expect(names).toEqual(expect.arrayContaining(["only", "sibling"]));
 
-    const siblingDir = path.join(home, "Desk", "workspaces", siblingSlug);
+    const siblingDir = path.join(home, siblingSlug);
     expect((await fs.stat(siblingDir)).isDirectory()).toBe(true);
 
     const delRes = await request("DELETE", `/workspaces/${siblingId}`, token);
     expect(delRes.status).toBe(200);
     expect(delRes.body).toEqual({ ok: true });
 
-    // FS dir for the deleted workspace is gone from ~/Desk/workspaces/
+    // FS dir for the deleted workspace is gone from ~/Desk/
     // and present under ~/Desk/.trash/workspaces/ with a timestamped suffix.
     await expect(fs.stat(siblingDir)).rejects.toMatchObject({ code: "ENOENT" });
-    const trashEntries = await fs.readdir(path.join(home, "Desk", ".trash", "workspaces"));
+    const trashEntries = await fs.readdir(path.join(home, ".trash", "workspaces"));
     expect(trashEntries.some(name => name.startsWith(`${siblingSlug}-`))).toBe(true);
 
     // Back to exactly one workspace — deleting that one must again be refused.

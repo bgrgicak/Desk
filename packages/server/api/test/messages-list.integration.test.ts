@@ -102,8 +102,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
-    model: "anthropic/claude-sonnet-4-5",
+    model: "opencode/big-pickle",
   });
   for (const ws of [wsA, wsB]) {
     await pool.query(
@@ -277,22 +276,22 @@ beforeAll(async () => {
     content: { type: "text", text: "hello from B user" },
     state: "pending",
   });
-  //  10. agent "note" succeeded (unscheduled)
+  //  10. agent "summary" succeeded (unscheduled)
   await insertMessage(alpha, {
     chatId: alpha.chatB,
     role: "agent",
-    content: { type: "note", body: "summary" },
+    content: { type: "summary", body: "summary" },
     state: "succeeded",
   });
-  //  11. system ai_note_request pending, scheduled — `kind='ai_note'` mirrors
-  //      what scheduleAiNote() writes today.
+  //  11. system summary_request pending, scheduled — `kind='summary'` mirrors
+  //      what scheduleSummary() writes today.
   await insertMessage(alpha, {
     chatId: alpha.chatB,
     role: "system",
-    content: { type: "ai_note_request" },
+    content: { type: "summary_request" },
     state: "pending",
     executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    kind: "ai_note",
+    kind: "summary",
   });
   //  12. agent "artifactRef" succeeded (unscheduled)
   await insertMessage(alpha, {
@@ -352,6 +351,28 @@ describe("GET /messages — unfiltered", () => {
     for (const bId of beta.messagesById.keys()) {
       expect(ids.has(bId)).toBe(false);
     }
+  });
+
+  it("view=compact keeps list metadata but strips hidden payload bulk", async () => {
+    const fullRes = await request("GET", "/messages?contentKind=toolCall", alpha.token);
+    expect(fullRes.status).toBe(200);
+    const fullToolCall = (fullRes.body as { items: Message[] }).items[0];
+    expect(fullToolCall.content).toMatchObject({
+      type: "toolCall",
+      toolName: "grep",
+      args: { q: "foo" },
+    });
+
+    const compactRes = await request("GET", "/messages?view=compact&contentKind=toolCall", alpha.token);
+    expect(compactRes.status).toBe(200);
+    const compactToolCall = (compactRes.body as { items: Message[] }).items[0];
+    expect(compactToolCall.id).toBe(fullToolCall.id);
+    expect(compactToolCall.chatId).toBe(fullToolCall.chatId);
+    expect(compactToolCall.content).toEqual({
+      type: "toolCall",
+      toolName: "grep",
+      args: {},
+    });
   });
 });
 
@@ -465,10 +486,10 @@ describe("GET /messages — scheduled", () => {
   });
 });
 
-// `kind` is the message-kind discriminator (chat / task / ai_note), distinct
+// `kind` is the message-kind discriminator (chat / task / summary), distinct
 // from `contentKind` which filters on `content.type`. The Tasks page will
-// migrate to `?kind=task`; system mechanisms like ai-note refresh stay
-// invisible to that surface because they're `kind='ai_note'`. See
+// migrate to `?kind=task`; system mechanisms like summary refresh stay
+// invisible to that surface because they're `kind='summary'`. See
 // packages/server/docs/plans/message-as-task.md.
 describe("GET /messages — kind", () => {
   it("kind=task returns only the task-kind row", async () => {
@@ -480,22 +501,22 @@ describe("GET /messages — kind", () => {
     expect(items[0].title).toBe("Audit Q2 numbers");
   });
 
-  it("kind=ai_note returns only the ai_note row", async () => {
-    const res = await request("GET", "/messages?kind=ai_note", alpha.token);
+  it("kind=summary returns only the summary row", async () => {
+    const res = await request("GET", "/messages?kind=summary", alpha.token);
     expect(res.status).toBe(200);
     const items = (res.body as { items: Message[] }).items;
     expect(items).toHaveLength(1);
-    expect(items[0].kind).toBe("ai_note");
-    expect((items[0].content as { type: string }).type).toBe("ai_note_request");
+    expect(items[0].kind).toBe("summary");
+    expect((items[0].content as { type: string }).type).toBe("summary_request");
   });
 
-  it("kind=task,ai_note returns both", async () => {
-    const res = await request("GET", "/messages?kind=task,ai_note", alpha.token);
+  it("kind=task,summary returns both", async () => {
+    const res = await request("GET", "/messages?kind=task,summary", alpha.token);
     expect(res.status).toBe(200);
     const items = (res.body as { items: Message[] }).items;
     expect(items).toHaveLength(2);
     const kinds = new Set(items.map((m) => m.kind));
-    expect(kinds).toEqual(new Set(["task", "ai_note"]));
+    expect(kinds).toEqual(new Set(["task", "summary"]));
   });
 
   it("kind=task is workspace-scoped when combined with workspaceId", async () => {

@@ -21,7 +21,6 @@ export const AgentSchema = z.object({
   id: z.string(),
   userId: z.string(),
   name: z.string(),
-  instructions: z.string(),
   model: z.string(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
@@ -40,7 +39,7 @@ export const WorkspaceSchema = z.object({
   description: z.string(),
   icon: z.string(),
   color: z.string(),
-  /** On-disk directory name under `~/Desk/workspaces/`. Derived from `name`
+  /** On-disk directory name under `~/Desk/`. Derived from `name`
    * at create time, renamed in lock-step when the workspace is renamed. */
   path: z.string(),
   createdAt: z.string(),
@@ -82,9 +81,12 @@ export const MessageContentArtifactRefSchema = z.object({
   type: z.literal("artifactRef"),
   /** Workspace-relative path (forward-slash separated). */
   path: z.string(),
+  /** Workspace that owns the path. Older rows omit this and use the active chat workspace. */
+  workspaceId: z.string().optional(),
   /** Caller-facing display name, usually the basename. */
   name: z.string().optional(),
   mime: z.string().optional(),
+  params: z.record(z.string(), z.string()).optional(),
 });
 
 /** A single event from the agent's JSON event stream. */
@@ -115,24 +117,36 @@ export const MessageContentEventsSchema = z.object({
 });
 
 /**
- * A coherent narrative summary of a chat. Produced by scheduled ai_note
- * runs and stored as a regular message in the chat timeline (no separate
- * notes table). The user can edit it via PATCH on the message; the agent
- * reads the most recent note to incorporate edits on the next refresh.
+ * A coherent narrative summary of a chat. Produced by scheduled summary
+ * runs and stored as a regular message in the chat timeline. The user can
+ * edit it via PATCH on the message; the agent reads the most recent summary
+ * to incorporate edits on the next refresh.
  */
-export const MessageContentNoteSchema = z.object({
-  type: z.literal("note"),
+export const MessageContentSummarySchema = z.object({
+  type: z.literal("summary"),
   body: z.string(),
 });
 
 /**
- * Scheduled request for the agent to (re)generate the chat's note. Emitted
+ * Scheduled request for the agent to (re)generate the chat's summary. Emitted
  * as a pending system message; on fire the agent replaces it with a
- * `note`-content child. Kept as its own content type so scheduled requests
+ * `summary`-content child. Kept as its own content type so scheduled requests
  * stay distinguishable from ordinary system messages in the chat log.
  */
-export const MessageContentAiNoteRequestSchema = z.object({
-  type: z.literal("ai_note_request"),
+export const MessageContentSummaryRequestSchema = z.object({
+  type: z.literal("summary_request"),
+  chatTitle: z.string().optional(),
+  messagePreview: z.string().optional(),
+});
+
+/**
+ * Scheduled request for the workspace agent to run the daily memory
+ * reflection pass. Stored as a recurring internal task so the normal
+ * scheduler owns retries, run history, pause/resume, and next-run updates.
+ */
+export const MessageContentReflectionRequestSchema = z.object({
+  type: z.literal("reflection_request"),
+  workspaceId: z.string(),
 });
 
 /**
@@ -152,8 +166,9 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentToolResultSchema,
   MessageContentArtifactRefSchema,
   MessageContentEventsSchema,
-  MessageContentNoteSchema,
-  MessageContentAiNoteRequestSchema,
+  MessageContentSummarySchema,
+  MessageContentSummaryRequestSchema,
+  MessageContentReflectionRequestSchema,
   MessageContentAgentTurnSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
@@ -181,13 +196,13 @@ export type MessageState = (typeof MESSAGE_STATES)[number];
 /**
  * Discriminates a message's role on non-chat surfaces. `chat` is the default
  * conversational message; `task` is a user-defined task surfaced on the Tasks
- * page; `ai_note` is the system-scheduled note refresh trigger; `task_run`
- * is one firing of a task (parent_id points at the task definition, state
+ * page; `summary` is the system-scheduled summary refresh trigger; `task_run`
+ * is one firing of a task-like row (parent_id points at the definition, state
  * tracks that single execution). See:
  *   - packages/server/docs/plans/message-as-task.md
  *   - packages/server/docs/plans/task-runs-as-messages.md
  */
-export const MESSAGE_KINDS = ["chat", "task", "task_run", "ai_note"] as const;
+export const MESSAGE_KINDS = ["chat", "task", "task_run", "summary"] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 export const SchedulerRefSchema = z.object({
@@ -221,7 +236,7 @@ export const MessageSchema = z.object({
   endedAt: z.string().optional(),
   updatedAt: z.string().optional(),
 
-  /** Discriminator for non-chat surfaces (tasks, ai-note refresh, etc.). */
+  /** Discriminator for non-chat surfaces (tasks, summary refresh, etc.). */
   kind: z.enum(MESSAGE_KINDS).default("chat"),
   /** Display name for tasks; null for ordinary chat messages. */
   title: z.string().nullable().optional(),
@@ -246,6 +261,8 @@ export type File = z.infer<typeof FileSchema>;
 export const SandboxSessionSchema = z.object({
   id: z.string(),
   agentId: z.string(),
+  /** Message/run id this token was minted for. Used to gate run-scoped APIs. */
+  runId: z.string().optional(),
   /** Workspace whose sandbox container this token was minted for.
    * Optional for historical sessions from before the multi-workspace split. */
   workspaceId: z.string().optional(),
@@ -254,4 +271,3 @@ export const SandboxSessionSchema = z.object({
   revokedAt: z.string().optional(),
 });
 export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
-

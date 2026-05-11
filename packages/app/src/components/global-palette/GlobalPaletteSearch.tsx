@@ -21,6 +21,7 @@ import {
 import type { ServerFile } from '@/store/types'
 
 interface GlobalPaletteSearchProps {
+  listMaxHeight?: number
   activeWorkspaceId?: string
   onNavigatePage: (target: NavTarget) => void
   onNavigateSettings: (target: SettingsTarget) => void
@@ -43,6 +44,7 @@ const PALETTE_SIZING = [
 ].join(' ')
 
 export function GlobalPaletteSearch({
+  listMaxHeight,
   activeWorkspaceId,
   onNavigatePage,
   onNavigateSettings,
@@ -99,7 +101,7 @@ export function GlobalPaletteSearch({
     return workspaces.filter(w => w.name.toLowerCase().includes(needle))
   }, [isSearching, workspaces, trimmed])
 
-  const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat'), [searchResults])
+  const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat' || r.type === 'message'), [searchResults])
   const fileResults = useMemo(() => searchResults.filter(r => r.type === 'file'), [searchResults])
 
   const hasAnyResults =
@@ -119,24 +121,27 @@ export function GlobalPaletteSearch({
   }
 
   return (
-    <Command shouldFilter={false} className={PALETTE_SIZING}>
+    <Command shouldFilter={false} className={`${PALETTE_SIZING} min-h-0`}>
       <CommandInput
         placeholder="Ask a question or search across all workspaces"
         value={query}
         onValueChange={setQuery}
       />
-      <CommandList className="max-h-[576px]">
+      <CommandList className="min-h-0 max-h-[576px]" style={listMaxHeight ? { maxHeight: listMaxHeight } : undefined}>
         <CommandEmpty>No results found.</CommandEmpty>
 
-        {/* No-results path: lead with Ask AI */}
-        {isSearching && !hasAnyResults && (
+        {/* Lead with Ask AI so it is always visible while searching. */}
+        {isSearching && (
           <CommandGroup heading="Ask AI">
             <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
               <Sparkles className="text-muted-foreground" />
-              <span className="truncate">{trimmed}</span>
+              <span className="font-medium">Ask AI</span>
+              <span className="min-w-0 truncate text-muted-foreground">{trimmed}</span>
             </CommandItem>
           </CommandGroup>
         )}
+
+        {isSearching && hasAnyResults && <CommandSeparator />}
 
         {/* Default view ─ no query: recent global Ask AI chats. */}
         {!isSearching && recentChats && recentChats.length > 0 && (
@@ -199,15 +204,20 @@ export function GlobalPaletteSearch({
         {isSearching && chatResults.length > 0 && (
           <CommandGroup heading="Chats">
             {chatResults.map(r => {
-              const ws = activeWorkspaceId ?? ''
+              const ws = r.workspaceId ?? activeWorkspaceId ?? ''
               return (
                 <CommandItem
-                  key={`s-chat:${r.id}`}
-                  value={`s-chat:${r.id}`}
+                  key={`s-chat:${r.messageId ?? r.id}`}
+                  value={`s-chat:${r.messageId ?? r.id}`}
                   onSelect={() => onSelectChat({ id: r.id, workspaceId: ws })}
                 >
                   <MessageSquare className="text-muted-foreground" />
-                  <span className="truncate">{r.title}</span>
+                  <span className="min-w-0 truncate">
+                    <span className="block truncate">{r.title}</span>
+                    {r.snippet && (
+                      <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
+                    )}
+                  </span>
                 </CommandItem>
               )
             })}
@@ -216,11 +226,11 @@ export function GlobalPaletteSearch({
         {isSearching && fileResults.length > 0 && (
           <CommandGroup heading="Files">
             {fileResults.map(r => {
-              const ws = activeWorkspaceId ?? ''
+              const ws = r.workspaceId ?? activeWorkspaceId ?? ''
               return (
                 <CommandItem
-                  key={`s-file:${r.id}`}
-                  value={`s-file:${r.id}`}
+                  key={`s-file:${r.workspaceId ?? ''}:${r.id}`}
+                  value={`s-file:${r.workspaceId ?? ''}:${r.id}`}
                   onSelect={() => onSelectFile({ path: r.id, workspaceId: ws })}
                 >
                   <FileText className="text-muted-foreground" />
@@ -249,18 +259,6 @@ export function GlobalPaletteSearch({
               </CommandItem>
             ))}
           </CommandGroup>
-        )}
-
-        {isSearching && hasAnyResults && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Ask AI">
-              <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
-                <Sparkles className="text-muted-foreground" />
-                <span className="truncate">{trimmed}</span>
-              </CommandItem>
-            </CommandGroup>
-          </>
         )}
       </CommandList>
     </Command>

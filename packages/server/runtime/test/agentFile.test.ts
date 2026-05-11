@@ -6,15 +6,14 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_123",
       agentName: "Jarvis",
-      model: "anthropic/claude-sonnet-4-5",
-      instructions: "Help me with code reviews.",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
     // Frontmatter
     expect(result).toContain("---\n");
     expect(result).toContain("description: Jarvis");
-    expect(result).toContain("model: anthropic/claude-sonnet-4-5");
+    expect(result).toContain("model: opencode/big-pickle");
     expect(result).toContain("mode: primary");
 
     // Identity framing
@@ -25,39 +24,25 @@ describe("renderAgentFile", () => {
     // Dotfile visibility rule
     expect(result).toContain("foo.md");
     expect(result).toContain(".foo.md");
-    // Per-chat workbench
+    // Per-chat artifacts
     expect(result).toContain("~/.chats/");
 
-    // Inlined skills — desk-cli skill must appear before the user
-    // instructions section so OpenCode sees it as always-on context.
-    expect(result).toContain("# Desk CLI");
+    // Desk reference manuals are native OpenCode skills, not inlined prompt text.
+    expect(result).toContain("## Desk native skills");
+    expect(result).toContain("desk-cli-task-schedule");
+    expect(result).toContain("desk-cli-file-to-markdown");
     expect(result).toContain("desk-agent task schedule");
-    expect(result.indexOf("# Desk CLI")).toBeLessThan(result.indexOf("## User instructions"));
+    expect(result).not.toContain("# Desk CLI");
 
-    // User instructions
-    expect(result).toContain("## User instructions");
-    expect(result).toContain("Help me with code reviews.");
-  });
-
-  it("handles empty instructions", () => {
-    const result = renderAgentFile({
-      agentId: "agt_empty",
-      agentName: "Assistant",
-      model: "anthropic/claude-haiku-4-5",
-      instructions: "",
-      userName: "Alice",
-    });
-
-    expect(result).toContain("You are Assistant, a coworker of Alice.");
-    expect(result).toContain("## User instructions");
+    // Memory rules section is present (P1.3/P1.4).
+    expect(result).toContain("## Memory and recall");
   });
 
   it("renders the user's timezone in the scheduling section", () => {
     const result = renderAgentFile({
       agentId: "agt_tz",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
       userTimezone: "America/Los_Angeles",
     });
@@ -70,12 +55,136 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_no_tz",
       agentName: "Helper",
-      model: "anthropic/claude-sonnet-4-5",
-      instructions: "",
+      model: "opencode/big-pickle",
       userName: "Desk",
     });
 
     expect(result).toContain("not reported — assume UTC");
     expect(result).toContain("RUN `desk-agent task schedule`");
+  });
+
+  it("includes goal autodetection instructions by default", () => {
+    const result = renderAgentFile({
+      agentId: "agt_goal_detect",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+    });
+
+    expect(result).toContain("## Goal autodetection");
+  });
+
+  it("omits goal autodetection when includeGoalAutodetect is false", () => {
+    const result = renderAgentFile({
+      agentId: "agt_goal_detect",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      includeGoalAutodetect: false,
+    });
+
+    expect(result).not.toContain("## Goal autodetection");
+  });
+
+  it("renders the per-chat artifact paths when chatId is supplied", () => {
+    const result = renderAgentFile({
+      agentId: "agt_chat",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      chatId: "cht_abc",
+    });
+
+    expect(result).toContain("Chat artifacts:   ~/.chats/cht_abc/artifacts/");
+    expect(result).toContain("Chat attachments: ~/.chats/cht_abc/attachments/");
+    expect(result).toContain("Chat summaries:   ~/.chats/cht_abc/notes/");
+  });
+
+  it("renders a narrow summary-only prompt for summary runs", () => {
+    const result = renderAgentFile({
+      agentId: "agt_summary",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      chatId: "cht_abc",
+      runMode: "summary",
+    });
+
+    expect(result).toContain("## Chat summary");
+    expect(result).toContain("Desk stores the final markdown as a `summary` message");
+    expect(result).toContain("Chat summaries: ~/.chats/cht_abc/notes/");
+    expect(result).not.toContain("## Your workspace");
+    expect(result).not.toContain("desk-agent chat attach-artifact");
+    expect(result).not.toContain("## Memory and recall");
+  });
+
+  it("omits the goal fragment when no goal is provided", () => {
+    const result = renderAgentFile({
+      agentId: "agt_nogoal",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+    });
+    expect(result).not.toContain("## User's goal:");
+  });
+
+  it("includes the matching goal fragment for each GoalKey", () => {
+    const cases: Array<{ goal: "app" | "document" | "image" | "data" | "site" | "run" | "task" | "scheduled"; anchor: string }> = [
+      { goal: "app", anchor: "User's goal: build an app" },
+      { goal: "document", anchor: "User's goal: write a document" },
+      { goal: "image", anchor: "User's goal: produce an image" },
+      { goal: "data", anchor: "User's goal: work with data" },
+      { goal: "site", anchor: "User's goal: build a site" },
+      { goal: "run", anchor: "User's goal: run a check or automation" },
+      { goal: "task", anchor: "User's goal: track a task" },
+      { goal: "scheduled", anchor: "User's goal: schedule recurring or future work" },
+    ];
+    for (const { goal, anchor } of cases) {
+      const result = renderAgentFile({
+        agentId: `agt_${goal}`,
+        agentName: "Helper",
+        model: "opencode/big-pickle",
+        userName: "Desk",
+        goal,
+      });
+      expect(result, `goal=${goal}`).toContain(anchor);
+    }
+  });
+
+  it("keeps the base prompt concise when no goal or chat is set", () => {
+    const result = renderAgentFile({
+      agentId: "agt_baseline",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+    });
+    expect(result).toContain("Your mandate is to help Desk accomplish their goals");
+    expect(result).toContain("## Your workspace");
+    expect(result).toContain("## Scheduling — act first, ask never");
+    expect(result).toContain("## Goal autodetection");
+    expect(result).toContain("## Desk native skills");
+    expect(result).toContain("## Memory and recall");
+    expect(result).not.toContain("# Desk CLI");
+    expect(result).not.toContain("### Cron quick reference");
+    expect(result).not.toContain("NO_TOKEN");
+  });
+
+  it("renders goal and chat paths before the Desk skill router", () => {
+    const result = renderAgentFile({
+      agentId: "agt_doc",
+      agentName: "Helper",
+      model: "opencode/big-pickle",
+      userName: "Desk",
+      chatId: "chat-x",
+      goal: "document",
+    });
+    // Spot-check the goal fragment + chat path render together.
+    expect(result).toContain("Chat artifacts:   ~/.chats/chat-x/artifacts/");
+    expect(result).toContain("## User's goal: write a document");
+    // Ordering: artifacts (chatId) renders before goal, goal before skill router.
+    expect(result.indexOf("Chat artifacts:   ~/.chats/chat-x/artifacts/"))
+      .toBeLessThan(result.indexOf("## User's goal: write a document"));
+    expect(result.indexOf("## User's goal: write a document"))
+      .toBeLessThan(result.indexOf("## Desk native skills"));
   });
 });

@@ -16,6 +16,9 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   let dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
+  // With no saved preference yet, New chat is the selected default.
+  await expect(dialog.getByTestId("prefs-default-view-new-chat")).toHaveClass(/bg-foreground/);
+
   // Pick a non-default view ("tasks") to verify persistence.
   await dialog.getByTestId("prefs-default-view-tasks").click();
 

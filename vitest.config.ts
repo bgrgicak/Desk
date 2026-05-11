@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Load .env from repo root so ANTHROPIC_API_KEY / DATABASE_URL are available
+// Load .env from repo root so DESK_SECRET_KEY / DATABASE_URL are available
 const envPath = path.resolve(import.meta.dirname, ".env");
 if (fs.existsSync(envPath)) {
   for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
@@ -49,6 +49,7 @@ export default defineConfig({
       "**/dist/**",
       "**/test/e2e/**",
       "packages/app/e2e/**",
+      ".worktrees/**",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,

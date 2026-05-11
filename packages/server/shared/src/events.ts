@@ -26,11 +26,14 @@ export const ChatDeletedEventSchema = z.object({
 export const MessageAppendedEventSchema = z.object({
   type: z.literal("message.appended"),
   payload: MessageSchema,
+  workspaceId: z.string().optional(),
+  chatTitle: z.string().optional(),
+  actorUserId: z.string().optional(),
 });
 
 /**
  * Message mutation event — covers state transitions (pending→running→terminal)
- * and content edits (user editing a note, etc). Consumers can diff the
+ * and content edits (user editing a summary, etc). Consumers can diff the
  * payload against their cached copy.
  */
 export const MessageUpdatedEventSchema = z.object({

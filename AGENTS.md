@@ -6,7 +6,9 @@ We are building a prototype, it's crucial for us to move fast and make the right
 
 - Implement integration tests before working on a feature.
 - Run relevant tests after implementing a feature to ensure it works as expected.
-- **Tests must be real**: real Postgres, real Docker, real Anthropic API. No fakes as the only coverage of any surface. Fakes may exist for dev ergonomics but every faked surface must also have a real-backend counterpart.
+- **Tests must be real**: real Postgres, real Docker, real AI calls via the free `opencode/big-pickle` model. No fakes as the only coverage of any surface. Fakes may exist for dev ergonomics but every faked surface must also have a real-backend counterpart.
+- For substantial feature work or cross-package changes, run `npm run ci:local` before calling the work complete, or explicitly report why it could not be run. This requires Node 23 and Docker.
+- Prefer targeted tests while iterating, then use the full local CI mirror as the final verification for non-trivial changes.
 
 ### Code review
 

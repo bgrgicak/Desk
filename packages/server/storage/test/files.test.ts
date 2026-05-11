@@ -10,6 +10,7 @@ import {
   deleteFile,
   moveFile,
   pinLibraryFileToChat,
+  relativeSymlinkTarget,
   removeChatAttachment,
   resolveForSandbox,
   statFile,
@@ -51,7 +52,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
 
-    const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", file.path);
+    const hostPath = path.join(ctx.home, "desk", file.path);
     const content = await fs.readFile(hostPath, "utf-8");
     expect(content).toBe("library content");
   });
@@ -178,7 +179,7 @@ describe("deleteFile (moves to trash)", () => {
       stream: makeStream("bye"),
     });
 
-    const hostPath = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
+    const hostPath = path.join(ctx.home, "desk", uploaded.path);
     await fs.access(hostPath);
 
     await deleteFile(ctx, ctx.workspaceSlug,uploaded.path);
@@ -187,11 +188,11 @@ describe("deleteFile (moves to trash)", () => {
     await expect(fs.access(hostPath)).rejects.toThrow();
 
     // But the trash dir holds a file of the same content.
-    const trashEntries = await fs.readdir(path.join(ctx.home, "Desk", ".trash"));
+    const trashEntries = await fs.readdir(path.join(ctx.home, ".trash"));
     const trashed = trashEntries.find((n) => n.endsWith("delete-me.txt"));
     expect(trashed).toBeDefined();
     const content = await fs.readFile(
-      path.join(ctx.home, "Desk", ".trash", trashed!),
+      path.join(ctx.home, ".trash", trashed!),
       "utf-8",
     );
     expect(content).toBe("bye");
@@ -203,6 +204,32 @@ describe("deleteFile (moves to trash)", () => {
 });
 
 describe("removeChatAttachment", () => {
+  it("pins library files with sandbox-portable relative symlinks", async () => {
+    const uploaded = await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+      name: "pin-portable.txt",
+      mime: "text/plain",
+      stream: makeStream("portable"),
+      subpath: "PinPortable",
+    });
+
+    await pinLibraryFileToChat(ctx, ctx.workspaceSlug, ctx.chatId, uploaded.path);
+
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const targetAbs = path.join(root, uploaded.path);
+    const attDir = await chatAttachmentsDir(ctx.home, ctx.workspaceSlug, ctx.chatId);
+    const linkPath = path.join(attDir, "pin-portable.txt");
+    expect(await fs.readlink(linkPath)).toBe(relativeSymlinkTarget(linkPath, targetAbs));
+    expect(await fs.readFile(linkPath, "utf8")).toBe("portable");
+
+    await fs.unlink(linkPath);
+    await fs.symlink(targetAbs, linkPath);
+
+    await pinLibraryFileToChat(ctx, ctx.workspaceSlug, ctx.chatId, uploaded.path);
+    expect(await fs.readlink(linkPath)).toBe(relativeSymlinkTarget(linkPath, targetAbs));
+  });
+
   it("unlinks a pinned library symlink without disturbing the source file", async () => {
     const uploaded = await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
@@ -245,10 +272,12 @@ describe("removeChatAttachment", () => {
     ).rejects.toThrow(ValidationError);
   });
 
-  it("rejects hidden / dot-prefixed names", async () => {
+  it("treats hidden / dot-prefixed names like any other (NotFoundError when absent)", async () => {
+    // Hidden names are no longer rejected — they behave like regular
+    // files. If the file doesn't exist, the caller sees NotFoundError.
     await expect(
       removeChatAttachment(ctx, ctx.workspaceSlug, ctx.chatId, ".internal.txt"),
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toThrow(NotFoundError);
   });
 
   it("throws NotFoundError when the attachment doesn't exist", async () => {
@@ -272,7 +301,7 @@ describe("moveFile (symlink-on-move)", () => {
     const moved = await moveFile(ctx, ctx.workspaceSlug,uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
-    const oldAbs = path.join(ctx.home, "Desk", "workspaces", "desk", uploaded.path);
+    const oldAbs = path.join(ctx.home, "desk", uploaded.path);
     const lstat = await fs.lstat(oldAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
 

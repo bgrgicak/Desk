@@ -1,5 +1,24 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
-import type { ServerAgent, ServerMessage } from "../types";
+import { taskStatusFromTaskAndRuns } from "@/lib/task-status";
+import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
+
+export function taskMessageKindsForDeveloperMode(_developerMode: boolean): Array<"task" | "summary"> {
+  return ["task"];
+}
+
+export function summaryRequestMessageKindsForDeveloperMode(developerMode: boolean): Array<"summary"> {
+  return developerMode ? ["summary"] : [];
+}
+
+export function isTaskListMessageForDeveloperMode(m: ServerMessage, developerMode: boolean): boolean {
+  if (m.kind === "task") return true;
+  if (!developerMode) return false;
+  return m.kind === "summary" && m.content.type === "summary_request";
+}
+
+export function taskRunMessageKinds(): Array<"task_run"> {
+  return ["task_run"];
+}
 
 const COLOR_PALETTE: Task["color"][] = [
   "blue",
@@ -17,21 +36,50 @@ function colorFor(id: string): Task["color"] {
   return COLOR_PALETTE[Math.abs(h) % COLOR_PALETTE.length];
 }
 
-function nameFor(m: ServerMessage): string {
+function nameFor(m: ServerMessage, chats: ServerChat[], workspaces: ServerWorkspace[]): string {
+  if (m.content.type === "summary_request") {
+    const embeddedTitle = m.content.chatTitle?.trim();
+    const chatTitle = embeddedTitle || chats.find((chat) => chat.id === m.chatId)?.title.trim();
+    return chatTitle ? `Summarize - ${chatTitle}` : "Summarize";
+  }
+  if (m.content.type === "reflection_request") {
+    const workspaceId = m.content.workspaceId;
+    const workspaceName = workspaces.find((ws) => ws.id === workspaceId)?.name.trim();
+    return workspaceName ? `Reflect - ${workspaceName}` : "Reflect";
+  }
   if (m.title && m.title.trim().length > 0) return m.title;
   if (m.content.type === "text") {
     const first = m.content.text.split("\n")[0].trim();
     return first.length > 0 ? first : "(empty)";
   }
-  if (m.content.type === "note") return m.content.body.split("\n")[0].trim();
+  if (m.content.type === "summary") return m.content.body.split("\n")[0].trim();
   return m.content.type;
 }
 
-function statusFor(m: ServerMessage): Task["status"] {
-  if (m.state === "running") return "active";
-  if (m.state === "succeeded" || m.state === "failed" || m.state === "cancelled") return "complete";
-  if (m.executeAt || m.cron) return "scheduled";
-  return "todo";
+function descriptionFor(m: ServerMessage): string | undefined {
+  if (m.content.type === "summary_request") {
+    const preview = m.content.messagePreview?.trim();
+    return preview && preview !== m.content.chatTitle?.trim() ? preview : undefined;
+  }
+  if (m.content.type !== "text") return undefined;
+  const text = m.content.text.trim();
+  if (!text) return undefined;
+  if (m.title && text === m.title) return undefined;
+  if (m.title && text.startsWith(`${m.title}\n`)) {
+    const withoutTitle = text.slice(m.title.length).trim();
+    return withoutTitle.length > 0 ? withoutTitle : undefined;
+  }
+  if (m.title) return text;
+  const [, ...rest] = text.split("\n");
+  const description = rest.join("\n").trim();
+  return description.length > 0 ? description : undefined;
+}
+
+function statusFor(m: ServerMessage, runs: ServerMessage[] = []): Task["status"] {
+  return taskStatusFromTaskAndRuns(
+    { state: m.state ?? "pending", executeAt: m.executeAt, cron: m.cron },
+    runs.map(run => ({ state: run.state })),
+  );
 }
 
 function statusTextFor(m: ServerMessage): string {
@@ -53,31 +101,53 @@ function statusTextFor(m: ServerMessage): string {
   return "Pending";
 }
 
+export function taskOccurrenceFromMessage(m: ServerMessage): TaskOccurrence | undefined {
+  const startedAt = m.startedAt ? new Date(m.startedAt) : undefined;
+  if (!startedAt && !m.executeAt) return undefined;
+
+  const occStartedAt = startedAt ?? new Date(m.executeAt!);
+  const endedAt = m.endedAt ? new Date(m.endedAt) : occStartedAt;
+  const status: TaskOccurrence["status"] =
+    m.state === "running" ? "active"
+    : m.state === "failed" ? "failed"
+    : m.state === "pending" || m.state === "paused" ? "scheduled"
+    : "completed";
+
+  return {
+    id: m.kind === "task_run" ? m.id : `${m.id}-occ`,
+    startedAt: occStartedAt,
+    endedAt,
+    status,
+    statusText: statusTextFor(m),
+  };
+}
+
 /**
  * Convert a scheduled/executing server Message into the trunk-derived
  * Task shape that the Tasks page renders. `priority`, `assigneeId`,
  * `color`, free-form `schedule`, and `history` per-occurrence are
  * client-derived — the server doesn't carry them yet.
  */
-export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
+export function toUiTask(
+  m: ServerMessage,
+  agents: ServerAgent[],
+  chats: ServerChat[] = [],
+  workspaces: ServerWorkspace[] = [],
+  runs: ServerMessage[] = [],
+): Task {
   const agent = agents.find((a) => a.id === m.agentId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
-  const status = statusFor(m);
+  const status = statusFor(m, runs);
 
   const history: TaskOccurrence[] = [];
+  for (const run of runs) {
+    const occurrence = taskOccurrenceFromMessage(run);
+    if (occurrence) history.push(occurrence);
+  }
   if (realStartedAt) {
-    const occStatus: TaskOccurrence["status"] =
-      m.state === "running" ? "active"
-      : m.state === "succeeded" ? "completed"
-      : m.state === "failed" ? "failed"
-      : "completed";
-    history.push({
-      id: `${m.id}-occ`,
-      startedAt: realStartedAt,
-      endedAt: completedAt ?? realStartedAt,
-      status: occStatus,
-    });
+    const occurrence = taskOccurrenceFromMessage(m);
+    if (occurrence) history.push(occurrence);
   } else if (m.executeAt && m.state !== "cancelled") {
     const when = new Date(m.executeAt);
     history.push({
@@ -95,7 +165,8 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
 
   return {
     id: m.id,
-    name: nameFor(m),
+    name: nameFor(m, chats, workspaces),
+    description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,
     statusText: statusTextFor(m),
@@ -103,6 +174,10 @@ export function toUiTask(m: ServerMessage, agents: ServerAgent[]): Task {
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,
+    messageKind: m.kind,
+    messageContentType: m.content.type,
+    messageRole: m.role,
+    messageState: m.state ?? "pending",
     chatId: m.chatId,
     messageId: m.id,
     artifactIds: [],

@@ -1,16 +1,29 @@
 export {
   ensureLayout,
   ensureWorkspaceLayout,
+  ensureUserMemoryLayout,
+  ensureWorkspaceMemoryLayout,
   renameWorkspaceDir,
   trashWorkspaceDir,
   chatAttachmentsDir,
+  chatArtifactsDir,
   chatsDir,
   resolveDeskHome,
   resolveHostPath,
   tmpDir,
   trashDir,
+  userMemoryDir,
+  userMemoryIndexPath,
+  userMemoryTopicPath,
+  userJournalDir,
+  userJournalPath,
+  workspaceMemoryDir,
+  workspaceMemoryIndexPath,
+  workspaceMemoryTopicPath,
+  workspaceJournalDir,
+  workspaceJournalPath,
   workspaceRootPath,
-  workspacesRoot,
+  migrateLegacyWorkspaceLayout,
 } from "./layout.js";
 export {
   uploadArtifact,
@@ -22,12 +35,25 @@ export {
   overwriteFile,
   pinLibraryFileToChat,
   saveChatAttachmentToLibrary,
+  saveChatArtifactToLibrary,
+  copyLibraryAppToChat,
+  replaceLibraryAppFromChat,
+  ReplaceLibraryAppConflictError,
+  deleteChatApp,
+  deleteLibraryApp,
   removeChatAttachment,
   trashChatDirectories,
   resolveForSandbox,
   validateLibrarySubpath,
+  validateReadableSubpath,
 } from "./files.js";
-export type { StorageContext, UploadArtifactInput, FileRef } from "./files.js";
+export type {
+  StorageContext,
+  UploadArtifactInput,
+  FileRef,
+  CopyLibraryAppResult,
+  ReplaceLibraryAppOptions,
+} from "./files.js";
 export {
   listLibrary,
   createLibraryFolder,
@@ -40,12 +66,13 @@ export {
 export type { LibraryContext, FolderRef, CreateLinkInput, IgnoreFrame } from "./library.js";
 export { reconcileArtifactRefs } from "./reconcile.js";
 export {
-  snapshotNote,
-  listNoteHistory,
-  noteHistoryDir,
-  notesDir,
-  materializeNote,
-  deleteMaterializedNote,
-} from "./noteHistory.js";
-export type { NoteVersion } from "./noteHistory.js";
+  snapshotSummary,
+  snapshotAndReplaceSummary,
+  listSummaryHistory,
+  summaryHistoryDir,
+  summaryStorageDir,
+  materializeSummary,
+  deleteMaterializedSummary,
+} from "./summaryHistory.js";
+export type { SummaryVersion } from "./summaryHistory.js";
 export { enforceLogRetention } from "./logRetention.js";

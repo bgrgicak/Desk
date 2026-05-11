@@ -93,8 +93,10 @@ export async function get(
 }
 
 /**
- * Overwrites an existing library file with new content. Fails if the file
- * doesn't exist — callers wanting to create should POST to /library instead.
+ * Saves content to a library file. Creates the file (and parent dirs) if
+ * it doesn't exist yet, or overwrites in place. This lets hidden files
+ * created by the agent (`.memory/workspace.md`, etc.) be saved through
+ * the same PUT endpoint as any other file.
  *
  * When `ifMatch` is provided it is compared against the file's current mtime
  * (in milliseconds). A mismatch throws ConflictError so the caller can respond

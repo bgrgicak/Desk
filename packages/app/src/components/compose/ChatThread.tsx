@@ -1,52 +1,68 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
+import { FailedRunBanner } from './FailedRunBanner'
+import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
-import type { AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
-
-// ── Message visibility (canonical source) ─────────────────────────────────────
-
-const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
-  'agent_turn',
-  'ai_note_request',
-  'note',
-])
-
-const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([
-  'toolCall',
-  'toolResult',
-])
-
-function eventsHasUserText(log: AgentLogEntry[]): boolean {
-  let sawEvent = false
-  for (const entry of log) {
-    if (entry.kind === 'event') {
-      sawEvent = true
-      if (entry.event.type === 'text') {
-        const t = entry.event.part?.text
-        if (typeof t === 'string' && t.trim().length > 0) return true
-      }
-    } else if (entry.kind === 'unparsed' && !sawEvent) {
-      if (entry.line.trim().length > 0) return true
-    }
-  }
-  return false
-}
-
-export function isMessageVisible(m: ServerMessage, developerMode: boolean): boolean {
-  if (m.kind === 'task_run' && !developerMode) return false
-  if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
-  if (developerMode) return true
-  if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
-  if (m.content.type === 'events') return eventsHasUserText(m.content.log)
-  return true
-}
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 // ── ChatThread ────────────────────────────────────────────────────────────────
 
+/** Distance from the top (px) at which we trigger loading older messages. */
+const SCROLL_TOP_THRESHOLD = 120
+
+/**
+ * Finds the most recent failed `agent_turn` in the message list.
+ * Returns the failed message, or `null` if the latest agent turn is not
+ * in a failed state (e.g. succeeded, running, or pending).
+ *
+ * Exported for testing.
+ */
+export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]
+    if (m.content.type === 'agent_turn') {
+      return m.state === 'failed' ? m : null
+    }
+  }
+  return null
+}
+
+/**
+ * A successful agent turn can be visually silent in the normal chat stream when
+ * the run only emitted tool/event rows that are hidden outside developer mode.
+ * In that case render an explicit completion fallback so the chat doesn't look
+ * like the agent ignored the user.
+ */
+export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerMode: boolean): boolean {
+  if (developerMode) return false
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    const turn = items[i]
+    if (turn.content.type !== 'agent_turn') continue
+    if (turn.state !== 'succeeded') return false
+
+    let sawHiddenToolOutput = false
+    for (const later of items.slice(i + 1)) {
+      if (isMessageVisible(later, false)) return false
+      if (
+        later.role === 'agent' &&
+        (later.content.type === 'toolCall' || later.content.type === 'toolResult' || later.content.type === 'events')
+      ) {
+        sawHiddenToolOutput = true
+      }
+    }
+    return sawHiddenToolOutput
+  }
+
+  return false
+}
+
 export interface ChatThreadProps {
   chatId: string
+  workspaceId?: string
   /** When true the messages query is skipped (used for the "new chat" stub). */
   skipQuery?: boolean
   agentName?: string
@@ -56,6 +72,14 @@ export interface ChatThreadProps {
   highlightMessageId?: string
   /** CSS classes for the inner message list container. */
   innerClassName?: string
+  /** CSS classes for regular message rows within the list container. */
+  messageClassName?: string | ((message: ServerMessage) => string | undefined)
+  /** CSS classes for the typing/status row. */
+  statusClassName?: string
+  /** CSS classes for the agent name/time row. */
+  agentHeaderClassName?: string
+  /** CSS classes for content rendered after the final assistant message. */
+  lastAssistantSlotClassName?: string
   /** Rendered above the message list (e.g. "Open in chat" link). */
   headerSlot?: ReactNode
   /** Rendered below the scroll area (e.g. ChatInput). */
@@ -75,12 +99,17 @@ export interface ChatThreadProps {
 
 export function ChatThread({
   chatId,
+  workspaceId,
   skipQuery = false,
   agentName,
   developerMode = false,
   isSending = false,
   highlightMessageId,
   innerClassName = 'space-y-6 p-4',
+  messageClassName,
+  statusClassName,
+  agentHeaderClassName,
+  lastAssistantSlotClassName,
   headerSlot,
   footerSlot,
   emptySlot,
@@ -89,16 +118,62 @@ export function ChatThread({
   showNewBadge = false,
   filterMessage,
 }: ChatThreadProps) {
-  const { data, isLoading } = useGetChatMessagesQuery({ chatId }, { skip: skipQuery })
+  // ── Scrollback state ─────────────────────────────────────────────────
+  const [beforeCursor, setBeforeCursor] = useState<string | undefined>(undefined)
+
+  // Reset scrollback state when chatId changes.
+  const prevChatIdRef = useRef(chatId)
+  if (prevChatIdRef.current !== chatId) {
+    prevChatIdRef.current = chatId
+    setBeforeCursor(undefined)
+  }
+
+  // Initial load — newest page (no cursor). Use `data` (not `currentData`)
+  // so we keep showing the previous chat's messages while the next chat's
+  // request is in flight, instead of blanking out and remounting the
+  // textarea/dropzone mid-interaction.
+  const { data, isError } = useGetChatMessagesQuery(
+    { chatId, full: developerMode },
+    { skip: skipQuery },
+  )
+
+  // Load older page when beforeCursor is set.
+  const { isFetching: isFetchingOlder } = useGetChatMessagesQuery(
+    { chatId, before: beforeCursor!, full: developerMode },
+    { skip: skipQuery || !beforeCursor },
+  )
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
+  const isAtBottomRef = useRef(true)
+  /** When loading older messages, stores the scroll-height before prepend so
+   *  we can restore the scroll position after the DOM updates. */
+  const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null)
 
   const allItems = data?.items ?? []
+  const prevCursor = data?.prevCursor
+  const isInitialLoading = !skipQuery && !data && !isError
 
   const hasPendingTrigger = allItems.some(
     m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
   )
   const isTyping = hasPendingTrigger || isSending
+
+  // Detect the most recent failed agent turn (if any) to show an inline
+  // error banner. Only show it when there is no newer pending/running turn
+  // (which would mean a retry is already in progress).
+  const failedAgentTurn = useMemo(() => {
+    if (isTyping) return null
+    return findFailedAgentTurn(allItems)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, isTyping])
+
+  const showToolOnlyFallback = useMemo(
+    () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, developerMode, isTyping, failedAgentTurn],
+  )
 
   const messages: ServerMessage[] = useMemo(
     () => {
@@ -116,25 +191,118 @@ export function ChatThread({
     return null
   }, [messages])
 
+  const resolvedStatusClassName = statusClassName ?? (typeof messageClassName === 'string' ? messageClassName : undefined)
+
+  // ── Scroll position management ───────────────────────────────────────
+  // Track message count to detect when older messages were prepended.
+  const prevMessageCountRef = useRef(0)
+
   useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    // Handle highlighted message scrolling.
     if (highlightMessageId) {
-      const el = messageRefs.current.get(highlightMessageId)
-      if (el) {
-        el.scrollIntoView({ block: 'center' })
+      const msgEl = messageRefs.current.get(highlightMessageId)
+      if (msgEl) {
+        msgEl.scrollIntoView({ block: 'center' })
         return
       }
     }
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+
+    // If older messages were prepended (count grew AND we captured a scroll
+    // anchor), restore scroll position so the user's viewport doesn't jump.
+    if (scrollAnchorRef.current && messages.length > prevMessageCountRef.current) {
+      const { scrollHeight: prevHeight, scrollTop: prevTop } = scrollAnchorRef.current
+      const newHeight = el.scrollHeight
+      el.scrollTop = prevTop + (newHeight - prevHeight)
+      scrollAnchorRef.current = null
+      prevMessageCountRef.current = messages.length
+      return
     }
-  }, [messages, isTyping, highlightMessageId])
+
+    prevMessageCountRef.current = messages.length
+
+    // Auto-scroll to bottom when at/near the bottom.
+    if (isAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages, isTyping, failedAgentTurn, highlightMessageId])
+
+  // On initial load, scroll to bottom.
+  const hasInitialScrolled = useRef(false)
+  useEffect(() => {
+    if (!isInitialLoading && messages.length > 0 && !hasInitialScrolled.current) {
+      hasInitialScrolled.current = true
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }
+  }, [isInitialLoading, messages.length])
+
+  // Reset initial scroll flag when chat changes.
+  useEffect(() => {
+    hasInitialScrolled.current = false
+  }, [chatId])
+
+  // ── Load older messages on scroll-to-top ─────────────────────────────
+  const loadOlderMessages = useCallback(() => {
+    if (!prevCursor || isFetchingOlder) return
+    // Capture current scroll position before the DOM changes.
+    if (scrollRef.current) {
+      scrollAnchorRef.current = {
+        scrollHeight: scrollRef.current.scrollHeight,
+        scrollTop: scrollRef.current.scrollTop,
+      }
+    }
+    setBeforeCursor(prevCursor)
+  }, [prevCursor, isFetchingOlder])
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    // Track whether we're at the bottom (within 40px tolerance).
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+
+    // Load older messages when scrolled near the top.
+    if (el.scrollTop < SCROLL_TOP_THRESHOLD) {
+      loadOlderMessages()
+    }
+  }, [loadOlderMessages])
+
+  if (isInitialLoading) {
+    return (
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
+        {headerSlot}
+        <div className="flex flex-1 min-h-0 items-center justify-center text-sm text-muted-foreground" data-testid="chat-thread-loading">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Loading chat…</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
       {headerSlot}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className={innerClassName}>
-          {messages.length === 0 && !isLoading && (
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden" onScroll={handleScroll}>
+        <div className={`min-w-0 max-w-full ${innerClassName}`}>
+          {/* Loading-older indicator */}
+          {isFetchingOlder && (
+            <div className="flex justify-center py-2">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {/* "Beginning of conversation" marker */}
+          {!prevCursor && messages.length > 0 && !isInitialLoading && (
+            <p className="text-xs text-muted-foreground text-center pt-1 pb-2">
+              Beginning of conversation
+            </p>
+          )}
+          {messages.length === 0 && !isInitialLoading && (
             emptySlot ?? (
               <p className="text-xs text-muted-foreground text-center pt-4" data-testid="task-chat-empty">
                 No messages yet. Ask a question or request changes.
@@ -144,27 +312,70 @@ export function ChatThread({
           {messages.map((msg, i) => (
             <div
               key={msg.id}
+              className="min-w-0 max-w-full"
               data-message-id={msg.id}
               ref={(el) => {
                 if (el) messageRefs.current.set(msg.id, el)
                 else messageRefs.current.delete(msg.id)
               }}
             >
-              <MessageBubble
-                message={msg}
-                agentName={agentName}
-                isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role}
-                isNew={showNewBadge && msg.id === lastAssistantId}
-                onAttachmentClick={onAttachmentClick}
-                developerMode={developerMode}
-              />
-              {lastAssistantSlot && msg.id === lastAssistantId && lastAssistantSlot(msg.id)}
+              <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
+                <MessageBubble
+                  message={msg}
+                  workspaceId={workspaceId}
+                  agentName={agentName}
+                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
+                  isNew={showNewBadge && msg.id === lastAssistantId}
+                  onAttachmentClick={onAttachmentClick}
+                  agentHeaderClassName={agentHeaderClassName}
+                  hideAgentHeader={msg.content.type === 'artifactRef'}
+                  developerMode={developerMode}
+                />
+              </div>
+              {lastAssistantSlot && msg.id === lastAssistantId && (
+                <div className={lastAssistantSlotClassName}>
+                  {lastAssistantSlot(msg.id)}
+                </div>
+              )}
             </div>
           ))}
-          <StatusIndicator text={null} isTyping={isTyping} />
+          {showToolOnlyFallback && (
+            <div className={resolvedStatusClassName}>
+              <ToolOnlyRunFallback />
+            </div>
+          )}
+          {isTyping && (
+            <div className={resolvedStatusClassName}>
+              <StatusIndicator text={null} isTyping={isTyping} />
+            </div>
+          )}
+          {failedAgentTurn && (
+            <div className={resolvedStatusClassName}>
+              <FailedRunBanner
+                chatId={failedAgentTurn.chatId}
+                messageId={failedAgentTurn.id}
+              />
+            </div>
+          )}
         </div>
       </div>
       {footerSlot}
+    </div>
+  )
+}
+
+function ToolOnlyRunFallback() {
+  return (
+    <div className="min-w-0 max-w-full space-y-1.5" data-testid="tool-only-run-fallback">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1">
+          <CheckCircle2 className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+          <span className="text-xs text-muted-foreground">Desk</span>
+        </div>
+      </div>
+      <div className="rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm text-muted-foreground">
+        Done — I used tools for this run and didn&apos;t write a separate reply.
+      </div>
     </div>
   )
 }

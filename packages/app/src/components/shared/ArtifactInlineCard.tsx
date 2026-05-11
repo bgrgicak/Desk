@@ -1,10 +1,17 @@
 import { Bot, BookmarkPlus, Check } from 'lucide-react'
+import type { MouseEvent } from 'react'
 import { toast } from 'sonner'
 import type { Artifact } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
+import { buildPath } from '@/router/nav'
+import { InlineArtifactPreview } from './InlineArtifactPreview'
 
 const ARTIFACT_TYPE_LABELS: Record<string, string> = {
   document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
+}
+
+function plainLeftClick(e: MouseEvent<HTMLAnchorElement>) {
+  return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
 }
 
 function getArtifactDescription(artifact: Artifact): string {
@@ -18,33 +25,58 @@ function getArtifactDescription(artifact: Artifact): string {
 
 interface ArtifactInlineCardProps {
   artifact: Artifact
+  workspaceId?: string
   isSaved: boolean
   onOpen: () => void
   /** Called when user clicks Save — parent is responsible for updating isSaved */
   onSave?: () => void
 }
 
-export function ArtifactInlineCard({ artifact, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
+export function ArtifactInlineCard({ artifact, workspaceId, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
+  const openHref = workspaceId ? buildPath(workspaceId, 'pinned', { artifact: artifact.id }) : undefined
+  const fallback = <ArtifactInlineCardFallback artifact={artifact} workspaceId={workspaceId} isSaved={isSaved} onOpen={onOpen} onSave={onSave} />
+  if (workspaceId) {
+    return (
+      <InlineArtifactPreview
+        workspaceId={workspaceId}
+        path={artifact.id}
+        name={artifact.name}
+        onOpen={onOpen}
+        openHref={openHref}
+        actions={<ArtifactSaveButton artifact={artifact} isSaved={isSaved} onSave={onSave} />}
+        fallback={fallback}
+      />
+    )
+  }
+  return fallback
+}
+
+function ArtifactInlineCardFallback({ artifact, workspaceId, isSaved, onOpen, onSave }: ArtifactInlineCardProps) {
   const Icon = getArtifactIcon(artifact.type)
   const description = getArtifactDescription(artifact)
+  const openHref = workspaceId ? buildPath(workspaceId, 'pinned', { artifact: artifact.id }) : undefined
+  const topClassName = 'block w-full text-left p-4 hover:bg-muted/30 transition-colors rounded-t-xl'
+  const openButtonClassName = 'flex items-center gap-1.5 text-xs font-medium border border-border rounded-md px-2.5 py-1 hover:bg-muted/50 transition-colors'
+  const topContent = (
+    <div className="flex items-start gap-3">
+      <div className="h-11 w-11 rounded-lg bg-muted flex items-center justify-center shrink-0">
+        <Icon className="h-5 w-5 text-foreground/70" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm text-foreground truncate">{artifact.name}</p>
+        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>
+      </div>
+    </div>
+  )
 
   return (
-    <div className="w-full rounded-xl border-2 border-border bg-background">
+    <div className="w-full rounded-xl border-2 border-border bg-background" data-testid="artifact-inline-fallback">
       {/* Clickable top section */}
-      <button
-        onClick={onOpen}
-        className="w-full text-left p-4 hover:bg-muted/30 transition-colors rounded-t-xl"
-      >
-        <div className="flex items-start gap-3">
-          <div className="h-11 w-11 rounded-lg bg-muted flex items-center justify-center shrink-0">
-            <Icon className="h-5 w-5 text-foreground/70" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm text-foreground truncate">{artifact.name}</p>
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>
-          </div>
-        </div>
-      </button>
+      {openHref ? (
+        <a href={openHref} onClick={e => { if (plainLeftClick(e)) onOpen() }} className={topClassName}>{topContent}</a>
+      ) : (
+        <button onClick={onOpen} className={topClassName}>{topContent}</button>
+      )}
 
       {/* Footer: agent info + Open + Save */}
       <div className="px-4 py-2.5 border-t flex items-center gap-1.5">
@@ -53,34 +85,41 @@ export function ArtifactInlineCard({ artifact, isSaved, onOpen, onSave }: Artifa
         <span className="text-muted-foreground/40 mx-0.5 text-xs">·</span>
         <span className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type] ?? artifact.type}</span>
         <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={onOpen}
-            className="flex items-center gap-1.5 text-xs font-medium border border-border rounded-md px-2.5 py-1 hover:bg-muted/50 transition-colors"
-          >
-            Open
-          </button>
-          {isSaved ? (
-            <button
-              disabled
-              className="flex items-center gap-1.5 text-xs font-medium bg-primary/60 text-primary-foreground rounded-md px-2.5 py-1 cursor-default"
-            >
-              <Check className="h-3 w-3" />
-              In Library
-            </button>
+          {openHref ? (
+            <a href={openHref} onClick={e => { if (plainLeftClick(e)) onOpen() }} className={openButtonClassName}>Open</a>
           ) : (
-            <button
-              onClick={() => {
-                onSave?.()
-                toast.success(`"${artifact.name}" moved to your Library`)
-              }}
-              className="flex items-center gap-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md px-2.5 py-1 hover:bg-primary/90 transition-colors"
-            >
-              <BookmarkPlus className="h-3 w-3" />
-              Save to Library
-            </button>
+            <button onClick={onOpen} className={openButtonClassName}>Open</button>
           )}
+          <ArtifactSaveButton artifact={artifact} isSaved={isSaved} onSave={onSave} />
         </div>
       </div>
     </div>
+  )
+}
+
+function ArtifactSaveButton({ artifact, isSaved, onSave }: Pick<ArtifactInlineCardProps, 'artifact' | 'isSaved' | 'onSave'>) {
+  if (isSaved) {
+    return (
+      <button
+        disabled
+        className="flex items-center gap-1.5 rounded-md bg-primary/60 px-2.5 py-1 text-xs font-medium text-primary-foreground cursor-default"
+      >
+        <Check className="h-3 w-3" />
+        In Library
+      </button>
+    )
+  }
+
+  return (
+    <button
+      onClick={() => {
+        onSave?.()
+        toast.success(`"${artifact.name}" moved to your Library`)
+      }}
+      className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+    >
+      <BookmarkPlus className="h-3 w-3" />
+      Save to Library
+    </button>
   )
 }

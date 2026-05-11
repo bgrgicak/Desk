@@ -87,7 +87,7 @@ function getDropdownStyle(rect: DOMRect, width: number): React.CSSProperties {
 }
 
 const pickerBtnClass =
-  'flex items-center gap-1 rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors px-2 h-6 text-xs font-medium shrink-0'
+  'flex min-w-0 max-w-full items-center gap-1 rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors px-2 h-6 text-xs font-medium shrink-0 [&>span]:truncate'
 const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
 export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickersProps>(function ComposerPickers(
@@ -261,7 +261,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
   const uploadEnabled = Boolean(onOpenUploadPicker)
 
   return (
-    <div className={`flex items-center gap-1.5 ${className ?? ''}`}>
+    <div className={`flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden ${className ?? ''}`}>
       {directUpload && (
         <input
           ref={fileInputRef}
@@ -293,7 +293,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
                 ? <effectiveGoal.Icon className="h-3 w-3" />
                 : <Target className="h-3 w-3" />
               }
-              {effectiveGoal.label}
+              <span>{effectiveGoal.label}</span>
               <ChevronDown className="h-3 w-3" />
             </button>
             {goalOpen && goalRect && createPortal(
@@ -338,7 +338,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         className={pickerBtnClass}
       >
         <Bot className="h-3 w-3" />
-        {activeAgent?.name ?? 'Agent'}
+        <span>{activeAgent?.name ?? 'Agent'}</span>
         <ChevronDown className="h-3 w-3" />
       </button>
       {agentOpen && agentRect && createPortal(
@@ -397,7 +397,7 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
         className={pickerBtnClass}
       >
         <Paperclip className="h-3 w-3" />
-        {directUpload ? 'Attach file' : 'Add files'}
+        <span>{directUpload ? 'Attach file' : 'Add files'}</span>
         {!directUpload && <ChevronDown className="h-3 w-3" />}
       </button>
       {!directUpload && attachOpen && attachRect && createPortal(
@@ -412,6 +412,21 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
               placeholder="Search files and folders…"
               className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
             />
+          </div>
+          <div className="border-b">
+            <button
+              type="button"
+              onClick={() => {
+                setAttachOpen(false)
+                onOpenUploadPicker?.()
+              }}
+              disabled={!uploadEnabled || uploadInProgress}
+              data-testid="chat-upload-a-file"
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <span>{uploadInProgress ? 'Uploading…' : 'Upload a file…'}</span>
+            </button>
           </div>
           <div className="overflow-y-auto max-h-52">
             {filteredAttachments.length === 0 && (
@@ -447,25 +462,9 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
               )
             })}
           </div>
-          <div className="border-t">
-            <button
-              type="button"
-              onClick={() => {
-                setAttachOpen(false)
-                onOpenUploadPicker?.()
-              }}
-              disabled={!uploadEnabled || uploadInProgress}
-              data-testid="chat-upload-a-file"
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
-            >
-              <Paperclip className="h-3.5 w-3.5 shrink-0" />
-              <span>{uploadInProgress ? 'Uploading…' : 'Upload a file…'}</span>
-            </button>
-          </div>
         </div>,
         portalTarget ?? document.body,
       )}
     </div>
   )
 })
-

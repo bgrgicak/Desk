@@ -41,6 +41,13 @@ const INTERNAL_PREFIX = "/internal/";
 // a user session — see auth/sandboxToken.ts.
 const SANDBOX_PREFIX = "/sandbox/";
 
+// Routes under /apps/* serve a chat-artifact app's built static assets.
+// The static GETs authenticate via a per-app HttpOnly cookie issued by
+// `POST /apps/.../issue` (which itself takes the bearer session). The
+// issue endpoint is the only /apps/* path that needs the bearer token,
+// and we re-check it inside the dispatcher rather than gating here.
+const APPS_PREFIX = "/apps/";
+
 /**
  * Extracts and validates auth from an Authorization header.
  * Returns userId on success, throws UnauthorizedError on failure.
@@ -62,6 +69,13 @@ export async function requireAuth(
   }
   if (url.startsWith(SANDBOX_PREFIX)) {
     // Defer to authenticateSandboxToken() in the dispatcher.
+    return "";
+  }
+  if (url.startsWith(APPS_PREFIX)) {
+    // The /apps/* dispatcher handles its own auth — static GETs use a
+    // per-app HttpOnly cookie, the issue endpoint re-verifies the
+    // bearer token directly. Returning "" here lets the request reach
+    // the dispatcher without the global Bearer requirement firing.
     return "";
   }
 

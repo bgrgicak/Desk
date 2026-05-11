@@ -40,6 +40,29 @@ export async function setProviderKeys(
 }
 
 /**
+ * Returns the user's provider keys with disabled entries filtered out.
+ * "Disabled" means the user has toggled the connection off in Settings —
+ * `provider_meta[envKey].enabled === false`. Used by every code path that
+ * forwards keys to the runtime so disabled providers stop surfacing in
+ * the model picker and stop being callable from the sandbox.
+ */
+export async function getActiveProviderKeys(
+  db: Pool,
+  userId: string,
+): Promise<Record<string, string>> {
+  const [keys, meta] = await Promise.all([
+    getProviderKeys(db, userId),
+    getProviderMeta(db, userId),
+  ]);
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(keys)) {
+    if (meta[name]?.enabled === false) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
+/**
  * Merges the given map into the user's stored provider keys. A null value
  * deletes that key; any other value replaces it. Keys not mentioned are
  * preserved.
@@ -63,7 +86,15 @@ export async function mergeProviderKeys(
 
 // ── Provider metadata (display names, etc.) ──────────────────────────────────
 
-export type ProviderMetaEntry = { name?: string };
+export type ProviderMetaEntry = {
+  name?: string;
+  /**
+   * For host-managed connections (e.g. Codex), tracks whether the user has
+   * opted in. Manual API-key connections don't use this — their presence in
+   * `provider_keys_encrypted` is the on/off signal.
+   */
+  enabled?: boolean;
+};
 export type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
 
 /**

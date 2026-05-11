@@ -20,6 +20,11 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
+// Route coverage keeps /tools/models on the fake driver; real Docker/opencode
+// coverage lives in tools-models.integration.test.ts.
+const PRIOR_DESK_SANDBOX_DRIVER = process.env.DESK_SANDBOX_DRIVER;
+process.env.DESK_SANDBOX_DRIVER = "fake";
+const SANDBOX_AVAILABLE = true;
 
 let pool: Pool;
 let server: http.Server;
@@ -65,6 +70,12 @@ afterAll(async () => {
   await clearSessions(pool);
   clearConnections();
   server?.close();
+
+  if (PRIOR_DESK_SANDBOX_DRIVER === undefined) {
+    delete process.env.DESK_SANDBOX_DRIVER;
+  } else {
+    process.env.DESK_SANDBOX_DRIVER = PRIOR_DESK_SANDBOX_DRIVER;
+  }
 
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
@@ -258,7 +269,7 @@ describe("Routes coverage (real Postgres)", () => {
     const body = res.body as { providers: Record<string, string | null> };
     expect(typeof body.providers).toBe("object");
     // Every PROVIDER_KEY_VARS entry must appear; exact names checked below.
-    expect(body.providers).toHaveProperty("ANTHROPIC_API_KEY");
+    expect(body.providers).toHaveProperty("GEMINI_API_KEY");
     expect(body.providers).toHaveProperty("OPENAI_API_KEY");
     expect(body.providers).toHaveProperty("AWS_REGION");
   });
@@ -266,14 +277,14 @@ describe("Routes coverage (real Postgres)", () => {
   it("PUT /me/providers — sets, updates, masks, deletes a key", async () => {
     // Set
     const setRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: "sk-ant-abcdefghijklmnop" },
+      providers: { GEMINI_API_KEY: "test-key-abcdefghijklmnop" },
     });
     expect(setRes.status).toBe(200);
     const setBody = setRes.body as { providers: Record<string, string | null> };
-    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect(setBody.providers.GEMINI_API_KEY).not.toBeNull();
     // Masking: full value must not appear verbatim
-    expect(setBody.providers.ANTHROPIC_API_KEY).not.toBe("sk-ant-abcdefghijklmnop");
-    expect(setBody.providers.ANTHROPIC_API_KEY).toContain("...");
+    expect(setBody.providers.GEMINI_API_KEY).not.toBe("test-key-abcdefghijklmnop");
+    expect(setBody.providers.GEMINI_API_KEY).toContain("...");
 
     // Partial update leaves other keys alone
     const updateRes = await request("PUT", "/me/providers", token, {
@@ -281,16 +292,16 @@ describe("Routes coverage (real Postgres)", () => {
     });
     expect(updateRes.status).toBe(200);
     const updateBody = updateRes.body as { providers: Record<string, string | null> };
-    expect(updateBody.providers.ANTHROPIC_API_KEY).not.toBeNull();
+    expect(updateBody.providers.GEMINI_API_KEY).not.toBeNull();
     expect(updateBody.providers.OPENAI_API_KEY).not.toBeNull();
 
     // Delete via null
     const delRes = await request("PUT", "/me/providers", token, {
-      providers: { ANTHROPIC_API_KEY: null },
+      providers: { GEMINI_API_KEY: null },
     });
     expect(delRes.status).toBe(200);
     const delBody = delRes.body as { providers: Record<string, string | null> };
-    expect(delBody.providers.ANTHROPIC_API_KEY).toBeNull();
+    expect(delBody.providers.GEMINI_API_KEY).toBeNull();
     expect(delBody.providers.OPENAI_API_KEY).not.toBeNull();
 
     // Clean up
@@ -318,8 +329,7 @@ describe("Routes coverage (real Postgres)", () => {
   it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
     const createRes = await request("POST", "/agents", token, {
       name: "Sidekick",
-      instructions: "Assist",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/big-pickle",
     });
     expect(createRes.status).toBe(201);
     const created = createRes.body as { id: string };
@@ -472,7 +482,7 @@ describe("Routes coverage (real Postgres)", () => {
       workspaceId,
       agentId,
       title: "Chat5",
-      goal: "Test goal 5",
+      goal: "document",
     });
     expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
@@ -482,7 +492,7 @@ describe("Routes coverage (real Postgres)", () => {
     const body = getRes.body as { id: string; title: string; goal: string; updatedAt: string };
     expect(body.id).toBe(chat.id);
     expect(body.title).toBe("Chat5");
-    expect(body.goal).toBe("Test goal 5");
+    expect(body.goal).toBe("document");
     expect(body.updatedAt).toBeTruthy();
 
     // 404 for unknown
@@ -496,31 +506,31 @@ describe("Routes coverage (real Postgres)", () => {
       workspaceId,
       agentId,
       title: "OrigTitle",
-      goal: "OrigGoal",
+      goal: "task",
     });
+    expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
 
     const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
       title: "PatchedTitle",
-      goal: "PatchedGoal",
+      goal: "site",
     });
     expect(patchRes.status).toBe(200);
     const patched = patchRes.body as { title: string; goal: string };
     expect(patched.title).toBe("PatchedTitle");
-    expect(patched.goal).toBe("PatchedGoal");
+    expect(patched.goal).toBe("site");
 
     const getRes = await request("GET", `/chats/${chat.id}`, token);
     const body = getRes.body as { title: string; goal: string };
     expect(body.title).toBe("PatchedTitle");
-    expect(body.goal).toBe("PatchedGoal");
+    expect(body.goal).toBe("site");
   });
 
   it("PATCH /chats/:id — agentId re-binds the chat when the new agent is enrolled", async () => {
     // Create a second agent and enroll it in the workspace.
     const createAgent = await request("POST", "/agents", token, {
       name: "Switcher",
-      instructions: "Assist",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/big-pickle",
     });
     const otherAgentId = (createAgent.body as { id: string }).id;
     const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
@@ -548,12 +558,157 @@ describe("Routes coverage (real Postgres)", () => {
     expect((getRes.body as { agentId: string }).agentId).toBe(otherAgentId);
   });
 
+  it("PATCH /chats/:id/messages/:id — updates task title and initial text", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Task chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Original title",
+      content: "Original title\n\nOriginal details",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, {
+      title: "Edited title",
+      content: { type: "text", text: "Edited title\n\nEdited details" },
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = patchRes.body as { title: string; content: { type: string; text: string } };
+    expect(patched.title).toBe("Edited title");
+    expect(patched.content).toEqual({ type: "text", text: "Edited title\n\nEdited details" });
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    expect(listRes.status).toBe(200);
+    const items = (listRes.body as { items: Array<{ id: string; title: string; content: unknown }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.title).toBe("Edited title");
+    expect(saved?.content).toEqual({ type: "text", text: "Edited title\n\nEdited details" });
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid message content", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, {
+      content: { type: "not-a-real-content-type" },
+    });
+    expect(patchRes.status).toBe(400);
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; content: unknown }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.content).toEqual({ type: "text", text: "hello" });
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects a null patch body", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Null patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, null);
+    expect(patchRes.status).toBe(400);
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid task titles", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid title patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Original title",
+      content: "Original title",
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    for (const title of [{ bad: true }, "   "]) {
+      const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, { title });
+      expect(patchRes.status).toBe(400);
+    }
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; title: string }> }).items;
+    expect(items.find((item) => item.id === message.id)?.title).toBe("Original title");
+  });
+
+  it("PATCH /chats/:id/messages/:id — rejects invalid schedules", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "Invalid schedule patch chat",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    const executeAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const messageRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      kind: "task",
+      title: "Scheduled task",
+      content: "Scheduled task",
+      executeAt,
+    });
+    expect(messageRes.status).toBe(201);
+    const message = messageRes.body as { id: string };
+
+    for (const patch of [
+      { executeAt: { bad: true } },
+      { executeAt: "not-a-date" },
+      { executeAt: "2026-02-31T00:00:00.000Z" },
+      { executeAt: "Thu May 07 2026" },
+      { executeAt: "2026-05-07" },
+      { cron: { bad: true } },
+      { cron: "   " },
+      { cron: "not a cron" },
+    ]) {
+      const patchRes = await request("PATCH", `/chats/${chat.id}/messages/${message.id}`, token, patch);
+      expect(patchRes.status).toBe(400);
+    }
+
+    const listRes = await request("GET", `/chats/${chat.id}/messages`, token);
+    const items = (listRes.body as { items: Array<{ id: string; executeAt?: string; cron?: string | null }> }).items;
+    const saved = items.find((item) => item.id === message.id);
+    expect(saved?.executeAt).toBe(executeAt);
+    expect(saved?.cron ?? null).toBeNull();
+  });
+
   it("PATCH /chats/:id — rejects an agent not enrolled in the chat's workspace", async () => {
     // Create an agent but skip the workspace enrollment step.
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
-      instructions: "",
-      model: "anthropic/claude-opus-4-7",
+      model: "opencode/big-pickle",
     });
     const strangerId = (createAgent.body as { id: string }).id;
 
@@ -568,6 +723,62 @@ describe("Routes coverage (real Postgres)", () => {
       agentId: strangerId,
     });
     expect(patchRes.status).toBe(400);
+  });
+
+  it("PATCH /chats/:id — unread: false marks chat as read", async () => {
+    // Create a chat and insert a message to mark it unread.
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "UnreadTest",
+    });
+    expect(createRes.status).toBe(201);
+    const chat = createRes.body as { id: string };
+
+    // Sending a message sets chats.unread = 1 via the DB trigger.
+    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "hello",
+    });
+    expect(msgRes.status).toBe(201);
+
+    // Confirm the chat is now unread.
+    const getRes1 = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes1.body as { unread: boolean }).unread).toBe(true);
+
+    // PATCH unread: false.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      unread: false,
+    });
+    expect(patchRes.status).toBe(200);
+    expect((patchRes.body as { unread: boolean }).unread).toBe(false);
+
+    // Confirm via GET that the server persisted the change.
+    const getRes2 = await request("GET", `/chats/${chat.id}`, token);
+    expect((getRes2.body as { unread: boolean }).unread).toBe(false);
+  });
+
+  it("PATCH /chats/:id — unread: false combined with title update", async () => {
+    const createRes = await request("POST", "/chats", token, {
+      workspaceId,
+      agentId,
+      title: "CombinedPatch",
+    });
+    const chat = createRes.body as { id: string };
+
+    // Make it unread via a message.
+    await request("POST", `/chats/${chat.id}/messages`, token, {
+      content: "trigger unread",
+    });
+
+    // PATCH both title and unread in one call.
+    const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {
+      title: "NewTitle",
+      unread: false,
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = patchRes.body as { title: string; unread: boolean };
+    expect(patched.title).toBe("NewTitle");
+    expect(patched.unread).toBe(false);
   });
 
   // ── 7. DELETE /library + multipart upload ────────────────────────
@@ -605,7 +816,7 @@ describe("Routes coverage (real Postgres)", () => {
   // DELETE/logs coverage added there.
 
   // ── 13. GET /tools/models ─────────────────────────────────────────
-  it("GET /tools/models — returns a bare array of { id, provider }", async () => {
+  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models — returns a bare array of { id, provider }", async () => {
     const res = await request("GET", "/tools/models", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -622,7 +833,7 @@ describe("Routes coverage (real Postgres)", () => {
     }
   });
 
-  it("GET /tools/models?provider=opencode — filters to provider", async () => {
+  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models?provider=opencode — filters to provider", async () => {
     const res = await request("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);

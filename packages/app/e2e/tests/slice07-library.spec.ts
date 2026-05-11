@@ -61,7 +61,7 @@ test("uploaded file shows up in the library view", async ({
   await loggedInPage.reload();
 
   // Navigate to the Library sidebar entry.
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   await expect(
     loggedInPage.getByText(/slice7-ping\.md/).first(),
@@ -89,7 +89,7 @@ test("deleting a library item removes it from the list", async ({
   );
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   await expect(loggedInPage.getByText(filename).first()).toBeVisible({
     timeout: 10_000,
@@ -149,7 +149,7 @@ test("moves a folder (with contents) into another folder", async ({
   });
 
   await loggedInPage.reload();
-  await loggedInPage.getByRole("button", { name: /^Library$/ }).first().click();
+  await loggedInPage.getByRole("link", { name: /^Library$/ }).first().click();
 
   // Open the src folder's row menu → "Move to folder" → pick dst.
   const srcRow = loggedInPage.getByText(src, { exact: true }).first();

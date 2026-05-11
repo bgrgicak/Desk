@@ -6,7 +6,9 @@ import { type Pool } from "@agent-desk/db";
 import {
   generateId,
   AgentEventSchema,
+  GOAL_KEYS,
   type AgentLogEntry,
+  type GoalKey,
   type Message,
   type WsEvent,
 } from "@agent-desk/shared";
@@ -16,9 +18,19 @@ import {
   createOrReuse,
   execRun as runtimeExecRun,
   cancelRun as runtimeCancelRun,
+  estimateMessagesTokens,
+  listModels,
+  productionReflectWorkspace,
+  resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
+import {
+  runWorkspaceReflection,
+  yesterdayDateLocal,
+  type ReflectFn,
+  type WorkspaceReflectionInput,
+} from "./reflection.js";
 
 export interface RunManagerOptions {
   pool: Pool;
@@ -35,6 +47,23 @@ export interface RunManagerOptions {
     onLog: (evt: LogEvent) => void | Promise<void>,
     opts?: { agentFileInput: AgentFileInput; attachments?: string[] },
   ) => Promise<{ exitCode: number }>;
+  /** Test-injectable replacement for the production workspace reflection call. */
+  reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
+  /** DESK_HOME root. Defaults to resolveDeskHome(). */
+  home?: string;
+  /** Test hook for model metadata used by the adaptive summary trigger. */
+  summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
+}
+
+interface SummaryModelTokenLimits {
+  contextWindow: number;
+  inputLimit?: number;
+  outputLimit?: number;
+}
+
+export interface FireMessageOptions {
+  /** Manual task fires create a run now without consuming the task's schedule. */
+  manual?: boolean;
 }
 
 function computeNextRun(cronExpr: string): string {
@@ -45,9 +74,11 @@ function computeNextRun(cronExpr: string): string {
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
+  const home = opts.home ?? resolveDeskHome();
+  const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
-  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "3", 10);
+  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
 
   async function getDefaultAgentId(): Promise<string> {
     const agents = await queries.agents.list(pool);
@@ -63,8 +94,7 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   async function ensureLogDir(workspaceSlug: string, chatId: string): Promise<string> {
-    const home = resolveDeskHome();
-    const dir = path.join(home, "Desk", "workspaces", workspaceSlug, ".chats", chatId, "logs");
+    const dir = path.join(home, workspaceSlug, ".chats", chatId, "logs");
     await fsp.mkdir(dir, { recursive: true });
     return dir;
   }
@@ -139,6 +169,137 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
+   * Summaries should be a clean final markdown body. If the model used tools, keep
+   * the last text event instead of concatenating planning chatter with the
+   * final answer.
+   */
+  function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
+    let sawEvent = false;
+    let lastText = "";
+    for (const e of entries) {
+      if (e.kind !== "event") continue;
+      sawEvent = true;
+      if (e.event.type === "text") {
+        const t = e.event.part?.text;
+        if (typeof t === "string" && t.trim()) lastText = t;
+      }
+    }
+    if (lastText) return lastText.trim();
+    if (sawEvent) return "";
+    return entries
+      .filter((e) => e.kind === "unparsed")
+      .map((e) => (e as { line: string }).line)
+      .join("\n")
+      .trim();
+  }
+
+  const CHAT_SUMMARY_PROMPT = [
+    "Refresh this chat's running summary.",
+    "Return only the final markdown body; do not create files, write artifacts, or attach artifacts.",
+    "Use the chat-summary format described in the agent instructions.",
+  ].join("\n");
+
+  function messageTextForPrompt(message: Message): string | null {
+    const content = message.content;
+    switch (content.type) {
+      case "text":
+        return content.text;
+      case "artifactRef":
+        return `Attached artifact: ${content.name ?? content.path} (${content.path})`;
+      case "summary":
+        return content.body;
+      case "events":
+        return deriveTextFromLog(content.log) || null;
+      default:
+        return null;
+    }
+  }
+
+  function formatMessageForPrompt(message: Message): { role: string; text: string } | null {
+    const text = messageTextForPrompt(message);
+    const attachmentText = (message.attachments ?? [])
+      .map((attachment) => `${attachment.name ?? path.basename(attachment.path)} (${attachment.path})`)
+      .join(", ");
+    const body = [text, attachmentText ? `Attachments: ${attachmentText}` : ""]
+      .filter((part): part is string => Boolean(part && part.trim()))
+      .join("\n");
+    if (!body.trim()) return null;
+    const role = message.content.type === "summary"
+      ? "Summary"
+      : message.role === "user"
+        ? "User"
+        : message.role === "agent"
+          ? "Agent"
+          : "System";
+    return {
+      role,
+      text: body.trim(),
+    };
+  }
+
+  function shouldIncludeInPromptContext(message: Message): boolean {
+    const type = message.content.type;
+    if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
+    if (message.state === "pending" || message.state === "running") return false;
+    return message.role === "user" || message.role === "agent" || type === "summary";
+  }
+
+  // Maximum UTF-8 bytes the transcript context may occupy before being
+  // trimmed. The full prompt (context + task) must fit inside the
+  // container's ARG_MAX (2 097 152 bytes on Linux). We reserve ~500 KB for
+  // the task text, wrapper headers, and other env vars, leaving 1.5 MB for
+  // the context. Oldest entries are dropped first so the most recent
+  // messages are always preserved.
+  const MAX_CONTEXT_BYTES = 1_500_000;
+
+  async function buildChatTranscriptContext(
+    currentMessage: Message,
+    currentUserMessageId?: string,
+  ): Promise<string> {
+    const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
+    const entries = items
+      .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
+      .filter(shouldIncludeInPromptContext)
+      .map(formatMessageForPrompt)
+      .filter((entry): entry is { role: string; text: string } => entry !== null);
+
+    // Trim from oldest → newest until the serialised context fits.
+    const sep = "\n\n---\n\n";
+    let bytes = 0;
+    let trimFrom = 0; // first index to keep
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const chunk = `${entries[i].role}:\n${entries[i].text}`;
+      bytes += Buffer.byteLength(chunk, "utf8") + (i < entries.length - 1 ? Buffer.byteLength(sep, "utf8") : 0);
+      if (bytes > MAX_CONTEXT_BYTES) {
+        trimFrom = i + 1;
+        break;
+      }
+    }
+    const kept = trimFrom > 0 ? entries.slice(trimFrom) : entries;
+    const parts = kept.map((entry) => `${entry.role}:\n${entry.text}`);
+    if (trimFrom > 0) {
+      parts.unshift(`System:\n[Earlier context omitted — transcript exceeded size limit. ${trimFrom} older message(s) not shown.]`);
+    }
+    return parts.join(sep);
+  }
+
+  async function withChatTranscriptContext(
+    currentMessage: Message,
+    prompt: string,
+    currentUserMessageId?: string,
+  ): Promise<string> {
+    const context = await buildChatTranscriptContext(currentMessage, currentUserMessageId);
+    if (!context) return prompt;
+    return [
+      "Chat transcript context (oldest to newest; newest summary, if any, is the compaction boundary):",
+      context,
+      "",
+      "Current task:",
+      prompt,
+    ].join("\n");
+  }
+
+  /**
    * Returns the prompt the agent will receive plus any workspace-relative
    * attachment paths to forward to opencode via `--file`. We don't inline
    * paths into the prompt: opencode surfaces the file content directly,
@@ -148,60 +309,147 @@ export function createRunManager(opts: RunManagerOptions) {
   async function derivePromptInputs(
     msg: Message,
   ): Promise<{ prompt: string; attachments?: string[] }> {
-    // Self-firing kinds (task / ai_note) carry the prompt directly on the
+    // Self-firing kinds (task / summary) carry the prompt directly on the
     // message — no parent lookup needed.
-    if (msg.kind === "ai_note") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+    if (msg.kind === "summary") {
+      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
     }
     if (msg.kind === "task") {
       const c = msg.content as { type?: string; text?: string };
       const text = c?.type === "text" && typeof c.text === "string" ? c.text : "";
       const refs = msg.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: text, attachments };
+      return { prompt: await withChatTranscriptContext(msg, text), attachments };
+    }
+    if (msg.content.type === "reflection_request") {
+      return { prompt: "Run the daily workspace memory reflection." };
     }
     const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
-    if (c?.type === "text" && typeof c.text === "string") return { prompt: c.text };
-    if (c?.type === "ai_note_request") {
-      return { prompt: "Produce a coherent running summary of this chat, in markdown." };
+    if (c?.type === "text" && typeof c.text === "string") {
+      return { prompt: await withChatTranscriptContext(msg, c.text) };
+    }
+    if (c?.type === "summary_request") {
+      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
     }
     if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
       const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string; goal?: string } | undefined;
+      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
       const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      const prompt = inner?.goal ? `Goal: ${inner.goal}\n\n${text}` : text;
-      return { prompt, attachments };
+      return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
     }
-    return { prompt: JSON.stringify(msg.content) };
+    const fallback = JSON.stringify(msg.content);
+    return { prompt: await withChatTranscriptContext(msg, fallback) };
   }
 
-  function outputContentTypeFor(msg: Message): "note" | "text" {
-    if (msg.kind === "ai_note") return "note";
+
+
+  function outputContentTypeFor(msg: Message): "summary" | "text" {
+    if (msg.kind === "summary") return "summary";
     const c = msg.content as { type?: string };
-    return c?.type === "ai_note_request" ? "note" : "text";
+    return c?.type === "summary_request" ? "summary" : "text";
   }
 
   function buildOutputContent(
-    kind: "note" | "text",
+    kind: "summary" | "text",
     entries: AgentLogEntry[],
   ): Message["content"] | null {
-    if (kind === "note") {
-      const body = deriveTextFromLog(entries);
+    if (kind === "summary") {
+      const body = deriveSummaryTextFromLog(entries);
       if (!body) return null;
-      return { type: "note", body };
+      return { type: "summary", body };
     }
     if (entries.length === 0) return null;
     return { type: "events", log: entries };
+  }
+
+  function errorLogLines(err: unknown): string[] {
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      "Agent run failed before it could complete.",
+      message,
+    ].filter((line) => line.trim().length > 0);
+  }
+
+  async function fireReflectionTask(
+    msg: Message,
+    workspaceId: string,
+    workspaceSlug: string,
+    workspaceName: string,
+    userId: string | null,
+    userName: string,
+    userTimezone: string | undefined,
+    manual: boolean,
+  ): Promise<string | null> {
+    const c = msg.content as { type?: string; workspaceId?: string };
+    if (c.type !== "reflection_request" || c.workspaceId !== workspaceId) {
+      throw new Error("reflection request does not match its chat workspace");
+    }
+    const agentId = msg.agentId ?? (await getDefaultAgentId());
+    const agent = await queries.agents.findById(pool, agentId);
+    if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
+    const providerKeys = userId
+      ? await queries.userSettings.getActiveProviderKeys(pool, userId)
+      : {};
+    const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
+    return await runWorkspaceReflection({
+      pool,
+      home,
+      date: yesterdayDateLocal(),
+      workspaceId,
+      workspaceSlug,
+      workspaceName,
+      userId: userId ?? "",
+      userName,
+      userTimezone,
+      agent: { id: agent.id, name: agent.name, model: agent.model },
+      providerKeys,
+      extraEnv,
+      reflectWorkspace: opts.reflectWorkspace ?? productionReflectWorkspace,
+      reflectOnEmptyActivity: manual,
+    });
+  }
+
+  // Convert the reflection journal into a brief task-run log entry. The prompt
+  // (`reflection-workspace.md`) is the source of truth for output shape — it
+  // asks the model for at most 3 plain bullets. We strip headings/leading
+  // bullet markers, drop blanks, and keep the first few lines verbatim so a
+  // bad model run is visible (and fixable in the prompt) instead of silently
+  // sanitised here.
+  function reflectionOutcomeText(journal: string | null): string {
+    if (journal === null) return "- No activity.";
+    if (journal.trim().length === 0) return "- Empty reflection.";
+
+    const bullets: string[] = [];
+    for (const rawLine of journal.split(/\r?\n/)) {
+      const line = rawLine
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^[-*]\s+/, "")
+        .trim();
+      if (!line) continue;
+      bullets.push(`- ${line}`);
+      if (bullets.length >= 3) break;
+    }
+    return bullets.length > 0 ? bullets.join("\n") : "- Empty reflection.";
+  }
+
+  async function logReflectionOutcome(runId: string, journal: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
+    const text = reflectionOutcomeText(journal);
+    await onLog({
+      runId,
+      seq: 0,
+      kind: "stdout",
+      payload: JSON.stringify({ type: "text", part: { text } }),
+    });
   }
 
   /**
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
    *   - `task`: inserts a fresh `task_run` child of the task and runs the
-   *     agent against it. The task definition is *not* mutated through
-   *     pending → running — it stays as the schedule. Each fire produces
+   *     agent against it. The scheduler does not mutate the parent through
+   *     pending → running; each fire produces
    *     a new run row with its own state/started_at/ended_at, so a cron
    *     task accumulates a real run history. Concurrent fires of the same
    *     task converge in `startTaskRun` (locks the task, refuses if a run
@@ -210,17 +458,22 @@ export function createRunManager(opts: RunManagerOptions) {
    *     state and clear executeAt once the run completes — so they leave
    *     the "scheduled" column.
    *
-   *   - `chat` / `ai_note`: claims the message itself (pending → running)
+   *   - `chat` / `summary`: claims the message itself (pending → running)
    *     and finalises it in place. Idempotent on `messageId` — these
    *     kinds fire once per row (a fresh row per chat agent_turn or per
-   *     scheduleAiNote refresh).
+   *     scheduleSummary refresh).
    *
    * Returns `fired: false` if the row is missing, the kind doesn't fire,
    * or another fire is already in flight (the task lock declined us).
    */
-  async function fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }> {
+  async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
+    const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
+      `SELECT workspace_id FROM chats WHERE id = ?`,
+      [msg.chatId],
+    );
+    const eventWorkspaceId = fireChatRows[0]?.workspace_id;
 
     // Execution target: the row whose state/started_at/ended_at this fire
     // owns. For a task, it's a freshly-inserted task_run child; for other
@@ -239,10 +492,9 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       if (!run) return { fired: false, childIds: [] };
       runId = run.id;
-      emit({ type: "message.appended", payload: run });
-      // Emit parent task update so the kanban moves the card to Active.
-      const updatedTask = await queries.messages.findById(pool, messageId);
-      if (updatedTask) emit({ type: "message.updated", payload: updatedTask });
+      emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+      // The task_run child is the authoritative agent-owned Active signal. The
+      // parent is emitted only when a lifecycle policy below changes it.
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -253,39 +505,15 @@ export function createRunManager(opts: RunManagerOptions) {
       });
     }
 
-    const { prompt, attachments } = await derivePromptInputs(msg);
-    const outputKind = outputContentTypeFor(msg);
-
-    // Single JOIN resolves workspace slug, agent, user, and timezone in one round-trip.
-    const { rows: ctxRows } = await pool.query<{
-      workspace_id: string;
-      workspace_path: string;
-      agent_id: string | null;
-      user_id: string | null;
-      username: string | null;
-      timezone: string | null;
-    }>(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, c.agent_id,
-              u.id AS user_id, u.username, u.timezone
-       FROM chats c
-       JOIN workspaces w ON w.id = c.workspace_id
-       LEFT JOIN users u ON u.id = w.user_id
-       WHERE c.id = ?`,
-      [msg.chatId],
-    );
-    const ctxRow = ctxRows[0];
-    const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
-    const workspaceSlug = ctxRow?.workspace_path ?? "desk";
-    const chatAgentId = ctxRow?.agent_id ?? null;
-    const userId = ctxRow?.user_id ?? null;
-    const userName = ctxRow?.username ?? "User";
-    const userTimezone = ctxRow?.timezone ?? undefined;
-
-    const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
-    const logFile = path.join(logDir, `${runId}.log`);
-    const logStream = fs.createWriteStream(logFile, { flags: "a" });
+    // All post-claim work is wrapped in a single try/catch so any failure
+    // — including pre-execution setup like prompt building or workspace lookup
+    // — always reaches finalizeExecution and never leaves the message stuck
+    // in `running` state.
+    let logStream: fs.WriteStream | undefined;
+    let logFile: string | undefined;
 
     const onLog = async (evt: LogEvent) => {
+      if (!logStream) return;
       // Split on internal newlines so each log file line is exactly one
       // `kind\tpayload\n` record. A single onLog call may carry several
       // events concatenated by the driver (a stdout chunk covering
@@ -301,31 +529,99 @@ export function createRunManager(opts: RunManagerOptions) {
     };
 
     try {
+      const { prompt, attachments } = await derivePromptInputs(msg);
+      const outputKind = outputContentTypeFor(msg);
+
+      // Single JOIN resolves workspace slug, agent, user, timezone, and the
+      // chat's persistent goal in one round-trip. `chat_goal` feeds the
+      // per-chat goal fragment into the rendered system prompt.
+      const { rows: ctxRows } = await pool.query<{
+        workspace_id: string;
+        workspace_path: string;
+        workspace_name: string;
+        agent_id: string | null;
+        user_id: string | null;
+        username: string | null;
+        timezone: string | null;
+        chat_goal: string | null;
+      }>(
+        `SELECT w.id AS workspace_id, w.path AS workspace_path, w.name AS workspace_name, c.agent_id,
+                u.id AS user_id, u.username, u.timezone,
+                c.goal AS chat_goal
+         FROM chats c
+         JOIN workspaces w ON w.id = c.workspace_id
+         LEFT JOIN users u ON u.id = w.user_id
+         WHERE c.id = ?`,
+        [msg.chatId],
+      );
+      const ctxRow = ctxRows[0];
+      const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
+      const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+      const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
+      const chatAgentId = ctxRow?.agent_id ?? null;
+      const userId = ctxRow?.user_id ?? null;
+      const userName = ctxRow?.username ?? "User";
+      const userTimezone = ctxRow?.timezone ?? undefined;
+      // Validate against the known goal keys before treating the column as a
+      // GoalKey: if a row holds a value outside GOAL_KEYS (legacy data, manual
+      // SQL edit), `goal/<key>.md` would not exist and the run would crash on
+      // ENOENT mid-render. Fall back to no goal in that case.
+      const rawGoal = ctxRow?.chat_goal ?? null;
+      const chatGoal: GoalKey | null =
+        rawGoal !== null && (GOAL_KEYS as readonly string[]).includes(rawGoal)
+          ? (rawGoal as GoalKey)
+          : null;
+
+      const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
+      logFile = path.join(logDir, `${runId}.log`);
+      logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId
-        ? await queries.userSettings.getProviderKeys(pool, userId)
+        ? await queries.userSettings.getActiveProviderKeys(pool, userId)
         : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
         );
       }
+      // Codex/ChatGPT bridge: when the user has opted in and the host has a
+      // valid `~/.codex/auth.json`, translate it to OpenCode's auth blob and
+      // forward it as OPENCODE_AUTH_CONTENT. Re-read per run so a refresh on
+      // the host (interactive `codex` use) propagates without recreating the
+      // sandbox.
+      const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
       const agent = await queries.agents.findById(pool, agentId);
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
         model: agent?.model ?? "opencode/big-pickle",
-        instructions: agent?.instructions ?? "",
         userName,
         userTimezone,
+        chatId: msg.chatId,
+        goal: chatGoal,
+        runMode: outputKind === "summary" ? "summary" : "chat",
       };
 
       let result: { exitCode: number };
-      if (opts.execRunFn) {
+      if (msg.content.type === "reflection_request") {
+        const journal = await fireReflectionTask(
+          msg,
+          workspaceId,
+          workspaceSlug,
+          workspaceName,
+          userId,
+          userName,
+          userTimezone,
+          fireOptions.manual === true,
+        );
+        await logReflectionOutcome(runId, journal, onLog);
+        result = { exitCode: 0 };
+      } else if (opts.execRunFn) {
         result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
-        const home = resolveDeskHome();
-        const handle = await createOrReuse(workspaceId, workspaceSlug, home, providerKeys);
+        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+          ? { containerId: "fake-sandbox", workspaceId }
+          : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
         result = await runtimeExecRun(pool, handle, {
           runId,
           prompt,
@@ -336,14 +632,15 @@ export function createRunManager(opts: RunManagerOptions) {
           agent: agentFileInput,
           attachments,
           providerKeys,
+          extraEnv,
           onLog,
         });
       }
 
       // Wait for pending writes to flush before reading the file back.
       await new Promise<void>((resolve) => {
-        logStream.once("finish", resolve);
-        logStream.end();
+        logStream!.once("finish", resolve);
+        logStream!.end();
       });
       const terminal = result.exitCode === 0 ? "succeeded" : "failed";
       await queries.messages.finalizeExecution(pool, runId, terminal);
@@ -351,18 +648,18 @@ export function createRunManager(opts: RunManagerOptions) {
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,
       });
-      await afterTaskRun(msg, terminal);
+      await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
       const content = buildOutputContent(outputKind, entries);
       if (content) {
-        // When the run produced a new note, snapshot the previous note
+        // When the run produced a new summary, snapshot the previous summary
         // (if any) so a bad rewrite doesn't silently erase user edits.
-        if (outputKind === "note") {
-          const { snapshotNote } = await import("@agent-desk/storage");
+        if (outputKind === "summary") {
+          const { snapshotSummary } = await import("@agent-desk/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
-             WHERE chat_id = ? AND json_extract(content, '$.type') = 'note'
+             WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
              ORDER BY created_at DESC LIMIT 1`,
             [msg.chatId],
           );
@@ -371,12 +668,14 @@ export function createRunManager(opts: RunManagerOptions) {
             const prevRow = prev.rows[0] as { id: string; content: string };
             const parsed = JSON.parse(prevRow.content) as { body?: string };
             if (typeof parsed.body === "string") {
-              const home = resolveDeskHome();
-              await snapshotNote(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
+              await snapshotSummary(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }
 
+        // Summary runs carry kind="summary" on the output child so the
+        // insert path treats them as internal (no unread flip).
+        const childKind = outputKind === "summary" ? "summary" : undefined;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
           chatId: msg.chatId,
@@ -385,57 +684,109 @@ export function createRunManager(opts: RunManagerOptions) {
           parentId: runId,
           agentId,
           model: agentFileInput.model,
+          ...(childKind ? { kind: childKind } : {}),
         });
-        // Note-kind output: also write the body to the notes/ dir so the
+        // Summary output: also write the body to the notes/ dir so the
         // agent (and any other filesystem consumer) can see the latest
-        // note alongside its own files. Best-effort — the DB row is the
+        // summary alongside its own files. Best-effort — the DB row is the
         // source of truth.
-        if (content.type === "note") {
-          const { materializeNote } = await import("@agent-desk/storage");
-          const home = resolveDeskHome();
-          await materializeNote(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+        if (content.type === "summary") {
+          const { materializeSummary } = await import("@agent-desk/storage");
+          await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
-        emit({ type: "message.appended", payload: child });
+        emit({ type: "message.appended", payload: child, workspaceId });
         emit({ type: "workspace.synced", payload: { workspaceId } });
         return { fired: true, childIds: [child.id] };
       }
       emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [] };
     } catch (err) {
-      logStream.end();
       // eslint-disable-next-line no-console
       console.error(`fireMessage ${messageId} failed:`, err);
+      for (const line of errorLogLines(err)) {
+        await onLog({ runId, seq: 0, kind: "stderr", payload: line });
+      }
+      if (logStream) {
+        await new Promise<void>((resolve) => {
+          logStream!.once("finish", resolve);
+          logStream!.end();
+        });
+      }
       await queries.messages.finalizeExecution(pool, runId, "failed");
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, runId))!,
+      const failedMsg = await queries.messages.findById(pool, runId);
+      if (failedMsg) emit({ type: "message.updated", payload: failedMsg });
+      await afterTaskRun(msg, "failed", fireOptions);
+      if (!logFile) return { fired: true, childIds: [] };
+      const entries = await readLogEntries(logFile);
+      const content = buildOutputContent("text", entries);
+      if (!content) {
+        return { fired: true, childIds: [] };
+      }
+      // Failed summary runs: tag the error output child with
+      // kind="summary" so it doesn't flip unread.
+      const errorChildKind = outputContentTypeFor(msg) === "summary" ? "summary" : undefined;
+      const child = await queries.messages.insert(pool, {
+        id: generateId("message"),
+        chatId: msg.chatId,
+        role: "agent",
+        content,
+        parentId: runId,
+        ...(errorChildKind ? { kind: errorChildKind } : {}),
       });
-      await afterTaskRun(msg, "failed");
-      return { fired: true, childIds: [] };
+      emit({ type: "message.appended", payload: child, workspaceId: eventWorkspaceId });
+      return { fired: true, childIds: [child.id] };
     }
   }
 
   /**
    * After a task run completes: cron tasks advance execute_at to the next
-   * occurrence and stay pending; one-shot tasks transition to the terminal
-   * state and clear execute_at.
+   * occurrence and stay pending; successful one-shot tasks transition to done
+   * and clear execute_at. Failed one-shot runs clear the missed occurrence but
+   * keep the parent task pending so an error does not count as completion.
    */
+  function isUnscheduledTask(task: Message): boolean {
+    // Unscheduled tasks are kanban cards first and execution prompts second.
+    // A completed agent run is history on a task_run child; it must not
+    // silently move the parent card out of Todo/Active regardless of who
+    // authored the parent task.
+    return task.kind === "task" && !task.executeAt && !task.cron;
+  }
+
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
+    fireOptions: FireMessageOptions = {},
   ): Promise<void> {
     if (task.kind !== "task") return;
+    if (fireOptions.manual && (task.executeAt || task.cron)) {
+      const result = await pool.query(
+        `UPDATE messages
+         SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND state = 'running'`,
+        [task.state, task.id],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        const updated = await queries.messages.findById(pool, task.id);
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      const latest = await queries.messages.findById(pool, task.id);
+      if (latest?.state === "pending" && latest.cron && !latest.executeAt) {
+        const updated = await queries.messages.updateMessage(pool, task.id, {
+          executeAt: computeNextRun(latest.cron),
+        });
+        if (updated) emit({ type: "message.updated", payload: updated });
+      }
+      return;
+    }
     if (task.cron) {
       const nextRun = computeNextRun(task.cron);
       const updated = await queries.messages.updateMessage(pool, task.id, { state: "pending", executeAt: nextRun });
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    // User-created unscheduled tasks: the user owns their status. Leave
-    // the parent at 'running' so the card stays in the Active column.
-    if (task.role === "user" && !task.executeAt) return;
+    if (isUnscheduledTask(task)) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
-      state: terminal,
+      state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,
     });
     if (updated) emit({ type: "message.updated", payload: updated });
@@ -477,35 +828,231 @@ export function createRunManager(opts: RunManagerOptions) {
     return timer;
   }
 
-  /** Permanently deletes a message row. Used for ephemeral rows (e.g. ai_note) that should leave no trace. */
+  /** Permanently deletes a message row. Used for ephemeral rows (e.g. summary) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
     await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
   }
 
-  /** Schedules an ai_note refresh for the chat, deleting any prior ai_note rows first. */
-  async function scheduleAiNote(chatId: string): Promise<void> {
-    await cancelAiNoteForChat(chatId);
+  /**
+   * Hybrid summary trigger (memory-system spec, P2.2).
+   *
+   * Counts tokens in the transcript-since-last-summary; if the transcript
+   * crosses an adaptive model-aware budget, fire the summary immediately
+   * (executeAt = now). Otherwise the existing time-based 30-minute fallback
+   * applies.
+   *
+   * The trigger uses the active chat agent's OpenCode-reported context window
+   * when available. Defaults follow long-context RAG/memory practice: summarize
+   * at a small fraction of the model window, but clamp the threshold so small
+   * local models keep enough working context and frontier models do not wait
+   * until chats become unwieldy. Env overrides remain available for ops.
+   */
+  async function scheduleSummary(chatId: string): Promise<void> {
+    await cancelSummaryForChat(chatId);
+    const urgent = await isSummaryBudgetExceeded(chatId);
+    const summaryContext = await summaryRequestDisplayContext(chatId);
+    const executeAt = urgent
+      ? new Date().toISOString()
+      : new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const messageId = generateId("message");
     await queries.messages.insert(pool, {
       id: messageId,
       chatId,
       role: "system",
-      content: { type: "ai_note_request" },
+      content: {
+        type: "summary_request",
+        ...(summaryContext.chatTitle ? { chatTitle: summaryContext.chatTitle } : {}),
+        ...(summaryContext.messagePreview ? { messagePreview: summaryContext.messagePreview } : {}),
+      },
       state: "pending",
-      kind: "ai_note",
-      executeAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      kind: "summary",
+      title: summaryContext.title,
+      executeAt,
     });
   }
 
-  async function cancelAiNoteForChat(chatId: string): Promise<void> {
+  async function summaryRequestDisplayContext(chatId: string): Promise<{
+    chatTitle?: string;
+    messagePreview?: string;
+    title: string;
+  }> {
+    const chat = await queries.chats.findById(pool, chatId);
+    const chatTitle = chat?.title?.trim() || undefined;
+    const messagePreview = await latestUserMessagePreview(chatId);
+    const titleParts = [chatTitle, messagePreview].filter((part): part is string => !!part);
+    return {
+      chatTitle,
+      messagePreview,
+      title: titleParts.length > 0 ? `Summarize - ${titleParts.join(": ")}` : "Summarize chat",
+    };
+  }
+
+  async function latestUserMessagePreview(chatId: string): Promise<string | undefined> {
+    const { rows } = await pool.query(
+      `SELECT content FROM messages
+       WHERE chat_id = ?
+         AND role = 'user'
+         AND json_extract(content, '$.type') = 'text'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [chatId],
+    );
+    if (rows.length === 0) return undefined;
+    const raw = rows[0].content;
+    const content = typeof raw === "string" ? JSON.parse(raw) as { text?: unknown } : raw as { text?: unknown };
+    if (typeof content.text !== "string") return undefined;
+    return summarizeMessagePreview(content.text);
+  }
+
+  function summarizeMessagePreview(text: string): string | undefined {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (!normalized) return undefined;
+    return normalized.length > 96 ? `${normalized.slice(0, 95).trimEnd()}…` : normalized;
+  }
+
+  function envPositiveInt(name: string): number | null {
+    const fromEnv = Number.parseInt(
+      process.env[name] ?? "",
+      10,
+    );
+    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : null;
+  }
+
+  function summaryTriggerFraction(): number {
+    const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
+    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.15;
+  }
+
+  function summaryTriggerBudget(limits: SummaryModelTokenLimits): number {
+    const explicit = envPositiveInt("DESK_SUMMARY_TRIGGER_TOKENS");
+    if (explicit !== null) return explicit;
+
+    const min = envPositiveInt("DESK_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
+    const max = envPositiveInt("DESK_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
+    const effectiveInputWindow = limits.inputLimit ?? limits.contextWindow;
+    const fractional = Math.floor(effectiveInputWindow * summaryTriggerFraction());
+    const safeUpperBound = Math.floor(effectiveInputWindow * 0.6);
+    return Math.max(1, Math.min(Math.max(fractional, min), max, safeUpperBound));
+  }
+
+  async function chatAgentModel(chatId: string): Promise<string> {
+    const { rows } = await pool.query(
+      `SELECT c.agent_id AS chat_agent_id
+       FROM chats c
+       WHERE c.id = ?`,
+      [chatId],
+    );
+    const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
+    const agent = await queries.agents.findById(pool, agentId as string);
+    return agent?.model ?? "opencode/big-pickle";
+  }
+
+  function normalizeModelLimits(value: number | SummaryModelTokenLimits | null): SummaryModelTokenLimits | null {
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value > 0 ? { contextWindow: value } : null;
+    }
+    if (value === null) return null;
+    if (!Number.isFinite(value.contextWindow) || value.contextWindow <= 0) return null;
+    return {
+      contextWindow: value.contextWindow,
+      ...(value.inputLimit !== undefined && Number.isFinite(value.inputLimit) && value.inputLimit > 0 ? { inputLimit: value.inputLimit } : {}),
+      ...(value.outputLimit !== undefined && Number.isFinite(value.outputLimit) && value.outputLimit > 0 ? { outputLimit: value.outputLimit } : {}),
+    };
+  }
+
+  function modelLimitsFromRef(model: {
+    id: string;
+    provider: string;
+    contextWindow?: number;
+    inputLimit?: number;
+    outputLimit?: number;
+  }): SummaryModelTokenLimits | null {
+    return normalizeModelLimits({
+      contextWindow: model.contextWindow ?? model.inputLimit ?? 0,
+      ...(model.inputLimit !== undefined ? { inputLimit: model.inputLimit } : {}),
+      ...(model.outputLimit !== undefined ? { outputLimit: model.outputLimit } : {}),
+    });
+  }
+
+  async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
+    const fromEnv = envPositiveInt("DESK_SUMMARY_MODEL_CONTEXT_WINDOW");
+    if (fromEnv !== null) return { contextWindow: fromEnv };
+
+    if (opts.summaryModelContextWindowFn) {
+      const resolved = normalizeModelLimits(await opts.summaryModelContextWindowFn(chatId, modelId).catch(() => null));
+      if (resolved !== null) return resolved;
+    }
+
+    const { rows } = await pool.query(
+      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.user_id AS user_id
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+       WHERE c.id = ?`,
+      [chatId],
+    );
+    const row = rows[0];
+    const workspaceId = row?.workspace_id as string | undefined;
+    const workspaceSlug = row?.workspace_path as string | undefined;
+    if (workspaceId && workspaceSlug) {
+      const cacheKey = `${workspaceId}:${row?.user_id ?? ""}`;
+      const cached = modelContextCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        const value = cached.values.get(modelId);
+        if (value !== undefined) return value;
+      }
+      try {
+        const userId = row?.user_id as string | undefined;
+        const providerKeys = userId ? await queries.userSettings.getActiveProviderKeys(pool, userId) : {};
+        const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
+        const models = await listModels(workspaceId, workspaceSlug, {
+          providerKeys,
+          env: extraEnv,
+          timeoutMs: 5_000,
+        });
+        const values = new Map<string, SummaryModelTokenLimits>();
+        for (const model of models) {
+          const limits = modelLimitsFromRef(model);
+          if (limits !== null) values.set(model.id, limits);
+        }
+        modelContextCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, values });
+        const value = values.get(modelId);
+        if (value !== undefined) return value;
+      } catch {
+        // Model metadata is best-effort. Scheduling must never fail because the
+        // sandbox or provider key lookup is temporarily unavailable.
+      }
+    }
+
+    // Conservative fallback for unknown/local models when OpenCode metadata is
+    // unavailable: enough room for a useful transcript, much lower than old 60K.
+    return { contextWindow: 60_000 };
+  }
+
+  async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
+    const items = await queries.messages.listAgentContextByChat(pool, chatId);
+    const tokenized = items
+      .filter(shouldIncludeInPromptContext)
+      .map((m) => {
+        const formatted = formatMessageForPrompt(m);
+        return formatted ? { role: formatted.role, text: formatted.text } : null;
+      })
+      .filter((m): m is { role: string; text: string } => m !== null);
+    const used = estimateMessagesTokens(tokenized);
+    const modelId = await chatAgentModel(chatId);
+    const limits = await summaryModelTokenLimits(chatId, modelId);
+    const budget = summaryTriggerBudget(limits);
+    return used >= budget;
+  }
+
+  async function cancelSummaryForChat(chatId: string): Promise<void> {
     await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND kind = 'ai_note'`,
+      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
       [chatId],
     );
   }
 
-  async function cancelAiNote(chatId: string): Promise<void> {
-    await cancelAiNoteForChat(chatId);
+  async function cancelSummary(chatId: string): Promise<void> {
+    await cancelSummaryForChat(chatId);
   }
 
   /** Cancels an in-flight exec: kills the opencode child if possible. */
@@ -585,8 +1132,8 @@ export function createRunManager(opts: RunManagerOptions) {
     resumeMessage,
     rescheduleMessage,
     cancelScheduledMessage,
-    scheduleAiNote,
-    cancelAiNote,
-    cancelAiNoteForChat,
+    scheduleSummary,
+    cancelSummary,
+    cancelSummaryForChat,
   };
 }

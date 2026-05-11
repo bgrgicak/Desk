@@ -10,7 +10,7 @@ import type { ChatMessage } from '@/data/ui-types'
 import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 export function serverMessageToChatMessage(m: ServerMessage): ChatMessage | null {
-  if (m.role === 'system' || m.kind === 'ai_note') return null
+  if (m.role === 'system' || m.kind === 'summary') return null
   if (m.content.type === 'events') return null
   const text =
     m.content.type === 'text'
@@ -67,7 +67,7 @@ export function useServerChat(
   const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
 
   const { data: messagesData } = useGetChatMessagesQuery(
-    { chatId: chatId! },
+    { chatId: chatId!, full: false },
     { skip: !chatId },
   )
 

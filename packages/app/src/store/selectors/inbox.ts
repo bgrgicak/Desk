@@ -13,7 +13,7 @@ function typeFor(m: ServerMessage): InboxItem["type"] {
 
 function messageFor(m: ServerMessage): string {
   if (m.content.type === "text") return m.content.text;
-  if (m.content.type === "note") return m.content.body;
+  if (m.content.type === "summary") return m.content.body;
   return `(${m.content.type})`;
 }
 

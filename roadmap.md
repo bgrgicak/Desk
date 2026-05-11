@@ -76,7 +76,7 @@ Ordered by priority for the private-beta milestone.
 - Server-side rate-limit / quota signaling surfaced in the UI
 - Audit log of what an agent did on the user's behalf (especially with connections)
 - Basic observability for the server (latency + error rates per endpoint) so we know what beta users hit
-- Test coverage parity per `AGENTS.md`: each new real surface gets an integration test against real Postgres + real Anthropic, not just unit tests
+- Test coverage parity per `AGENTS.md`: each new real surface gets an integration test against real Postgres + real AI (free `opencode/big-pickle`), not just unit tests
 
 ## Suggested sequencing (rough, not contractual)
 

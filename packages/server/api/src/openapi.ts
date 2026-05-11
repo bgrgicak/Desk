@@ -3,6 +3,8 @@
  * Covers all v1 routes with request/response shapes.
  */
 
+import { GOAL_KEYS } from "@agent-desk/shared";
+
 interface OpenApiSpec {
   openapi: string;
   info: { title: string; version: string; description: string };
@@ -151,6 +153,66 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
+      "/me/providers/local": {
+        get: {
+          summary: "List host-detected local sources",
+          description: "Returns every registered local source (Codex CLI auth today; LM Studio / Ollama in the future) with its detection status and the user's per-source opt-in flag.",
+          responses: {
+            "200": {
+              description: "Local source array",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      sources: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            kind: { type: "string" },
+                            available: { type: "boolean" },
+                            enabled: { type: "boolean" },
+                            reason: { type: "string" },
+                            detail: { type: "object", additionalProperties: true },
+                          },
+                          required: ["kind", "available", "enabled"],
+                        },
+                      },
+                    },
+                    required: ["sources"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/me/providers/local/{kind}": {
+        put: {
+          summary: "Toggle a local source's per-user opt-in",
+          parameters: [
+            { name: "kind", in: "path", required: true, schema: { type: "string" }, description: "Local source kind, e.g. 'codex'." },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { enabled: { type: "boolean" } },
+                  required: ["enabled"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Updated source state" },
+            "400": { description: "Missing or non-boolean enabled" },
+            "404": { description: "Unknown source kind" },
+          },
+        },
+      },
       "/workspaces": {
         get: { summary: "List workspaces", responses: { "200": { description: "Workspace array" } } },
         post: {
@@ -200,16 +262,16 @@ export function generateOpenApiSpec(): OpenApiSpec {
         get: { summary: "List the current user's agents", responses: { "200": { description: "Agent array" } } },
         post: {
           summary: "Create an agent",
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, instructions: { type: "string" }, model: { type: "string" } }, required: ["name"] } } } },
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } }, required: ["name"] } } } },
           responses: { "201": { description: "Created agent" } },
         },
       },
       "/agents/{id}": {
         get: { summary: "Get agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Agent" } } },
         patch: {
-          summary: "Update agent (name, instructions, model)",
+          summary: "Update agent (name, model)",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, instructions: { type: "string" }, model: { type: "string" } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } } } } } },
           responses: { "200": { description: "Updated agent" } },
         },
         delete: {
@@ -230,7 +292,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           parameters: [
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
           ],
-          responses: { "200": { description: "Chat array with last-message snippet, `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `ai_note` fall back), and `goalKind` (`app`/`data`/`site`/etc. inferred from the newest user-role text — drives the sidebar icon when set, with `kind` as the fallback signal)." } },
+          responses: { "200": { description: "Chat array with last-message snippet, persisted `goal` (`app`/`data`/`site`/etc.; explicit picker selections and clear text inference both write here), and `kind` (newest user-action message kind — `task`/`task_run`; `chat` and `summary` fall back when no goal is set)." } },
         },
         post: {
           summary: "Create chat",
@@ -242,7 +304,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
         get: { summary: "Get chat", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Chat" } } },
         patch: {
           summary: "Update chat",
-          description: "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and instructions.",
+          description: "Patch chat metadata. `agentId` re-binds the chat to a different agent (the new agent must be enabled in the chat's workspace) — subsequent messages use the new agent's model and the user's memory.",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           requestBody: {
             content: {
@@ -251,7 +313,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     title: { type: "string" },
-                    goal: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal. Pass null to clear it.",
+                    },
                     agentId: { type: "string", description: "Must be an agent enabled in this chat's workspace." },
                   },
                 },
@@ -282,6 +348,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "string" },
+                    goal: {
+                      type: ["string", "null"],
+                      enum: [...GOAL_KEYS, null],
+                      description: "Persisted chat goal for this send. Omit to keep/infer; pass null to clear the chat goal.",
+                    },
                     attachments: {
                       type: "array",
                       description: "Files the user attached to this message. Each item references a file already uploaded via POST /chats/{id}/attachments — the path is workspace-relative, forward-slash separated.",
@@ -307,8 +378,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/chats/{id}/messages/{messageId}": {
         patch: {
-          summary: "Edit a message (content, cancel, reschedule)",
-          description: "Update content (e.g. user edits a note), transition state (only 'cancelled' or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
+          summary: "Edit a message (title, content, cancel, reschedule)",
+          description: "Update title/content (e.g. user edits a task or summary), transition state (only 'cancelled', 'paused', or 'pending' allowed), or reschedule (execute_at/cron). Emits message.updated.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -320,7 +391,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
                   type: "object",
                   properties: {
                     content: { type: "object" },
-                    state: { type: "string", enum: ["cancelled", "pending"] },
+                    title: { type: ["string", "null"] },
+                    state: { type: "string", enum: ["cancelled", "paused", "pending"] },
                     executeAt: { type: ["string", "null"] },
                     cron: { type: ["string", "null"] },
                   },
@@ -349,7 +421,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}/logs": {
         get: {
           summary: "Stream a message's execution log file",
-          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
+          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -360,17 +432,17 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
-      "/chats/{id}/messages/{messageId}/note-history": {
+      "/chats/{id}/messages/{messageId}/summary-history": {
         get: {
-          summary: "List archived versions of a note-content message",
-          description: "Each PATCH of a `note`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/note-history/. This endpoint returns every snapshot, newest first.",
+          summary: "List archived versions of a summary-content message",
+          description: "Each PATCH of a `summary`-content message and each AI rewrite snapshots the prior body under .chats/{chatId}/notes/.history/. This endpoint returns every snapshot, newest first, and also reads legacy .chats/{chatId}/note-history/ and .chats/{chatId}/summary-history/ directories for compatibility.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
           ],
           responses: {
             "200": {
-              description: "Note version array",
+              description: "Summary version array",
               content: {
                 "application/json": {
                   schema: {
@@ -400,11 +472,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/attachments": {
         get: {
           summary: "List chat attachments",
-          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeNotes=true to also include the chat's materialized note mirrors from `.chats/{id}/notes/`. Each item carries a `kind` field: \"attachment\" or \"note\".",
+          description: "Returns visible (non-dot) attachments by default. Pass ?showHidden=true to include dot-prefixed agent artifacts. Pass ?includeArtifacts=true to also include agent-written files/dirs from `.chats/{id}/artifacts/`. Each item carries a `kind` field: \"attachment\" or \"artifact\".",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "showHidden", in: "query", schema: { type: "boolean" } },
-            { name: "includeNotes", in: "query", schema: { type: "boolean" } },
+            { name: "includeArtifacts", in: "query", schema: { type: "boolean" } },
           ],
           responses: { "200": { description: "File array" } },
         },
@@ -549,8 +621,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "200": { description: "File content (Content-Disposition: inline)" }, "404": { description: "No such path in the resolved workspace" } },
         },
         put: {
-          summary: "Overwrite an existing library file's contents",
-          description: "Replaces the file at `path` with the request body. Fails with 404 if the file doesn't exist — use POST /library to create.",
+          summary: "Save content to a library file (upsert)",
+          description: "Replaces the file at `path` with the request body. Creates the file and parent directories if they don't exist yet, so agent-written files (e.g. `.memory/workspace.md`) can be saved without a separate POST.",
           parameters: [
             { name: "path", in: "query", required: true, schema: { type: "string" } },
             { name: "workspaceId", in: "query", schema: { type: "string", pattern: "^wks_[A-Za-z0-9_-]+$" } },
@@ -560,8 +632,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
           },
           responses: {
-            "200": { description: "Updated FileRef" },
-            "404": { description: "No such path in the resolved workspace" },
+            "200": { description: "Saved FileRef (created or updated)" },
             "413": { description: "File exceeds maximum size" },
           },
         },
@@ -580,7 +651,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
             { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
-            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|ai_note`). Distinct from `contentKind`." },
+            { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|summary`). Distinct from `contentKind`." },
             { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },
             { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Only messages with `createdAt > since`. Useful for WS-reconnect catchup." },
             { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque pagination cursor returned as `nextCursor` in the previous page." },
@@ -610,7 +681,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/tools/models": {
         get: {
           summary: "List AI models that are ready to use",
-          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid provider models (anthropic, openai) appear only when the corresponding API key is configured. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+          description: "Returns the set of models available in the sandbox. Free opencode models (e.g. opencode/big-pickle) are always present. Paid-provider models appear only when the user has configured the matching API key via /me/providers. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
           parameters: [
             { name: "provider", in: "query", schema: { type: "string" }, description: "Restrict to a single provider id, e.g. \"opencode\"." },
           ],
@@ -635,6 +706,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             },
             "400": { description: "Sandbox rejected the listing" },
             "404": { description: "No sandbox available" },
+            "503": { description: "No container runtime is available to query the sandbox" },
           },
         },
       },
@@ -643,9 +715,17 @@ export function generateOpenApiSpec(): OpenApiSpec {
           summary: "Search across artifacts, chats, and library",
           parameters: [
             { name: "q", in: "query", required: true, schema: { type: "string" } },
-            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library"] } },
+            { name: "scope", in: "query", schema: { type: "string", enum: ["all", "artifacts", "chats", "library", "files"] } },
+            { name: "kind", in: "query", schema: { type: "string", description: "Comma-separated indexed kinds: chat,message,summary,library_file,attachment,artifact" } },
+            { name: "workspaceId", in: "query", schema: { type: "string" } },
+            { name: "chatId", in: "query", schema: { type: "string" } },
+            { name: "showHidden", in: "query", schema: { type: "boolean" } },
           ],
-          responses: { "200": { description: "Search result array" } },
+          responses: {
+            "200": {
+              description: "Search result array. Chat results are indexed message or summary hits from chat_search_index.",
+            },
+          },
         },
       },
       "/ws": {

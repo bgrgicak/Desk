@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useSelector } from 'react-redux'
+import { getSessionToken } from '@/auth/session'
 import {
   Link2,
   Download,
@@ -55,6 +56,15 @@ import { toFolderList } from '@/store/selectors/library'
 import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
 import { MergeEditor } from './MergeEditor'
+import {
+  AppPreview,
+  parseChatAppDirPath,
+  parseChatAppFragmentPath,
+  parseChatAppManifestPath,
+  parseLibraryAppDirPath,
+  parseLibraryAppFragmentPath,
+  parseLibraryAppManifestPath,
+} from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { ConversationPanel } from '@/components/artifact/ConversationPanel'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
@@ -62,8 +72,62 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
 import { selectFileChangeCounter, selectWorkspaceChangeCounter } from '@/store/slices/derivedSlice'
+import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
+import { previewBlobFor } from '@/lib/preview-blob'
+import {
+  DESKTOP_RIGHT_PANEL_BREAKPOINT,
+  isSmallRightPanelViewport,
+  rightPanelClassName,
+  shouldOpenRightPanelsByDefault,
+} from '@/components/shared/rightPanelLayout'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
+
+function useIsSmallRightPanelScreen() {
+  const [smallScreen, setSmallScreen] = useState(() => isSmallRightPanelViewport())
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const query = window.matchMedia(`(max-width: ${DESKTOP_RIGHT_PANEL_BREAKPOINT - 1}px)`)
+    const update = () => setSmallScreen(isSmallRightPanelViewport())
+
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  return smallScreen
+}
+
+type ContextDetailAppPreviewRef =
+  | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
+  | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; fragment?: string }
+
+export function appPreviewRefForContextItem(
+  item: Pick<ContextItem, 'id' | 'type'>,
+): ContextDetailAppPreviewRef | null {
+  const chatAppManifestRef = parseChatAppManifestPath(item.id)
+  const chatAppDirRef = item.type === 'app' ? parseChatAppDirPath(item.id) : null
+  const chatFragmentRef = parseChatAppFragmentPath(item.id)
+  if (chatFragmentRef) return { scope: 'chat', chatId: chatFragmentRef.chatId, appName: chatFragmentRef.appName, fragment: chatFragmentRef.fragment }
+  const chatAppRef = chatAppManifestRef ?? chatAppDirRef
+  if (chatAppRef) return { scope: 'chat', chatId: chatAppRef.chatId, appName: chatAppRef.appName }
+
+  const libraryFragmentRef = parseLibraryAppFragmentPath(item.id)
+  if (libraryFragmentRef) return { scope: 'library', appName: libraryFragmentRef.appName, appPath: libraryFragmentRef.appPath, fragment: libraryFragmentRef.fragment }
+
+  const libraryManifestRef = parseLibraryAppManifestPath(item.id)
+  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName, appPath: item.id.slice(0, -'/desk.app.json'.length) }
+
+  const libraryAppDirRef =
+    item.type === 'app' && !libraryManifestRef
+      ? parseLibraryAppDirPath(item.id)
+      : null
+  if (libraryAppDirRef) return { scope: 'library', appName: libraryAppDirRef.appName, appPath: item.id }
+
+  return null
+}
 
 interface ContextDetailProps {
   item: ContextItem
@@ -76,19 +140,23 @@ interface ContextDetailProps {
   /** Called after a successful rename (note title auto-rename or file
    * rename modal) so the parent can update the URL to the new path. */
   onRenameItem?: (newPath: string) => void
+  previewParams?: Record<string, string>
 }
 
 function canPreview(item: ContextItem): boolean {
   if (item.type === 'note' || item.type === 'link') return true
-  return fileKindForItem(item) !== 'unknown'
+  const k = fileKindForItem(item)
+  return k !== 'unknown' && k !== 'app'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem, previewParams }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
 
-  const [panelCollapsed, setPanelCollapsed] = usePersistedState<boolean>('desk.context.sidebarCollapsed', false)
+  const rightPanelOpenKey = `desk.library.${item.id}.rightPanelOpen`
+  const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenRightPanelsByDefault())
+  const isSmallViewport = useIsSmallRightPanelScreen()
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [showPreview, setShowPreview] = usePersistedState(
     `desk.library.${item.id}.previewMode`,
@@ -117,6 +185,21 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   const [conflictContent, setConflictContent] = useState<string | null>(null)
 
   const kind = fileKindForItem(item)
+  // PR-C: when the open item is an app manifest inside a chat artifact's
+  // `<name>.app/` directory, render the app live in an iframe instead of
+  // the raw JSON. The bridge + capability checklist live inside
+  // <AppPreview>.
+  // PR-E extends this to library apps: clicking either the `<name>.app/`
+  // library directory or its inner `desk.app.json` opens the same live
+  // preview.
+  const baseAppPreviewRef = appPreviewRefForContextItem(item)
+  const appPreviewRef = baseAppPreviewRef
+    ? {
+        ...baseAppPreviewRef,
+        ...(baseAppPreviewRef.scope === 'library' ? { workspaceId: activeWorkspaceId } : {}),
+        ...(previewParams ? { params: previewParams } : {}),
+      }
+    : null
 
   // Refs that mirror the latest editorValue / previewText so the async fetch
   // callback can read current values without stale closures, and without
@@ -185,7 +268,9 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
             editorInitFor.current = item.id
           }
         } else {
-          createdUrl = URL.createObjectURL(blob)
+          const previewBlob = await previewBlobFor(effectiveKind, blob, item.name, item.id, blob.type || item.mimeType)
+          if (cancelled) return
+          createdUrl = URL.createObjectURL(previewBlob)
           setPreviewBlobUrl(createdUrl)
         }
       })
@@ -540,12 +625,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {panelCollapsed && (
+              {!panelOpen && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setPanelCollapsed(false)}
+                  onClick={() => setPanelOpen(true)}
                 >
                   <PanelRight className="h-4 w-4" />
                 </Button>
@@ -555,8 +640,10 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
         />
 
         {/* Preview area */}
-        <div className="flex-1 overflow-y-auto bg-muted/20 flex flex-col">
-          {item.type === 'note' && item.mimeType !== 'text/markdown' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
+          {appPreviewRef ? (
+            <AppPreview {...appPreviewRef} />
+          ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
             <div className="flex-1 flex flex-col bg-background overflow-y-auto">
               <div className="mx-auto w-full max-w-[490px] px-4 pt-8 pb-16">
                 {editorValue !== null ? (
@@ -640,6 +727,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 </div>
               )
             })()
+          ) : kind === 'app' ? (
+            <div className="flex-1 flex flex-col bg-muted/30">
+              <iframe
+                title={item.name}
+                src={`/api/apps/${activeWorkspaceId}/${item.id}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
+                className="flex-1 w-full border-0 bg-white"
+                sandbox={GENERATED_APP_IFRAME_SANDBOX}
+              />
+            </div>
           ) : kind === 'pdf' ? (
             <div className="flex-1 flex flex-col bg-muted/30">
               {previewBlobUrl ? (
@@ -672,7 +768,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                     <iframe
                       title={item.name}
                       src={htmlPreviewBlobUrl}
-                      sandbox="allow-same-origin"
+                      sandbox={GENERATED_APP_IFRAME_SANDBOX}
                       className="flex-1 w-full border-0 bg-white"
                     />
                   ) : (
@@ -714,12 +810,12 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'image' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-800 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <img
                   src={previewBlobUrl}
                   alt={item.name}
-                  className="max-w-full max-h-full object-contain"
+                  className="h-full w-full object-contain"
                   onError={() => setMediaLoadFailed(true)}
                 />
               ) : (
@@ -729,7 +825,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
             </div>
           ) : kind === 'video' && !mediaLoadFailed ? (
-            <div className="flex-1 flex items-center justify-center bg-zinc-900 overflow-auto">
+            <div className="flex-1 flex items-center justify-center bg-background overflow-auto">
               {previewBlobUrl ? (
                 <video
                   src={previewBlobUrl}
@@ -812,13 +908,15 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
       </div>
 
       {/* Right panel — conversation + details */}
-      <div className={`hidden lg:flex shrink-0 transition-all duration-300 overflow-hidden ${panelCollapsed ? 'w-0' : 'w-[380px]'}`}>
-        <ConversationPanel
-          initialMessages={[]}
-          item={item}
-          workspaceId={activeWorkspaceId}
-          onCollapse={() => setPanelCollapsed(true)}
-        />
+      <div className={rightPanelClassName(panelOpen, isSmallViewport, 'w-[380px]')}>
+        {panelOpen && (
+          <ConversationPanel
+            initialMessages={[]}
+            item={item}
+            workspaceId={activeWorkspaceId}
+            onCollapse={() => setPanelOpen(false)}
+          />
+        )}
       </div>
 
       {/* Delete confirmation dialog */}

@@ -1,6 +1,6 @@
 /**
  * Integration test for per-message `attachments` + `model` stamping and
- * notes/{id}.md materialization. Real Postgres, real filesystem, fake
+ * summary mirror materialization. Real SQLite, real filesystem, fake
  * sandbox driver (no Docker).
  *
  * Covers:
@@ -11,9 +11,9 @@
  *   - fireMessage stamps the agent's configured model on the inserted
  *     assistant row, so historical bubbles render the correct label even
  *     if the agent is later reconfigured.
- *   - ai_note_request firing materializes the produced note body at
+ *   - summary_request firing materializes the produced summary body at
  *     `~/.chats/{chatId}/notes/{messageId}.md` so the agent can read its
- *     own notes with ordinary file tools.
+ *     own summaries with ordinary file tools.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -252,7 +252,7 @@ describe("GET /library/content for chat attachments", () => {
 
   beforeAll(async () => {
     attachmentPath = `.chats/${chatId}/attachments/${filename}`;
-    const dir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "attachments");
+    const dir = path.join(home, "desk", ".chats", chatId, "attachments");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, filename), fileBody);
   });
@@ -278,24 +278,24 @@ describe("GET /library/content for chat attachments", () => {
     expect(meta.size).toBe(fileBody.length);
   });
 
-  it("serves a chat-owned note via /library/meta with a 'Chat notes' label", async () => {
-    const noteFilename = "msg_open_me.md";
-    const notePath = `.chats/${chatId}/notes/${noteFilename}`;
-    const noteDir = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes");
-    await fs.mkdir(noteDir, { recursive: true });
-    await fs.writeFile(path.join(noteDir, noteFilename), "# Running summary\n");
+  it("serves a chat-owned summary via /library/meta with a 'Chat summary' label", async () => {
+    const summaryFilename = "msg_open_me.md";
+    const summaryPath = `.chats/${chatId}/notes/${summaryFilename}`;
+    const summaryDir = path.join(home, "desk", ".chats", chatId, "notes");
+    await fs.mkdir(summaryDir, { recursive: true });
+    await fs.writeFile(path.join(summaryDir, summaryFilename), "# Running summary\n");
 
-    const noteRes = await request(
+    const summaryRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(notePath)}`,
+      `/library/meta?path=${encodeURIComponent(summaryPath)}`,
       undefined,
       userToken,
     );
-    expect(noteRes.status).toBe(200);
-    const meta = noteRes.body as { path: string; name: string; label?: string };
-    expect(meta.path).toBe(notePath);
-    expect(meta.name).toBe(noteFilename);
-    expect(meta.label).toBe("Chat notes");
+    expect(summaryRes.status).toBe(200);
+    const meta = summaryRes.body as { path: string; name: string; label?: string };
+    expect(meta.path).toBe(summaryPath);
+    expect(meta.name).toBe(summaryFilename);
+    expect(meta.label).toBe("Chat summary");
   });
 
   it("still rejects other dot-prefixed paths (e.g. .chats/<id>/logs/) with 404", async () => {
@@ -364,45 +364,62 @@ describe("fireMessage stamps model on the assistant row", () => {
   });
 });
 
-describe("notes/{id}.md is materialized when ai_note_request fires", () => {
-  it("writes the note body to ~/.chats/{chatId}/notes/{messageId}.md", async () => {
-    // Seed a pending ai_note_request and fire it.
+describe("notes/{id}.md is materialized when summary_request fires", () => {
+  it("writes the summary body to ~/.chats/{chatId}/notes/{messageId}.md", async () => {
+    // Seed a pending summary_request and fire it.
     const requestId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
        VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
-      [requestId, chatId, JSON.stringify({ type: "ai_note_request" })],
+      [requestId, chatId, JSON.stringify({ type: "summary_request" })],
     );
     const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
-    const notePath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
-    const content = await fs.readFile(notePath, "utf-8");
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
+    const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toContain("Summary");
     expect(content).toContain("attached file");
   });
 
-  it("re-materializes on PATCH when the user edits the note body", async () => {
-    // Produce a fresh note first.
+  it("re-materializes on PATCH when the user edits the summary body", async () => {
+    // Produce a fresh summary first.
     const reqId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
        VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
-      [reqId, chatId, JSON.stringify({ type: "ai_note_request" })],
+      [reqId, chatId, JSON.stringify({ type: "summary_request" })],
     );
     const { childIds } = await runManager.fireMessage(reqId);
-    const noteId = childIds[0];
+    const summaryId = childIds[0];
 
     const patched = await request(
       "PATCH",
-      `/chats/${chatId}/messages/${noteId}`,
-      { content: { type: "note", body: "User-edited summary of the chat." } },
+      `/chats/${chatId}/messages/${summaryId}`,
+      { content: { type: "summary", body: "User-edited summary of the chat." } },
       userToken,
     );
     expect(patched.status).toBe(200);
 
-    const notePath = path.join(home, "Desk", "workspaces", "desk", ".chats", chatId, "notes", `${noteId}.md`);
-    const content = await fs.readFile(notePath, "utf-8");
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toBe("User-edited summary of the chat.");
+  });
+
+  it("deletes the materialized summary mirror when the summary message is deleted", async () => {
+    const reqId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, execute_at)
+       VALUES (?, ?, 'system', ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour'))`,
+      [reqId, chatId, JSON.stringify({ type: "summary_request" })],
+    );
+    const { childIds } = await runManager.fireMessage(reqId);
+    const summaryId = childIds[0];
+    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    await expect(fs.stat(summaryPath)).resolves.toBeTruthy();
+
+    const deleted = await request("DELETE", `/chats/${chatId}/messages/${summaryId}`, undefined, userToken);
+    expect(deleted.status).toBe(200);
+    await expect(fs.stat(summaryPath)).rejects.toThrow();
   });
 });

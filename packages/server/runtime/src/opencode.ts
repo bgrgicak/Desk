@@ -1,15 +1,18 @@
 import { type Pool } from "@agent-desk/db";
+import { networkInterfaces } from "node:os";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import { workspaceRootPath } from "@agent-desk/storage";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
-import { projectMounts, teardownMounts } from "./mounts.js";
+import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
 import { writeAgentFile, type AgentFileInput } from "./agentFile.js";
 
 export interface ExecRunOptions {
   runId: string;
   prompt: string;
-  chatContext?: string;
   home: string;
   workspaceId: string;
   workspaceSlug: string;
@@ -19,12 +22,38 @@ export interface ExecRunOptions {
   attachments?: string[];
   /**
    * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
-   * to `http://host.docker.internal:35138` when omitted.
+   * to the sandbox-reachable host gateway when omitted.
    */
   apiUrl?: string;
   /** Provider API keys forwarded into every exec so they're always current. */
   providerKeys?: Record<string, string>;
+  /**
+   * Non-key env entries forwarded into every exec — currently used for the
+   * Codex/ChatGPT bridge (`OPENCODE_AUTH_CONTENT`).
+   */
+  extraEnv?: Record<string, string>;
   onLog: (event: LogEvent) => void;
+}
+
+function firstNonInternalIpv4(): string | null {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return null;
+}
+
+function defaultSandboxApiUrl(): string {
+  const configured = process.env.DESK_SANDBOX_API_URL;
+  if (configured) return configured;
+
+  const port = process.env.PORT ?? "35138";
+  const hasLocalDockerBridge = Boolean(networkInterfaces().docker0?.some(
+    (entry) => entry.family === "IPv4" && !entry.internal,
+  ));
+  const host = hasLocalDockerBridge ? "host.docker.internal" : firstNonInternalIpv4() ?? "host.docker.internal";
+  return `http://${host}:${port}`;
 }
 
 /**
@@ -56,34 +85,35 @@ export async function execRun(
 
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
-  // single-bind workspace mount.
+  // single-bind workspace mount. The per-chat artifact paths and any
+  // goal fragment are part of the rendered system prompt — no separate
+  // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
 
-  // Tell the agent which chat it's in. The per-chat workbench path is
-  // encoded in the system prompt as a template; here we anchor it and
-  // name the attachments/ + notes/ subdirs so the agent reads real
-  // paths instead of guessing.
-  const workbenchHint = opts.chatId
-    ? [
-        `Current chat workbench: ~/.chats/${opts.chatId}/`,
-        `Chat attachments: ~/.chats/${opts.chatId}/attachments/`,
-        `Chat notes:       ~/.chats/${opts.chatId}/notes/`,
-      ].join("\n")
-    : null;
-  const chatContext = [workbenchHint, opts.chatContext].filter(Boolean).join("\n\n") || undefined;
+  // Write the prompt to a file on the shared workspace mount instead of
+  // passing it via DESK_PROMPT. Large chat transcripts can exceed ARG_MAX
+  // (~1 MB on macOS) when packed into an execve environment block; a file
+  // reference dodges that limit entirely.
+  const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
+  const promptHostPath = path.join(wsRoot, `.desk-prompt-${opts.runId}`);
+  const promptSandboxPath = `${SANDBOX_HOME}/.desk-prompt-${opts.runId}`;
+  await fsp.writeFile(promptHostPath, opts.prompt, "utf8");
 
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
-      chatContext,
+      promptFile: promptSandboxPath,
+      home: opts.home,
       workspaceSlug: opts.workspaceSlug,
+      chatId: opts.chatId,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      apiUrl: opts.apiUrl ?? "http://host.docker.internal:35138",
+      apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
       providerKeys: opts.providerKeys,
+      extraEnv: opts.extraEnv,
       onLog: opts.onLog,
     });
     return result;
@@ -91,6 +121,7 @@ export async function execRun(
     // Always clean up
     await revokeToken(pool, session.id);
     await teardownMounts(handle, opts.runId);
+    await fsp.unlink(promptHostPath).catch(() => {});
   }
 }
 

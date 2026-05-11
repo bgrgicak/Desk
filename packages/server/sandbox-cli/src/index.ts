@@ -1,4 +1,5 @@
 import { writeErrorAndExit } from "./errors.js";
+import { COMMANDS } from "./commands.js";
 
 /**
  * `desk` — the in-sandbox CLI used by the OpenCode agent to call back into
@@ -7,17 +8,6 @@ import { writeErrorAndExit } from "./errors.js";
  * entries.
  */
 
-interface Command {
-  usage: string;
-  help?: string;
-  run(argv: string[]): Promise<void>;
-}
-
-const COMMANDS: Record<string, () => Promise<Command>> = {
-  "task schedule": () => import("./commands/task-schedule.js"),
-  "secret list": () => import("./commands/secret-list.js"),
-  "secret get": () => import("./commands/secret-get.js"),
-};
 
 export function output(data: unknown): void {
   const json = process.stdout.isTTY
@@ -37,9 +27,7 @@ async function printHelp(): Promise<void> {
   process.stdout.write(lines.join("\n") + "\n");
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-
+export async function main(args = process.argv.slice(2)): Promise<void> {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     await printHelp();
     return;

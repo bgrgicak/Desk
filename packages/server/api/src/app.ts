@@ -1,10 +1,20 @@
+import { createReadStream } from "node:fs";
+import { type Readable } from "node:stream";
+import Busboy from "busboy";
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
-import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
-import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
-import type { StorageContext } from "@agent-desk/storage";
+import { queries } from "@agent-desk/db";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type WsEvent } from "@agent-desk/shared";
+import {
+  chatArtifactsDir,
+  ReplaceLibraryAppConflictError,
+  resolveHostPath,
+  workspaceRootPath,
+  type StorageContext,
+} from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
@@ -22,6 +32,7 @@ import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
+import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
 import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
@@ -31,14 +42,37 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
+import * as appsRoutes from "./routes/apps.js";
+import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
   requireLibraryPathInWorkspace,
+  parseReadableChatArtifactPath,
   requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
 } from "./workspace-scope.js";
 
 type RunManager = ReturnType<typeof createRunManager>;
+
+const SEARCH_SCOPES = new Set(["all", "artifacts", "chats", "library", "files"]);
+const SEARCH_KINDS = new Set(["chat", "message", "summary", "library_file", "attachment", "artifact"]);
+type SearchScope = "artifacts" | "chats" | "library" | "files" | "all";
+type SearchKind = "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
+
+function parseSearchScope(raw: string | null): SearchScope {
+  const scope = raw ?? "all";
+  if (!SEARCH_SCOPES.has(scope)) throw new ValidationError(`Invalid search scope: ${scope}`);
+  return scope as SearchScope;
+}
+
+function parseSearchKinds(raw: string | null): SearchKind[] | undefined {
+  if (!raw) return undefined;
+  const kinds = raw.split(",").map((kind) => kind.trim()).filter(Boolean);
+  for (const kind of kinds) {
+    if (!SEARCH_KINDS.has(kind)) throw new ValidationError(`Invalid search kind: ${kind}`);
+  }
+  return kinds as SearchKind[];
+}
 
 export interface AppOptions {
   pool: Pool;
@@ -52,6 +86,73 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
   res.end(json);
+}
+
+/**
+ * The /apps/* dispatcher's `issue` endpoint runs after requireAuth has
+ * already let the path through (no global Bearer check on /apps/*). This
+ * helper re-applies the Bearer check locally so the issue endpoint
+ * cannot mint app-session tokens without a valid user session.
+ */
+async function requireBearerForApps(pool: Pool, req: IncomingMessage): Promise<string> {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Bearer ")) {
+    throw new UnauthorizedError("Missing or invalid Authorization header");
+  }
+  const userId = await verifySession(pool, auth.slice(7));
+  if (!userId) {
+    throw new UnauthorizedError("Invalid or expired session token");
+  }
+  return userId;
+}
+
+async function requireReadablePathForRoute(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  relPath: string,
+  workspaceId: string,
+): Promise<void> {
+  await requireReadablePathInWorkspace(pool, userId, relPath, workspaceId);
+  const artifact = parseReadableChatArtifactPath(relPath);
+  if (!artifact) return;
+
+  const { rows: chatRows } = await pool.query<{ workspace_id: string }>(
+    "SELECT workspace_id FROM chats WHERE id = ?",
+    [artifact.chatId],
+  );
+  if (chatRows[0]?.workspace_id !== workspaceId) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+
+  const { rows } = await pool.query<{ path: string }>(
+    "SELECT path FROM workspaces WHERE id = ?",
+    [workspaceId],
+  );
+  const workspaceSlug = rows[0]?.path;
+  if (!workspaceSlug) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
+
+  const artifactRoot = chatArtifactsDir(storage.home, workspaceSlug, artifact.chatId);
+  const workspaceRoot = workspaceRootPath(storage.home, workspaceSlug);
+  const target = resolveHostPath(storage.home, workspaceSlug, relPath);
+  let realWorkspaceRoot: string;
+  let realRoot: string;
+  let realTarget: string;
+  try {
+    [realWorkspaceRoot, realRoot, realTarget] = await Promise.all([
+      fsRealpath(workspaceRoot),
+      fsRealpath(artifactRoot),
+      fsRealpath(target),
+    ]);
+  } catch {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realRoot !== realWorkspaceRoot && !realRoot.startsWith(realWorkspaceRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + pathSep)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -71,13 +172,13 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Default destination for `/internal/backup`. Lands next to the live DB
- * inside `~/Desk/backups/` so file ownership matches the DB and the
- * directory is included in any host-level backup of `~/Desk`. Uses
+ * inside `$DESK_HOME/backups/` so file ownership matches the DB and the
+ * directory is included in any host-level backup of the data root. Uses
  * UTC date so multi-region rsync targets don't fight over filenames.
  */
 function defaultBackupPath(deskHome: string): string {
   const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-  return pathJoin(deskHome, "Desk", "backups", `desk-${ts}.sqlite3`);
+  return pathJoin(deskHome, "backups", `desk-${ts}.sqlite3`);
 }
 
 /**
@@ -100,6 +201,50 @@ async function parseMultipart(req: IncomingMessage): Promise<FormData> {
   } catch {
     throw new ValidationError("Malformed multipart body");
   }
+}
+
+/**
+ * Streaming multipart parser for single-file uploads. Text fields must
+ * appear before the file part in the body (the client must append them
+ * first). The returned stream is busboy's raw file stream — callers must
+ * consume it fully so the underlying HTTP request drains.
+ */
+function parseMultipartFileStream(req: IncomingMessage): Promise<{
+  name: string;
+  mime: string;
+  stream: Readable;
+  subpath?: string;
+}> {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    return Promise.reject(new ValidationError("Expected multipart/form-data body"));
+  }
+  return new Promise((resolve, reject) => {
+    const bb = Busboy({ headers: req.headers });
+    const fields: Record<string, string> = {};
+    let resolved = false;
+
+    bb.on("field", (fieldname, value) => { fields[fieldname] = value; });
+
+    bb.on("file", (fieldname, fileStream, info) => {
+      if (fieldname !== "file" || resolved) {
+        fileStream.resume();
+        return;
+      }
+      resolved = true;
+      const name = info.filename || fields["name"] || "upload";
+      const mime = info.mimeType || "application/octet-stream";
+      const subpath = fields["subpath"] && fields["subpath"] !== "" ? fields["subpath"] : undefined;
+      resolve({ name, mime, stream: fileStream, subpath });
+    });
+
+    bb.on("error", reject);
+    bb.on("close", () => {
+      if (!resolved) reject(new ValidationError("Missing 'file' part in multipart body"));
+    });
+
+    req.pipe(bb);
+  });
 }
 
 type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: RouteParams) => Promise<void>;
@@ -163,7 +308,32 @@ export function createApp(opts: AppOptions): Server {
       // Auth
       let userId: string;
       try {
-        userId = await requireAuth(pool, path, req.headers.authorization);
+        // For /apps/* routes the client is an iframe that can't send custom
+        // headers. Allow the session token via the ?token= query param as a
+        // fallback, the same pattern used by the WebSocket upgrade.
+        // For /apps/* routes the client is an iframe. The initial index.html
+        // request carries ?token= but sub-resource requests (JS/CSS) do not.
+        // We accept the token from:
+        //   1. The Authorization header (normal API calls)
+        //   2. The ?token= query param (initial iframe navigation)
+        //   3. The `desk-app-token` cookie set when index.html was served
+        let appsTokenHeader = req.headers.authorization;
+        if (!appsTokenHeader && path.startsWith("/apps/")) {
+          const queryToken = url.searchParams.get("token");
+          if (queryToken) {
+            appsTokenHeader = `Bearer ${queryToken}`;
+          } else {
+            // Parse cookies manually (no dependency needed)
+            const cookieHeader = req.headers.cookie ?? "";
+            const cookieToken = cookieHeader
+              .split(";")
+              .map((c) => c.trim())
+              .find((c) => c.startsWith("desk-app-token="))
+              ?.slice("desk-app-token=".length);
+            if (cookieToken) appsTokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
+          }
+        }
+        userId = await requireAuth(pool, path, appsTokenHeader);
       } catch (err) {
         if (err instanceof DeskError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
@@ -188,7 +358,16 @@ export function createApp(opts: AppOptions): Server {
       // Route dispatch
       await dispatch(method, params, req, res);
     } catch (err) {
-      if (err instanceof DeskError) {
+      if (err instanceof appsRoutes.IssueRateLimitError) {
+        // Rate-limit response carries Retry-After so the parent SPA can
+        // back off cleanly instead of hammering the endpoint.
+        res.setHeader("Retry-After", String(err.retryAfterSeconds));
+        sendJson(res, 429, {
+          code: "RATE_LIMITED",
+          message: err.message,
+          retryAfterSeconds: err.retryAfterSeconds,
+        });
+      } else if (err instanceof DeskError) {
         sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
       } else {
         console.error("Unhandled error:", err);
@@ -345,6 +524,121 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Per-app storage routes (PR-H). Match before the static-app
+    // dispatcher so a request to `.../storage/...` doesn't get caught
+    // by the dist-serve branch.
+    if (segments[0] === "apps" && segments.includes("storage")) {
+      const handled = await handleAppStorageRequest(
+        pool,
+        storage,
+        segments,
+        method,
+        req,
+        res,
+      );
+      if (handled) return;
+    }
+
+    // Static-app routes — `/apps/chat/:chatId/:appName/dist/*` and the
+    // companion `POST /apps/chat/:chatId/:appName/issue` mint-token
+    // endpoint. Auth: the static GET path validates a per-app HttpOnly
+    // cookie issued on first load; the issue endpoint re-validates the
+    // user's bearer session directly because requireAuth let it through.
+    if (segments[0] === "apps" && segments[1] === "chat" && segments.length >= 4) {
+      if (
+        method === "POST" &&
+        segments.length === 5 &&
+        segments[4] === "issue"
+      ) {
+        const issuerId = await requireBearerForApps(pool, req);
+        const chatId = decodeURIComponent(segments[2]);
+        const appName = decodeURIComponent(segments[3]);
+        const result = await appsRoutes.handleIssueAppSession(
+          pool,
+          storage,
+          issuerId,
+          chatId,
+          appName,
+        );
+        sendJson(res, 201, result);
+        return;
+      }
+      if (
+        method === "DELETE" &&
+        segments.length === 4
+      ) {
+        // PR-E: delete a chat-artifact `<name>.app/`. Cascade-revokes any
+        // active app_sessions bound to (chatId, appName). The .storage/
+        // SQLite file goes with the directory.
+        const issuerId = await requireBearerForApps(pool, req);
+        const chatId = decodeURIComponent(segments[2]);
+        const appName = decodeURIComponent(segments[3]);
+        await requireOwnedChat(pool, chatId, issuerId);
+        await chatRoutes.removeChatApp(storage, chatId, appName, emitEvent);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
+        const handled = await appsRoutes.handleStaticAppRequest(
+          pool,
+          storage,
+          segments,
+          new URL(req.url ?? "/", "http://localhost"),
+          req,
+          res,
+        );
+        if (handled) return;
+      }
+    }
+
+    // Library-scoped variant: /apps/library/:appName/dist/* and the
+    // companion `POST /apps/library/:appName/issue` (PR-E).
+    if (segments[0] === "apps" && segments[1] === "library" && segments.length >= 3) {
+      if (
+        method === "POST" &&
+        segments.length === 4 &&
+        segments[3] === "issue"
+      ) {
+        const issuerId = await requireBearerForApps(pool, req);
+        const appName = decodeURIComponent(segments[2]);
+        const result = await appsRoutes.handleIssueLibraryAppSession(
+          pool,
+          storage,
+          issuerId,
+          appName,
+          {
+            workspaceId: query.get("workspaceId") ?? undefined,
+            appPath: query.get("path") ?? undefined,
+          },
+        );
+        sendJson(res, 201, result);
+        return;
+      }
+      if (method === "DELETE" && segments.length === 3) {
+        // PR-E: delete a library `<name>.app/` (moves it to .trash for
+        // recovery) and revoke all sessions for that app. Library scope
+        // doesn't include a sub-path: the route deletes the
+        // workspace-root `<appName>.app/`. Library apps under a
+        // subfolder are deleted via the generic library-delete path.
+        const issuerId = await requireBearerForApps(pool, req);
+        const appName = decodeURIComponent(segments[2]);
+        await chatRoutes.removeLibraryApp(storage, issuerId, appName, emitEvent);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (method === "GET") {
+        const handled = await appsRoutes.handleStaticLibraryAppRequest(
+          pool,
+          storage,
+          segments,
+          new URL(req.url ?? "/", "http://localhost"),
+          req,
+          res,
+        );
+        if (handled) return;
+      }
+    }
+
     // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
     // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
     // and we use the agent's userId to gate the chat ownership check.
@@ -352,22 +646,262 @@ export function createApp(opts: AppOptions): Server {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
       if (!body.chatId || typeof body.chatId !== "string") {
         throw new ValidationError("Missing chatId");
       }
-      const chatId = body.chatId;
-      await requireOwnedChat(pool, chatId, agent.userId);
+      const sourceChatId = body.chatId;
+      await requireOwnedChat(pool, sourceChatId, agent.userId);
+      let targetChatId = sourceChatId;
+      let createdChat: unknown;
+
+      const sendBody = { kind: "task", ...body };
+      delete (sendBody as { chatId?: string }).chatId;
+      delete (sendBody as { newChat?: boolean }).newChat;
+
+      const attachments = (sendBody as { attachments?: unknown }).attachments;
+      if (Array.isArray(attachments)) {
+        for (const attachment of attachments) {
+          const attachmentPath = (attachment as { path?: unknown })?.path;
+          if (typeof attachmentPath !== "string" || !attachmentPath.trim()) {
+            throw new ValidationError("Invalid attachment path");
+          }
+          if (attachmentPath.includes("\0") || attachmentPath.includes("\\") || attachmentPath.startsWith("/")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          const segments = attachmentPath.split("/");
+          if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          if (attachmentPath.startsWith(".chats/") && !attachmentPath.startsWith(`.chats/${sourceChatId}/artifacts/`)) {
+            throw new ValidationError("Sandbox task attachments must be library files or artifacts from the source chat");
+          }
+        }
+      }
+
+      if (body.newChat === true) {
+        if (typeof body.executeAt === "string" || typeof body.cron === "string") {
+          throw new ValidationError("newChat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
+        }
+        if (typeof body.kind === "string" && body.kind !== "task") {
+          throw new ValidationError("newChat is only for simple manual tasks; kind must be omitted or task");
+        }
+        sendBody.kind = "task";
+        const sourceChat = await chatRoutes.getChat(pool, sourceChatId);
+        const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
+        const rawContent = typeof body.content === "string" ? body.content.trim() : "";
+        if (typeof body.content === "string" && !body.content.includes(sourceChatId)) {
+          sendBody.content = `${body.content}\n\nOriginating chat: ${sourceChatId}`;
+        }
+        chatRoutes.validateSendMessageBody(sendBody);
+        createdChat = await chatRoutes.createChat(pool, {
+          workspaceId: sourceChat.workspaceId,
+          agentId: sourceChat.agentId,
+          title: rawTitle ?? (rawContent.slice(0, 80) || "New task"),
+          goal: "task",
+        });
+        targetChatId = (createdChat as { id: string }).id;
+      }
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
       // this from `desk-agent task schedule`, so a chat reply isn't the intent.
-      // Caller can still override (e.g. kind="ai_note") if they have a
+      // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
-      const sendBody = { kind: "task", ...body };
-      delete (sendBody as { chatId?: string }).chatId;
+      if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
 
-      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
-      sendJson(res, 201, userMessage);
+      const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emitEvent, { role: "agent" });
+      sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);
+      return;
+    }
+
+    // Seed messages — bulk-inserts text messages without triggering agent
+    // turns. Used by the agent to populate a chat for scrollback testing.
+    if (path === "/sandbox/seed-messages" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as {
+        chatId?: string;
+        messages?: Array<{ role?: string; text: string }>;
+      };
+      if (!body.chatId || typeof body.chatId !== "string") {
+        throw new ValidationError("Missing chatId");
+      }
+      if (!Array.isArray(body.messages) || body.messages.length === 0) {
+        throw new ValidationError("Missing or empty messages array");
+      }
+      await requireOwnedChat(pool, body.chatId, agent.userId);
+
+      const inserted: unknown[] = [];
+      for (const m of body.messages) {
+        const role = m.role === "agent" ? "agent" : "user";
+        const msg = await queries.messages.insert(pool, {
+          id: generateId("message"),
+          chatId: body.chatId,
+          role,
+          content: { type: "text", text: m.text },
+        });
+        inserted.push(msg);
+      }
+      sendJson(res, 201, { count: inserted.length });
+      return;
+    }
+
+    // Memory-system P3.5 — full-text search for the in-sandbox agent.
+    // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
+    // session's workspace; cross-workspace recall requires a future
+    // explicit home-workspace exception, not workspace=*.
+    if (path === "/sandbox/search/messages" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const chatIdParam = params.get("chat") ?? undefined;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const ws = await queries.workspaces.findById(pool, session.workspaceId);
+      if (!ws || ws.userId !== agent.userId) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (workspaceParam && workspaceParam !== ws.path && workspaceParam !== "*") {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
+
+      // When chatId is supplied, gate ownership.
+      if (chatIdParam) {
+        const chat = await requireOwnedChat(pool, chatIdParam, agent.userId);
+        if (chat.workspaceId !== session.workspaceId) {
+          throw new NotFoundError(`Chat not found: ${chatIdParam}`);
+        }
+      }
+
+      const hits = await queries.search.searchChatMessages(pool, {
+        query: q,
+        chatId: chatIdParam,
+        workspaceSlug: ws.path,
+        kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+
+      sendJson(res, 200, { hits });
+      return;
+    }
+
+    if (path === "/sandbox/search" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const q = params.get("q") ?? params.get("query") ?? "";
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
+      if (!sessionWorkspace) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (
+        workspaceParam &&
+        workspaceParam !== "*" &&
+        workspaceParam !== sessionWorkspace.path &&
+        workspaceParam !== sessionWorkspace.id
+      ) {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
+      const result = await searchRoutes.search(
+        pool,
+        storage,
+        agent.userId,
+        q,
+        parseSearchScope(params.get("scope")),
+        {
+          workspaceId: sessionWorkspace.id,
+          chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
+          kinds: parseSearchKinds(params.get("kind")),
+          showHidden: params.get("showHidden") === "true",
+        },
+      );
+      sendJson(res, 200, { hits: result });
+      return;
+    }
+
+    if ((path === "/sandbox/find/library" || path === "/sandbox/find/artifacts") && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+      const workspaceParam = params.get("workspace") ?? undefined;
+      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
+      if (!session.workspaceId) {
+        throw new NotFoundError("Workspace not found for sandbox session");
+      }
+      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
+      if (!sessionWorkspace) {
+        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
+      }
+      if (
+        workspaceParam &&
+        workspaceParam !== "*" &&
+        workspaceParam !== sessionWorkspace.path &&
+        workspaceParam !== sessionWorkspace.id
+      ) {
+        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      }
+      const kindParam = params.get("kind") ?? "any";
+      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
+      const result = await searchRoutes.findLibraryItems(pool, storage, agent.userId, {
+        query: params.get("q") ?? params.get("query") ?? undefined,
+        kind:
+          kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"
+            ? kindParam
+            : "any",
+        workspaceId: sessionWorkspace.id,
+        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
+      });
+      sendJson(res, 200, { hits: result });
+      return;
+    }
+
+    if (path === "/sandbox/artifacts" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      if (!session.runId) {
+        throw new ValidationError("Sandbox artifact attachment requires a live run token");
+      }
+      const runMessage = await queries.messages.findById(pool, session.runId);
+      if (!runMessage) {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      if (runMessage.state !== "running") {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      const runChatId = runMessage.chatId;
+      if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
+        throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
+      }
+      if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+        throw new ValidationError("Summary runs cannot attach artifacts");
+      }
+      const chat = await requireOwnedChat(pool, runChatId, agent.userId);
+      if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
+        throw new NotFoundError(`Chat not found: ${runChatId}`);
+      }
+
+      const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emitEvent, {
+        agentId: agent.id,
+        model: agent.model,
+      });
+      sendJson(res, 201, message);
       return;
     }
 
@@ -424,10 +958,24 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers/meta" && method === "PUT") {
-      const body = await parseBody(req) as { meta: Record<string, { name?: string } | null> };
+      const body = await parseBody(req) as { meta: Record<string, { name?: string; enabled?: boolean } | null> };
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
       sendJson(res, 200, result);
       return;
+    }
+    if (path === "/me/providers/local" && method === "GET") {
+      const result = await localSourceRoutes.listLocalSources(pool, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    {
+      const m = path.match(/^\/me\/providers\/local\/([A-Za-z0-9_-]+)$/);
+      if (m && method === "PUT") {
+        const body = await parseBody(req) as { enabled: boolean };
+        const result = await localSourceRoutes.setLocalSourceEnabled(pool, userId, m[1], body);
+        sendJson(res, 200, result);
+        return;
+      }
     }
 
     // Vault — per-user secrets vault setup/unlock/lock/status. Secrets
@@ -558,7 +1106,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/agents" && method === "POST") {
-      const body = await parseBody(req) as { name: string; instructions?: string; model?: string };
+      const body = await parseBody(req) as { name: string; model?: string };
       const result = await agentRoutes.createAgent(pool, userId, body);
       sendJson(res, 201, result);
       return;
@@ -571,7 +1119,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
       await requireOwnedAgent(pool, segments[1], userId);
-      const body = await parseBody(req) as { name?: string; instructions?: string; model?: string };
+      const body = await parseBody(req) as { name?: string; model?: string };
       const result = await agentRoutes.patchAgent(pool, segments[1], body);
       sendJson(res, 200, result);
       return;
@@ -606,11 +1154,12 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
       await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string; agentId?: string };
+      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string; unread?: boolean };
       if (body.agentId !== undefined) {
         await requireOwnedAgent(pool, body.agentId, userId);
       }
       const result = await chatRoutes.patchChat(pool, segments[1], body);
+      emitEvent({ type: "chat.updated", payload: result });
       sendJson(res, 200, result);
       return;
     }
@@ -628,7 +1177,27 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor });
+      const before = query.get("before") ?? undefined;
+      const limitRaw = query.get("limit");
+      let limit: number | undefined;
+      if (limitRaw !== null && limitRaw !== "") {
+        const parsed = Number(limitRaw);
+        if (!Number.isInteger(parsed) || parsed <= 0) throw new ValidationError(`Invalid limit: ${limitRaw}`);
+        limit = Math.min(parsed, 200);
+      }
+      const viewRaw = query.get("view") ?? undefined;
+      if (viewRaw !== undefined && viewRaw !== "full" && viewRaw !== "compact" && viewRaw !== "timeline") {
+        throw new ValidationError(`Invalid view: ${viewRaw}`);
+      }
+      const result = await chatRoutes.listMessages(pool, segments[1], {
+        cursor,
+        before,
+        limit,
+        // Normal chat API reads should use the payload-trimmed timeline by
+        // default. Full hidden tool/event/summary payloads remain available to
+        // developer/debug callers that explicitly request `view=full`.
+        view: (viewRaw ?? "timeline") as "full" | "compact" | "timeline",
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -638,9 +1207,9 @@ export function createApp(opts: AppOptions): Server {
       const body = ct.startsWith("multipart/form-data")
         ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
         : await parseBody(req);
-      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent);
+      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent, { actorUserId: userId });
 
-      // Self-firing kinds (task / ai_note): execute_at is computed at insert
+      // Self-firing kinds (task / summary): execute_at is computed at insert
       // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
       if (userMessage.kind && userMessage.kind !== "chat") {
         sendJson(res, 201, userMessage);
@@ -648,19 +1217,19 @@ export function createApp(opts: AppOptions): Server {
       }
 
       // Default chat path: fire the pending trigger message and schedule
-      // an ai-note refresh for this chat.
+      // a summary refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`fireMessage for trigger ${triggerId} failed:`, err);
       });
-      runManager.scheduleAiNote(segments[1]).catch(() => {});
+      runManager.scheduleSummary(segments[1]).catch(() => {});
 
       sendJson(res, 201, userMessage);
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null };
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: "chat" | "task" | "task_run" | "summary"; title?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
       sendJson(res, 200, result);
       return;
@@ -671,9 +1240,9 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "note-history" && segments.length === 5 && method === "GET") {
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const result = await chatRoutes.getNoteHistory(storage, segments[1], segments[3]);
+      const result = await chatRoutes.getSummaryHistory(storage, segments[1], segments[3]);
       sendJson(res, 200, result);
       return;
     }
@@ -693,10 +1262,10 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
       await requireOwnedChat(pool, segments[1], userId);
       const showHidden = query.get("showHidden") === "true";
-      const includeNotes = query.get("includeNotes") === "true";
+      const includeArtifacts = query.get("includeArtifacts") === "true";
       const result = await chatRoutes.listAttachments(storage, segments[1], {
         showHidden,
-        includeNotes,
+        includeArtifacts,
       });
       sendJson(res, 200, result);
       return;
@@ -746,6 +1315,87 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 201, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "copy-library-app" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { path?: unknown };
+      const libraryPath = typeof body?.path === "string" ? body.path : "";
+      if (!libraryPath) throw new ValidationError("Missing 'path' in body");
+      const result = await chatRoutes.copyAppFromLibrary(
+        storage,
+        segments[1],
+        libraryPath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "replace-library-app" && segments.length === 3 && method === "POST") {
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as {
+        name?: unknown;
+        targetPath?: unknown;
+        expectedSourceVersion?: unknown;
+      };
+      const artifactName = typeof body?.name === "string" ? body.name : "";
+      const targetPath = typeof body?.targetPath === "string" ? body.targetPath : "";
+      if (!artifactName) throw new ValidationError("Missing 'name' in body");
+      if (!targetPath) throw new ValidationError("Missing 'targetPath' in body");
+      const headerIfMatch = req.headers["if-match"];
+      const ifMatch = Array.isArray(headerIfMatch) ? headerIfMatch[0] : headerIfMatch;
+      const expectedSourceVersion =
+        typeof body?.expectedSourceVersion === "string"
+          ? body.expectedSourceVersion
+          : typeof ifMatch === "string" && ifMatch
+            ? ifMatch
+            : undefined;
+      try {
+        const result = await chatRoutes.replaceLibraryAppWithChatArtifact(
+          storage,
+          segments[1],
+          artifactName,
+          targetPath,
+          emitEvent,
+          { expectedSourceVersion },
+        );
+        sendJson(res, 200, result);
+      } catch (err) {
+        if (err instanceof ReplaceLibraryAppConflictError) {
+          sendJson(res, 409, {
+            code: "VERSION_CONFLICT",
+            message: err.message,
+            expected: err.expected,
+            actual: err.actual,
+          });
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+    if (segments[0] === "chats" && segments[2] === "save-artifact-to-library" && segments.length === 3 && method === "POST") {
+      // Promotes a `<name>.app/` chat artifact directory into the
+      // workspace library. Sibling of save-to-library which only
+      // handles single-file attachments. Issue #47, PR-E.
+      await requireOwnedChat(pool, segments[1], userId);
+      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
+      const artifactName = typeof body?.name === "string" ? body.name : "";
+      if (!artifactName) {
+        throw new ValidationError("Missing 'name' in body");
+      }
+      const destSubpath =
+        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
+          ? body.destSubpath
+          : undefined;
+      const result = await chatRoutes.saveArtifactToLibrary(
+        storage,
+        segments[1],
+        artifactName,
+        destSubpath,
+        emitEvent,
+      );
+      sendJson(res, 201, result);
+      return;
+    }
 
     // Library routes. Because library files live at arbitrary nested paths
     // on the filesystem, we pass the workspace-relative path via ?path=...
@@ -765,16 +1415,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (path === "/library" && method === "POST") {
       const wsId = await requireWorkspaceId(pool, userId, query);
-      const form = await parseMultipart(req);
-      const part = form.get("file");
-      if (!(part instanceof Blob)) {
-        throw new ValidationError("Missing 'file' part in multipart body");
-      }
-      const name = (part as File).name || (typeof form.get("name") === "string" ? (form.get("name") as string) : "upload");
-      const mime = part.type || "application/octet-stream";
-      const subpathRaw = form.get("subpath");
-      const subpath = typeof subpathRaw === "string" && subpathRaw !== "" ? subpathRaw : undefined;
-      const stream = (await import("node:stream")).Readable.from(Buffer.from(await part.arrayBuffer()));
+      const { name, mime, stream, subpath } = await parseMultipartFileStream(req);
       const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream, subpath }, emitEvent);
       sendJson(res, 201, result);
       return;
@@ -819,13 +1460,13 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const result = await libraryRoutes.get(storage, wsId, p);
-      // Note mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
-      // user-friendly "Chat notes" label so the detail view doesn't title
+      // Summary mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
+      // user-friendly "Chat summary" label so the detail view doesn't title
       // the page with the messageId-based filename.
       const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
-        ? { ...result, label: "Chat notes" }
+        ? { ...result, label: "Chat summary" }
         : result;
       sendJson(res, 200, decorated);
       return;
@@ -834,7 +1475,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -847,7 +1488,7 @@ export function createApp(opts: AppOptions): Server {
       const p = query.get("path");
       if (!p) throw new ValidationError("Missing path query parameter");
       const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathInWorkspace(pool, userId, p, wsId);
+      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
       const { stream, file } = await libraryRoutes.download(storage, wsId, p);
       res.writeHead(200, {
         "Content-Type": file.mime,
@@ -916,6 +1557,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/tools/models" && method === "GET") {
       const result = await toolRoutes.listModels(pool, {
         provider: query.get("provider") ?? undefined,
+        userId,
       });
       sendJson(res, 200, result);
       return;
@@ -924,12 +1566,16 @@ export function createApp(opts: AppOptions): Server {
     // Search
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";
-      const scope = (query.get("scope") ?? "all") as "artifacts" | "chats" | "library" | "all";
+      const scope = parseSearchScope(query.get("scope"));
       const showHidden = query.get("showHidden") === "true";
       const workspaceId = query.get("workspaceId") ?? undefined;
-      const result = await searchRoutes.search(pool, storage, q, scope, {
+      const chatId = query.get("chatId") ?? undefined;
+      const kinds = parseSearchKinds(query.get("kind"));
+      const result = await searchRoutes.search(pool, storage, userId, q, scope, {
         showHidden,
         workspaceId,
+        chatId,
+        kinds,
       });
       sendJson(res, 200, result);
       return;
@@ -938,6 +1584,180 @@ export function createApp(opts: AppOptions): Server {
     // OpenAPI spec
     if (path === "/openapi.json" && method === "GET") {
       sendJson(res, 200, openApiSpec);
+      return;
+    }
+
+    // App static-file serving: /apps/<workspaceId>/<...appRelPath>/dist/<...file>
+    // Serves the built dist/ output of a `.app/` directory so the frontend
+    // can embed the app in an iframe.
+    if (segments[0] === "apps" && segments.length >= 4 && method === "GET") {
+      const wsId = segments[1];
+      if (!wsId || !/^wks_[A-Za-z0-9_-]+$/.test(wsId)) {
+        sendJson(res, 400, { code: "BAD_REQUEST", message: "Invalid workspaceId in path" });
+        return;
+      }
+      // /apps/* is skipped by the global auth middleware; resolve the user
+      // here from Bearer header, ?token= query param, or desk-app-token cookie.
+      let appsUserId: string;
+      {
+        let tokenHeader = req.headers.authorization;
+        if (!tokenHeader) {
+          const qt = query.get("token");
+          if (qt) {
+            tokenHeader = `Bearer ${qt}`;
+          } else {
+            const cookieHeader = req.headers.cookie ?? "";
+            const cookieToken = cookieHeader
+              .split(";")
+              .map((c) => c.trim())
+              .find((c) => c.startsWith("desk-app-token="))
+              ?.slice("desk-app-token=".length);
+            if (cookieToken) tokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
+          }
+        }
+        if (!tokenHeader || !tokenHeader.startsWith("Bearer ")) {
+          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Missing or invalid Authorization" });
+          return;
+        }
+        const resolvedId = await verifySession(pool, tokenHeader.slice(7));
+        if (!resolvedId) {
+          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Invalid or expired session token" });
+          return;
+        }
+        appsUserId = resolvedId;
+      }
+      await requireOwnedWorkspace(pool, wsId, appsUserId);
+
+      // segments: ['apps', wsId, ...appParts, 'dist', ...fileParts]
+      // Find the 'dist' marker — it must appear after at least one app segment.
+      const distIdx = segments.indexOf("dist", 2);
+      if (distIdx < 3) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
+        return;
+      }
+      // Reconstruct the workspace-relative app path and the in-dist file path.
+      // Segments from url.pathname are still percent-encoded; decode each one
+      // and reject any that normalise to '.' or '..' to prevent traversal.
+      const decodeSeg = (s: string) => {
+        try { return decodeURIComponent(s); } catch { return s; }
+      };
+      const appSegments = segments.slice(2, distIdx).map(decodeSeg);
+      const fileSegmentsRaw = segments.slice(distIdx + 1).map(decodeSeg);
+      // Reject traversal attempts in either the app path or the file path.
+      if ([...appSegments, ...fileSegmentsRaw].some((s) => s === ".." || s === ".")) {
+        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+        return;
+      }
+      const appRelPath = appSegments.join("/");
+      const distRelFile = fileSegmentsRaw.length > 0 ? fileSegmentsRaw.join("/") : "index.html";
+
+      // Validate: appRelPath must end with .app
+      if (!appRelPath.endsWith(".app")) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
+        return;
+      }
+
+      // Verify the user can read the app directory (re-uses existing auth logic).
+      await requireReadablePathForRoute(pool, storage, appsUserId, appRelPath, wsId);
+
+      const { rows: wsRows } = await pool.query<{ path: string }>(
+        "SELECT path FROM workspaces WHERE id = ?",
+        [wsId],
+      );
+      const slug = wsRows[0]?.path;
+      if (!slug) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "Workspace not found" });
+        return;
+      }
+
+      const wsRoot = workspaceRootPath(storage.home, slug);
+      // Build the candidate dist file path. We must not allow path traversal.
+      const distRoot = pathJoin(wsRoot, appRelPath, "dist");
+      const candidate = pathNormalize(pathJoin(distRoot, distRelFile));
+      if (!candidate.startsWith(distRoot + pathSep) && candidate !== distRoot) {
+        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+        return;
+      }
+
+      const realDistRoot = await fsRealpath(distRoot).catch(() => null);
+      if (!realDistRoot) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
+        return;
+      }
+      const assertInsideDist = async (filePath: string): Promise<string | null> => {
+        const realCandidate = await fsRealpath(filePath).catch(() => null);
+        if (!realCandidate) return null;
+        return realCandidate === realDistRoot || realCandidate.startsWith(realDistRoot + pathSep)
+          ? realCandidate
+          : null;
+      };
+
+      const APP_MIME: Record<string, string> = {
+        ".html": "text/html; charset=utf-8",
+        ".js":   "application/javascript; charset=utf-8",
+        ".mjs":  "application/javascript; charset=utf-8",
+        ".css":  "text/css; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".svg":  "image/svg+xml",
+        ".png":  "image/png",
+        ".jpg":  "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif":  "image/gif",
+        ".webp": "image/webp",
+        ".ico":  "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2":"font/woff2",
+        ".ttf":  "font/ttf",
+        ".map":  "application/json; charset=utf-8",
+        ".txt":  "text/plain; charset=utf-8",
+      };
+      const mime = APP_MIME[pathExtname(candidate).toLowerCase()] ?? "application/octet-stream";
+
+      const appQueryToken = query.get("token");
+      const appTokenCookie = appQueryToken
+        ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
+        : null;
+
+      try {
+        const st = await fsStat(candidate);
+        if (!st.isFile()) throw new Error("not a file");
+        const realCandidate = await assertInsideDist(candidate);
+        if (!realCandidate) {
+          sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+          return;
+        }
+        const headers: Record<string, string | string[]> = {
+          "Content-Type": mime,
+          "Content-Length": String(st.size),
+          "Cache-Control": "no-cache",
+        };
+        if (appTokenCookie && mime.startsWith("text/html")) {
+          headers["Set-Cookie"] = appTokenCookie;
+        }
+        res.writeHead(200, headers);
+        createReadStream(realCandidate).pipe(res);
+      } catch {
+        // Fallback to index.html for SPA client-side routing within the app.
+        const indexPath = pathJoin(distRoot, "index.html");
+        try {
+          const ist = await fsStat(indexPath);
+          const realIndexPath = await assertInsideDist(indexPath);
+          if (!realIndexPath) {
+            sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
+            return;
+          }
+          const headers: Record<string, string | string[]> = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": String(ist.size),
+            "Cache-Control": "no-cache",
+          };
+          if (appTokenCookie) headers["Set-Cookie"] = appTokenCookie;
+          res.writeHead(200, headers);
+          createReadStream(realIndexPath).pipe(res);
+        } catch {
+          sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
+        }
+      }
       return;
     }
 

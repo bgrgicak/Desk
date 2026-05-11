@@ -12,38 +12,24 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
+import { detectEngine, sandboxImage, type Engine } from "@agent-desk/runtime";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-function dockerAvailable(): boolean {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+let engineForSetup: Engine | null = null;
+let SKIP = false;
+try {
+  engineForSetup = await detectEngine();
+  if (!(await engineForSetup.imageId(sandboxImage()))) SKIP = true;
+} catch {
+  SKIP = true;
 }
-
-// Free opencode models are always present — no API key required.
-// Gate only on Docker + sandbox image availability.
-function sandboxImageAvailable(): boolean {
-  try {
-    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const HAS_ANTHROPIC_KEY = !!process.env.ANTHROPIC_API_KEY;
-const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
-const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let pool: Pool;
@@ -72,17 +58,6 @@ beforeAll(async () => {
 
   process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
 
-  // Paid-provider tests require keys in user_settings. Pull whatever's set
-  // in the host env into the seeded user's row so opencode in the sandbox
-  // can see them.
-  const envKeys: Record<string, string> = {};
-  if (process.env.ANTHROPIC_API_KEY) envKeys.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (process.env.OPENAI_API_KEY) envKeys.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (Object.keys(envKeys).length > 0) {
-    const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
-    await queries.userSettings.setProviderKeys(pool, rows[0].id as string, envKeys);
-  }
-
   const runManager = createRunManager({
     pool,
     execRunFn: async (runId, _a, _p, onLog) => {
@@ -110,23 +85,19 @@ afterAll(async () => {
 
   // Best-effort cleanup of any sandbox container we caused the API to spawn.
   // Sandboxes are keyed per-workspace now (M3), not per-agent.
-  try {
-    const { default: Docker } = await import("dockerode");
-    const { dockerSocketPath } = await import("@agent-desk/runtime");
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const all = await docker.listContainers({ all: true });
-    for (const c of all) {
-      const name = (c.Names[0] ?? "").replace(/^\//, "");
-      if (name.startsWith("desk-sandbox-wks_")) {
-        const container = docker.getContainer(c.Id);
-        await container.stop({ t: 2 }).catch(() => {});
-        await container.remove({ force: true }).catch(() => {});
+  if (engineForSetup) {
+    try {
+      const all = await engineForSetup.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      for (const c of all) {
+        if (c.name.startsWith("desk-sandbox-wks_")) {
+          await engineForSetup.remove(c.id, true).catch(() => {});
+        }
       }
-    }
-  } catch { /* ok */ }
+    } catch { /* ok */ }
+  }
 
   if (pool) await pool.end();
-  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (home) await rmTempTree(home);
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
@@ -148,32 +119,14 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     }
   }, 90_000);
 
-  it("?provider=opencode returns only opencode models", async () => {
+  it("?provider=opencode returns only opencode models, including a free model", async () => {
     const res = await httpJson("GET", "/tools/models?provider=opencode", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
     expect(body.every((m) => m.provider === "opencode")).toBe(true);
-  }, 60_000);
-
-  // Paid-provider tests — skipped when the corresponding key is absent.
-  const itIfAnthropic = HAS_ANTHROPIC_KEY ? it : it.skip;
-  itIfAnthropic("?provider=anthropic returns only anthropic models", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=anthropic", token);
-    expect(res.status).toBe(200);
-    const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "anthropic")).toBe(true);
-  }, 60_000);
-
-  const itIfOpenAI = HAS_OPENAI_KEY ? it : it.skip;
-  itIfOpenAI("?provider=openai returns only openai models", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=openai", token);
-    expect(res.status).toBe(200);
-    const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "openai")).toBe(true);
+    expect(body.some((m) => m.id === "opencode/big-pickle")).toBe(true);
   }, 60_000);
 });
 
@@ -206,4 +159,22 @@ function httpJson(
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+async function rmTempTree(path: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await fs.rm(path, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM" && code !== "EBUSY" && code !== "ENOTEMPTY") {
+        throw err;
+      }
+      lastError = err;
+      await delay(100 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }

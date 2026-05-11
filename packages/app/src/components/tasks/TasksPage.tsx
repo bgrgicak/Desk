@@ -1,52 +1,79 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Search } from 'lucide-react'
+import { Loader2, Search } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BoardView } from './BoardView'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import { TaskSheet, type TaskCreateInput } from './TaskSheet'
 import type { Task } from '@/data/ui-types'
+import { buildTaskStatusMove } from '@/lib/task-status'
 
 interface TasksPageProps {
   tasks: Task[]
+  isLoading?: boolean
   /** Called when a board drop moves a task to a different column. Wires
    * through to PATCH /chats/:id/messages/:id in App.tsx. Intra-column
    * reorders don't fire this hook — the server has no ordering field. */
-  onTaskMove?: (task: Task, newStatus: Task['status']) => Promise<void> | void
+  onTaskMove?: (task: Task, newStatus: Task['status']) => Promise<boolean | void> | boolean | void
   onCreateTask?: (input: TaskCreateInput) => Promise<void> | void
 }
 
-export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
+export function TasksPage({ tasks, isLoading = false, onTaskMove, onCreateTask }: TasksPageProps) {
   const [createSheetOpen, setCreateSheetOpen] = useState(false)
   const [defaultCreateStatus, setDefaultCreateStatus] = useState<Task['status']>('todo')
   const [selectedTask, setSelectedTask]   = useState<Task | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [searchQuery, setSearchQuery]     = useState('')
+  const [optimisticStatuses, setOptimisticStatuses] = useState<Record<string, Task['status']>>({})
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const effectiveTasks = useMemo(
+    () => tasks.map(task => {
+      const status = optimisticStatuses[task.id]
+      return status && status !== task.status ? { ...task, status } : task
+    }),
+    [tasks, optimisticStatuses],
+  )
+
+  useEffect(() => {
+    setOptimisticStatuses(current => {
+      let changed = false
+      const next = { ...current }
+      const taskIds = new Set(tasks.map(task => task.id))
+      for (const [taskId, status] of Object.entries(current)) {
+        const task = tasks.find(t => t.id === taskId)
+        if (!taskIds.has(taskId) || task?.status === status) {
+          delete next[taskId]
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [tasks])
 
   // Keep the selected task in sync with the underlying list: after a
   // lifecycle PATCH (pause/resume/cancel) invalidates the messages
   // query, the incoming `tasks` array carries the updated row.
   useEffect(() => {
     if (!selectedTask) return
-    const fresh = tasks.find(t => t.id === selectedTask.id)
+    const fresh = effectiveTasks.find(t => t.id === selectedTask.id)
     if (!fresh) return
     if (fresh !== selectedTask) setSelectedTask(fresh)
-  }, [tasks, selectedTask])
+  }, [effectiveTasks, selectedTask])
 
   const filteredTasks = useMemo(() => {
-    if (!searchQuery.trim()) return tasks
+    if (!searchQuery.trim()) return effectiveTasks
     const q = searchQuery.toLowerCase()
-    return tasks.filter(t => t.name.toLowerCase().includes(q))
-  }, [tasks, searchQuery])
+    return effectiveTasks.filter(t => t.name.toLowerCase().includes(q))
+  }, [effectiveTasks, searchQuery])
 
   function handleSelectTask(task: Task) {
     setSelectedTask(task)
     setPanelCollapsed(false)
   }
 
-  const showPanel = selectedTask && !panelCollapsed
+  const showPanel = !isLoading && selectedTask && !panelCollapsed
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -77,16 +104,49 @@ export function TasksPage({ tasks, onTaskMove, onCreateTask }: TasksPageProps) {
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          <BoardView
-            tasks={filteredTasks}
-            selectedTaskId={selectedTask?.id ?? null}
-            onSelectTask={handleSelectTask}
-            onTaskMove={(task, newStatus) => onTaskMove?.(task, newStatus)}
-            onAddTask={status => {
-              setDefaultCreateStatus(status)
-              setCreateSheetOpen(true)
-            }}
-          />
+          {isLoading ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading tasks…
+            </div>
+          ) : (
+            <BoardView
+              tasks={filteredTasks}
+              selectedTaskId={selectedTask?.id ?? null}
+              onSelectTask={handleSelectTask}
+              onTaskMove={async (task, newStatus) => {
+                if (!onTaskMove) return false
+                const move = buildTaskStatusMove(task, newStatus, 'user')
+                if (move.kind === 'none' || !task.chatId || !task.messageId) return false
+
+                setOptimisticStatuses(current => ({ ...current, [task.id]: move.optimisticStatus }))
+                try {
+                  const accepted = await onTaskMove(task, newStatus)
+                  if (accepted === false) {
+                    setOptimisticStatuses(current => {
+                      if (current[task.id] !== move.optimisticStatus) return current
+                      const next = { ...current }
+                      delete next[task.id]
+                      return next
+                    })
+                  }
+                  return accepted
+                } catch (err) {
+                  setOptimisticStatuses(current => {
+                    if (current[task.id] !== move.optimisticStatus) return current
+                    const next = { ...current }
+                    delete next[task.id]
+                    return next
+                  })
+                  throw err
+                }
+              }}
+              onAddTask={status => {
+                setDefaultCreateStatus(status)
+                setCreateSheetOpen(true)
+              }}
+            />
+          )}
         </div>
 
         <AnimatePresence>

@@ -48,7 +48,7 @@ describe("messages queries", () => {
     expect(chat!.unread).toBe(true);
   });
 
-  it("lists by chat with cursor pagination", async () => {
+  it("lists by chat with cursor pagination (forward)", async () => {
     // Insert a few more
     for (let i = 0; i < 3; i++) {
       await messages.insert(pool, {
@@ -59,17 +59,40 @@ describe("messages queries", () => {
       });
     }
 
-    const page1 = await messages.listByChat(pool, chatId, { limit: 2 });
-    expect(page1.items).toHaveLength(2);
-    expect(page1.nextCursor).toBeDefined();
+    // Forward pagination with explicit cursor: use the first message as cursor
+    // to page forward from it.
+    const allMsgs = await messages.listByChat(pool, chatId);
+    expect(allMsgs.items.length).toBe(4); // 1 from prior test + 3 new
 
-    const page2 = await messages.listByChat(pool, chatId, { cursor: page1.nextCursor, limit: 2 });
-    expect(page2.items.length).toBeGreaterThanOrEqual(1);
+    const firstMsg = allMsgs.items[0];
+    const cursor = `${firstMsg.createdAt}|${firstMsg.id}`;
+    const page = await messages.listByChat(pool, chatId, { cursor, limit: 2 });
+    expect(page.items).toHaveLength(2);
+    // Messages after the first should be the next ones chronologically.
+    expect(page.items[0].id).not.toBe(firstMsg.id);
+  });
+
+  it("lists by chat with reverse pagination (before)", async () => {
+    // No-cursor call returns newest page. With 4 messages and limit=2,
+    // we should get the 2 newest + a prevCursor.
+    const newest = await messages.listByChat(pool, chatId, { limit: 2 });
+    expect(newest.items).toHaveLength(2);
+    expect(newest.prevCursor).toBeDefined();
+
+    // Load older page using prevCursor.
+    const older = await messages.listByChat(pool, chatId, { before: newest.prevCursor, limit: 2 });
+    expect(older.items).toHaveLength(2);
+    // Items returned in chronological order — oldest first.
+    expect(new Date(older.items[0].createdAt).getTime())
+      .toBeLessThanOrEqual(new Date(older.items[1].createdAt).getTime());
+    // Older page items should come before newest page items chronologically.
+    expect(new Date(older.items[1].createdAt).getTime())
+      .toBeLessThanOrEqual(new Date(newest.items[0].createdAt).getTime());
   });
 
   it("cascades delete when chat is deleted", async () => {
-    const { rows } = await messages.listByChat(pool, chatId);
-    expect(rows).toBeUndefined(); // it returns { items, nextCursor }
+    const { items } = await messages.listByChat(pool, chatId);
+    expect(items.length).toBeGreaterThan(0);
 
     await pool.query("DELETE FROM chats WHERE id = ?", [chatId]);
     const result = await messages.listByChat(pool, chatId);
@@ -219,7 +242,7 @@ describe("retargetAttachmentPaths", () => {
       role: "user",
       content: { type: "text", text: "no attachments" },
     });
-    // No throw, no spurious updates.
+     // No throw, no spurious updates.
     const updated = await messages.retargetAttachmentPaths(
       p,
       wsId,
@@ -227,5 +250,146 @@ describe("retargetAttachmentPaths", () => {
       "Other/path.txt",
     );
     expect(updated).toHaveLength(0);
+  });
+});
+
+describe("recoverOrphanedRuns", () => {
+  let p: Pool;
+  let cId: string;
+
+  beforeAll(async () => {
+    p = await setupTestDb();
+    const userId = generateId("user");
+    await users.insert(p, { id: userId, username: "orphan-user", passwordHash: "h", email: "orphan@example.com" });
+    const agentId = generateId("agent");
+    await agents.insert(p, { id: agentId, userId, name: "OrphanAgent" });
+    const wsId = generateId("workspace");
+    await workspaces.insert(p, { id: wsId, userId, name: "OrphanWS", path: `orphanws-${wsId.slice(-6)}` });
+    await p.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id)
+       VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      [wsId, agentId],
+    );
+    cId = generateId("chat");
+    await chats.insert(p, { id: cId, workspaceId: wsId, agentId, title: "OrphanChat" });
+  });
+
+  afterAll(async () => {
+    await teardownTestDb(p);
+  });
+
+  it("re-queues orphaned running agent_turn messages as pending", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake" },
+      state: "running",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+    expect(msg!.executeAt).toBeTruthy();
+    expect(msg!.startedAt).toBeUndefined();
+    expect(msg!.endedAt).toBeUndefined();
+  });
+
+  it("re-queues orphaned pending agent_turn (no execute_at) as pending with execute_at", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake2" },
+      state: "pending",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+    expect(msg!.executeAt).toBeTruthy();
+  });
+
+  it("re-queues orphaned running summary_request messages as pending", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "running",
+    });
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.requeued).toContain(id);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+  });
+
+  it("fails orphaned task_run messages", async () => {
+    const taskId = generateId("message");
+    await messages.insert(p, {
+      id: taskId,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "a task" },
+      kind: "task",
+      state: "running",
+    });
+    const runId = generateId("message");
+    await p.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, state, parent_id)
+       VALUES (?, ?, 'user', '{"type":"text","text":"run"}', 'task_run', 'running', ?)`,
+      [runId, cId, taskId],
+    );
+    const result = await messages.recoverOrphanedRuns(p);
+    expect(result.failed).toBeGreaterThanOrEqual(1);
+    const run = await messages.findById(p, runId);
+    expect(run!.state).toBe("failed");
+  });
+
+  it("leaves scheduled pending messages alone (future execute_at)", async () => {
+    const id = generateId("message");
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "summary_request" },
+      state: "pending",
+      executeAt: future,
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
+  });
+
+  it("does not touch succeeded or failed messages", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "fake3" },
+      state: "succeeded",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("succeeded");
+  });
+
+  it("does not touch regular text messages in pending state", async () => {
+    const id = generateId("message");
+    await messages.insert(p, {
+      id,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "hello" },
+      state: "pending",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const msg = await messages.findById(p, id);
+    expect(msg!.state).toBe("pending");
   });
 });

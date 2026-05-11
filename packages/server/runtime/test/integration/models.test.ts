@@ -10,33 +10,21 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
-import { createOrReuse, stopSandbox, dockerSocketPath } from "../../src/docker.js";
+import { createOrReuse, stopSandbox, sandboxImage } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
+import { detectEngine, type Engine } from "../../src/engine.js";
+import { rmTempTree } from "./helpers.js";
 
-function dockerAvailable(): boolean {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+let engineForSetup: Engine | null = null;
+let SKIP = false;
+try {
+  engineForSetup = await detectEngine();
+  if (!(await engineForSetup.imageId(sandboxImage()))) SKIP = true;
+} catch {
+  SKIP = true;
 }
-
-// Free opencode models are always present — no API key required.
-// Gate only on Docker + the sandbox image.
-function sandboxImageAvailable(): boolean {
-  try {
-    execFileSync("docker", ["image", "inspect", "desk/sandbox:v1"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const SKIP = !dockerAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
@@ -53,14 +41,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (SKIP) return;
-  try {
-    const Docker = (await import("dockerode")).default;
-    const docker = new Docker({ socketPath: dockerSocketPath() });
-    const container = docker.getContainer(`desk-sandbox-${testWorkspaceId}`);
-    await container.stop({ t: 2 }).catch(() => {});
-    await container.remove({ force: true }).catch(() => {});
-  } catch { /* ok */ }
-  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (engineForSetup) {
+    await engineForSetup.remove(`desk-sandbox-${testWorkspaceId}`, true).catch(() => {});
+  }
+  if (home) await rmTempTree(home);
 });
 
 describeIf("sandbox model listing (real Docker)", () => {
@@ -91,29 +75,9 @@ describeIf("sandbox model listing (real Docker)", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
 
+    // Keep the real integration pinned to a free opencode model that requires no API key.
+    expect(filtered.some((m) => m.id === "opencode/big-pickle")).toBe(true);
+
     await stopSandbox(handle);
-  }, 60_000);
-
-  // Paid-provider tests — skipped when the corresponding key is absent.
-  const itIfAnthropic = process.env.ANTHROPIC_API_KEY ? it : it.skip;
-  itIfAnthropic("listModels filters to anthropic when key is present", async () => {
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
-      provider: "anthropic",
-      providerKeys: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
-    });
-    expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "anthropic")).toBe(true);
-    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
-  }, 60_000);
-
-  const itIfOpenAI = process.env.OPENAI_API_KEY ? it : it.skip;
-  itIfOpenAI("listModels filters to openai when key is present", async () => {
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, {
-      provider: "openai",
-      providerKeys: { OPENAI_API_KEY: process.env.OPENAI_API_KEY! },
-    });
-    expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "openai")).toBe(true);
-    await stopSandbox(await createOrReuse(testWorkspaceId, testWorkspaceSlug, home));
   }, 60_000);
 });

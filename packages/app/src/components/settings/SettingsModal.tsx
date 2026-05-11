@@ -48,6 +48,8 @@ import {
   usePutProviderKeysMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
+  useGetLocalSourcesQuery,
+  usePutLocalSourceMutation,
   useGetMeQuery,
   type ModelRef,
 } from '@/store/api'
@@ -55,9 +57,34 @@ import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
   PROVIDER_KEY_BY_KIND,
+  isLocalSourceKind,
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
+import { useCompactViewport } from '@/hooks/use-compact-viewport'
+
+interface LocalSourceState {
+  kind: string
+  available: boolean
+  enabled: boolean
+  reason?: string
+  detail?: Record<string, string | number | boolean>
+}
+
+/**
+ * Per-kind copy for the unavailable-source state. The set of recognised
+ * reasons grows as we register more local sources; falling back to a
+ * generic "not detected" message keeps the UI safe for unknown reasons.
+ */
+function describeLocalSourceReason(kind: string, reason: string | undefined): string {
+  if (kind === 'codex') {
+    if (reason === 'missing') return 'No `~/.codex/auth.json` was found on this machine. Run `codex` and sign in to your ChatGPT account.'
+    if (reason === 'wrong_mode') return 'Codex is configured with an API key, not a ChatGPT subscription. Sign in via `codex` with your ChatGPT account.'
+    if (reason === 'no_tokens' || reason === 'invalid') return 'The Codex auth file is incomplete or invalid. Re-run `codex` to refresh it.'
+    if (reason === 'expired_no_refresh') return 'The Codex tokens are expired and cannot be refreshed. Re-run `codex` to sign back in.'
+  }
+  return 'Not detected on this machine.'
+}
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { PreferenceRow } from '@/components/settings/shared'
@@ -120,39 +147,64 @@ const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
 ]
 
 // Provider id → brand glyph kind. Anything not in the map renders the
-// generic muted square.
+// generic muted square. `codex` is the Codex-via-ChatGPT-subscription path
+// for OpenAI models — distinct from the API-key-backed `openai` provider.
 function brandKindForProvider(provider: string): ConnectionKind | null {
   if (provider === 'anthropic') return 'claude'
   if (provider === 'openai')    return 'chatgpt'
+  if (provider === 'codex')     return 'codex'
   return null
 }
 
 // Connection kinds that the picker can actually configure (i.e. we have a
 // backend to persist them). Other catalog entries appear in the picker
-// but are disabled.
-function isFunctionalKind(kind: ConnectionKind): boolean {
+// but are disabled. Local-source kinds (Codex, future LM Studio / Ollama)
+// count as functional only when the host has them available; cloud kinds
+// count as functional whenever they have a registered env-key mapping.
+function isFunctionalKind(
+  kind: ConnectionKind,
+  localSources: Record<string, LocalSourceState>,
+): boolean {
+  if (isLocalSourceKind(kind)) return localSources[kind]?.available === true
   return PROVIDER_KEY_BY_KIND[kind] !== undefined
 }
 
-// Build the connections list from the persisted provider keys. Only
-// kinds whose key is set show up — we don't fake "Claude is connected"
-// when no key has been saved. Custom display names come from providerMeta.
+// Build the connections list from the persisted provider keys + every
+// host-detected local source. Cloud (API-key) kinds show up once their
+// key is saved; local-source kinds show up whenever the host has them
+// available, and their switch reflects the per-user server-side opt-in.
+// Custom display names come from providerMeta (cloud only).
 function deriveConnections(
   providerKeys: Record<string, string | null>,
-  providerMeta: Record<string, { name?: string }>,
+  providerMeta: Record<string, { name?: string; enabled?: boolean }>,
+  localSources: Record<string, LocalSourceState>,
 ): Connection[] {
   const out: Connection[] = []
   for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
     if (providerKeys[envKey]) {
       const catalogMeta = CONNECTION_CATALOG[kind]
-      const customName = providerMeta[envKey]?.name
+      const entry = providerMeta[envKey]
       out.push({
         id: `conn-${kind}`,
         kind,
-        name: customName || catalogMeta.name,
-        enabled: true,
+        name: entry?.name || catalogMeta.name,
+        // The flag is opt-out: omitted/`true` = on. Disable persists via
+        // providersMeta and is honored server-side when forwarding keys
+        // to the sandbox.
+        enabled: entry?.enabled !== false,
       })
     }
+  }
+  for (const [kind, source] of Object.entries(localSources) as [ConnectionKind, LocalSourceState][]) {
+    if (!source.available) continue
+    const catalogMeta = CONNECTION_CATALOG[kind]
+    if (!catalogMeta) continue
+    out.push({
+      id: `conn-${kind}`,
+      kind,
+      name: catalogMeta.name,
+      enabled: source.enabled === true,
+    })
   }
   return out
 }
@@ -171,13 +223,13 @@ function StatusFilterPills({
   value, onChange,
 }: { value: StatusFilter; onChange: (next: StatusFilter) => void }) {
   return (
-    <div className="flex items-center rounded-lg border p-0.5">
+    <div className="flex w-full items-center rounded-lg border p-0.5 sm:w-auto">
       {STATUS_FILTERS.map(f => (
         <button
           key={f.value}
           onClick={() => onChange(f.value)}
           className={cn(
-            'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+            'flex-1 rounded-md px-3 py-1 text-xs font-medium transition-colors sm:flex-none',
             value === f.value
               ? 'bg-muted text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -194,7 +246,7 @@ function SearchInput({
   value, onChange, placeholder,
 }: { value: string; onChange: (next: string) => void; placeholder?: string }) {
   return (
-    <div className="relative w-56">
+    <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       <Input
         value={value}
@@ -210,10 +262,10 @@ function Field({
   label, help, children,
 }: { label: string; help?: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 max-w-full space-y-1.5">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       {children}
-      {help && <p className="text-xs text-muted-foreground/80">{help}</p>}
+      {help && <p className="text-xs text-muted-foreground/80 break-words">{help}</p>}
     </div>
   )
 }
@@ -222,9 +274,9 @@ function EmptyState({
   title, body, action,
 }: { title: string; body: string; action?: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed px-6 py-10 text-center flex flex-col items-center gap-3">
+    <div className="min-w-0 max-w-full rounded-xl border border-dashed px-4 py-10 text-center flex flex-col items-center gap-3 sm:px-6">
       <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground max-w-sm">{body}</p>
+      <p className="text-xs text-muted-foreground max-w-sm break-words">{body}</p>
       {action}
     </div>
   )
@@ -298,9 +350,9 @@ function WorkspaceSection({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-        <div className="flex items-center gap-3">
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
           <div
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
             style={{ backgroundColor: color }}
@@ -311,13 +363,13 @@ function WorkspaceSection({
             placeholder="Workspace name"
             value={name}
             onChange={e => setName(e.target.value)}
-            className="flex-1"
+            className="w-full min-w-0 sm:flex-1"
           />
         </div>
 
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex min-w-0 flex-wrap gap-2">
             {COLOR_OPTIONS.map(({ value, label }) => (
               <button
                 key={value}
@@ -334,12 +386,12 @@ function WorkspaceSection({
 
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
-          <div className="grid grid-cols-8 gap-1">
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(2rem,1fr))] gap-1">
             {EMOJI_OPTIONS.map(e => (
               <button
                 key={e}
                 onClick={() => setEmoji(e)}
-                className={`flex items-center justify-center h-8 w-8 rounded-md text-lg transition-colors ${
+                className={`mx-auto flex h-8 w-8 items-center justify-center rounded-md text-lg transition-colors ${
                   emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted'
                 }`}
               >
@@ -363,7 +415,7 @@ function WorkspaceSection({
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -374,7 +426,7 @@ function WorkspaceSection({
               size="sm"
               disabled={!canDelete}
               title={canDelete ? undefined : "You need at least one workspace. Create another before deleting this one."}
-              className="text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground"
+              className="w-full min-w-0 justify-start text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground sm:w-auto"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete workspace
@@ -405,6 +457,7 @@ function WorkspaceSection({
           size="sm"
           disabled={!name.trim() || !isDirty}
           onClick={() => onUpdate({ ...workspace, name: name.trim(), emoji, bg: color, description })}
+          className="w-full shrink-0 sm:w-auto"
         >
           Save changes
         </Button>
@@ -423,6 +476,7 @@ type AgentsFocus =
 function providerLabel(provider: string): string {
   if (provider === 'anthropic') return 'Claude'
   if (provider === 'openai')    return 'ChatGPT'
+  if (provider === 'codex')     return 'Codex'
   if (provider === 'opencode')  return 'OpenCode'
   return provider
 }
@@ -489,7 +543,7 @@ function AgentsList({
     return (
       <EmptyState
         title="No agents yet"
-        body="Create an agent with a name, a model, and the default instructions it should follow."
+        body="Every workspace should start with a default opencode agent. If one is missing, refresh this panel; you can change its model here once it appears."
         action={
           <Button size="sm" className="gap-1.5" onClick={onAdd}>
             <Plus className="h-3.5 w-3.5" />Add agent
@@ -503,7 +557,7 @@ function AgentsList({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       {filtered.map((a, i) => {
         const allModels: ModelRef[] = []
         for (const ms of modelIndex.values()) allModels.push(...ms)
@@ -516,7 +570,7 @@ function AgentsList({
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
-            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
+            className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
           >
             <Switch
               checked={enrolled}
@@ -531,11 +585,11 @@ function AgentsList({
                 <span className="truncate">{model?.label ?? a.model}</span>
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex shrink-0 items-center gap-1.5">
               <Button
                 variant="outline"
                 size="sm"
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                className="hidden opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                 onClick={() => onOpen(a.id)}
               >
                 Edit
@@ -579,7 +633,7 @@ function AgentDetail({
   modelIndex: Map<string, ModelRef[]>
   focus: Exclude<AgentsFocus, null>
   busy: boolean
-  onSave: (v: { id?: string; name: string; model: string; instructions: string }) => void
+  onSave: (v: { id?: string; name: string; model: string }) => void
   onCancel: () => void
   onDelete: (id: string) => void
 }) {
@@ -592,9 +646,8 @@ function AgentDetail({
 
   const initialModel = existing?.model ?? flatModels[0]?.id ?? ''
 
-  const [name, setName]                 = useState(existing?.name ?? '')
-  const [model, setModel]               = useState(initialModel)
-  const [instructions, setInstructions] = useState(existing?.instructions ?? '')
+  const [name, setName] = useState(existing?.name ?? '')
+  const [model, setModel] = useState(initialModel)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
 
   const canSave = name.trim().length > 0 && model.trim().length > 0
@@ -604,7 +657,6 @@ function AgentDetail({
       id: existing?.id,
       name: name.trim(),
       model: model.trim(),
-      instructions: instructions.trim(),
     })
   }
 
@@ -612,8 +664,8 @@ function AgentDetail({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
         <Field label="Name">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
         </Field>
@@ -660,21 +712,11 @@ function AgentDetail({
             </PopoverContent>
           </Popover>
         </Field>
-
-        <Field label="Default instructions" help="Prepended to every conversation this agent runs.">
-          <Textarea
-            value={instructions}
-            onChange={e => setInstructions(e.target.value)}
-            placeholder="Describe how this agent should behave, what tone to use, what to avoid…"
-            rows={8}
-            className="resize-y min-h-40"
-          />
-        </Field>
       </div>
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -709,9 +751,9 @@ function AgentDetail({
             </Popover>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button size="sm" onClick={handleSave} disabled={!canSave || busy}>
+        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={!canSave || busy}>
             {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add agent') : (busy ? 'Saving…' : 'Save')}
           </Button>
         </div>
@@ -767,7 +809,7 @@ function ConnectionsList({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       {filtered.map((c, i) => {
         const meta = CONNECTION_CATALOG[c.kind]
         return (
@@ -776,7 +818,7 @@ function ConnectionsList({
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
-            className="group flex items-center gap-3 py-4 border-b last:border-b-0"
+            className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
           >
             <Switch
               checked={c.enabled}
@@ -792,7 +834,7 @@ function ConnectionsList({
               <Button
                 variant="outline"
                 size="sm"
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                className="hidden opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                 onClick={() => onOpen(c.id)}
               >
                 Edit
@@ -824,9 +866,10 @@ function ConnectionsList({
 }
 
 function ConnectionsPicker({
-  configuredKinds, onPick,
+  configuredKinds, localSources, onPick,
 }: {
   configuredKinds: Set<ConnectionKind>
+  localSources: Record<string, LocalSourceState>
   onPick: (kind: ConnectionKind) => void
 }) {
   const [search, setSearch] = useState('')
@@ -837,23 +880,24 @@ function ConnectionsPicker({
       || meta.description.toLowerCase().includes(q))
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-      <div className="flex items-center justify-end">
+    <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+      <div className="flex min-w-0 items-center justify-end">
         <SearchInput value={search} onChange={setSearch} placeholder="Search connections…" />
       </div>
       {entries.length === 0 ? (
         <EmptyState title="No matches" body={`No connections match “${q}”.`} />
       ) : (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {entries.map(([kind, meta], i) => {
-            const functional = isFunctionalKind(kind)
+            const functional = isFunctionalKind(kind, localSources)
             const alreadyAdded = configuredKinds.has(kind)
             const disabled = !functional || alreadyAdded
+            const localKind = isLocalSourceKind(kind)
             const badge = !functional
-              ? 'Coming soon'
+              ? (localKind ? 'Not detected' : 'Coming soon')
               : alreadyAdded
                 ? 'Added'
-                : null
+                : (localKind ? 'Detected' : null)
             return (
               <motion.button
                 key={kind}
@@ -863,7 +907,7 @@ function ConnectionsPicker({
                 onClick={() => !disabled && onPick(kind)}
                 disabled={disabled}
                 className={cn(
-                  'group flex flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors',
+                  'group flex min-w-0 flex-col items-start gap-2 rounded-xl border bg-background p-4 text-left transition-colors',
                   disabled
                     ? 'cursor-not-allowed opacity-60'
                     : 'hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none',
@@ -877,7 +921,7 @@ function ConnectionsPicker({
                     </span>
                   )}
                 </div>
-                <div className="min-w-0">
+                <div className="w-full min-w-0">
                   <p className="text-sm font-medium truncate">{meta.name}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{meta.description}</p>
                 </div>
@@ -891,19 +935,22 @@ function ConnectionsPicker({
 }
 
 function ConnectionDetail({
-  connections, focus, providerKeys, providerMeta, busySaveKey, busySaveMeta,
-  onSave, onCancel, onDelete, onSaveProviderKey,
+  connections, focus, providerKeys, providerMeta, localSource, busySaveKey, busySaveMeta, busyLocalSource,
+  onSave, onCancel, onDelete, onSaveProviderKey, onToggleLocalSource,
 }: {
   connections: Connection[]
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   providerKeys: Record<string, string | null>
   providerMeta: Record<string, { name?: string }>
+  localSource: LocalSourceState | undefined
   busySaveKey: boolean
   busySaveMeta: boolean
+  busyLocalSource: boolean
   onSave: (c: Connection) => void
   onCancel: () => void
   onDelete: (id: string) => void
   onSaveProviderKey: (envKey: string, value: string) => void
+  onToggleLocalSource: (kind: string, enabled: boolean) => void
 }) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
   const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
@@ -950,16 +997,90 @@ function ConnectionDetail({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
-  return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pt-3 pb-4 space-y-4">
-        <div className="flex items-center gap-3">
-          <ConnectionGlyph kind={kind} size="lg" />
-          <div>
-            <p className="text-sm font-medium">{catalogMeta.name}</p>
-            <p className="text-xs text-muted-foreground">{catalogMeta.description}</p>
+  if (isLocalSourceKind(kind)) {
+    const detail = localSource?.detail ?? {}
+    const email = typeof detail.email === 'string' ? detail.email : undefined
+    const plan = typeof detail.plan === 'string' ? detail.plan : undefined
+    const expMs = typeof detail.expiresAt === 'number' ? detail.expiresAt : undefined
+    const expiry = expMs ? new Date(expMs) : undefined
+    const reasonLabel = describeLocalSourceReason(kind, localSource?.reason)
+    return (
+      <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+        <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+          <div className="flex min-w-0 max-w-full items-center gap-3">
+            <ConnectionGlyph kind={kind} size="lg" />
+            <div className="min-w-0 max-w-full">
+              <p className="text-sm font-medium truncate">{catalogMeta.name}</p>
+              <p className="text-xs text-muted-foreground break-words">{catalogMeta.description}</p>
+            </div>
+          </div>
+
+          <Field
+            label="Status"
+            help={`Desk detects this source on the host at run time and forwards it to the sandbox — no API key required.`}
+          >
+            {localSource?.available ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                <p>Detected on this machine{email ? ` — ${email}` : ''}.</p>
+                {(plan || expiry) && (
+                  <p className="text-xs text-muted-foreground">
+                    {plan ? `Plan: ${plan}` : ''}
+                    {plan && expiry ? ' · ' : ''}
+                    {expiry ? `Token expires ${expiry.toLocaleString()}` : ''}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
+                {reasonLabel}
+              </div>
+            )}
+          </Field>
+
+          <Field
+            label="Use in sandboxes"
+            help="When enabled, Desk forwards this source's auth/credentials to OpenCode so it can call its models from inside the sandbox."
+          >
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={localSource?.enabled === true}
+                disabled={!localSource?.available || busyLocalSource}
+                onCheckedChange={(next) => onToggleLocalSource(kind, next)}
+                aria-label={`Toggle ${catalogMeta.name} in sandboxes`}
+                data-testid={`local-source-toggle-${kind}`}
+              />
+              <span className="text-xs text-muted-foreground">
+                {busyLocalSource ? 'Saving…' : localSource?.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+          </Field>
+        </div>
+
+        <div
+          className={cn(
+            'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
+            scrolledUnder && 'border-border',
+          )}
+        >
+          <div />
+          <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+            <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel}>Close</Button>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
+          <div className="flex min-w-0 max-w-full items-center gap-3">
+            <ConnectionGlyph kind={kind} size="lg" />
+            <div className="min-w-0 max-w-full">
+              <p className="text-sm font-medium truncate">{catalogMeta.name}</p>
+              <p className="text-xs text-muted-foreground break-words">{catalogMeta.description}</p>
+            </div>
+          </div>
 
         <Field label="Display name" help="Optional custom label shown in the connections list.">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
@@ -971,18 +1092,19 @@ function ConnectionDetail({
             ? 'Stored encrypted on the server. Saved keys appear masked on reload — submit a fresh value to overwrite.'
             : 'Stored locally. Used to authenticate against the service.'}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-col gap-2 sm:flex-row sm:items-center">
             <Input
               type="password"
               value={apiKey}
               onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
               data-testid={providerEnvKey ? `provider-key-${providerEnvKey}` : undefined}
               placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : 'Paste the API key or token'}
-              className="flex-1"
+              className="min-w-0 flex-1"
             />
             {providerEnvKey && (
               <Button
                 size="sm"
+                className="w-full sm:w-auto"
                 disabled={!apiKeyDirty || busySaveKey}
                 data-testid={`provider-save-${providerEnvKey}`}
                 onClick={handleSaveKey}
@@ -996,7 +1118,7 @@ function ConnectionDetail({
 
       <div
         className={cn(
-          'shrink-0 p-4 flex items-center justify-between gap-2 border-t border-transparent',
+          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
           scrolledUnder && 'border-border',
         )}
       >
@@ -1031,9 +1153,9 @@ function ConnectionDetail({
             </Popover>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
-          <Button size="sm" onClick={handleSave} disabled={busySaveMeta}>
+        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={busySaveMeta}>
             {focus.mode === 'new' ? (busySaveMeta ? 'Adding…' : 'Add connection') : (busySaveMeta ? 'Saving…' : 'Save')}
           </Button>
         </div>
@@ -1044,9 +1166,10 @@ function ConnectionDetail({
 
 // ── Preferences ──────────────────────────────────────────────────────────────
 
-// Mirrors `RouteView` from `@/router/nav`. 'desk' is kept as a valid stored
-// value during the deprecation window; `loadPrefs` normalises it to 'pinned'.
-type DefaultView = 'pinned' | 'desk' | 'tasks' | 'context'
+// Mirrors `RouteView` from `@/router/nav`, plus the special new-chat landing
+// state. 'desk' is kept as a valid stored value during the deprecation window;
+// `loadPrefs` normalises it to 'pinned'.
+type DefaultView = 'new-chat' | 'pinned' | 'desk' | 'tasks' | 'context'
 
 export interface PrefsShape {
   defaultView: DefaultView
@@ -1055,7 +1178,7 @@ export interface PrefsShape {
 }
 
 const PREFS_DEFAULTS: PrefsShape = {
-  defaultView: 'tasks',
+  defaultView: 'new-chat',
   showBadges: true,
   developerMode: false,
 }
@@ -1064,7 +1187,7 @@ function prefsKey(userId: string): string {
   return `desk.prefs.${userId}`
 }
 
-const VALID_VIEWS: readonly DefaultView[] = ['pinned', 'desk', 'tasks', 'context']
+const VALID_VIEWS: readonly DefaultView[] = ['new-chat', 'pinned', 'desk', 'tasks', 'context']
 
 export function loadPrefs(userId: string | undefined): PrefsShape {
   if (!userId) return PREFS_DEFAULTS
@@ -1110,12 +1233,13 @@ function PreferencesSection() {
   }
 
   const VIEW_OPTIONS: { value: DefaultView; label: string }[] = [
+    { value: 'new-chat', label: 'New chat' },
     { value: 'tasks',   label: 'Tasks'   },
     { value: 'context', label: 'Library' },
   ]
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-w-0 flex-col overflow-hidden">
       <PreferenceRow
         title="Show unread badges"
         description="Display unread counts on workspace tabs and nav items."
@@ -1131,14 +1255,14 @@ function PreferencesSection() {
         title="Default view"
         description="The view you land on after sign-in and when switching workspaces."
       >
-        <div className="flex rounded-md border overflow-hidden">
+        <div className="flex w-full min-w-0 max-w-full flex-wrap overflow-hidden rounded-md border sm:w-auto">
           {VIEW_OPTIONS.map(opt => (
             <button
               key={opt.value}
               data-testid={`prefs-default-view-${opt.value}`}
               onClick={() => update({ defaultView: opt.value })}
               className={cn(
-                'px-3 py-1.5 text-xs font-medium transition-colors',
+                'min-w-0 flex-1 px-3 py-1.5 text-xs font-medium transition-colors sm:flex-none',
                 prefs.defaultView === opt.value
                   ? 'bg-foreground text-background'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
@@ -1192,6 +1316,7 @@ export function SettingsModal({
   initialSection,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
+  const isCompactViewport = useCompactViewport()
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -1222,12 +1347,12 @@ export function SettingsModal({
     setAgentsSearch('')
   }
 
-  const handleSaveAgent = async (v: { id?: string; name: string; model: string; instructions: string }) => {
+  const handleSaveAgent = async (v: { id?: string; name: string; model: string }) => {
     try {
       if (v.id) {
-        await patchAgent({ id: v.id, patch: { name: v.name, model: v.model, instructions: v.instructions } }).unwrap()
+        await patchAgent({ id: v.id, patch: { name: v.name, model: v.model } }).unwrap()
       } else {
-        const created = await createAgent({ name: v.name, model: v.model, instructions: v.instructions }).unwrap()
+        const created = await createAgent({ name: v.name, model: v.model }).unwrap()
         // Auto-enroll in the current workspace so the agent is active immediately.
         await addWorkspaceAgent({ workspaceId: workspace.id, agentId: created.id }).unwrap()
       }
@@ -1253,7 +1378,6 @@ export function SettingsModal({
       await createAgent({
         name: `${source.name} (copy)`,
         model: source.model,
-        instructions: source.instructions,
       }).unwrap()
     } catch (err) {
       toast.error('Could not duplicate agent', { description: describeApiError(err) })
@@ -1286,26 +1410,32 @@ export function SettingsModal({
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
   const { data: providersMeta } = useGetProvidersMetaQuery()
   const [putProvidersMeta, { isLoading: savingMeta }] = usePutProvidersMetaMutation()
+  const { data: localSourcesData } = useGetLocalSourcesQuery()
+  const [putLocalSource, { isLoading: savingLocalSource }] = usePutLocalSourceMutation()
 
   const providerKeysMap = providerKeys ?? {}
   const providersMetaMap = providersMeta ?? {}
+  const localSourcesByKind = useMemo<Record<string, LocalSourceState>>(() => {
+    const map: Record<string, LocalSourceState> = {}
+    for (const s of localSourcesData?.sources ?? []) map[s.kind] = s as LocalSourceState
+    return map
+  }, [localSourcesData])
   const connections = useMemo(
-    () => deriveConnections(providerKeysMap, providersMetaMap),
-    [providerKeysMap, providersMetaMap],
+    () => deriveConnections(providerKeysMap, providersMetaMap, localSourcesByKind),
+    [providerKeysMap, providersMetaMap, localSourcesByKind],
   )
   const configuredKinds = useMemo(
     () => new Set(connections.map(c => c.kind)),
     [connections],
   )
 
-  // Per-workspace availability for connections is local-only for now —
-  // a key being saved means the connection exists, this toggle gates
-  // whether agents in this workspace see it. State resets on remount.
-  const [connectionsDisabledLocal, setConnectionsDisabledLocal] = useState<Set<string>>(new Set())
-  const connectionsView = useMemo(
-    () => connections.map(c => ({ ...c, enabled: !connectionsDisabledLocal.has(c.id) })),
-    [connections, connectionsDisabledLocal],
-  )
+  // The "enabled" flag is server state for every kind: API-key kinds
+  // store it in provider_meta[envKey].enabled; local-source kinds (Codex,
+  // future LM Studio / Ollama) store it via /me/providers/local. The
+  // runtime filters disabled providers before forwarding keys to the
+  // sandbox, so toggling actually hides the provider from the model
+  // picker (not just from this list).
+  const connectionsView = connections
 
   const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
   const [connectionsSearch, setConnectionsSearch]             = useState('')
@@ -1317,6 +1447,19 @@ export function SettingsModal({
   }
 
   const handleSaveConnection = async (conn: Connection) => {
+    // Local sources (Codex, future LM Studio / Ollama) are host-managed —
+    // there is no API key, no display name. Picking one from the picker
+    // is the user's opt-in signal.
+    if (isLocalSourceKind(conn.kind)) {
+      try {
+        await putLocalSource({ kind: conn.kind, enabled: true }).unwrap()
+      } catch (err) {
+        toast.error(`Could not enable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
+        return
+      }
+      setConnectionsFocus(null)
+      return
+    }
     // Persist the display name to /me/providers/meta if this is a
     // functional (API-key-backed) connection kind.
     const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
@@ -1337,12 +1480,25 @@ export function SettingsModal({
   const handleDeleteConnection = async (id: string) => {
     const conn = connections.find(c => c.id === id)
     if (!conn) { setConnectionsFocus(null); return }
+    if (isLocalSourceKind(conn.kind)) {
+      try {
+        await putLocalSource({ kind: conn.kind, enabled: false }).unwrap()
+      } catch (err) {
+        toast.error(`Could not disable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
+        return
+      }
+      setConnectionsFocus(null)
+      return
+    }
     const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
     if (envKey) {
       try {
-        // Sending an empty string clears the key on the server — the row
-        // disappears from the list because deriveConnections() drops it.
-        await putProviderKeys({ [envKey]: '' }).unwrap()
+        // null deletes the key server-side; "" would store an empty string
+        // and the masked echo keeps the row visible.
+        await putProviderKeys({ [envKey]: null }).unwrap()
+        // Drop any persisted display name so re-adding the connection
+        // starts from the catalog default.
+        await putProvidersMeta({ [envKey]: null }).unwrap()
       } catch (err) {
         toast.error('Could not remove connection', { description: describeApiError(err) })
         return
@@ -1351,12 +1507,36 @@ export function SettingsModal({
     setConnectionsFocus(null)
   }
 
+  const handleToggleLocalSource = async (kind: string, enabled: boolean) => {
+    try {
+      await putLocalSource({ kind, enabled }).unwrap()
+    } catch (err) {
+      toast.error('Could not update connection', { description: describeApiError(err) })
+    }
+  }
+
   const handleToggleConnectionEnabled = (id: string) => {
-    setConnectionsDisabledLocal(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+    const conn = connections.find(c => c.id === id)
+    if (!conn) return
+    if (isLocalSourceKind(conn.kind)) {
+      const next = !(localSourcesByKind[conn.kind]?.enabled === true)
+      void putLocalSource({ kind: conn.kind, enabled: next })
+        .unwrap()
+        .catch((err) => toast.error(
+          next ? 'Could not enable connection' : 'Could not disable connection',
+          { description: describeApiError(err) },
+        ))
+      return
+    }
+    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    if (!envKey) return
+    const next = !conn.enabled
+    void putProvidersMeta({ [envKey]: { enabled: next } })
+      .unwrap()
+      .catch((err) => toast.error(
+        next ? 'Could not enable connection' : 'Could not disable connection',
+        { description: describeApiError(err) },
+      ))
   }
 
   const handleSaveProviderKey = async (envKey: string, value: string) => {
@@ -1495,16 +1675,25 @@ export function SettingsModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="p-0 gap-0 sm:max-w-[900px] overflow-hidden"
+        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] p-0 gap-0 sm:max-w-[900px] overflow-hidden"
         showCloseButton={false}
-        style={{ height: '620px' }}
+        style={{ height: 'min(620px, calc(100dvh - 1rem))' }}
       >
         <DialogTitle className="sr-only">Workspace settings</DialogTitle>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn('absolute right-3 top-3 z-20 h-7 w-7 text-muted-foreground', !isCompactViewport && 'hidden')}
+          onClick={() => onOpenChange(false)}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </Button>
 
-        <div className="flex h-full">
+        <div className={cn('flex h-full min-h-0 min-w-0 overflow-hidden', isCompactViewport ? 'flex-col' : 'flex-row')}>
           {/* Left nav */}
-          <div className="w-52 shrink-0 flex flex-col border-r bg-muted/30">
-            <div className="px-4 pt-5 pb-3">
+          <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
+            <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
                 <div
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
@@ -1516,13 +1705,14 @@ export function SettingsModal({
               </div>
             </div>
 
-            <nav className="flex-1 px-2 space-y-0.5">
+            <nav className={cn('flex gap-1 px-2', isCompactViewport ? 'overflow-x-auto pb-2' : 'flex-1 flex-col gap-0 space-y-0.5 overflow-x-visible pb-0')}>
               {NAV.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors',
+                    isCompactViewport ? 'shrink-0' : 'w-full shrink',
                     activeSection === id
                       ? 'bg-muted text-foreground font-medium'
                       : 'text-foreground/70 hover:text-foreground hover:bg-muted/60',
@@ -1536,8 +1726,8 @@ export function SettingsModal({
           </div>
 
           {/* Right content */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="h-[52px] flex items-center justify-between gap-3 border-b px-4 shrink-0">
+          <div className={cn('flex w-full flex-1 flex-col min-w-0 min-h-0 overflow-hidden', !isCompactViewport && 'w-auto')}>
+            <div className={cn('min-h-[52px] items-center justify-between gap-3 border-b px-4 shrink-0', isCompactViewport ? 'hidden' : 'flex')}>
               {renderHeaderBreadcrumb()}
               <Button
                 variant="ghost"
@@ -1555,7 +1745,7 @@ export function SettingsModal({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.15, ease: 'easeOut' }}
-              className="flex-1 flex flex-col min-h-0"
+              className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden"
             >
               {activeSection === 'workspace' ? (
                 <WorkspaceSection
@@ -1577,6 +1767,7 @@ export function SettingsModal({
               ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
                 <ConnectionsPicker
                   configuredKinds={configuredKinds}
+                  localSources={localSourcesByKind}
                   onPick={(kind) => setConnectionsFocus({ mode: 'new', kind })}
                 />
               ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
@@ -1585,20 +1776,28 @@ export function SettingsModal({
                   focus={connectionsFocus}
                   providerKeys={providerKeysMap}
                   providerMeta={providersMetaMap}
+                  localSource={(() => {
+                    const k = connectionsFocus.mode === 'edit'
+                      ? connectionsView.find(c => c.id === connectionsFocus.id)?.kind
+                      : connectionsFocus.kind
+                    return k ? localSourcesByKind[k] : undefined
+                  })()}
                   busySaveKey={savingKey}
                   busySaveMeta={savingMeta}
+                  busyLocalSource={savingLocalSource}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
                   onDelete={handleDeleteConnection}
                   onSaveProviderKey={handleSaveProviderKey}
+                  onToggleLocalSource={handleToggleLocalSource}
                 />
               ) : (
-                <div className="flex-1 overflow-y-auto px-4 pt-3 pb-6">
+                <div className="flex-1 w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
                   {activeSection === 'agents' && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 max-w-full space-y-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={agentsStatusFilter} onChange={setAgentsStatusFilter} />
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
                           <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search agents…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setAgentsFocusAndReset({ mode: 'new' })}>
                             <Plus className="h-3.5 w-3.5" />Add
@@ -1624,10 +1823,10 @@ export function SettingsModal({
                     </div>
                   )}
                   {activeSection === 'connections' && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 max-w-full space-y-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={connectionsStatusFilter} onChange={setConnectionsStatusFilter} />
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
                           <SearchInput value={connectionsSearch} onChange={setConnectionsSearch} placeholder="Search connections…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setConnectionsFocusAndReset({ mode: 'picker' })}>
                             <Plus className="h-3.5 w-3.5" />Add

@@ -85,7 +85,7 @@ describe("encryption", () => {
   });
 
   it("encryptJson / decryptJson round-trip a map", () => {
-    const obj = { ANTHROPIC_API_KEY: "sk-abc", OPENAI_API_KEY: "sk-xyz" };
+    const obj = { GEMINI_API_KEY: "gem-abc", OPENAI_API_KEY: "sk-xyz" };
     const ct = encryptJson(obj);
     expect(decryptJson<typeof obj>(ct)).toEqual(obj);
   });

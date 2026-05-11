@@ -33,6 +33,18 @@ function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined
   }
 }
 
+export function buildSendOptions(
+  _persistedGoalKey: GoalKey,
+  goalOverride: GoalKey | undefined,
+  message: string,
+): SendOptions | undefined {
+  const explicitGoal = goalOverride
+  const taskOptions = optionsForGoal(explicitGoal ?? null, message)
+  return explicitGoal !== undefined || taskOptions
+    ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
+    : undefined
+}
+
 
 export interface UploadedFile {
   id: string
@@ -69,6 +81,8 @@ interface ChatInputProps {
   autoFocus?: boolean
   compact?: boolean
   showGoalPicker?: boolean
+  /** Persisted chat goal used as the composer's default selection. */
+  goal?: GoalKey
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
   /**
@@ -118,6 +132,7 @@ export function ChatInput({
   autoFocus = false,
   compact = false,
   showGoalPicker = true,
+  goal = null,
   prefillValue,
   focusRef,
   chatAgentId,
@@ -163,10 +178,15 @@ export function ChatInput({
 
   const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
-  const effectiveGoalKey: GoalKey = goalOverride ?? null
+  const persistedGoalKey = goal ?? null
+  const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
+
+  useEffect(() => {
+    setGoalOverride(undefined)
+  }, [goal])
 
   // Auto-focus
   useEffect(() => {
@@ -287,14 +307,10 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    const taskOptions = optionsForGoal(effectiveGoalKey, trimmed)
-    const options: SendOptions | undefined = effectiveGoalKey !== null
-      ? { ...taskOptions, goal: effectiveGoalKey }
-      : taskOptions
+    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed)
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     setValue('')
     setAttachedItems([])
-    setGoalOverride(undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -360,7 +376,7 @@ export function ChatInput({
         )}
 
         {/* Textarea + submit inline */}
-        <div className={`flex gap-2 px-3 ${compact ? 'py-2' : 'py-3'}`}>
+        <div className={`flex min-w-0 gap-2 px-3 ${compact ? 'py-2' : 'py-3'}`}>
           <textarea
             ref={textareaRef}
             rows={1}
@@ -369,7 +385,7 @@ export function ChatInput({
             onKeyDown={handleKeyDown}
             placeholder={activePlaceholder}
             disabled={disabled}
-            className={`flex-1 self-center resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 disabled:opacity-50`}
+            className="min-w-0 flex-1 self-center resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 disabled:opacity-50"
           />
           <div className="self-stretch flex flex-col justify-end">
             <button
@@ -387,7 +403,7 @@ export function ChatInput({
       </div>
 
       {/* Pickers row — below the input */}
-      <div className={`flex items-center gap-1.5 ${compact ? 'mt-1.5' : 'mt-2'}`}>
+      <div className={`flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden ${compact ? 'mt-1.5' : 'mt-2'}`}>
 
         <ComposerPickers
           ref={pickersRef}

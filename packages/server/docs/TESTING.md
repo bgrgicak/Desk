@@ -5,9 +5,10 @@
 | Variable | Default | Purpose |
 |---|---|---|
 | `DESK_HOME` | `$HOME` | Where the test fixture writes per-run sqlite + workspace dirs (under a `mkdtemp` subdir, not the user's real `~/Desk`) |
-| `ANTHROPIC_API_KEY` | (none) | Enables real AI end-to-end tests. Loaded from `.env` at repo root |
 | Docker daemon | auto-detected | Sandbox integration tests run when `docker info` succeeds. Rootful and rootless Linux + macOS Docker Desktop all work |
 | `at` / `crontab` | auto-detected | Scheduler integration tests run when the commands are available |
+
+Real AI tests use the free `opencode/big-pickle` model and require no API key.
 
 ## Running tests
 
@@ -18,6 +19,16 @@ npm run test:host
 # Playwright e2e (spawns desk-server + Vite preview)
 npm run test:e2e
 ```
+
+## CI layout
+
+GitHub Actions runs the independent gates in parallel:
+
+1. `Typecheck` runs `npm run typecheck`.
+2. `Vitest (host suite)` builds the sandbox CLI and `desk/sandbox:v1`, then runs the host Vitest suite.
+3. `Playwright e2e` builds `@agent-desk/api` and its Nx dependencies, installs Chromium, then runs the UI e2e suite with the fake sandbox driver.
+
+The final `Test (host suite)` job is an aggregate compatibility check that fails unless all three parallel jobs pass.
 
 ## Test tiers
 
@@ -37,8 +48,10 @@ login, CRUD, message sending, run triggering, and WebSocket event
 delivery. The Playwright suite drives the UI through Vite's preview
 proxy at `:5179`.
 
-When `ANTHROPIC_API_KEY` is set, the runtime `opencode.test.ts`
-exercises a real AI invocation inside a real Docker container.
+The runtime `opencode.test.ts` and the API `e2e.test.ts` real-stack
+block exercise a real AI invocation inside a real Docker container
+against the free `opencode/big-pickle` model — no API key required.
+They auto-skip when the sandbox image isn't available locally.
 
 ## Test isolation
 

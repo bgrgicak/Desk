@@ -13,6 +13,7 @@ export interface NavQuery {
   /** Message id to scroll to inside the selected chat. Cleared when the
    * user navigates within the chat normally. */
   message?: string | null;
+  artifactParams?: string | null;
 }
 
 export const NEW_CHAT_ID = "new";
@@ -28,6 +29,7 @@ export function buildPath(
   if (q.item) sp.set("item", q.item);
   if (q.folder) sp.set("folder", q.folder);
   if (q.message) sp.set("message", q.message);
+  if (q.artifactParams) sp.set("artifactParams", q.artifactParams);
   const s = sp.toString();
   return `/w/${wsId}/${view}${s ? "?" + s : ""}`;
 }

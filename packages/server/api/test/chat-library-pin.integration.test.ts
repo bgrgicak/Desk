@@ -39,6 +39,10 @@ interface SeededUser {
   agentId: string;
 }
 
+function portableSymlinkTarget(linkPath: string, targetAbs: string): string {
+  return path.relative(path.dirname(linkPath), targetAbs).split(path.sep).join("/") || ".";
+}
+
 function request(
   method: string,
   pathStr: string,
@@ -94,8 +98,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
-    model: "anthropic/claude-sonnet-4-5",
+    model: "opencode/big-pickle",
   });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
@@ -121,7 +124,7 @@ async function createChat(owner: SeededUser, title: string): Promise<string> {
 
 /** Writes a real library file at `workspaces/{slug}/{relPath}` and returns its workspace-relative path. */
 async function writeLibraryFile(slug: string, relPath: string, body: string): Promise<string> {
-  const abs = path.join(home, "Desk", "workspaces", slug, relPath);
+  const abs = path.join(home, slug, relPath);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, body);
   return relPath.split(path.sep).join("/");
@@ -174,11 +177,11 @@ describe("POST /chats/:id/library-refs", () => {
     expect(fileRef.size).toBe("library body".length);
 
     // It is actually a symlink — the library file is unchanged, not copied.
-    const linkAbs = path.join(home, "Desk", "workspaces", alpha.workspacePath, ".chats", chatId, "attachments", "spec.md");
+    const linkAbs = path.join(home, alpha.workspacePath, ".chats", chatId, "attachments", "spec.md");
     const lstat = await fs.lstat(linkAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
-    const targetAbs = path.join(home, "Desk", "workspaces", alpha.workspacePath, "Notes/spec.md");
-    expect(await fs.readlink(linkAbs)).toBe(targetAbs);
+    const targetAbs = path.join(home, alpha.workspacePath, "Notes/spec.md");
+    expect(await fs.readlink(linkAbs)).toBe(portableSymlinkTarget(linkAbs, targetAbs));
 
     // listAttachments surfaces the pin alongside any other on-disk attachments.
     const list = await request("GET", `/chats/${chatId}/attachments`, alpha.token);
@@ -202,7 +205,7 @@ describe("POST /chats/:id/library-refs", () => {
     expect((a.body as { path: string }).path).toBe(`.chats/${chatId}/attachments/report.md`);
     expect((b.body as { path: string }).path).toBe(`.chats/${chatId}/attachments/report.md`);
 
-    const attDir = path.join(home, "Desk", "workspaces", alpha.workspacePath, ".chats", chatId, "attachments");
+    const attDir = path.join(home, alpha.workspacePath, ".chats", chatId, "attachments");
     const entries = await fs.readdir(attDir);
     expect(entries.filter((n) => n.startsWith("report")).length).toBe(1);
   });
@@ -232,7 +235,7 @@ describe("POST /chats/:id/library-refs", () => {
 
     // Remove the library target. The symlink stays on disk but stat() fails,
     // so listAttachments must drop it from the response.
-    await fs.unlink(path.join(home, "Desk", "workspaces", alpha.workspacePath, "ephemeral.txt"));
+    await fs.unlink(path.join(home, alpha.workspacePath, "ephemeral.txt"));
 
     const list = await request("GET", `/chats/${chatId}/attachments`, alpha.token);
     const items = list.body as { path: string }[];
@@ -241,7 +244,7 @@ describe("POST /chats/:id/library-refs", () => {
 
   it("rejects pinning a path that already lives inside the chat's attachments dir", async () => {
     const chatId = await createChat(alpha, "pin self-ref");
-    const attDir = path.join(home, "Desk", "workspaces", alpha.workspacePath, ".chats", chatId, "attachments");
+    const attDir = path.join(home, alpha.workspacePath, ".chats", chatId, "attachments");
     await fs.mkdir(attDir, { recursive: true });
     await fs.writeFile(path.join(attDir, "already.txt"), "uploaded");
 

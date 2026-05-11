@@ -1,14 +1,26 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Routes,
   Route,
   Navigate,
   useNavigate,
+  useLocation,
   useParams,
   useSearchParams,
 } from 'react-router-dom'
 import { toast } from 'sonner'
-import { TooltipProvider, Toaster } from '@agent-desk/ui'
+import { Loader2 } from 'lucide-react'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  TooltipProvider,
+  Toaster,
+} from '@agent-desk/ui'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ContextList } from '@/components/context/ContextList'
@@ -18,7 +30,7 @@ import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
 import { GlobalPalette } from '@/components/global-palette/GlobalPalette'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
-import type { AttachmentRef } from '@/store/types'
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
@@ -27,6 +39,8 @@ import {
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
+  useGetChatQuery,
+  useGetMeQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
   usePinChatLibraryRefMutation,
@@ -37,26 +51,34 @@ import {
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
 } from '@/store/api'
-import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
   setArtifactTransitionSource,
   setArtifactBackLabel,
   setTodaySheetOpen,
   setAgentationVisible,
   markArtifactSaved,
-  markChatRead,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
+import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
-import { toUiTask } from '@/store/selectors/tasks'
+import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
+import type { PrefsShape } from '@/components/settings/SettingsModal'
+import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
+import { buildTaskStatusMove } from '@/lib/task-status'
+import {
+  acceptBrowserNotificationPermissionOffer,
+  markBrowserNotificationPermissionOffered,
+  shouldOfferBrowserNotificationPermissionOnce,
+} from '@/lib/account-notifications'
 
 // RTK Query rejects with `{ status, data: { code, message } }` from the
 // server, not Error instances — so the common `err instanceof Error ?
@@ -72,6 +94,26 @@ function extractApiError(err: unknown): string | undefined {
   }
   if (err instanceof Error) return err.message
   return undefined
+}
+
+function buildDefaultViewPath(wsId: string, defaultView: PrefsShape['defaultView']): string {
+  if (defaultView === 'new-chat') return buildPath(wsId, 'pinned', { chat: NEW_CHAT_ID })
+  if (defaultView === 'desk') return buildPath(wsId, 'pinned')
+  return buildPath(wsId, defaultView)
+}
+
+function parseArtifactParams(raw: string | null): Record<string, string> | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const entries = Object.entries(parsed).filter((entry): entry is [string, string] => (
+      typeof entry[0] === 'string' && typeof entry[1] === 'string'
+    ))
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const NEW_CHAT_STUB: Chat = {
@@ -108,46 +150,74 @@ export default function App() {
 // first workspace's default view. Anything unrecognised also lands here.
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
-  const { defaultView } = usePrefs()
-  if (!serverWorkspaces || serverWorkspaces.length === 0) {
+  const { defaultView, loaded: prefsLoaded } = usePrefs()
+  // Loading state: queries still in flight. Render a centered spinner
+  // instead of an empty div — an empty <div className="h-dvh"/> looks
+  // identical to a crashed app, and any tab-switch / WS-reconnect that
+  // briefly invalidates the cache flashes a full-screen white panel.
+  if (!serverWorkspaces || !prefsLoaded) {
     return (
       <TooltipProvider>
         <Toaster position="bottom-right" />
-        <div className="h-dvh" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+        </div>
       </TooltipProvider>
     )
   }
-  return <Navigate to={buildPath(serverWorkspaces[0].id, defaultView as RouteView)} replace />
+  // The user has zero workspaces (fresh install or all deleted). The
+  // app has no place to land — surface that explicitly instead of
+  // staying on a blank screen forever.
+  if (serverWorkspaces.length === 0) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <div className="max-w-sm text-center px-6">
+            <h1 className="text-lg font-semibold mb-2">No workspaces yet</h1>
+            <p className="text-sm text-muted-foreground">
+              Create a workspace from the top bar to get started.
+            </p>
+          </div>
+        </div>
+      </TooltipProvider>
+    )
+  }
+  return <Navigate to={buildDefaultViewPath(serverWorkspaces[0].id, defaultView)} replace />
 }
 
 function AppInner() {
   const { wsId = '', view: viewParam } = useParams<{ wsId: string; view: string }>()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const dispatch = useAppDispatch()
+  const appStore = useAppStore()
+  const [notificationPromptOpen, setNotificationPromptOpen] = useState(false)
 
   const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
   const activeWorkspaceId = wsId
-  const { defaultView } = usePrefs()
+  const { defaultView, developerMode } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
   const selectedMessageId = searchParams.get('message')
+  const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
+  const shouldLoadTasksView = activeView === 'tasks'
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
-  const readChatIdList = useAppSelector(s => s.ui.readChatIds)
   const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
   const agentationVisible = useAppSelector(s => s.ui.agentationVisible)
 
   const savedArtifactIds = new Set(savedArtifactIdList)
-  const readChatIds = new Set(readChatIdList)
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
+  const { data: me } = useGetMeQuery()
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
-  const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
+  const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
 
   // If the wsId in the URL isn't one the user has, bounce to the first.
@@ -161,6 +231,25 @@ function AppInner() {
     navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
   }, [serverWorkspaces, wsFetching, activeWorkspaceId, activeView, navigate])
 
+  useEffect(() => {
+    if (!activeWorkspaceId) return
+    saveLastWorkspaceUrl(activeWorkspaceId, `${location.pathname}${location.search}${location.hash}`)
+  }, [activeWorkspaceId, location.pathname, location.search, location.hash])
+
+  useEffect(() => {
+    setNotificationPromptOpen(shouldOfferBrowserNotificationPermissionOnce(me?.id))
+  }, [me?.id])
+
+  const dismissNotificationPrompt = useCallback(() => {
+    markBrowserNotificationPermissionOffered(me?.id)
+    setNotificationPromptOpen(false)
+  }, [me?.id])
+
+  const enableDesktopNotifications = useCallback(async () => {
+    await acceptBrowserNotificationPermissionOffer(me?.id)
+    setNotificationPromptOpen(false)
+  }, [me?.id])
+
   // One-shot artifact-open animation hint: cleared once the artifact pane closes.
   useEffect(() => {
     if (!selectedArtifactPath && artifactTransitionSource !== null) {
@@ -169,22 +258,87 @@ function AppInner() {
     }
   }, [selectedArtifactPath, artifactTransitionSource, dispatch])
 
-  const { data: serverChats } = useGetChatsQuery(
+  // Use `currentData` for workspace-scoped queries. RTK Query's `data` keeps
+  // the previous arg's fulfilled value while the new arg loads, which makes a
+  // freshly selected workspace briefly render the old workspace's sidebar and
+  // views. `currentData` still uses the cache for this exact workspace when it
+  // exists; otherwise the UI shows a loader instead of stale cross-workspace
+  // content.
+  const {
+    currentData: serverChats,
+    isLoading: chatsLoading,
+    isUninitialized: chatsUninitialized,
+    isError: chatsError,
+  } = useGetChatsQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
+  const selectedChatFromList = selectedChatId && selectedChatId !== NEW_CHAT_ID
+    ? chats.find(c => c.id === selectedChatId) ?? null
+    : null
+  // Fetch the selected chat independently of the sidebar list. The list can be
+  // relatively expensive on large workspaces; a direct chat URL should not wait
+  // for sidebar hydration before rendering the conversation surface.
+  const shouldFetchSelectedChatById = !!(
+    activeWorkspaceId &&
+    selectedChatId &&
+    selectedChatId !== NEW_CHAT_ID
+  )
+  const {
+    currentData: selectedServerChatById,
+    isLoading: selectedChatByIdLoading,
+    isFetching: selectedChatByIdFetching,
+  } = useGetChatQuery(selectedChatId ?? '', { skip: !shouldFetchSelectedChatById })
+  const selectedChatById = selectedServerChatById?.workspaceId === activeWorkspaceId
+    ? toUiChat(selectedServerChatById)
+    : null
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
-  const { data: tasksResp } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, kind: ['task'] },
-    { skip: !activeWorkspaceId },
+  const { currentData: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
   )
-  const tasks = (tasksResp?.items ?? []).map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? []))
+  const { currentData: summaryRequestTasksResp } = useGetMessagesQuery(
+    {
+      workspaceId: activeWorkspaceId,
+      kind: summaryRequestMessageKindsForDeveloperMode(developerMode),
+      contentKind: ['summary_request'],
+    },
+    { skip: !activeWorkspaceId || !developerMode || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
+  )
+  const { currentData: taskRunsResp } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), limit: 500 },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
+  )
+  const { currentData: activeTaskRunsResp } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), state: ['running'], limit: 200 },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
+  )
+  const taskRunsByParent = new Map<string, ServerMessage[]>()
+  const taskRunsById = new Map<string, ServerMessage>()
+  for (const run of taskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
+  for (const run of activeTaskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
+  for (const run of taskRunsById.values()) {
+    if (!run.parentId) continue
+    const runs = taskRunsByParent.get(run.parentId) ?? []
+    runs.push(run)
+    taskRunsByParent.set(run.parentId, runs)
+  }
+  const tasks = [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
+    .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
+    .map(m => toUiTask(
+      m,
+      workspaceServerAgents ?? serverAgents ?? [],
+      serverChats ?? [],
+      serverWorkspaces ?? [],
+      taskRunsByParent.get(m.id) ?? [],
+    ))
+  const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
@@ -199,7 +353,7 @@ function AppInner() {
     kind?: 'task'
     taskTitle?: string
     executeAt?: string
-    goal?: string
+    goal?: string | null
     pinPaths?: string[]
   }): Promise<{ chatId: string; messageId: string }> => {
     if (!activeWorkspaceId) throw new Error('No active workspace')
@@ -260,6 +414,7 @@ function AppInner() {
       item?: string | null
       folder?: string | null
       message?: string | null
+      artifactParams?: string | null
     } = {},
   ) => {
     const ws = opts.wsId ?? activeWorkspaceId
@@ -276,23 +431,21 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [dispatch, goTo])
 
-  const handleViewChange = useCallback((view: RouteView) => {
-    goTo({ view })
-  }, [goTo])
-
   const handleGlobalToday = useCallback(() => {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
 
-  // Workspace switch lands on the user's default view rather than carrying
-  // over the current one — the avatar click is a "go home in workspace X"
-  // action, not "navigate within this view to workspace X". `goTo` falls
-  // back to the activeView when no view is passed, so we explicitly pass
-  // the pref here.
+  // Click on the *current* workspace tab is "go home in this workspace" —
+  // always lands on the default view. Click on a *different* workspace tab
+  // is "switch and resume" — lands on whatever URL that workspace was last
+  // viewed at, falling back to its default view on first visit.
   const handleSelectWorkspace = useCallback((id: string) => {
     dispatch(setTodaySheetOpen(false))
-    goTo({ wsId: id, view: defaultView as RouteView })
-  }, [goTo, dispatch, defaultView])
+    const target = id === activeWorkspaceId
+      ? buildDefaultViewPath(id, defaultView)
+      : (getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView))
+    navigate(target)
+  }, [activeWorkspaceId, navigate, dispatch, defaultView])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))
@@ -320,15 +473,10 @@ function AppInner() {
     }
   }, [dispatch, saveChatAttachmentToLibraryMutation])
 
-  // Library items the user picked via "Use in chat" — seeded into the
-  // new-chat input tray so they ride the first message as attachments,
-  // then pinned via library-refs once the chat exists so they show up in
-  // the right-sidebar "In this chat" list (mirrors the `+` picker).
-  //
-  // Held in a ref, not state, because two `goTo` calls in the same handler
-  // can produce an intermediate render that mounts ChatView with
-  // half-committed state. Refs are stable across renders, so ChatView's
-  // mount-time `useState` initializer always reads the current value.
+  // Library items picked via "Use in chat" — passed to ChatView as
+  // `initialStagedItems` to seed the Files sidebar on the new-chat stub.
+  // Held in a ref so two `goTo` calls in the same handler don't cause
+  // a stale read on the intermediate render before ChatView mounts.
   const composeStagedItemsRef = useRef<ContextItem[]>([])
 
   const handleComposeWithContext = useCallback((items?: ContextItem[]) => {
@@ -336,20 +484,20 @@ function AppInner() {
     enterCompose()
   }, [enterCompose])
 
-  // Drop staged items once the user is no longer on the new-chat stub.
-  // After the first message is sent, `handleNewChatFirstMessage` clears
-  // the ref directly; this effect just covers the navigate-away-without-
-  // sending case so a later re-mount doesn't replay stale picks.
+  // Clear the ref when leaving the new-chat stub so a later re-mount
+  // of the stub doesn't replay stale picks.
   useEffect(() => {
     if (selectedChatId !== NEW_CHAT_ID) {
       composeStagedItemsRef.current = []
     }
   }, [selectedChatId])
 
-  const handleSidebarChatClick = useCallback((chat: { id: string }) => {
-    dispatch(markChatRead(chat.id))
+  const handleSidebarChatClick = useCallback((chat: { id: string; unread?: boolean }) => {
+    if (chat.unread) {
+      markChatReadQuietly(chat.id, dispatch, appStore.getState)
+    }
     goTo({ chat: chat.id })
-  }, [dispatch, goTo])
+  }, [dispatch, appStore, goTo])
 
   const handleNewChatFirstMessage = useCallback(async (
     message: string,
@@ -357,6 +505,7 @@ function AppInner() {
     attachments?: AttachmentRef[],
     options?: SendOptions,
     files?: File[],
+    pinPaths?: string[],
   ) => {
     if (!activeWorkspaceId) return
     // The workspace-agents query may not have resolved yet on first paint
@@ -378,10 +527,6 @@ function AppInner() {
       return
     }
     const title = message.length > 50 ? message.slice(0, 50) + '…' : message
-    // Capture the staged library items now and clear the ref immediately so
-    // a same-tick re-render of the new-chat stub can't re-seed stale picks.
-    const itemsToPin = composeStagedItemsRef.current
-    composeStagedItemsRef.current = []
     try {
       const { chatId } = await doCreateAndPost({
         agentId: pickedAgentId,
@@ -392,8 +537,8 @@ function AppInner() {
         kind: options?.kind,
         taskTitle: options?.title,
         executeAt: options?.executeAt,
-        goal: options?.goal ?? undefined,
-        pinPaths: itemsToPin.map(i => i.id),
+        goal: options && 'goal' in options ? options.goal : undefined,
+        pinPaths: pinPaths ?? [],
       })
       goTo({ chat: chatId })
     } catch (err) {
@@ -433,9 +578,14 @@ function AppInner() {
   const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
   const unreadCount = awaitingResp?.items.length ?? 0
 
-  const { data: libraryResp } = useGetLibraryQuery(
+  const {
+    currentData: libraryResp,
+    isLoading: libraryLoading,
+    isUninitialized: libraryUninitialized,
+    isFetching: libraryFetching,
+  } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
   const libraryItems: ContextItem[] = activeWorkspaceId
     ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? []))
@@ -453,14 +603,31 @@ function AppInner() {
   }, [libraryResp, dispatch])
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
-  const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
+  const selectedChat = (!isNewChat && selectedChatId) ? selectedChatFromList ?? selectedChatById : null
+  const chatsListLoading = !!activeWorkspaceId && !serverChats && !chatsError
+  // `chatsFetching` flips true on every background refetch (WS reconnect,
+  // tag invalidation, refetchOnMountOrArgChange). RTK Query keeps the
+  // cached data on screen during that window, so flagging it as
+  // "resolving" only causes the sidebar/main pane to flash a loader
+  // when we already have data — exactly the dev-server tab-switch
+  // flicker. Keep this signal scoped to the genuinely-no-data case.
+  const chatsListResolving = chatsListLoading || chatsLoading || chatsUninitialized
+  const selectedChatByIdResolving = shouldFetchSelectedChatById && (selectedChatByIdLoading || selectedChatByIdFetching)
+  const isResolvingSelectedChat = !!selectedChatId && !isNewChat && !selectedChat && selectedChatByIdResolving
+  const isLoadingChatSurface = isResolvingSelectedChat || (activeView === 'pinned' && chatsListResolving)
+
+  useEffect(() => {
+    if (!selectedChat?.unread) return
+    markChatReadQuietly(selectedChat.id, dispatch, appStore.getState)
+  }, [selectedChat?.id, selectedChat?.unread, dispatch, appStore])
+
   const activeChat = isNewChat
     ? { ...NEW_CHAT_STUB, workspaceId: activeWorkspaceId || undefined }
     : selectedChat
   const chatArtifacts = (selectedChat?.artifactIds ?? [])
     .map(id => artifacts.find(a => a.id === id))
     .filter(Boolean) as Artifact[]
-  const chatShowNewBadge = !!(selectedChat?.unread && readChatIds.has(selectedChat.id))
+  const chatShowNewBadge = !!selectedChat?.unread
 
   // Both `?artifact=<path>` and `?item=<path>` route to the same unified
   // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
@@ -474,7 +641,7 @@ function AppInner() {
   // by path so we can render the same ContextDetail view for them.
   const needsMetaFallback =
     !!effectiveItemPath && !libraryItem && !!activeWorkspaceId
-  const { data: fallbackFile } = useGetLibraryFileQuery(
+  const { currentData: fallbackFile, isFetching: fallbackFileFetching } = useGetLibraryFileQuery(
     { workspaceId: activeWorkspaceId ?? '', path: effectiveItemPath ?? '' },
     { skip: !needsMetaFallback },
   )
@@ -483,6 +650,11 @@ function AppInner() {
     (needsMetaFallback && fallbackFile && activeWorkspaceId
       ? toContextItem(fallbackFile, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? [])
       : null)
+  const isResolvingSelectedContextItem =
+    !!effectiveItemPath &&
+    !!activeWorkspaceId &&
+    !selectedContextItem &&
+    (!libraryResp || libraryLoading || libraryFetching || fallbackFileFetching)
 
 
   return (
@@ -501,7 +673,7 @@ function AppInner() {
         onNavigateSettings={(t) => {
           dispatch(setPendingSettingsSection(t.section))
         }}
-        onNavigateWorkspace={(id) => goTo({ wsId: id, view: defaultView as RouteView })}
+        onNavigateWorkspace={handleSelectWorkspace}
         onSelectChat={({ id, workspaceId }) => {
           goTo({ wsId: workspaceId || activeWorkspaceId, chat: id })
         }}
@@ -509,29 +681,45 @@ function AppInner() {
           goTo({ wsId: workspaceId || activeWorkspaceId, view: 'context', item: path })
         }}
       />
+      <Dialog open={notificationPromptOpen} onOpenChange={(open) => {
+        if (open) setNotificationPromptOpen(true)
+        else dismissNotificationPrompt()
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Enable desktop notifications?</DialogTitle>
+            <DialogDescription>
+              Desk can show browser notifications for the same new chat messages that get the sidebar unread dot.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={dismissNotificationPrompt}>Not now</Button>
+            <Button onClick={() => { void enableDesktopNotifications() }}>Enable notifications</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <AppShell
         activeView={activeView}
-        onViewChange={handleViewChange}
-        onCompose={enterCompose}
         chats={chats}
+        isChatsLoading={chatsListLoading}
         artifacts={artifacts}
         selectedChatId={selectedChatId}
         onChatClick={handleSidebarChatClick}
         onDeleteChat={handleDeleteChat}
         unreadCount={unreadCount}
-        readChatIds={readChatIds}
         isDetailOpen={!!selectedContextItem}
         onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
+        getWorkspaceHref={(id) => getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView)}
         onGlobalToday={handleGlobalToday}
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
         onChatWithAgent={handleChatWithAgent}
         pinnedItems={pinnedItems}
+        isPinnedLoading={!!activeWorkspaceId && !libraryResp && (libraryLoading || libraryFetching || libraryUninitialized)}
         selectedItemId={effectiveItemPath}
-        onPinnedItemClick={(item) => goTo({ view: 'context', item: item.id })}
         onPinItem={(itemId) => {
           if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: itemId })
         }}
@@ -557,6 +745,7 @@ function AppInner() {
             }}
             onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
             onRenameItem={(newPath) => goTo({ item: newPath })}
+            previewParams={selectedArtifactParams}
           />
         )}
 
@@ -574,35 +763,39 @@ function AppInner() {
             highlightMessageId={selectedMessageId ?? undefined}
             onAttachmentClick={(att) =>
               att.kind === 'directory'
-                ? goTo({ view: 'context', item: null, folder: att.path })
-                : goTo({ item: att.path })
+                ? goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
+                : goTo({
+                    wsId: att.workspaceId,
+                    view: 'context',
+                    item: att.path,
+                    artifactParams: att.params ? JSON.stringify(att.params) : null,
+                  })
             }
             initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />
         )}
 
-        {!selectedContextItem && !activeChat && activeView === 'pinned' && (
+        {!selectedContextItem && !activeChat && (isLoadingChatSurface || isResolvingSelectedContextItem) && (
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{isLoadingChatSurface ? 'Loading chats…' : 'Loading workspace…'}</span>
+            </div>
+          </div>
+        )}
+
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && !chatsListResolving && activeView === 'pinned' && (
           <Navigate to={buildPath(activeWorkspaceId, 'context')} replace />
         )}
-        {!selectedContextItem && !activeChat && activeView === 'tasks' && (
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'tasks' && (
           <TasksPage
             tasks={tasks}
+            isLoading={tasksListLoading}
             onTaskMove={async (task, newStatus) => {
-              if (!task.chatId || !task.messageId) return
-              // UI column → server action:
-              //   active    → POST .../run (fires the agent now; server
-              //               flips state pending→running and back).
-              //   complete  → PATCH state:'cancelled' (terminal, allowed
-              //               from any non-running state).
-              //   todo      → PATCH executeAt+cron cleared and state:'pending'
-              //               so terminal rows (succeeded/failed/cancelled)
-              //               restore to the Todo column.
-              //   scheduled → PATCH state:'pending' + a default executeAt
-              //               (24h out) when the row has no schedule yet,
-              //               so the drop doesn't require a separate
-              //               "set a time" step. The user can edit the
-              //               time from the task detail panel.
-              if (newStatus === 'active') {
+              if (!task.chatId || !task.messageId) return false
+              const move = buildTaskStatusMove(task, newStatus, 'user')
+              if (move.kind === 'none') return false
+              if (move.kind === 'run') {
                 try {
                   await runMessageMutation({
                     chatId: task.chatId,
@@ -610,42 +803,21 @@ function AppInner() {
                   }).unwrap()
                 } catch (err) {
                   toast.error('Run failed', { description: extractApiError(err) })
+                  throw err
                 }
-                return
-              }
-
-              const hasSchedule = !!task.scheduledFor || !!task.schedule
-
-              const patch: {
-                state?: 'pending' | 'cancelled'
-                executeAt?: string | null
-                cron?: string | null
-              } = {}
-
-              if (newStatus === 'complete') {
-                patch.state = 'cancelled'
-              } else if (newStatus === 'todo') {
-                patch.executeAt = null
-                patch.cron = null
-                patch.state = 'pending'
-              } else if (newStatus === 'scheduled') {
-                patch.state = 'pending'
-                if (!hasSchedule) {
-                  // Default to 24 hours out so the drop succeeds without a
-                  // separate "set a time" prompt. The user can fine-tune
-                  // from the task detail panel.
-                  patch.executeAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-                }
+                return true
               }
 
               try {
                 await patchMessageMutation({
                   chatId: task.chatId,
                   messageId: task.messageId,
-                  patch,
+                  patch: move.patch,
                 }).unwrap()
+                return true
               } catch (err) {
                 toast.error('Move failed', { description: extractApiError(err) })
+                throw err
               }
             }}
             onCreateTask={async (input) => {
@@ -684,9 +856,10 @@ function AppInner() {
             }}
           />
         )}
-        {!selectedContextItem && !activeChat && activeView === 'context' && (
+        {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'context' && !effectiveItemPath && (
           <ContextList
             items={libraryItems}
+            isLoading={libraryLoading || libraryUninitialized || !libraryResp || (libraryFetching && libraryItems.length === 0)}
             onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
             onPinItem={(item) => {

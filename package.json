@@ -4,6 +4,7 @@
   "workspaces": [
     "packages/server/*",
     "packages/app",
+    "packages/app-scaffold",
     "packages/agent-desk-cli",
     "packages/ui"
   ],
@@ -12,6 +13,7 @@
     "dev": "packages/server/setup/scripts/dev.sh",
     "dev:app": "npm -w @agent-desk/app run dev",
     "build": "nx run-many -t build",
+    "ci:local": "scripts/ci-local.sh",
     "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
     "typecheck": "nx run-many -t typecheck",
     "test": "vitest run --passWithNoTests",
@@ -24,5 +26,9 @@
   },
   "engines": {
     "node": "^23.4.0"
+  },
+  "dependencies": {
+    "enhanced-resolve": "^5.21.1",
+    "hash-wasm": "^4.12.0"
   }
 }

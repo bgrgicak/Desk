@@ -163,8 +163,7 @@ async function seedUser(suffix: string, broadcastUserId?: string): Promise<Seede
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    instructions: "",
-    model: "anthropic/claude-sonnet-4-5",
+    model: "opencode/big-pickle",
   });
   await pool.query(
     `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
@@ -217,11 +216,11 @@ async function createChatWithPayload(
   });
 
   // Seed an on-disk attachment + a log, both under the chat's hidden tree.
-  const attachmentsDir = path.join(home, "Desk", "workspaces", wsPath, ".chats", chatId, "attachments");
+  const attachmentsDir = path.join(home, wsPath, ".chats", chatId, "attachments");
   await fs.mkdir(attachmentsDir, { recursive: true });
   await fs.writeFile(path.join(attachmentsDir, "hello.txt"), "chat artifact");
 
-  const logsDir = path.join(home, "Desk", "workspaces", wsPath, ".chats", chatId, "logs");
+  const logsDir = path.join(home, wsPath, ".chats", chatId, "logs");
   await fs.mkdir(logsDir, { recursive: true });
   await fs.writeFile(path.join(logsDir, `${scheduledMessageId}.log`), "stdout\tready\n");
 
@@ -307,12 +306,12 @@ describe("DELETE /chats/:id", () => {
     expect(row).toBeNull();
 
     // On-disk chat dir moved to trash. The entire `.chats/{chatId}/`
-    // subtree — logs, attachments, note-history — relocates together.
+    // subtree — logs, attachments, notes — relocates together.
     const alphaWs = await queries.workspaces.findById(pool, alpha.workspaceId);
-    const live = path.join(home, "Desk", "workspaces", alphaWs!.path, ".chats", chatId);
+    const live = path.join(home, alphaWs!.path, ".chats", chatId);
     await expect(fs.stat(live)).rejects.toThrow();
 
-    const trashed = await fs.readdir(path.join(home, "Desk", ".trash", ".chats"));
+    const trashed = await fs.readdir(path.join(home, ".trash", ".chats"));
     expect(trashed.some((n) => n.startsWith(`${chatId}-`))).toBe(true);
 
     // WS event received.

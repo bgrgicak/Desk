@@ -39,7 +39,6 @@ describe("AgentSchema", () => {
     id: "agt_abc",
     userId: "usr_abc",
     name: "Helper",
-    instructions: "Be helpful",
     model: "gpt-4",
   };
 
@@ -48,11 +47,11 @@ describe("AgentSchema", () => {
   });
 
   it("rejects missing name", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", instructions: "x", model: "m" })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", userId: "usr_abc", model: "m" })).toThrow();
   });
 
   it("rejects missing userId (M3 invariant)", () => {
-    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", instructions: "x", model: "m" })).toThrow();
+    expect(() => AgentSchema.parse({ id: "agt_abc", name: "n", model: "m" })).toThrow();
   });
 
   it("round-trips through JSON", () => {
@@ -150,7 +149,7 @@ describe("FileSchema (FS-backed FileRef)", () => {
 });
 
 describe("MessageSchema execution metadata", () => {
-  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "ai_note_request" }, createdAt: now, kind: "chat" as const };
+  const base = { id: "msg_abc", chatId: "cht_abc", role: "system", content: { type: "summary_request" }, createdAt: now, kind: "chat" as const };
 
   it("accepts state + executeAt + schedulerRef", () => {
     const msg = {
@@ -214,28 +213,33 @@ describe("MessageSchema execution metadata", () => {
       ...base,
       role: "agent",
       content: { type: "text", text: "hello" },
-      model: "anthropic/claude-sonnet-4-5",
+      model: "opencode/big-pickle",
     };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 });
 
-describe("MessageContent note / ai_note_request", () => {
+describe("MessageContent summary / summary_request", () => {
   const base = { id: "msg_abc", chatId: "cht_abc", createdAt: now, kind: "chat" as const };
 
-  it("parses note content", () => {
-    const msg = { ...base, role: "agent", content: { type: "note", body: "Running summary of the chat." } };
+  it("parses summary content", () => {
+    const msg = { ...base, role: "agent", content: { type: "summary", body: "Running summary of the chat." } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("parses ai_note_request content", () => {
-    const msg = { ...base, role: "system", content: { type: "ai_note_request" } };
+  it("parses summary_request content", () => {
+    const msg = { ...base, role: "system", content: { type: "summary_request" } };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });
 
-  it("rejects a note with non-string body", () => {
+  it("parses reflection_request content", () => {
+    const msg = { ...base, role: "system", kind: "task" as const, content: { type: "reflection_request", workspaceId: "wks_abc" } };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
+
+  it("rejects a summary with non-string body", () => {
     expect(() =>
-      MessageSchema.parse({ ...base, role: "agent", content: { type: "note", body: 123 } }),
+      MessageSchema.parse({ ...base, role: "agent", content: { type: "summary", body: 123 } }),
     ).toThrow();
   });
 });

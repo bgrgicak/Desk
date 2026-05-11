@@ -116,7 +116,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"providers\": {\n    \"ANTHROPIC_API_KEY\": \"sk-ant-...\"\n  }\n}"
+              "raw": "{\n  \"providers\": {\n    \"OPENAI_API_KEY\": \"sk-...\"\n  }\n}"
             },
             "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
           }
@@ -228,7 +228,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"anthropic/claude-opus-4-7\"\n}"
+              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"opencode/big-pickle\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
           }
@@ -251,7 +251,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"My agent\",\n  \"instructions\": \"Be helpful\",\n  \"model\": \"claude-opus-4-7\"\n}"
+              "raw": "{\n  \"name\": \"My agent\",\n  \"model\": \"claude-opus-4-7\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/agents/{{agentId}}",
@@ -378,7 +378,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"content\": { \"type\": \"note\", \"body\": \"Edited note\" }\n}"
+              "raw": "{\n  \"content\": { \"type\": \"summary\", \"body\": \"Edited summary\" }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}",
@@ -410,13 +410,13 @@
           }
         },
         {
-          "name": "GET /chats/:id/messages/:messageId/note-history",
+          "name": "GET /chats/:id/messages/:messageId/summary-history",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/note-history",
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/summary-history",
               "host": ["{{baseUrl}}"],
-              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "note-history"]
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "summary-history"]
             }
           }
         },
@@ -559,7 +559,7 @@
                 { "key": "state", "value": "", "description": "pending|running|succeeded|failed|cancelled. Comma-separated list accepted." },
                 { "key": "scheduled", "value": "", "description": "true = only rows with executeAt or cron; false = only unscheduled; omit for both." },
                 { "key": "awaitingUser", "value": "", "description": "true = only messages in chats whose awaitingUser flag is set." },
-                { "key": "contentKind", "value": "", "description": "text|toolCall|toolResult|artifactRef|events|note|ai_note_request|agent_turn. Comma-separated list accepted." },
+                { "key": "contentKind", "value": "", "description": "text|toolCall|toolResult|artifactRef|events|summary|summary_request|agent_turn. Comma-separated list accepted." },
                 { "key": "since", "value": "", "description": "ISO-8601 timestamp. Returns rows with createdAt > since (reconnect catchup)." },
                 { "key": "cursor", "value": "", "description": "Opaque pagination cursor from a previous response's nextCursor." },
                 { "key": "limit", "value": "50", "description": "Page size, max 200." }
@@ -578,11 +578,11 @@
             "method": "GET",
             "description": "Lists AI models that are ready to use — every entry is a provider opencode has authenticated inside the sandbox via a host-forwarded API key. Server-wide, not agent-scoped. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
             "url": {
-              "raw": "{{baseUrl}}/tools/models?provider=anthropic",
+              "raw": "{{baseUrl}}/tools/models?provider=opencode",
               "host": ["{{baseUrl}}"],
               "path": ["tools", "models"],
               "query": [
-                { "key": "provider", "value": "anthropic", "description": "Restrict to a single provider id, e.g. anthropic." }
+                { "key": "provider", "value": "opencode", "description": "Restrict to a single provider id, e.g. opencode." }
               ]
             }
           }

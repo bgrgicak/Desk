@@ -20,8 +20,9 @@ const CONTENT_KINDS = [
   "toolResult",
   "artifactRef",
   "events",
-  "note",
-  "ai_note_request",
+  "summary",
+  "summary_request",
+  "reflection_request",
   "agent_turn",
 ] as const;
 
@@ -152,6 +153,15 @@ export async function listMessages(
     throw new ValidationError("Invalid cursor");
   }
 
+  const viewRaw = query.get("view");
+  let view: "full" | "compact" | undefined;
+  if (viewRaw !== null && viewRaw !== "") {
+    if (viewRaw !== "full" && viewRaw !== "compact") {
+      throw new ValidationError(`Invalid view: ${viewRaw}`);
+    }
+    view = viewRaw;
+  }
+
   return queries.messages.listCrossChat(pool, {
     userId,
     workspaceId,
@@ -165,5 +175,6 @@ export async function listMessages(
     since,
     cursor,
     limit,
+    view,
   });
 }

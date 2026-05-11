@@ -41,16 +41,18 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  Input,
+  Textarea,
 } from '@agent-desk/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { buildPath } from '@/router/nav'
 import {
   useGetAgentsQuery,
+  useGetMessagesQuery,
   usePatchMessageMutation,
   useRunMessageMutation,
   usePostChatMessageMutation,
-  useDeleteChatMutation,
 } from '@/store/api'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -60,6 +62,8 @@ import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
 import { describeCron } from './schedule-utils'
+import { taskOccurrenceFromMessage, taskRunMessageKinds } from '@/store/selectors/tasks'
+import { buildTaskLifecycleMove, buildTaskStatusMove } from '@/lib/task-status'
 
 type PanelTab = 'details' | 'chat'
 
@@ -88,9 +92,10 @@ function OccurrenceStatusIcon({ status }: { status: TaskOccurrence['status'] }) 
 }
 
 // Task-panel chat shows only follow-up conversation messages, not the task
-// definition row itself. This filter is stable (module-level) so useMemo
-// inside ChatThread does not recompute on every render.
-const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task'
+// definition or per-fire execution prompt. This filter is stable
+// (module-level) so useMemo inside ChatThread does not recompute on every
+// render.
+const hidePanelTaskRows = (m: ServerMessage) => m.kind !== 'task' && m.kind !== 'task_run'
 
 function ChatInPanel({ chatId, agentName, messageId }: { chatId: string; agentName?: string; messageId?: string }) {
   const { wsId } = useParams<{ wsId: string }>()
@@ -154,19 +159,42 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const [instructionsOpen, setInstructionsOpen] = useState(true)
   const [showFullInstructions, setShowFullInstructions] = useState(false)
   const [isDescClamped, setIsDescClamped]     = useState(false)
+  const [draftTitle, setDraftTitle]           = useState(task.name)
+  const [draftDescription, setDraftDescription] = useState(task.description ?? '')
+  const detailsDirty = draftTitle !== task.name || draftDescription !== (task.description ?? '')
+  const lastTaskDetailsRef = useRef({ name: task.name, description: task.description ?? '' })
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   const { data: agents } = useGetAgentsQuery()
+  const { data: taskRuns } = useGetMessagesQuery(
+    task.chatId && task.messageId
+      ? { chatId: task.chatId, parentId: task.messageId, kind: taskRunMessageKinds(), limit: 200 }
+      : {},
+    { skip: !task.chatId || !task.messageId },
+  )
   const [patchMessage, patchState] = usePatchMessageMutation()
   const [runMessage, runState] = useRunMessageMutation()
-  const [deleteChat] = useDeleteChatMutation()
 
   useEffect(() => {
     setShowAllHistory(false)
     setShowFullInstructions(false)
     setIsDescClamped(false)
+    setDraftTitle(task.name)
+    setDraftDescription(task.description ?? '')
+    lastTaskDetailsRef.current = { name: task.name, description: task.description ?? '' }
   }, [task.id])
+
+  useEffect(() => {
+    const previous = lastTaskDetailsRef.current
+    const draftWasClean = draftTitle === previous.name && draftDescription === previous.description
+    const next = { name: task.name, description: task.description ?? '' }
+    if (draftWasClean) {
+      setDraftTitle(next.name)
+      setDraftDescription(next.description)
+    }
+    lastTaskDetailsRef.current = next
+  }, [task.name, task.description, draftTitle, draftDescription])
 
   useEffect(() => {
     if (!instructionsOpen || !descRef.current) return
@@ -176,45 +204,57 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   // "History" is past-only — filter the synthesized upcoming preview
   // occurrences (id ends with `-upcoming`) that the calendar uses to
   // place scheduled tasks on their future date. Newest-first.
-  const history = (task.history ?? [])
+  const runHistory = (taskRuns?.items ?? [])
+    .map(taskOccurrenceFromMessage)
+    .filter((occ): occ is TaskOccurrence => !!occ)
+  const history = [...runHistory, ...(task.history ?? [])]
     .filter(occ => !occ.id.endsWith('-upcoming'))
     .slice()
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
   const visibleHistory = showAllHistory ? history : history.slice(0, 5)
 
-  const isPaused = task.statusText.toLowerCase().includes('paused')
+  const isPaused = task.messageState === 'paused'
 
-  async function transition(nextState: 'paused' | 'pending' | 'cancelled', extra?: { executeAt?: string | null }) {
+  async function applyStatusMove(move: ReturnType<typeof buildTaskStatusMove>, errorTitle = 'Action failed') {
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    if (move.kind === 'none') return
+    try {
+      if (move.kind === 'run') {
+        await runMessage({ chatId: task.chatId, messageId: task.messageId }).unwrap()
+      } else {
+        await patchMessage({
+          chatId: task.chatId,
+          messageId: task.messageId,
+          patch: move.patch,
+        }).unwrap()
+      }
+    } catch (err) {
+      toast.error(errorTitle, { description: describeApiError(err) })
+    }
+  }
+
+  function changeStatus(next: Task['status']) {
+    void applyStatusMove(buildTaskStatusMove(task, next, 'user'))
+  }
+
+  function changeLifecycle(action: 'pause' | 'resume') {
+    void applyStatusMove(buildTaskLifecycleMove(task, action, 'user'))
+  }
+
+  async function runNow() {
     if (!task.chatId || !task.messageId) {
       toast.error('This task is not wired to a server message yet')
       return
     }
     try {
-      await patchMessage({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        patch: { state: nextState, ...(extra ?? {}) },
-      }).unwrap()
+      await runMessage({ chatId: task.chatId, messageId: task.messageId }).unwrap()
+      toast.success('Task run started')
     } catch (err) {
       toast.error('Action failed', { description: describeApiError(err) })
     }
-  }
-
-  function changeStatus(next: Task['status']) {
-    if (next === task.status && !isPaused) return
-    if (next === 'active') {
-      if (!task.chatId || !task.messageId) {
-        toast.error('This task is not wired to a server message yet')
-        return
-      }
-      void runMessage({ chatId: task.chatId, messageId: task.messageId })
-        .unwrap()
-        .catch(err => toast.error('Action failed', { description: describeApiError(err) }))
-      return
-    }
-    if (next === 'todo')      void transition('pending', { executeAt: null })
-    if (next === 'complete')  void transition('cancelled')
-    if (next === 'scheduled') void transition('pending')
   }
 
   const busy = patchState.isLoading || runState.isLoading
@@ -262,6 +302,55 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     }
   }
 
+  async function saveDetails() {
+    const title = draftTitle.trim()
+    const description = draftDescription.trim()
+    if (!title) {
+      toast.error('Task title is required')
+      return
+    }
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: {
+          title,
+          content: { type: 'text', text: description ? `${title}\n\n${description}` : title },
+        },
+      }).unwrap()
+      setDraftTitle(title)
+      setDraftDescription(description)
+    } catch (err) {
+      toast.error('Could not update task details', { description: describeApiError(err) })
+    }
+  }
+
+  async function removeTask() {
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: {
+          kind: 'chat',
+          executeAt: null,
+          cron: null,
+          title: null,
+        },
+      }).unwrap()
+      onCollapse()
+    } catch (err) {
+      toast.error('Could not remove task', { description: describeApiError(err) })
+    }
+  }
+
   // What the Schedule row shows when not editing.
   const scheduleLabel = task.schedule
     ? describeCron(task.schedule)
@@ -275,13 +364,16 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   const canPause  = !isPaused && (task.status === 'active' || task.status === 'scheduled')
   const canResume = isPaused
   const canCancel = task.status !== 'complete'
+  const canRunNow = task.status === 'scheduled'
+  const canEditDetails = task.messageKind === 'task' && task.messageContentType === 'text'
+  const canShowChat = !!task.chatId
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-background">
       {/* Header */}
       <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0 gap-2">
         <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
-          {(['details', 'chat'] as PanelTab[]).map(tab => (
+          {(['details', ...(canShowChat ? ['chat' as const] : [])] as PanelTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -296,6 +388,19 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
           ))}
         </div>
         <div className="flex items-center gap-0.5">
+          {canRunNow && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              data-testid="task-run-now"
+              title="Run now"
+              disabled={busy}
+              onClick={() => void runNow()}
+            >
+              <Play className="h-4 w-4" />
+            </Button>
+          )}
           {canPause && (
             <Button
               variant="ghost"
@@ -304,7 +409,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-pause"
               title="Pause"
               disabled={busy}
-              onClick={() => void transition('paused')}
+              onClick={() => changeLifecycle('pause')}
             >
               <Pause className="h-4 w-4" />
             </Button>
@@ -317,7 +422,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-resume"
               title="Resume"
               disabled={busy}
-              onClick={() => void transition('pending')}
+              onClick={() => changeLifecycle('resume')}
             >
               <Play className="h-4 w-4" />
             </Button>
@@ -330,7 +435,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-cancel"
               title="Complete"
               disabled={busy}
-              onClick={() => void transition('cancelled')}
+              onClick={() => changeStatus('complete')}
             >
               <Check className="h-4 w-4" />
             </Button>
@@ -339,7 +444,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
-            title="Delete task"
+            title="Remove task"
             onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -352,7 +457,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
       {/* Chat tab */}
       {activeTab === 'chat' && (
-        task.chatId
+        canShowChat && task.chatId
           ? <ChatInPanel chatId={task.chatId} agentName={task.agentName} messageId={task.messageId} />
           : <div className="flex-1 flex items-center justify-center p-4">
               <p className="text-xs text-muted-foreground text-center">No chat linked to this task yet.</p>
@@ -361,11 +466,38 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
 
       {/* Details tab */}
       {activeTab === 'details' && (
+        <div className="flex flex-1 min-h-0 flex-col">
         <div className="flex-1 overflow-y-auto">
 
           {/* Name + meta block */}
           <div className="px-4 py-4 border-b">
-            <h2 className="text-sm font-semibold text-foreground">{task.name}</h2>
+            {canEditDetails ? (
+              <div className="space-y-2.5">
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-muted-foreground">Title</span>
+                <Input
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  placeholder="Task title"
+                  disabled={busy}
+                  data-testid="task-title-input"
+                />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs text-muted-foreground">Description</span>
+                <Textarea
+                  value={draftDescription}
+                  onChange={(event) => setDraftDescription(event.target.value)}
+                  placeholder="Description"
+                  className="min-h-24 resize-none text-sm"
+                  disabled={busy}
+                  data-testid="task-description-input"
+                />
+                </label>
+              </div>
+            ) : (
+              <h2 className="text-sm font-semibold text-foreground break-words">{task.name}</h2>
+            )}
             <div className="mt-4 space-y-2.5">
 
               {/* Status */}
@@ -504,7 +636,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
           </div>{/* end name + meta block */}
 
           {/* Instructions collapsible */}
-          {task.description && (
+          {!canEditDetails && task.description && (
             <div className="border-b">
               <button
                 onClick={() => setInstructionsOpen(v => !v)}
@@ -520,6 +652,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
                   <p
                     ref={descRef}
                     className={`text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap ${!showFullInstructions ? 'line-clamp-[10]' : ''}`}
+                    data-testid="task-description"
                   >
                     {task.description}
                   </p>
@@ -589,27 +722,39 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
             )}
           </div>
         </div>
+        {canEditDetails && detailsDirty && (
+          <div className="shrink-0 border-t bg-background/95 p-3">
+            <Button
+              type="button"
+              className="w-full"
+              disabled={busy || !draftTitle.trim()}
+              onClick={() => void saveDetails()}
+              data-testid="task-details-save"
+            >
+              Save changes
+            </Button>
+          </div>
+        )}
+        </div>
       )}
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete &ldquo;{task.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogTitle>Remove &ldquo;{task.name}&rdquo; from tasks?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deleting this task will cancel any scheduled runs and permanently
-              clear the conversation history with the AI. This action cannot be undone.
+              This will cancel any future schedule and turn the task-defining
+              message back into a regular chat message. Conversation history and
+              artifacts will be kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={async () => {
-                if (task.chatId) await deleteChat(task.chatId)
-                onCollapse()
-              }}
+              onClick={() => void removeTask()}
             >
-              Delete task
+              Remove task
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

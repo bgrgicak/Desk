@@ -58,6 +58,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Skeleton,
 } from '@agent-desk/ui'
 import { PageHeader } from '@/components/layout/PageHeader'
 import type { ContextItem } from '@/data/ui-types'
@@ -89,6 +90,7 @@ import { usePrefs } from '@/hooks/use-prefs'
 
 interface ContextListProps {
   items: ContextItem[]
+  isLoading?: boolean
   onItemClick: (item: ContextItem) => void
   onCompose: (attachedItems?: ContextItem[]) => void
   onPinItem?: (item: ContextItem) => void
@@ -99,7 +101,6 @@ interface ContextListProps {
 
 type ViewMode = 'list' | 'grid'
 type TypeFilter = 'all' | 'folder' | 'file' | 'link' | 'note' | 'hidden'
-type ByFilter = 'all' | 'me' | 'ai'
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -107,12 +108,6 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'file', label: 'Files' },
   { value: 'note', label: 'Notes' },
   { value: 'link', label: 'Links' },
-]
-
-const BY_FILTERS: { value: ByFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'me', label: 'By me' },
-  { value: 'ai', label: 'By AI' },
 ]
 
 const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
@@ -124,21 +119,15 @@ const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
   hidden: EyeOff,
 }
 
-// Dev-only filter: surfaces dot-prefixed library entries the server hides
-// from normal listings (agent artifacts, `.opencode/`, drafts, etc.).
+// Dev-only filter: switches the library request to the server's showHidden
+// superset, so normal files stay visible while dot-prefixed entries and
+// gitignored paths are added back into the listing.
 const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', label: 'Hidden' }
 
-/** True when any path segment starts with `.` — matches the server's
- *  hidden-skip rule (search.ts) so we can locally separate hidden entries
- *  from the showHidden=true superset returned by the API. */
-function isHiddenPath(p: string): boolean {
-  return p.split('/').some(seg => seg.startsWith('.'))
-}
 
-export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
+export function ContextList({ items, isLoading, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
-  const [byFilter, setByFilter] = usePersistedState<ByFilter>('desk.context.byFilter', 'all')
   const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
@@ -170,20 +159,25 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
   const [createLibraryFolder] = useCreateLibraryFolderMutation()
   const [createLibraryLink] = useCreateLibraryLinkMutation()
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
-  // Hidden mode pulls the showHidden=true superset directly so we can render
-  // dot-prefixed entries that the parent's items prop excludes by default.
-  const { data: libraryResp } = useGetLibraryQuery(
+  // Hidden mode pulls the showHidden=true superset directly so hidden entries
+  // are included in addition to the normal visible library contents.
+  const { currentData: libraryResp, isLoading: internalLoading, isUninitialized: internalUninitialized } = useGetLibraryQuery(
     activeWorkspaceId
       ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) }
       : undefined,
     { skip: !activeWorkspaceId },
   )
 
+  // Treat the list as loading until both the parent AND internal queries have
+  // settled with data.  This closes every gap where `isLoading` (prop) flips
+  // false one render before data has propagated — the empty "Nothing yet"
+  // screen never appears while data is still in flight.
+  const resolvedLoading = isLoading || internalLoading || internalUninitialized || !libraryResp
+
   const effectiveItems: ContextItem[] = useMemo(() => {
     if (!isHiddenMode) return items
     if (!activeWorkspaceId) return []
     return (libraryResp?.items ?? [])
-      .filter(f => isHiddenPath(f.path))
       .map(f => toContextItem(f, activeWorkspaceId))
   }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
 
@@ -422,8 +416,8 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
   const handleCreateNote = async () => {
     if (!activeWorkspaceId) return
     const subpath = subpathFromFolderId(currentFolderId)
-    const name = 'Untitled.txt'
-    const blob = new File([''], name, { type: 'text/plain' })
+    const name = 'Untitled.md'
+    const blob = new File([''], name, { type: 'text/markdown' })
     try {
       const serverFile = await uploadLibraryFile({
         workspaceId: activeWorkspaceId,
@@ -455,25 +449,19 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
   const childFolders = getChildFolders(folders, currentFolderId)
   const folderItems = getItemsInFolder(currentFolderId, effectiveItems)
 
-  // Apply filters. Hidden mode is its own slice — surfaces every dot-prefixed
-  // entry (file or folder) regardless of mime kind, so the user can also
-  // navigate into hidden subtrees like `.opencode/`.
-  // Authorship filter narrows to user-uploaded vs AI-created items. Folders
-  // don't carry authorship metadata, so they're hidden whenever the filter is
-  // active — otherwise they'd misleadingly appear in a "By me" / "By AI" view.
+  // Apply filters. Hidden mode shows the server's showHidden=true superset —
+  // all normal entries plus dot-prefixed/gitignored entries — regardless of
+  // mime kind, so users can also navigate into hidden subtrees like `.opencode/`.
   const showFolders =
-    (typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden') &&
-    byFilter === 'all'
+    typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden'
   const filteredFolders = showFolders
     ? childFolders
-        .filter(f => !isHiddenMode || isHiddenPath(f.id))
         .filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : []
 
   const filteredItems = folderItems
     .filter(i => typeFilter === 'all' || typeFilter === 'hidden' || typeFilter === i.type)
     .filter(() => typeFilter !== 'folder')
-    .filter(i => byFilter === 'all' || (byFilter === 'ai' ? i.uploadedBy === 'ai' : i.uploadedBy === 'user'))
     .filter(i => !searchQuery || i.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime())
 
@@ -591,119 +579,106 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             </BreadcrumbList>
           </Breadcrumb>
         }
-        actions={<div className="flex items-center gap-2">
-          {/* Authorship filter pills */}
-          <div className="flex items-center rounded-lg border p-0.5">
-            {BY_FILTERS.map(f => (
-              <button
-                key={f.value}
-                onClick={() => setByFilter(f.value)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  byFilter === f.value
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+        actions={<div className="flex w-full min-w-0 flex-wrap items-center gap-1 sm:w-auto sm:flex-nowrap sm:justify-end sm:gap-2">
+          {/* Type dropdown */}
+          <div className="order-2 shrink-0 sm:order-none">
+            {(() => {
+              const TypeIcon = TYPE_FILTER_ICONS[typeFilter]
+              const currentLabel = typeFilter === 'all' ? 'All' : filterChips.find(f => f.value === typeFilter)?.label ?? 'All'
+              return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      data-testid="library-type-filter"
+                      className="flex h-10 shrink-0 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-accent/30 sm:h-8 sm:gap-1.5 sm:px-2.5"
+                    >
+                      <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-muted-foreground">{currentLabel}</span>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-40">
+                    {filterChips.map(f => {
+                      const FIcon = TYPE_FILTER_ICONS[f.value]
+                      return (
+                        <DropdownMenuItem key={f.value} onSelect={() => setTypeFilter(f.value)}>
+                          <FIcon className="h-4 w-4 text-muted-foreground" />
+                          {f.label}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )
+            })()}
           </div>
 
-          {/* Type dropdown */}
-          {(() => {
-            const TypeIcon = TYPE_FILTER_ICONS[typeFilter]
-            const currentLabel = typeFilter === 'all' ? 'All' : filterChips.find(f => f.value === typeFilter)?.label ?? 'All'
-            return (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    data-testid="library-type-filter"
-                    className="flex items-center gap-1.5 h-8 rounded-md border px-2.5 text-xs font-medium hover:bg-accent/30 transition-colors"
-                  >
-                    <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="text-muted-foreground">{currentLabel}</span>
-                    <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40">
-                  {filterChips.map(f => {
-                    const FIcon = TYPE_FILTER_ICONS[f.value]
-                    return (
-                      <DropdownMenuItem key={f.value} onSelect={() => setTypeFilter(f.value)}>
-                        <FIcon className="h-4 w-4 text-muted-foreground" />
-                        {f.label}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )
-          })()}
-
           {/* Search */}
-          <div className="relative">
+          <div className="order-1 relative min-w-0 flex-1 basis-full sm:order-none sm:basis-auto sm:flex-none">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search..."
-              className="h-8 w-40 rounded-md border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring/20 focus:border-ring/40 transition-all"
+              className="h-10 w-full rounded-md border bg-background pl-8 pr-3 text-xs outline-none transition-all placeholder:text-muted-foreground/60 focus:border-ring/40 focus:ring-2 focus:ring-ring/20 sm:h-8 sm:w-40"
             />
           </div>
 
-          {/* View toggle */}
-          <div className="flex items-center rounded-lg border p-0.5">
-            <button onClick={() => setViewMode('list')} className={`rounded-md p-1.5 transition-colors ${viewMode === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-              <LayoutList className="h-3.5 w-3.5" />
-            </button>
-            <button onClick={() => setViewMode('grid')} className={`rounded-md p-1.5 transition-colors ${viewMode === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-              <LayoutGrid className="h-3.5 w-3.5" />
-            </button>
+          <div className="order-2 ml-auto flex shrink-0 items-center gap-1 sm:order-none sm:ml-0 sm:gap-2">
+            {/* View toggle */}
+            <div className="flex h-10 shrink-0 items-center rounded-lg border p-0.5 sm:h-auto">
+              <button onClick={() => setViewMode('list')} className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors sm:h-auto sm:w-auto sm:p-1.5 ${viewMode === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                <LayoutList className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => setViewMode('grid')} className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors sm:h-auto sm:w-auto sm:p-1.5 ${viewMode === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {/* Use in chat — only inside a folder */}
+            {isInsideFolder && (
+              <Button size="sm" variant="outline" className="h-10 px-2 text-xs sm:h-8" onClick={handleAddFolderToChat}>
+                Use in chat
+              </Button>
+            )}
+
+            {/* Upload dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="h-10 w-10 px-0 sm:h-8 sm:w-8" data-testid="library-upload-button">
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
+                <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Create dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="default" className="h-10 gap-1 px-2.5 text-xs sm:h-8 sm:gap-1.5 sm:px-2" data-testid="library-add-button">
+                  Create
+                  <ChevronDown className="h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                {onCreateArtifact && (
+                  <>
+                    <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)} data-testid="library-create-ai-artifact"><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleCreateNote} data-testid="library-create-note"><StickyNote className="h-4 w-4 mr-2" />New note</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)} data-testid="library-create-folder"><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-
-          {/* Use in chat — only inside a folder */}
-          {isInsideFolder && (
-            <Button size="sm" variant="outline" className="text-xs" onClick={handleAddFolderToChat}>
-              Use in chat
-            </Button>
-          )}
-
-          {/* Upload dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline" className="px-2" data-testid="library-upload-button">
-                <Upload className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openDirectoryPicker} data-testid="library-upload-choose-folder"><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)} data-testid="library-paste-link"><Link2 className="h-4 w-4 mr-2" />Paste link</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Create dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="default" className="gap-1.5 text-xs" data-testid="library-add-button">
-                Create
-                <ChevronDown className="h-3 w-3 ml-0.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              {onCreateArtifact && (
-                <>
-                  <DropdownMenuItem onSelect={() => setCreateSheetOpen(true)} data-testid="library-create-ai-artifact"><Sparkles className="h-4 w-4 mr-2" />AI artifact</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)} data-testid="library-create-file"><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleCreateNote} data-testid="library-create-note"><StickyNote className="h-4 w-4 mr-2" />New note</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)} data-testid="library-create-folder"><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>}
       />
 
@@ -711,8 +686,20 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
       <ContextMenu>
       <ContextMenuTrigger asChild>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        {totalCount === 0 ? (
+      <div className="flex-1 overflow-y-auto px-2 py-3 sm:px-4">
+        {resolvedLoading ? (
+          <div className="space-y-0.5 pt-1">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+                <Skeleton className="h-4 w-4 rounded" />
+                <Skeleton className="h-4 flex-1 max-w-[200px]" />
+                <div className="flex-1" />
+                <Skeleton className="h-4 w-14" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+            ))}
+          </div>
+        ) : totalCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="mb-4">
               {isInsideFolder
@@ -744,8 +731,6 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                   <DropdownMenuItem onSelect={() => setCreateFileDialogOpen(true)}><FilePlus className="h-4 w-4 mr-2" />New file</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setFolderDialogOpen(true)}><FolderPlus className="h-4 w-4 mr-2" />New folder</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setPasteLinkDialogOpen(true)}><Link2 className="h-4 w-4 mr-2" />New link</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={openPicker} data-testid="library-upload-choose-file-empty"><Upload className="h-4 w-4 mr-2" />Upload file</DropdownMenuItem>
                   <DropdownMenuItem onSelect={openDirectoryPicker}><FolderPlus className="h-4 w-4 mr-2" />Upload folder</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -762,15 +747,15 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                 className="h-4 w-4"
               />
               <span className="text-xs text-muted-foreground font-medium flex-1">Name</span>
-              <span className="text-xs text-muted-foreground font-medium w-20 text-right">Type</span>
-              <span className="text-xs text-muted-foreground font-medium w-20 text-right">Added</span>
-              <span className="w-[140px] ml-10 shrink-0 text-xs text-muted-foreground font-medium text-right">Actions</span>
+              <span className="hidden text-xs text-muted-foreground font-medium w-20 text-right sm:block">Type</span>
+              <span className="hidden text-xs text-muted-foreground font-medium w-20 text-right sm:block">Added</span>
+              <span className="hidden w-[140px] ml-10 shrink-0 text-xs text-muted-foreground font-medium text-right sm:block">Actions</span>
             </div>
             <div className="space-y-0.5">
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countItemsRecursive(folders, folder.id, items)
+                const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
                 return (
                   <motion.div
                     key={folder.id}
@@ -799,17 +784,17 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
                         </p>
                       </div>
                     </div>
-                    <span className="text-xs text-muted-foreground shrink-0 w-20 text-right capitalize">
+                    <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right capitalize sm:block">
                       Folder
                     </span>
-                    <span className="text-xs text-muted-foreground shrink-0 w-20 text-right">
+                    <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right sm:block">
                       {getRelativeTime(folder.createdAt)}
                     </span>
-                    <div className="flex items-center gap-1 justify-end shrink-0 w-[140px] ml-10">
+                    <div className="flex items-center gap-1 justify-end shrink-0 sm:w-[140px] sm:ml-10">
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="hidden h-7 text-xs opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                         onClick={(e) => {
                           e.stopPropagation()
                           onCompose(getItemsInFolder(folder.id, items))
@@ -881,7 +866,7 @@ export function ContextList({ items, onItemClick, onCompose, onPinItem, onUnpinI
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countItemsRecursive(folders, folder.id, items)
+              const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
               return (
                 <motion.div
                   key={folder.id}

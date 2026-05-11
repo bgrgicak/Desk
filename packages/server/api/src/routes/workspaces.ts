@@ -2,20 +2,38 @@ import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
+import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
+
+const DEFAULT_AGENT_NAME = "Desk";
+const DEFAULT_AGENT_MODEL = "opencode/big-pickle";
 
 export async function listWorkspaces(pool: Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);
   return queries.workspaces.list(pool);
 }
 
+async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: string) {
+  const memberships = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
+  if (memberships.length > 0) return memberships;
+
+  const userAgents = await queries.agents.listByUser(pool, userId);
+  const agent = userAgents[0] ?? await queries.agents.insert(pool, {
+    id: generateId("agent"),
+    userId,
+    name: DEFAULT_AGENT_NAME,
+    model: DEFAULT_AGENT_MODEL,
+  });
+  await queries.workspaceAgents.addToWorkspace(pool, workspaceId, agent.id);
+  return queries.workspaceAgents.listForWorkspace(pool, workspaceId);
+}
+
 /**
- * Creates a workspace and auto-enrolls the caller's first agent (from
- * `agents.listByUser`, which orders by name). Without this, chat creation
- * would 400 on every agentId in the new workspace — users would have to
- * open settings and enroll an agent before the workspace is usable.
+ * Creates a workspace and ensures it has at least one enrolled agent. If the
+ * caller has no agents yet, creates a default opencode-backed agent first.
+ * Without this, chat creation would 400 on every agentId in the new workspace.
  * Users can override the enrollment via the Agent access settings panel.
  *
- * The workspace's on-disk directory at `~/Desk/workspaces/{slug}/` is
+ * The workspace's on-disk directory at `~/Desk/{slug}/` is
  * created before the DB insert so every successful insert has a matching
  * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
  * collision so two workspaces can't share a directory.
@@ -34,9 +52,12 @@ export async function createWorkspace(
     path,
     ...data,
   });
-  const userAgents = await queries.agents.listByUser(pool, userId);
-  if (userAgents.length > 0) {
-    await queries.workspaceAgents.addToWorkspace(pool, ws.id, userAgents[0].id);
+  await ensureWorkspaceAgent(pool, ws.id, userId);
+  if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
+    await ensureDailyReflectionTasks({
+      pool,
+      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+    });
   }
   return ws;
 }
@@ -109,7 +130,7 @@ export async function deleteWorkspace(
 export async function listWorkspaceAgents(pool: Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
-  const memberships = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
+  const memberships = await ensureWorkspaceAgent(pool, workspaceId, ws.userId);
   const agents = await Promise.all(
     memberships.map(async (m) => {
       const agent = await queries.agents.findById(pool, m.agentId);
@@ -142,6 +163,12 @@ export async function removeAgentFromWorkspace(
   workspaceId: string,
   agentId: string,
 ) {
+  const memberships = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
+  if (memberships.length <= 1 && memberships.some((m) => m.agentId === agentId)) {
+    throw new ValidationError(
+      "Cannot remove the last agent from a workspace; add another agent first.",
+    );
+  }
   await queries.workspaceAgents.removeFromWorkspace(pool, workspaceId, agentId);
   return { ok: true };
 }

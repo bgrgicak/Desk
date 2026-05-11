@@ -29,6 +29,8 @@ caller.
 | POST   | /me/password  | Change password          |
 | GET    | /me/providers | Get AI provider keys (masked) |
 | PUT    | /me/providers | Set / update / delete AI provider keys |
+| GET    | /me/providers/local | List host-detected local sources (Codex, future LM Studio / Ollama) |
+| PUT    | /me/providers/local/{kind} | Toggle a local source's per-user opt-in |
 
 ## Workspaces
 
@@ -88,12 +90,12 @@ agent by default and lets the user change it from the compose bar.
 | GET    | /chats/{id}               | Get chat                  |
 | PATCH  | /chats/{id}               | Update chat               |
 | DELETE | /chats/{id}               | Soft-delete chat (cascades messages, cancels schedules, trashes on-disk dirs, emits `chat.deleted` WS) |
-| GET    | /chats/{id}/messages                    | List messages             |
+| GET    | /chats/{id}/messages                    | List messages (scrollback-ready) |
 | POST   | /chats/{id}/messages                    | Send message              |
 | PATCH  | /chats/{id}/messages/{messageId}        | Edit message content, cancel, reschedule |
 | DELETE | /chats/{id}/messages/{messageId}        | Delete message (cancels scheduled firing) |
 | GET    | /chats/{id}/messages/{messageId}/logs   | Stream execution log file |
-| GET    | /chats/{id}/messages/{messageId}/note-history | List archived versions of a note-content message |
+| GET    | /chats/{id}/messages/{messageId}/summary-history | List archived versions of a summary-content message |
 | GET    | /chats/{id}/artifacts                   | List chat artifacts       |
 | POST   | /chats/{id}/artifacts                   | Upload artifact to chat (multipart/form-data) |
 
@@ -101,9 +103,19 @@ agent by default and lets the user change it from the compose bar.
 
 Lists chats in one of the caller's workspaces.
 
+Each chat may include a persisted `goal` (`app`, `document`, `image`, `data`,
+`site`, `run`, `task`, or `scheduled`). Explicit composer selections and clear
+message-text inference both write to `chats.goal`; clients should use that one
+field for goal icons and goal filters.
+
 **Query parameters:**
 
 - `workspaceId` (optional) — `wks_*` id of a workspace the caller owns. Returns 404 on non-owned ids and 400 on malformed ids. When omitted, defaults to the caller's first workspace (chronological order) for backwards compatibility; returns `[]` when the caller has no workspaces.
+
+### PATCH /chats/{id}
+
+Updates chat metadata. Body can include `{ title?: string, agentId?: string,
+goal?: string | null }`; pass `goal: null` to clear the persisted chat goal.
 
 ### DELETE /chats/{id}
 
@@ -111,7 +123,7 @@ Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
 2. Drops the chat row from SQLite; `ON DELETE CASCADE` removes its messages.
-3. Moves the chat's on-disk subtree `~/Desk/workspaces/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
+3. Moves the chat's on-disk subtree `~/Desk/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 
 Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE returns 404, never 403.
@@ -141,8 +153,8 @@ Messages carry one of:
 - `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
 - `{ type: "events", events: [...] }` — captured opencode event stream
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
-- `{ type: "note", body }` — a running AI-generated summary of the chat; rendered specially in the UI, editable via PATCH
-- `{ type: "ai_note_request" }` — a scheduled system message that triggers a note refresh when fired
+- `{ type: "summary", body }` — a running AI-generated summary of the chat; hidden unless developer mode is enabled, editable via PATCH
+- `{ type: "summary_request" }` — a scheduled system message that triggers a summary refresh when fired
 - `{ type: "agent_turn", userMessageId }` — pending execution slot attached to a user message. Carries no textual copy of the prompt; `fireMessage` resolves `userMessageId` to build the prompt at fire time. Hidden from the visible chat timeline.
 
 ### Message execution metadata
@@ -163,7 +175,7 @@ Messages grow optional execution fields (added M6a):
 
 ### POST /chats/{id}/messages
 
-Body: `{ content: string, attachments?: AttachmentRef[] }`. Each
+Body: `{ content: string, attachments?: AttachmentRef[], goal?: string | null }`. Each
 `AttachmentRef` is a workspace-relative `path` that resolves to either a
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
@@ -172,15 +184,44 @@ forwards each path to opencode via a `--file` flag (opencode accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
 
+When `goal` is a string, it is persisted to `chats.goal`. When `goal` is `null`,
+the chat goal is cleared for that send. When omitted and the chat does not
+already have a goal, the server infers a goal from clear message text and
+persists that instead.
+
 ### PATCH /chats/{id}/messages/{messageId}
 
 Partial update. Body can include:
 
-- `content` — replace the message content (e.g. user edits a note)
+- `content` — replace the message content (e.g. user edits a summary)
 - `state` — only `cancelled` or `pending` allowed; arbitrary transitions are rejected
 - `executeAt` / `cron` — reschedule; pass `null` to clear
 
 Emits `message.updated` over WS.
+
+### GET /chats/{id}/messages
+
+Lists messages in a chat with cursor-based pagination, supporting both
+forward and backward (scrollback) directions.
+
+**Query parameters:**
+
+| Param    | Type   | Description |
+|----------|--------|-------------|
+| `cursor` | string | Page forward: return messages after this cursor (chronological). |
+| `before` | string | Page backward (scrollback): return messages older than this cursor. |
+| `limit` | number | Page size, clamped to 200. Defaults to 50. |
+| `view` | `full` \| `compact` \| `timeline` | `compact` strips hidden tool/event payloads while keeping normal chat text; `timeline` also drops old rows that cannot render in the normal chat stream while preserving typing/error/tool-only fallback markers; `full` returns stored message content for developer/debug views. Defaults to `full`. |
+
+When neither `cursor` nor `before` is given, returns the **newest** 50
+messages so the chat opens at the bottom. The response includes
+`prevCursor` when older messages exist — pass it as `?before=` to load
+the next older page.
+
+**Response:** `{ items: Message[], nextCursor?: string, prevCursor?: string }`
+
+Items are always returned in chronological (ASC) order regardless of
+pagination direction.
 
 ### DELETE /chats/{id}/messages/{messageId}
 
@@ -191,23 +232,36 @@ entry. Moves the execution log file to `~/Desk/.trash/` if present.
 
 Streams the execution log file (stdout/stderr) for a running or completed
 message. Served directly from
-`~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
+`~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
 
-### GET /chats/{id}/messages/{messageId}/note-history
+### GET /chats/{id}/messages/{messageId}/summary-history
 
-Returns every archived version of a `note`-content message, newest first.
+Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
-written automatically when a note is PATCH-edited or when `fireMessage`
+written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/workspaces/desk/.chats/{chatId}/note-history/`. Empty array when
-nothing has been snapshotted yet.
+`~/Desk/desk/.chats/{chatId}/notes/.history/`. The endpoint also
+reads legacy `.chats/{chatId}/note-history/` and
+`.chats/{chatId}/summary-history/` snapshots for compatibility. Empty array
+when nothing has been snapshotted yet.
 
 ### Internal: POST /internal/messages/fire
 
 Loopback-only (127.0.0.1) + shared-secret. Fires a pending scheduled
 message by id. Called by `at`/`cron` via curl; not intended for user
 clients.
+
+### Sandbox: POST /sandbox/artifacts
+
+Sandbox-token only (`X-Desk-Sandbox-Token`). Called by
+`desk-agent chat attach-artifact` from inside an agent run after the agent
+writes a file. Body is `{ chatId, path, name?, mime? }`, where `path` is a
+workspace-relative path to an existing file, usually
+`.chats/{chatId}/artifacts/{file}`. Inserts an agent message with
+`content: { type: "artifactRef", path, name?, mime? }` and emits
+`message.appended`. Tokens minted for internal summary refresh runs are
+rejected so summaries cannot surface files as artifacts.
 
 ### POST /me/password
 
@@ -232,23 +286,53 @@ The set of known names is `PROVIDER_KEY_VARS` in `@agent-desk/shared`. In
 dev, values seed from the repo's `.env` once per user (gated by `DESK_DEV=1`);
 in prod, the UI is the only way to populate them.
 
+### GET /me/providers/local
+
+Lists every host-detected local model source — providers Desk auto-detects
+on the user's host machine and bridges into the sandbox via env vars rather
+than API keys. The first such source is **Codex** (the ChatGPT-subscription
+auth blob the Codex CLI stores at `~/.codex/auth.json`); LM Studio and
+Ollama can register the same way later without changing the wire shape.
+
+Response: `{ sources: Array<{ kind, available, enabled, reason?, detail? }> }`.
+
+- `available` — a usable instance is currently detected on the host.
+- `enabled` — the user has opted in (persisted in `provider_meta[<kind>]`).
+- `reason` — populated when `available=false` (`missing`, `wrong_mode`,
+  `no_tokens`, `expired_no_refresh`, …).
+- `detail` — display-only metadata (Codex surfaces `email`, `plan`,
+  `expiresAt`). Never includes credential material.
+
+### PUT /me/providers/local/{kind}
+
+Body `{ enabled: boolean }`. Toggles the user's opt-in for the given
+local source. When opted in, the runtime calls each source's `loadEnv()`
+on every sandbox spawn / exec and forwards the resulting env vars (e.g.
+`OPENCODE_AUTH_CONTENT` for Codex). Returns the updated source state.
+
+`404` for unknown kinds; `400` for missing/non-boolean `enabled`.
+
 ## Library
 
 | Method | Path                           | Description                                     |
 |--------|--------------------------------|-------------------------------------------------|
 | GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
+| PUT    | /library/content?path=&workspaceId=  | Save content to a file (upsert — creates if missing) |
 | POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
 | DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
-| GET    | /library/download?path=&workspaceId= | Stream a library file                     |
+| GET    | /library/content?path=&workspaceId=  | Stream a library file inline (for preview)      |
+| GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
-(`~/Desk/workspaces/desk/`). There is no DB index; listing walks the
-directory and skips dot-prefixed entries (the universal hidden-file
-convention — `.chats/`, `.opencode/`, etc. are never shown). File
-identifiers are workspace-root-relative paths (`foo.pdf`,
-`notes/bar.md`). The `path` query parameter is url-encoded.
+(`~/Desk/desk/`). There is no DB index; listing walks the
+directory and skips dot-prefixed entries (`.chats/`, `.memory/`, etc.)
+unless `showHidden=true` is set. Hidden (dot-prefixed) files are
+otherwise identical to regular files — all CRUD operations work the
+same way. File identifiers are workspace-root-relative paths (`foo.pdf`,
+`notes/bar.md`, `.memory/workspace.md`). The `path` query parameter is
+url-encoded.
 
 ### Links (`POST /library/link`)
 
@@ -292,7 +376,7 @@ Lists messages across all of the caller's chats with AND-combined filters. Read-
 | `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
 | `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
 | `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
-| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|note\|ai_note_request\|agent_turn` |
+| `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|summary\|summary_request\|agent_turn` |
 | `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
 | `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
 | `limit` | integer, default 50, max 200 | Page size. |
@@ -321,7 +405,7 @@ Removed in M6. Execution state and scheduling both live on the
   and a `schedulerRef` pointing at the at/cron entry. See PATCH on
   `/chats/{id}/messages/{messageId}` to reschedule or cancel.
 - Logs are a file at
-  `~/Desk/workspaces/desk/.chats/{chatId}/logs/{messageId}.log`, served
+  `~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`, served
   by `GET /chats/{id}/messages/{messageId}/logs`.
 
 ## Tools
@@ -343,18 +427,21 @@ authenticated.
 
 **Query parameters:**
 
-- `provider` (optional) — restrict to a single provider, e.g. `anthropic`
+- `provider` (optional) — restrict to a single provider, e.g. `opencode`
 
 **Response:** bare array, matching `/workspaces`, `/agents`, `/runs`.
 
 ```json
 [
-  { "id": "anthropic/claude-opus-4-7", "provider": "anthropic" }
+  { "id": "opencode/big-pickle", "provider": "opencode" }
 ]
 ```
 
 `id` is opencode's canonical model id — pass it straight to `opencode run --model`.
 `provider` is denormalised so UIs can group or filter without splitting the id.
+
+If no container runtime is reachable, the endpoint returns `503` with
+`code: "RUNTIME_UNAVAILABLE"` and an actionable message from runtime detection.
 
 ## Search
 

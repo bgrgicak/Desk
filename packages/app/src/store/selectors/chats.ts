@@ -19,7 +19,7 @@ export function toUiChat(c: ServerChat): UiChat {
     unread: c.unread,
     workspaceId: c.workspaceId,
     agentId: c.agentId,
+    goal: c.goal ?? null,
     kind: c.kind,
-    goalKind: c.goalKind ?? null,
   };
 }

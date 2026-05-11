@@ -28,6 +28,7 @@ export async function mintToken(
   const session = await queries.sandboxSessions.issue(pool, {
     id: generateId("sandboxSession"),
     agentId,
+    runId: opts?.runId,
     workspaceId: opts?.workspaceId,
     tokenHash: hashToken(token),
   });

@@ -1,11 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/storage";
+import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent-desk/storage";
 
 /**
  * Mount model (workspace-as-home):
  *
- *   host: ~/Desk/workspaces/desk/   →   sandbox: /home/agent/   (rw)
+ *   host: ~/Desk/desk/              →   sandbox: /home/agent/   (rw)
  *
  * The workspace root *is* the agent's home directory inside the sandbox.
  * User-visible files live at the root; dot-prefixed entries (`.chats/`,
@@ -20,6 +21,13 @@ import { chatAttachmentsDir, notesDir, workspaceRootPath } from "@agent-desk/sto
  */
 
 export const SANDBOX_HOME = "/home/agent";
+export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.config/opencode/skills`;
+export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
+
+/** Host-side global skills directory. Mounted read-only into each sandbox. */
+export function skillsHostDir(home: string): string {
+  return path.join(home, ".skills");
+}
 
 const activeMounts = new Map<string, Map<string, MountSet>>();
 
@@ -55,10 +63,10 @@ export async function projectMounts(
     // The workspace is bind-mounted at /home/agent, so the chat's attachments
     // surface at this path inside the container.
     mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
-    // Pre-create notes/ so the agent stops reporting "no notes dir" before
-    // the first materializeNote() call. The system prompt advertises this
+    // Pre-create notes/ so the agent stops reporting "no summaries dir" before
+    // the first materializeSummary() call. The system prompt advertises this
     // path in opencode.ts; matching it on disk keeps the two consistent.
-    await fs.mkdir(notesDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
+    await fs.mkdir(summaryStorageDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
 
   if (!activeMounts.has(handle.workspaceId)) {
@@ -110,8 +118,10 @@ export type MountPlan = MountPlanEntry[];
 
 /**
  * Default mount plan — one rw bind of the workspace root onto the
- * container's $HOME. Custom plans can be built by callers that need to
- * expose additional directories (e.g. ~/Projects) alongside.
+ * container's $HOME, plus global Desk skills mounted read-only outside
+ * $HOME and symlinked into OpenCode's skills path by the entrypoint. Custom
+ * plans can be built by callers that need to expose additional directories
+ * (e.g. ~/Projects) alongside.
  */
 export function buildDefaultMountPlan(home: string, workspaceSlug: string): MountPlan {
   return [
@@ -120,6 +130,12 @@ export function buildDefaultMountPlan(home: string, workspaceSlug: string): Moun
       targetPath: SANDBOX_HOME,
       mode: "rw",
       category: "workspace",
+    },
+    {
+      sourcePath: skillsHostDir(home),
+      targetPath: SKILLS_SANDBOX_MOUNT_DIR,
+      mode: "ro",
+      category: "external",
     },
   ];
 }

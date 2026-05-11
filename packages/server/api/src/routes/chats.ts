@@ -5,24 +5,46 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
+  chatArtifactsDir,
   chatAttachmentsDir,
-  listNoteHistory,
-  materializeNote,
-  notesDir,
+  listSummaryHistory,
+  deleteMaterializedSummary,
+  materializeSummary,
+  deleteChatApp,
+  deleteLibraryApp,
   pinLibraryFileToChat,
   removeChatAttachment,
   saveChatAttachmentToLibrary,
-  snapshotNote,
+  saveChatArtifactToLibrary,
+  copyLibraryAppToChat,
+  replaceLibraryAppFromChat,
+  snapshotSummary,
+  snapshotAndReplaceSummary,
   trashChatDirectories,
+  trashDir,
   uploadArtifact,
+  validateLibrarySubpath,
   workspaceRootPath,
   type FileRef,
-  type NoteVersion,
+  type SummaryVersion,
   type StorageContext,
 } from "@agent-desk/storage";
+
+const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
+const IsoUtcDateTimeSchema = z.string().datetime({ offset: true }).refine((value) => value.endsWith("Z"), {
+  message: "datetime must be UTC and end with Z",
+});
+
+function normalizeAppNameForDelete(appName: string): { appName: string; dirName: string } {
+  const baseName = appName.endsWith(".app") ? appName.slice(0, -".app".length) : appName;
+  if (!APP_NAME_PATTERN.test(baseName)) {
+    throw new ValidationError(`Invalid app name: ${appName}`);
+  }
+  return { appName: baseName, dirName: `${baseName}.app` };
+}
 
 /**
  * Subset of the run manager the patch-message route needs to drive
@@ -39,7 +61,7 @@ export interface MessageLifecycleOps {
    * croner to get the next occurrence. */
   rescheduleMessage(messageId: string): Promise<Message | null>;
   /** Claims the row and runs the agent in-process. */
-  fireMessage(messageId: string): Promise<{ fired: boolean; childIds: string[] }>;
+  fireMessage(messageId: string, options?: { manual?: boolean }): Promise<{ fired: boolean; childIds: string[] }>;
 }
 
 /**
@@ -79,9 +101,29 @@ export async function createChat(
 export async function patchChat(
   pool: Pool,
   id: string,
-  data: { title?: string; goal?: string; agentId?: string },
+  data: { title?: string; goal?: string | null; agentId?: string; unread?: boolean },
 ) {
-  const chat = await queries.chats.updateMeta(pool, id, data);
+  const { unread, ...metaFields } = data;
+  const hasMetaFields = Object.values(metaFields).some(v => v !== undefined);
+
+  // When meta fields and unread are both present, merge into a single UPDATE
+  // so the RETURNING * snapshot is atomic across both changes.
+  // When only unread is being cleared, delegate to markRead which uses a
+  // targeted UPDATE for the same atomicity guarantee.
+  if (hasMetaFields) {
+    const updateData = unread !== undefined ? { ...metaFields, unread } : metaFields;
+    const chat = await queries.chats.updateMeta(pool, id, updateData);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
+
+  if (unread === false) {
+    const chat = await queries.chats.markRead(pool, id);
+    if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+    return chat;
+  }
+
+  const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
   return chat;
 }
@@ -89,7 +131,7 @@ export async function patchChat(
 export async function listMessages(
   pool: Pool,
   chatId: string,
-  opts?: { cursor?: string },
+  opts?: { cursor?: string; before?: string; limit?: number; view?: "full" | "compact" | "timeline" },
 ) {
   return queries.messages.listByChat(pool, chatId, opts);
 }
@@ -101,7 +143,7 @@ export async function listMessages(
  *   `agent_turn` trigger that references the user message. fireMessage
  *   resolves the trigger at fire time, reads the parent user message's
  *   text as the prompt. No duplication of payload.
- * - `kind='task'` or `'ai_note'`: a single self-firing row. The schedule
+ * - `kind='task'` or `'summary'`: a single self-firing row. The schedule
  *   (`executeAt` / `cron`) lives directly on it; fireMessage dispatches
  *   on `kind` to know what to run. No separate trigger.
  *
@@ -115,8 +157,66 @@ const SendMessageSchema = z.object({
   title: z.string().optional(),
   executeAt: z.string().optional(),
   cron: z.string().optional(),
-  goal: z.string().optional(),
+  goal: z.string().nullable().optional(),
 });
+
+export function validateSendMessageBody(rawData: unknown): void {
+  const parsed = SendMessageSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid message body: ${parsed.error.message}`);
+  }
+}
+
+const AttachArtifactRefSchema = z.object({
+  chatId: z.string(),
+  path: z.string(),
+  name: z.string().optional(),
+  mime: z.string().optional(),
+  params: z.record(z.string(), z.string()).optional(),
+});
+
+function normalizeWorkspaceRelativePath(raw: string): string {
+  let relPath = raw.trim();
+  if (!relPath) throw new ValidationError("Missing artifact path");
+  if (relPath.includes("\0") || relPath.includes("\\")) {
+    throw new ValidationError(`Invalid artifact path: ${raw}`);
+  }
+  if (relPath.startsWith("~/")) relPath = relPath.slice(2);
+  if (relPath.startsWith("/home/agent/")) relPath = relPath.slice("/home/agent/".length);
+  while (relPath.startsWith("./")) relPath = relPath.slice(2);
+  if (path.isAbsolute(relPath)) throw new ValidationError(`Invalid artifact path: ${raw}`);
+
+  const segments = relPath.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+    }
+  }
+  return segments.join("/");
+}
+
+function validateAttachableArtifactPath(relPath: string, chatId: string): void {
+  const chatPrefix = `.chats/${chatId}/artifacts/`;
+  if (relPath.startsWith(chatPrefix)) {
+    const artifactSegments = relPath.slice(chatPrefix.length).split("/");
+    for (const segment of artifactSegments) {
+      // Dot-prefixed segments are allowed — hidden files inside the
+      // artifacts dir behave like regular files.
+      if (segment === "" || segment === "." || segment === "..") {
+        throw new ValidationError(`Invalid artifact path segment: ${segment}`);
+      }
+    }
+    return;
+  }
+
+  if (relPath.startsWith(".chats/")) {
+    throw new ValidationError("Artifact path must be in this chat's artifacts directory");
+  }
+
+  // Library files are also workspace-relative and may be surfaced when the
+  // agent created or promoted a finished artifact outside the chat scratchpad.
+  validateLibrarySubpath(relPath);
+}
 
 /**
  * Translates a multipart `POST /chats/{id}/messages` form into the JSON
@@ -185,6 +285,8 @@ export async function buildSendMessageBodyFromForm(
     const v = form.get(k);
     if (typeof v === "string" && v !== "") body[k] = v;
   }
+  const goal = form.get("goal");
+  if (typeof goal === "string") body.goal = goal === "" ? null : goal;
   return body;
 }
 
@@ -193,7 +295,7 @@ export async function sendMessage(
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
-  opts?: { role?: "user" | "agent" | "system" },
+  opts?: { role?: "user" | "agent" | "system"; actorUserId?: string },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -208,8 +310,13 @@ export async function sendMessage(
     data.attachments && data.attachments.length > 0 ? data.attachments : undefined;
 
   const kind: MessageKind = data.kind ?? "chat";
+  const senderRole = kind === "chat" ? "user" : opts?.role ?? "user";
 
-  // Self-firing kinds (task, ai_note): one row, schedule on the row, fire
+  if (data.goal !== undefined) {
+    await queries.chats.updateMeta(pool, chatId, { goal: data.goal });
+  }
+
+  // Self-firing kinds (task, summary): one row, schedule on the row, fire
   // dispatches by kind. The "userMessage" / "triggerId" pair in the return
   // value is a chat-shape concession — both ids point at the same row so
   // app.ts can schedule the message id without branching.
@@ -224,7 +331,7 @@ export async function sendMessage(
     const message = await queries.messages.insert(pool, {
       id: messageId,
       chatId,
-      role: opts?.role ?? "user",
+      role: senderRole,
       content: { type: "text", text: data.content },
       attachments,
       kind,
@@ -234,7 +341,7 @@ export async function sendMessage(
       cron: data.cron ?? null,
       agentId: chat.agentId,
     });
-    emit({ type: "message.appended", payload: message });
+    emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
     return { userMessage: message, triggerId: messageId };
   }
 
@@ -242,16 +349,14 @@ export async function sendMessage(
     id: generateId("message"),
     chatId,
     role: "user",
-    content: data.goal
-      ? { type: "text", text: data.content, goal: data.goal }
-      : { type: "text", text: data.content },
+    content: { type: "text", text: data.content },
     attachments,
   });
 
-  emit({ type: "message.appended", payload: userMessage });
+  emit({ type: "message.appended", payload: userMessage, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
 
   const triggerId = generateId("message");
-  await queries.messages.insert(pool, {
+  const trigger = await queries.messages.insert(pool, {
     id: triggerId,
     chatId,
     role: "system",
@@ -260,29 +365,88 @@ export async function sendMessage(
     parentId: userMessage.id,
     agentId: chat.agentId,
   });
+  emit({ type: "message.appended", payload: trigger, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
 
   return { userMessage, triggerId };
 }
 
+export async function attachArtifactRef(
+  storage: StorageContext,
+  rawData: unknown,
+  emit: (event: WsEvent) => void,
+  opts?: { agentId?: string; model?: string },
+): Promise<Message> {
+  const parsed = AttachArtifactRefSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid artifact body: ${parsed.error.message}`);
+  }
+  const data = parsed.data;
+  const relPath = normalizeWorkspaceRelativePath(data.path);
+  validateAttachableArtifactPath(relPath, data.chatId);
+
+  const chat = await queries.chats.findById(storage.pool, data.chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${data.chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const root = workspaceRootPath(storage.home, ws.path);
+  const abs = path.resolve(root, relPath);
+  if (!abs.startsWith(root + path.sep) && abs !== root) {
+    throw new ValidationError(`Path traversal detected: ${data.path}`);
+  }
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Artifact not found: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new ValidationError(`Artifact path must point to a file or directory: ${relPath}`);
+  }
+
+  const inferredMime = stat.isDirectory() ? "inode/directory" : undefined;
+
+  const message = await queries.messages.insert(storage.pool, {
+    id: generateId("message"),
+    chatId: data.chatId,
+    role: "agent",
+    content: {
+      type: "artifactRef",
+      path: relPath,
+      workspaceId: chat.workspaceId,
+      name: data.name?.trim() || path.basename(relPath),
+      mime: data.mime?.trim() || inferredMime,
+      ...(data.params ? { params: data.params } : {}),
+    },
+    agentId: opts?.agentId ?? chat.agentId,
+    model: opts?.model ?? null,
+  });
+  emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title });
+  emit({ type: "workspace.synced", payload: { workspaceId: chat.workspaceId } });
+  return message;
+}
+
 /**
- * PATCH a message. Supports editing content (e.g. user edits a note) and
+ * PATCH a message. Supports editing content (e.g. user edits a summary) and
  * lifecycle transitions: `cancelled` (stop & keep the row), `paused`
  * (stop firing without losing the schedule), `pending` (resume from
  * paused). Returns the updated row. Emits message.updated over WS.
  *
  * State transitions delegate to the run manager (pause/resume/cancel);
- * content-only patches (e.g. user editing a note body) snapshot the prior
- * note and take the plain DB update path.
+ * content-only patches (e.g. user editing a summary body) snapshot the prior
+ * summary and take the plain DB update path.
  */
 export async function patchMessage(
   pool: Pool,
   storage: StorageContext,
   chatId: string,
   messageId: string,
-  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null },
+  data: { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: MessageKind; title?: string | null },
   emit: (event: WsEvent) => void,
   lifecycleOps: MessageLifecycleOps | null = null,
 ): Promise<Message> {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new ValidationError("Message patch body must be an object");
+  }
+  if (Object.keys(data).length === 0) {
+    throw new ValidationError("Message patch body cannot be empty");
+  }
   const current = await queries.messages.findById(pool, messageId);
   if (!current || current.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
@@ -291,6 +455,70 @@ export async function patchMessage(
     throw new ValidationError(
       `state can only be patched to 'cancelled', 'paused', or 'pending' via this endpoint`,
     );
+  }
+  if (data.kind !== undefined) {
+    if (data.kind !== "chat") {
+      throw new ValidationError("kind can only be patched to 'chat' via this endpoint");
+    }
+    if (current.kind !== "task") {
+      throw new ValidationError("only task messages can be converted back to chat messages");
+    }
+  }
+  if (data.title !== undefined) {
+    if (data.title !== null && typeof data.title !== "string") {
+      throw new ValidationError("title must be a string or null");
+    }
+    if (typeof data.title === "string") {
+      const title = data.title.trim();
+      if (!title) throw new ValidationError("title cannot be empty");
+      data.title = title;
+    }
+  }
+  if (data.executeAt !== undefined) {
+    if (data.executeAt !== null && typeof data.executeAt !== "string") {
+      throw new ValidationError("executeAt must be an ISO datetime string or null");
+    }
+    if (typeof data.executeAt === "string") {
+      const parsed = IsoUtcDateTimeSchema.safeParse(data.executeAt);
+      if (!parsed.success) {
+        throw new ValidationError(`executeAt must be a valid ISO UTC datetime string: ${parsed.error.message}`);
+      }
+      const match = parsed.data.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/);
+      const date = new Date(parsed.data);
+      if (
+        !match ||
+        date.getUTCFullYear() !== Number(match[1]) ||
+        date.getUTCMonth() + 1 !== Number(match[2]) ||
+        date.getUTCDate() !== Number(match[3]) ||
+        date.getUTCHours() !== Number(match[4]) ||
+        date.getUTCMinutes() !== Number(match[5]) ||
+        date.getUTCSeconds() !== Number(match[6])
+      ) {
+        throw new ValidationError("executeAt must be a valid ISO UTC datetime string");
+      }
+    }
+  }
+  if (data.cron !== undefined) {
+    if (data.cron !== null && typeof data.cron !== "string") {
+      throw new ValidationError("cron must be a string or null");
+    }
+    if (typeof data.cron === "string") {
+      const cron = data.cron.trim();
+      if (!cron) throw new ValidationError("cron cannot be empty");
+      try {
+        new Cron(cron);
+      } catch (err) {
+        throw new ValidationError(err instanceof Error ? err.message : "Invalid cron expression");
+      }
+      data.cron = cron;
+    }
+  }
+  if (data.content !== undefined) {
+    const parsedContent = MessageContentSchema.safeParse(data.content);
+    if (!parsedContent.success) {
+      throw new ValidationError(`Invalid message content: ${parsedContent.error.message}`);
+    }
+    data.content = parsedContent.data;
   }
   // A no-op state patch (e.g. `state: 'pending'` on an already-pending row)
   // is allowed and falls through to the field-only path below — the kanban
@@ -310,16 +538,27 @@ export async function patchMessage(
 
   if (data.content !== undefined) {
     const prev = current.content as { type?: string; body?: string };
-    if (prev?.type === "note" && typeof prev.body === "string" || (data.content as { type?: string })?.type === "note") {
+    if (
+      (prev?.type === "summary" && typeof prev.body === "string") ||
+      (data.content as { type?: string })?.type === "summary"
+    ) {
       const chat = await queries.chats.findById(pool, chatId);
       const ws = chat ? await queries.workspaces.findById(pool, chat.workspaceId) : null;
       if (ws) {
-        if (prev?.type === "note" && typeof prev.body === "string") {
-          await snapshotNote(storage.home, ws.path, chatId, messageId, prev.body);
-        }
         const next = data.content as { type?: string; body?: string };
-        if (next?.type === "note" && typeof next.body === "string") {
-          await materializeNote(storage.home, ws.path, chatId, messageId, next.body).catch(() => { /* best-effort */ });
+        if (next?.type === "summary" && typeof next.body === "string") {
+          // Per-chat lock + atomic write — two concurrent PATCHes can no
+          // longer drop the intermediate body from history.
+          await snapshotAndReplaceSummary(
+            storage.home,
+            ws.path,
+            chatId,
+            messageId,
+            next.body,
+          ).catch(() => { /* best-effort */ });
+        } else if (prev?.type === "summary" && typeof prev.body === "string") {
+          // Content changed away from a summary — preserve the body in history.
+          await snapshotSummary(storage.home, ws.path, chatId, messageId, prev.body);
         }
       }
     }
@@ -354,8 +593,8 @@ export async function patchMessage(
 }
 
 /**
- * Runs a task message on demand. Used by the kanban "drag to Active"
- * gesture: forces the row back to `pending` then dispatches the agent.
+ * Runs a message on demand. Used by the kanban "drag to Active"
+ * gesture and task detail manual-run action.
  * Re-fires terminal rows (succeeded/failed/cancelled) too — the column
  * drop is the user's "do it again, now" intent. Idempotent if the row
  * is already running: returns the current row without firing twice.
@@ -371,36 +610,42 @@ export async function runMessage(
   if (!current || current.chatId !== chatId) {
     throw new NotFoundError(`Message not found in chat: ${messageId}`);
   }
-  if (current.state === "running") return current;
+  if (current.state === "running" && current.kind !== "task") return current;
 
-  // Reset to pending so fireMessage can claim it.
-  const reset = await queries.messages.updateMessage(pool, messageId, { state: "pending" });
-  if (!reset) throw new NotFoundError(`Message not found: ${messageId}`);
-  emit({ type: "message.updated", payload: reset });
+  // Non-task messages are claimed in-place by fireMessage and must be reset
+  // to pending before a manual re-fire. Task executions happen on a fresh
+  // task_run child. For unscheduled tasks, POST /run is also the kanban
+  // "move to Active" gesture, so persist that explicit user-owned status and
+  // let the scheduler record completion/failure only on the task_run child.
+  const rowToReturn = current.kind === "task"
+    ? (!current.executeAt && !current.cron
+      ? await queries.messages.updateMessage(pool, messageId, { state: "running" })
+      : current)
+    : await queries.messages.updateMessage(pool, messageId, { state: "pending" });
+  if (!rowToReturn) throw new NotFoundError(`Message not found: ${messageId}`);
+  if (current.kind !== "task" || rowToReturn !== current) emit({ type: "message.updated", payload: rowToReturn });
 
-  // Fire-and-forget. fireMessage's claimPending flips the row to
-  // 'running' and broadcasts message.updated; the kanban picks that up
-  // over WS and moves the card to the Active column. The full agent
-  // run continues in the background.
-  ops.fireMessage(messageId).catch((err) => {
+  // Fire-and-forget. The full agent run continues on the message itself for
+  // non-task rows and on a task_run child for task rows.
+  ops.fireMessage(messageId, { manual: true }).catch((err) => {
     // eslint-disable-next-line no-console
     console.error(`runMessage fireMessage failed for ${messageId}:`, err);
   });
 
-  return reset;
+  return rowToReturn;
 }
 
 /**
- * Returns every archived version of the supplied note-content message,
+ * Returns every archived version of the supplied summary-content message,
  * newest first. Returns an empty list if no snapshots exist yet.
  */
-export async function getNoteHistory(
+export async function getSummaryHistory(
   storage: StorageContext,
   chatId: string,
   messageId: string,
-): Promise<{ versions: NoteVersion[] }> {
+): Promise<{ versions: SummaryVersion[] }> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
-  const versions = await listNoteHistory(storage.home, slug, chatId, messageId);
+  const versions = await listSummaryHistory(storage.home, slug, chatId, messageId);
   return { versions };
 }
 
@@ -423,6 +668,12 @@ export async function deleteMessage(
 
   await pool.query("DELETE FROM messages WHERE id = ?", [messageId]);
 
+  if (msg.content.type === "summary") {
+    await deleteMaterializedSummary(storage.home, slug, chatId, messageId).catch(() => {
+      // Best-effort; deleting the DB row is the source of truth.
+    });
+  }
+
   // Move log file to trash if present.
   const logPath = path.join(
     workspaceRootPath(storage.home, slug),
@@ -432,9 +683,9 @@ export async function deleteMessage(
     `${messageId}.log`,
   );
   await fs.access(logPath).then(async () => {
-    const trashDir = path.join(storage.home, "Desk", ".trash");
-    await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(logPath, path.join(trashDir, `${Date.now()}-${messageId}.log`));
+    const trash = trashDir(storage.home);
+    await fs.mkdir(trash, { recursive: true });
+    await fs.rename(logPath, path.join(trash, `${Date.now()}-${messageId}.log`));
   }).catch(() => { /* no log file, fine */ });
 }
 
@@ -463,16 +714,15 @@ export async function getMessageLogs(
 
 /**
  * `attachment`: a user-uploaded file under `.chats/{id}/attachments/`.
- * `note`: a materialized mirror of a `note`-content message, written by
- * the runtime under `.chats/{id}/notes/{messageId}.md`. Notes are
- * read-only from the client's perspective — they're owned by the DB row.
+ * `artifact`: an agent-written file under `.chats/{id}/artifacts/`.
  *
- * `label` is an optional human-friendly name the UI shows alongside the
- * raw file name (e.g. notes always carry "Chat notes" so the listing
- * doesn't expose the messageId-based filename as the primary label).
+ * `label` is an optional human-friendly name the UI shows alongside the raw
+ * file name.
  */
 export type ChatFileRef = FileRef & {
-  kind: "attachment" | "note";
+  kind: "attachment" | "artifact";
+  /** True when the entry is a directory rather than a regular file. */
+  isDir?: boolean;
   label?: string;
 };
 
@@ -481,15 +731,16 @@ export type ChatFileRef = FileRef & {
  * visible (non-dot) entries — the user-uploaded chat files plus any
  * agent-finalized output. Passing `showHidden: true` includes agent
  * artifacts (dot-prefixed drafts / scratch) for the chat Artifacts panel
- * or a diagnostic view. Passing `includeNotes: true` also walks
- * `.chats/{id}/notes/` so the chat Files panel can show note mirrors
- * alongside uploads — each item is tagged with `kind` so the UI can
- * render them differently.
+ * or a diagnostic view. Passing `includeArtifacts: true` also walks
+ * `.chats/{id}/artifacts/` so the chat Files panel can show agent-written
+ * files alongside uploads — each item is tagged with `kind` so the UI can
+ * render them differently. Directories in `artifacts/` are included and
+ * marked with `isDir: true`.
  */
 export async function listAttachments(
   storage: StorageContext,
   chatId: string,
-  opts?: { showHidden?: boolean; includeNotes?: boolean },
+  opts?: { showHidden?: boolean; includeArtifacts?: boolean },
 ): Promise<ChatFileRef[]> {
   const slug = await workspaceSlugForChat(storage.pool, chatId);
   const root = workspaceRootPath(storage.home, slug);
@@ -514,25 +765,48 @@ export async function listAttachments(
     });
   }
 
-  if (opts?.includeNotes) {
-    const nDir = notesDir(storage.home, slug, chatId);
-    const noteNames = await fs.readdir(nDir).catch(() => [] as string[]);
-    for (const name of noteNames) {
-      // Notes are always materialized as `{messageId}.md`; skip anything
-      // that doesn't match so a stray dotfile doesn't show up.
-      if (!name.endsWith(".md")) continue;
-      const abs = path.join(nDir, name);
+  if (opts?.includeArtifacts) {
+    const artDir = chatArtifactsDir(storage.home, slug, chatId);
+    const attachedArtifactPaths = new Set<string>();
+    const { rows } = await storage.pool.query<{ content: string | unknown }>(
+      "SELECT content FROM messages WHERE chat_id = ?",
+      [chatId],
+    );
+    for (const row of rows) {
+      let content: unknown = row.content;
+      if (typeof row.content === "string") {
+        try {
+          content = JSON.parse(row.content) as unknown;
+        } catch {
+          continue;
+        }
+      }
+      const parsed = MessageContentSchema.safeParse(content);
+      if (!parsed.success || parsed.data.type !== "artifactRef") continue;
+      if (parsed.data.path.startsWith(`.chats/${chatId}/artifacts/`)) {
+        attachedArtifactPaths.add(parsed.data.path);
+      }
+    }
+
+    const artNames = await fs.readdir(artDir).catch(() => [] as string[]);
+    for (const name of artNames) {
+      if (!showHidden && name.startsWith(".")) continue;
+      const abs = path.join(artDir, name);
       const stat = await fs.stat(abs).catch(() => null);
-      if (!stat || !stat.isFile()) continue;
+      if (!stat) continue;
+      const isDir = stat.isDirectory();
+      const relPath = path.relative(root, abs).split(path.sep).join("/");
+      const isAppArtifactDir = isDir && name.endsWith(".app");
+      if (!isAppArtifactDir && !attachedArtifactPaths.has(relPath)) continue;
       out.push({
-        path: path.relative(root, abs).split(path.sep).join("/"),
+        path: relPath,
         name,
-        mime: "text/markdown",
+        mime: isDir ? "inode/directory" : "application/octet-stream",
         size: stat.size,
         createdAt: stat.birthtime.toISOString(),
         updatedAtMs: String(stat.mtimeMs),
-        kind: "note",
-        label: "Chat notes",
+        kind: "artifact",
+        isDir,
       });
     }
   }
@@ -641,6 +915,107 @@ export async function saveAttachmentToLibrary(
 }
 
 /**
+ * Promotes a `<name>.app/` chat artifact into the primary workspace
+ * library. Mirrors `saveAttachmentToLibrary` but operates on directories
+ * inside `.chats/{chatId}/artifacts/`. The chat artifact is removed from
+ * the chat's artifacts dir on success.
+ */
+export async function saveArtifactToLibrary(
+  storage: StorageContext,
+  chatId: string,
+  artifactName: string,
+  destSubpath: string | undefined,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const file = await saveChatArtifactToLibrary(
+    storage,
+    ws.path,
+    chatId,
+    artifactName,
+    destSubpath,
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: file.path, op: "added" },
+  });
+
+  return file;
+}
+
+/**
+ * Modify-as-version: copy a library `<name>.app/` into a chat's
+ * artifacts dir so the agent can iterate on it without disturbing the
+ * library copy.
+ */
+export async function copyAppFromLibrary(
+  storage: StorageContext,
+  chatId: string,
+  libraryPath: string,
+  emit: (event: WsEvent) => void,
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const ref = await copyLibraryAppToChat(storage, ws.path, chatId, libraryPath);
+  emit({
+    type: "library.changed",
+    payload: {
+      workspaceId: chat.workspaceId,
+      path: ref.path,
+      op: "added",
+      affectedChatIds: [chatId],
+    },
+  });
+  return ref;
+}
+
+/**
+ * Modify-as-version: replace a library `<name>.app/` with the
+ * chat-artifact version of the same app. The prior library copy is
+ * moved to `~/Desk/.trash/.app-versions/` for recovery.
+ *
+ * Concurrency: pass `expectedSourceVersion` (captured by the UI from
+ * `copyLibraryAppToChat`'s response) to enforce an If-Match-style
+ * version check. The caller surfaces the resulting `ConflictError` as
+ * a 409 to the client.
+ */
+export async function replaceLibraryAppWithChatArtifact(
+  storage: StorageContext,
+  chatId: string,
+  artifactName: string,
+  targetPath: string,
+  emit: (event: WsEvent) => void,
+  opts: { expectedSourceVersion?: string } = {},
+): Promise<FileRef> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const ref = await replaceLibraryAppFromChat(
+    storage,
+    ws.path,
+    chatId,
+    artifactName,
+    targetPath,
+    { expectedSourceVersion: opts.expectedSourceVersion },
+  );
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: chat.workspaceId, path: ref.path, op: "updated" },
+  });
+  return ref;
+}
+
+/**
  * Removes a chat attachment by basename. The mutation only unlinks the
  * entry inside `.chats/{chatId}/attachments/`: pinned library files
  * stay put, direct chat uploads are permanently removed (no
@@ -657,4 +1032,77 @@ export async function removeAttachment(
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
   await removeChatAttachment(storage, ws.path, chatId, attachmentName);
   return { ok: true };
+}
+
+/**
+ * Deletes a chat-artifact `<name>.app/` directory and revokes any active
+ * app_sessions bound to it. Issue #47, PR-E.
+ *
+ * The cascade is: filesystem removal → token revocation. We delete the
+ * fs first so a cookie-using iframe can't keep authoring data after the
+ * directory is gone (the storage backing file goes with the directory),
+ * then revoke the sessions so future requests get a clean 401.
+ */
+export async function removeChatApp(
+  storage: StorageContext,
+  chatId: string,
+  appName: string,
+  emit: (event: WsEvent) => void,
+): Promise<void> {
+  const chat = await queries.chats.findById(storage.pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+
+  const { appName: normalizedAppName, dirName } = normalizeAppNameForDelete(appName);
+  await deleteChatApp(storage, ws.path, chatId, dirName);
+
+  // Revoke any active sessions for this chat+app.
+  await storage.pool.query(
+    `DELETE FROM app_sessions WHERE chat_id = ? AND app_name = ?`,
+    [chatId, normalizedAppName],
+  );
+
+  emit({
+    type: "library.changed",
+    payload: {
+      workspaceId: chat.workspaceId,
+      path: `.chats/${chatId}/artifacts/${dirName}`,
+      op: "removed",
+      affectedChatIds: [chatId],
+    },
+  });
+}
+
+/**
+ * Deletes a library `<name>.app/` (workspace root only — subfoldered
+ * apps go through the generic library-delete path). Cascade-revokes
+ * any library-scope app_sessions bound to it. Issue #47, PR-E.
+ */
+export async function removeLibraryApp(
+  storage: StorageContext,
+  userId: string,
+  appName: string,
+  emit: (event: WsEvent) => void,
+): Promise<void> {
+  // Resolve the user's workspace the same way issueLibraryAppSession does.
+  const { rows } = await storage.pool.query<{ id: string; path: string }>(
+    "SELECT id, path FROM workspaces WHERE user_id = ? ORDER BY created_at LIMIT 1",
+    [userId],
+  );
+  if (rows.length === 0) throw new NotFoundError("No workspace for user");
+  const ws = rows[0];
+
+  const { appName: normalizedAppName, dirName } = normalizeAppNameForDelete(appName);
+  await deleteLibraryApp(storage, ws.path, dirName);
+
+  await storage.pool.query(
+    `DELETE FROM app_sessions WHERE scope = 'library' AND app_name = ? AND workspace_id = ?`,
+    [normalizedAppName, ws.id],
+  );
+
+  emit({
+    type: "library.changed",
+    payload: { workspaceId: ws.id, path: dirName, op: "removed" },
+  });
 }
