@@ -605,83 +605,103 @@ export function createRunManager(opts: RunManagerOptions) {
         runMode: outputKind === "summary" ? "summary" : "chat",
       };
 
-      // Event-driven resource auto-scaling: capture stderr per-attempt
-      // and, if a non-zero exit looks resource-shaped (`spawn EAGAIN`,
-      // OOM-killer, ENOMEM), grow the sandbox in place and re-run the
-      // same message. The user sees a delay, not an error. Capped at
-      // MAX_RESOURCE_RETRIES so a misclassified non-resource failure
-      // doesn't retry forever.
-      const MAX_RESOURCE_RETRIES = 2;
       let result: { exitCode: number };
-      let stderrCapture = "";
-      const onLogWithStderrCapture = async (evt: LogEvent) => {
-        if (evt.kind === "stderr") stderrCapture += evt.payload + "\n";
-        await onLog(evt);
-      };
-      let attempt = 0;
-      while (true) {
-        if (msg.content.type === "reflection_request") {
-          const journal = await fireReflectionTask(
-            msg,
-            workspaceId,
-            workspaceSlug,
-            workspaceName,
-            userId,
-            userName,
-            userTimezone,
-            fireOptions.manual === true,
-          );
-          await logReflectionOutcome(runId, journal, onLogWithStderrCapture);
-          result = { exitCode: 0 };
-        } else if (opts.execRunFn) {
-          result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
-        } else {
-          const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
-            ? { containerId: "fake-sandbox", workspaceId }
-            : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
-          result = await runtimeExecRun(pool, handle, {
-            runId,
-            prompt,
-            home,
-            workspaceId,
-            workspaceSlug,
-            chatId: msg.chatId,
-            agent: agentFileInput,
-            attachments,
-            providerKeys,
-            extraEnv,
-            onLog: onLogWithStderrCapture,
-          });
-        }
-        if (result.exitCode === 0) break;
-        if (attempt >= MAX_RESOURCE_RETRIES) break;
-        const failure = classifyResourceError(result.exitCode, stderrCapture);
-        if (!failure) break;
-        // Stop the current logStream and truncate the file so the retry
-        // log doesn't tail-mix with the failed attempt's events. The user
-        // shouldn't see "agent crashed then succeeded"; they should see
-        // only the successful attempt's events.
-        await new Promise<void>((resolve) => {
-          logStream!.once("close", resolve);
-          logStream!.end();
-        });
-        await fs.promises.truncate(logFile!, 0);
-        logStream = fs.createWriteStream(logFile!, { flags: "a" });
-        stderrCapture = "";
-        const growth = await growSandboxForResourceError(workspaceId, failure);
-        if (!growth.grew) {
-          // Already at the maximum — no point retrying. Fall through to
-          // finalise as failed; the user does see the failure in this case.
-          console.warn(
-            `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
-          );
-          break;
-        }
-        attempt++;
-        console.info(
-          `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
-            `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
+      if (msg.content.type === "reflection_request") {
+        // Reflections run in their own short-lived sandbox and never
+        // surface a non-zero exit through this path, so they bypass
+        // the resource-retry loop entirely.
+        const journal = await fireReflectionTask(
+          msg,
+          workspaceId,
+          workspaceSlug,
+          workspaceName,
+          userId,
+          userName,
+          userTimezone,
+          fireOptions.manual === true,
         );
+        await logReflectionOutcome(runId, journal, onLog);
+        result = { exitCode: 0 };
+      } else {
+        // Event-driven resource auto-scaling: capture stderr per-attempt
+        // and, if a non-zero exit looks resource-shaped (`spawn EAGAIN`,
+        // OOM-killer, ENOMEM), grow the sandbox in place and re-run the
+        // same message. The user sees a delay, not an error.
+        //
+        // MAX_RESOURCE_RETRIES caps both retry-loop runaway (a
+        // misclassified non-resource failure) and the reachable
+        // ceiling. From the 512 baseline, 3 retries hit 1024 → 2048
+        // → 4096, matching SANDBOX_MAX_PIDS / SANDBOX_MAX_MEMORY_BYTES.
+        const MAX_RESOURCE_RETRIES = 3;
+        // Keep only the tail of stderr — a long build can emit MBs of
+        // output, and we run `toLowerCase()` plus several regex/includes
+        // against this buffer every time we classify. Resource-failure
+        // markers all appear near the end of stderr, right before the
+        // process exits.
+        const STDERR_TAIL_BYTES = 8 * 1024;
+        let stderrCapture = "";
+        const captureStderr = (payload: string): void => {
+          stderrCapture += payload + "\n";
+          if (stderrCapture.length > STDERR_TAIL_BYTES) {
+            stderrCapture = stderrCapture.slice(-STDERR_TAIL_BYTES);
+          }
+        };
+        const onLogWithStderrCapture = async (evt: LogEvent) => {
+          if (evt.kind === "stderr") captureStderr(evt.payload);
+          await onLog(evt);
+        };
+        let attempt = 0;
+        while (true) {
+          if (opts.execRunFn) {
+            result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
+          } else {
+            const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+              ? { containerId: "fake-sandbox", workspaceId }
+              : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
+            result = await runtimeExecRun(pool, handle, {
+              runId,
+              prompt,
+              home,
+              workspaceId,
+              workspaceSlug,
+              chatId: msg.chatId,
+              agent: agentFileInput,
+              attachments,
+              providerKeys,
+              extraEnv,
+              onLog: onLogWithStderrCapture,
+            });
+          }
+          if (result.exitCode === 0) break;
+          if (attempt >= MAX_RESOURCE_RETRIES) break;
+          const failure = classifyResourceError(result.exitCode, stderrCapture);
+          if (!failure) break;
+          // Stop the current logStream and truncate the file so the retry
+          // log doesn't tail-mix with the failed attempt's events. The user
+          // shouldn't see "agent crashed then succeeded"; they should see
+          // only the successful attempt's events.
+          await new Promise<void>((resolve) => {
+            logStream!.once("close", resolve);
+            logStream!.end();
+          });
+          await fs.promises.truncate(logFile!, 0);
+          logStream = fs.createWriteStream(logFile!, { flags: "a" });
+          stderrCapture = "";
+          const growth = await growSandboxForResourceError(workspaceId, failure);
+          if (!growth.grew) {
+            // Already at the maximum — no point retrying. Fall through to
+            // finalise as failed; the user does see the failure in this case.
+            console.warn(
+              `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
+            );
+            break;
+          }
+          attempt++;
+          console.info(
+            `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
+              `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
+          );
+        }
       }
 
       // Wait for pending writes to flush before reading the file back.
@@ -886,9 +906,14 @@ export function createRunManager(opts: RunManagerOptions) {
    * idle workspace. Cheap enough to live alongside the existing
    * 60 s `pollTimer` without measurable cost.
    */
-  async function sweepIdleSandboxes(
-    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
-  ): Promise<string[]> {
+  /**
+   * Returns the set of workspace ids that should keep their sandbox
+   * alive: any workspace with a `state='running'` row, or any message
+   * whose `updated_at` is within `idleMs` of now. Exposed separately
+   * from `sweepIdleSandboxes` so tests can pin down the SQL-side
+   * decision directly without needing a real container engine.
+   */
+  async function getActiveWorkspaceIds(idleMs: number): Promise<Set<string>> {
     const cutoff = new Date(Date.now() - idleMs).toISOString();
     // Workspaces with *any* recent activity — running rows, just-fired
     // pending rows, or just-edited rows — count as active and keep their
@@ -900,8 +925,18 @@ export function createRunManager(opts: RunManagerOptions) {
           OR m.updated_at >= ?`,
       [cutoff],
     );
-    const active = new Set(rows.map((r) => r.workspace_id));
-    return reapIdleSandboxes(active);
+    return new Set(rows.map((r) => r.workspace_id));
+  }
+
+  async function sweepIdleSandboxes(
+    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
+  ): Promise<string[]> {
+    const active = await getActiveWorkspaceIds(idleMs);
+    // Pass `idleMs` as the per-container minimum age so a brand-new
+    // container created in the window between the SQL query and the
+    // `docker ps` can't be reaped — the very next sweep will see its
+    // first message row and treat the workspace as active.
+    return reapIdleSandboxes(active, idleMs);
   }
 
   function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
@@ -1221,6 +1256,7 @@ export function createRunManager(opts: RunManagerOptions) {
     startPolling,
     sweepIdleSandboxes,
     startIdleSweeper,
+    getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
     pauseMessage,

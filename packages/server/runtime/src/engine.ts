@@ -93,6 +93,12 @@ export interface ContainerInfo {
   pidsLimit?: number;
   /** Current memory-cgroup limit in bytes, with the same live-update semantics as `pidsLimit`. */
   memoryBytes?: number;
+  /**
+   * Container creation timestamp (ISO 8601). Used by the idle-sweeper to
+   * skip just-created containers — otherwise a `createOrReuse` racing the
+   * sweep can have its brand-new sandbox yanked out from under it.
+   */
+  createdAt?: string;
 }
 
 export interface ExecSpec {
@@ -293,6 +299,7 @@ class CliEngine implements Engine {
       running: raw.State?.Running ?? false,
       pidsLimit,
       memoryBytes,
+      createdAt: raw.Created,
     };
   }
 
@@ -362,7 +369,16 @@ class CliEngine implements Engine {
   ): Promise<boolean> {
     const args = ["update"];
     if (opts.pidsLimit !== undefined) args.push("--pids-limit", String(opts.pidsLimit));
-    if (opts.memoryBytes !== undefined) args.push("--memory", String(opts.memoryBytes));
+    if (opts.memoryBytes !== undefined) {
+      args.push("--memory", String(opts.memoryBytes));
+      // On cgroup v1, docker requires `--memory-swap >= --memory`; raising
+      // `--memory` alone is rejected with "Memory swap should be larger
+      // than memory limit". Passing -1 sets swap to "unlimited" which
+      // matches our create-time behavior (we never set --memory-swap) and
+      // works on cgroup v2 as well. Without this, auto-grow fails on any
+      // host still using cgroup v1.
+      args.push("--memory-swap", "-1");
+    }
     if (args.length === 1) return true; // nothing to change
     args.push(nameOrId);
     try {
@@ -507,6 +523,7 @@ export const _wrapExecChildForTest = wrapExecChild;
 interface ContainerInspect {
   Id: string;
   Image: string;
+  Created?: string;
   Config?: { User?: string; Labels?: Record<string, string> };
   HostConfig?: { Binds?: string[]; PidsLimit?: number; Memory?: number };
   Mounts?: Array<{ Type?: string; Source?: string; Destination?: string; Mode?: string }>;

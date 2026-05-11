@@ -112,9 +112,12 @@ export async function writeAgentFile(
  * starts the sandbox without firefox/playwright in memory, which is the
  * single largest baseline-resource saving on the sandbox.
  *
- * Conservative on purpose: a `document` or `data` chat that occasionally
- * needs the browser can still spawn it via an explicit user action; we'd
- * rather miss an edge case than start firefox for every chat.
+ * Conservative on purpose: there is no per-run override yet, so a chat
+ * whose goal isn't `site`/`app` simply won't have firefox available.
+ * If we accumulate edge cases that need the browser under other goals,
+ * the right fix is either (a) re-tag the chat's goal or (b) add a
+ * per-workspace `enable_playwright` setting — not a list of every
+ * goal that *might* occasionally want it.
  */
 const BROWSER_GOALS: ReadonlySet<GoalKey> = new Set(["site", "app"]);
 

@@ -547,11 +547,16 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
  * sandbox back to the smallest size.
  *
  * `recentlyActiveWorkspaceIds` is supplied by the caller (typically
- * from a DB query) so this module stays DB-agnostic. Returns the
- * names of containers it removed so callers can log / test.
+ * from a DB query) so this module stays DB-agnostic. Containers younger
+ * than `minAgeMs` are skipped to protect against the race window between
+ * a fire's `createOrReuse` and the next sweep — without this guard, a
+ * brand-new container belonging to a workspace whose `messages.updated_at`
+ * hasn't been bumped yet can be yanked out from under the in-flight fire.
+ * Returns the names of containers it removed so callers can log / test.
  */
 export async function reapIdleSandboxes(
   recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  minAgeMs: number = 5 * 60 * 1000,
 ): Promise<string[]> {
   const removed: string[] = [];
   let engine: Engine;
@@ -566,8 +571,8 @@ export async function reapIdleSandboxes(
   } catch {
     return removed;
   }
+  const now = Date.now();
   for (const c of containers) {
-    if (!c.name.startsWith("desk-sandbox-")) continue;
     // Skip transient reflection sandboxes — they have their own
     // workspace ids and own short lifecycles; a reaper that catches
     // them mid-reflection would kill the in-flight reflection.
@@ -578,6 +583,22 @@ export async function reapIdleSandboxes(
     // someone is mid-`docker update`, don't yank the container out
     // from under them. The grow lock is keyed by container name.
     if (growthInFlight.has(c.name)) continue;
+    // Skip just-created containers. The sweep's DB query and a fire's
+    // `createOrReuse` aren't strictly ordered, so a fire that started
+    // moments ago can have produced a container without yet having
+    // bumped any message row — meaning the workspace looks idle to the
+    // sweep. Inspecting Created here is one extra round-trip per
+    // candidate, but candidates are rare (idle workspaces only).
+    try {
+      const info = await engine.inspect(c.name);
+      if (info?.createdAt) {
+        const age = now - new Date(info.createdAt).getTime();
+        if (Number.isFinite(age) && age < minAgeMs) continue;
+      }
+    } catch {
+      // Inspect failed — treat as a transient and skip this round.
+      continue;
+    }
     try {
       await engine.remove(c.name, true);
       removed.push(c.name);

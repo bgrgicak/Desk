@@ -345,18 +345,91 @@ describe("pause / resume / cancel", () => {
   });
 });
 
-// ── sweepIdleSandboxes — DB query path ──────────────────────────────────────
+// ── idle-sandbox sweep ──────────────────────────────────────────────────────
 //
-// The actual `docker rm` happens via `reapIdleSandboxes`, which needs a
-// real engine. What this test pins down is the DB-side decision:
-// "which workspace ids are 'active enough' to keep their sandbox?"
-// — that's the contract `sweepIdleSandboxes` exposes to the runtime
-// reaper. We verify by running with an engine-less environment (no
-// `docker ps` runs) and checking that the SQL query returns the
-// expected workspace set via the side-effect of which `recentlyActiveWorkspaceIds`
-// would be computed. We can't observe it directly, but we can verify
-// `sweepIdleSandboxes` returns `[]` (no containers found, since no real
-// engine) and doesn't throw, which is the happy-path contract.
+// We split the SQL-side decision into `getActiveWorkspaceIds(idleMs)` so the
+// "which workspaces should keep their sandbox alive?" contract can be tested
+// directly without needing a container engine. The actual `docker rm` path
+// (`reapIdleSandboxes`) is covered by the runtime/docker integration tests
+// against a real engine.
+
+describe("getActiveWorkspaceIds", () => {
+  // Each test creates its own workspaces/chats and cleans up at the end so
+  // ordering between tests doesn't matter and stale rows from the suites
+  // above can't leak in.
+  async function makeWorkspaceWithChat(): Promise<{ workspaceId: string; chatId: string }> {
+    const workspaceId = generateId("workspace");
+    const newChatId = generateId("chat");
+    const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
+    const userId = userRows[0].id as string;
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+      [workspaceId, userId, "sweep test", `/tmp/${workspaceId}`],
+    );
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [newChatId, workspaceId, agentId, "sweep chat"],
+    );
+    return { workspaceId, chatId: newChatId };
+  }
+
+  it("treats a workspace with a running message as active", async () => {
+    const rm = makeRunManager();
+    const { workspaceId, chatId: cid } = await makeWorkspaceWithChat();
+    const msgId = generateId("message");
+    // Pin updated_at far in the past so only the `state='running'` arm
+    // can mark this workspace active.
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, updated_at)
+       VALUES (?, ?, 'user', ?, 'running', 'task_run', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 hours'))`,
+      [msgId, cid, JSON.stringify({ type: "text", text: "in-flight" })],
+    );
+    const active = await rm.getActiveWorkspaceIds(30 * 60 * 1000);
+    expect(active.has(workspaceId)).toBe(true);
+  });
+
+  it("treats a workspace with a recent message as active", async () => {
+    const rm = makeRunManager();
+    const { workspaceId, chatId: cid } = await makeWorkspaceWithChat();
+    const msgId = generateId("message");
+    // 1 second ago, well inside a 30 minute idle window.
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, updated_at)
+       VALUES (?, ?, 'user', ?, 'succeeded', 'task_run', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second'))`,
+      [msgId, cid, JSON.stringify({ type: "text", text: "recent" })],
+    );
+    const active = await rm.getActiveWorkspaceIds(30 * 60 * 1000);
+    expect(active.has(workspaceId)).toBe(true);
+  });
+
+  it("does not include a workspace whose only message is older than idleMs and not running", async () => {
+    const rm = makeRunManager();
+    const { workspaceId, chatId: cid } = await makeWorkspaceWithChat();
+    const msgId = generateId("message");
+    // 2 hours ago — outside any reasonable idle window.
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, updated_at)
+       VALUES (?, ?, 'user', ?, 'succeeded', 'task_run', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 hours'))`,
+      [msgId, cid, JSON.stringify({ type: "text", text: "stale" })],
+    );
+    const active = await rm.getActiveWorkspaceIds(30 * 60 * 1000);
+    expect(active.has(workspaceId)).toBe(false);
+  });
+
+  it("respects a wider idleMs that includes an otherwise-stale message", async () => {
+    const rm = makeRunManager();
+    const { workspaceId, chatId: cid } = await makeWorkspaceWithChat();
+    const msgId = generateId("message");
+    // 2 hours ago + 30 min window: not active. 3 hour window: active.
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, updated_at)
+       VALUES (?, ?, 'user', ?, 'succeeded', 'task_run', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 hours'))`,
+      [msgId, cid, JSON.stringify({ type: "text", text: "old-but-not-ancient" })],
+    );
+    expect((await rm.getActiveWorkspaceIds(30 * 60 * 1000)).has(workspaceId)).toBe(false);
+    expect((await rm.getActiveWorkspaceIds(3 * 60 * 60 * 1000)).has(workspaceId)).toBe(true);
+  });
+});
 
 describe("sweepIdleSandboxes", () => {
   it("returns [] and doesn't throw when no docker engine is reachable", async () => {
@@ -366,21 +439,6 @@ describe("sweepIdleSandboxes", () => {
     // runs successfully even though the engine doesn't.
     const removed = await rm.sweepIdleSandboxes(30 * 60 * 1000);
     expect(Array.isArray(removed)).toBe(true);
-  });
-
-  it("treats workspaces with running rows as active (won't be eligible to reap)", async () => {
-    // We can't directly assert "this workspace is active" without
-    // observing the engine call, but we can verify the DB query path
-    // doesn't crash when there are running rows present. The actual
-    // engine call is exercised in the runtime/docker integration tests.
-    const rm = makeRunManager();
-    const id = generateId("message");
-    await pool.query(
-      `INSERT INTO messages (id, chat_id, role, content, state, started_at, kind)
-       VALUES (?, ?, 'user', ?, 'running', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'task_run')`,
-      [id, chatId, JSON.stringify({ type: "text", text: "in-flight" })],
-    );
-    await expect(rm.sweepIdleSandboxes(30 * 60 * 1000)).resolves.toBeDefined();
   });
 });
 
