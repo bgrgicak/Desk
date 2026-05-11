@@ -1,6 +1,6 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
+import { CONNECTION_ENV_VARS } from "@agent-desk/shared";
 import type { VaultStore } from "./vault/store.js";
 
 /**
@@ -31,7 +31,7 @@ export async function resolveProviderKeys(
 
   const meta = await queries.userSettings.getProviderMeta(pool, resolvedUserId);
   const out: Record<string, string> = {};
-  for (const name of PROVIDER_KEY_VARS) {
+  for (const name of CONNECTION_ENV_VARS) {
     if (meta[name]?.enabled === false) continue;
     const secret = vault.get(resolvedUserId, name);
     if (secret?.password) out[name] = secret.password;

@@ -23,6 +23,15 @@ lives under `~/Desk/`.
   AI-provider API keys are configured per-user via
   Settings → Connections, not via this file.
 
+### GitHub connection setup
+
+Settings → Connections → GitHub currently uses a classic personal access token.
+Users create one in GitHub → **Settings** → **Developer settings** →
+**Personal access tokens** → **Tokens (classic)** with the `repo` scope, plus
+`workflow` if agents should edit GitHub Actions workflow files. Desk stores that
+token encrypted as `GITHUB_TOKEN` and forwards it to sandboxes as both
+`GITHUB_TOKEN` and `GH_TOKEN`.
+
 ## First-time setup
 
 ```bash

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
-import { classifyResourceError, killClaimedRunsInContainers } from "../src/docker.js";
+import { classifyResourceError, killClaimedRunsInContainers, providerKeyEnv, providerKeyExecEnv } from "../src/docker.js";
 import type { Engine, ExecHandle, ExecSpec, ContainerInfo } from "../src/engine.js";
 
 describe("classifyResourceError", () => {
@@ -65,6 +65,69 @@ describe("classifyResourceError", () => {
     expect(
       classifyResourceError(1, "setsid: child 12345 did not exit normally: Success\n"),
     ).toBe("memory");
+  });
+});
+
+describe("providerKeyEnv", () => {
+  it("keeps sandbox connection tokens out of create-time container env", () => {
+    expect(providerKeyEnv({
+      OPENAI_API_KEY: "sk-test",
+      GITHUB_TOKEN: "github_pat_test",
+      NOT_ALLOWED: "nope",
+    })).toEqual([
+      "OPENAI_API_KEY=sk-test",
+    ]);
+  });
+});
+
+describe("providerKeyExecEnv", () => {
+  it("does not forward host GitHub tokens without explicit vault-backed keys", () => {
+    const previousGitHubToken = process.env.GITHUB_TOKEN;
+    const previousGhToken = process.env.GH_TOKEN;
+    process.env.GITHUB_TOKEN = "host-github-token";
+    process.env.GH_TOKEN = "host-gh-token";
+    try {
+      const env = providerKeyExecEnv();
+
+      expect(env).not.toContain("GITHUB_TOKEN=host-github-token");
+      expect(env).not.toContain("GH_TOKEN=host-gh-token");
+    } finally {
+      if (previousGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previousGitHubToken;
+      if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previousGhToken;
+    }
+  });
+
+  it("forwards GitHub connection tokens per exec alongside model provider keys", () => {
+    const env = providerKeyExecEnv({
+      OPENAI_API_KEY: "sk-test",
+      GITHUB_TOKEN: "github_pat_test",
+      NOT_ALLOWED: "nope",
+    });
+    expect(env).toContain("GITHUB_TOKEN=github_pat_test");
+    expect(env).toContain("GH_TOKEN=github_pat_test");
+  });
+
+  it("clears missing connection keys so warm sandboxes cannot reuse deleted tokens", () => {
+    const env = providerKeyExecEnv({ OPENAI_API_KEY: "sk-test" });
+
+    expect(env).toContain("OPENAI_API_KEY=sk-test");
+    expect(env).toContain("GITHUB_TOKEN=");
+    expect(env).toContain("GH_TOKEN=");
+  });
+
+  it("does not let extra env override managed connection credentials", () => {
+    const env = providerKeyExecEnv(
+      { OPENAI_API_KEY: "sk-test" },
+      { GITHUB_TOKEN: "stale", GH_TOKEN: "stale", OPENCODE_AUTH_CONTENT: "codex" },
+    );
+
+    expect(env).not.toContain("GITHUB_TOKEN=stale");
+    expect(env).not.toContain("GH_TOKEN=stale");
+    expect(env).toContain("GITHUB_TOKEN=");
+    expect(env).toContain("GH_TOKEN=");
+    expect(env).toContain("OPENCODE_AUTH_CONTENT=codex");
   });
 });
 

@@ -1,10 +1,17 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
+import {
+  CONNECTION_ENV_VARS,
+  NotFoundError,
+  ValidationError,
+} from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
 import { VaultLockedError } from "../vault/store.js";
 
-type ProviderMetaEntry = { name?: string; enabled?: boolean };
+type ProviderMetaEntry = {
+  name?: string;
+  enabled?: boolean;
+};
 type ProviderMetaMap  = Record<string, ProviderMetaEntry>;
 
 export async function getMe(pool: Pool, userId: string) {
@@ -51,7 +58,7 @@ function maskKey(value: string): string {
 
 /**
  * Returns provider keys for the current user, masked. Every known
- * PROVIDER_KEY_VARS name appears in the response (null when unset) so the UI
+ * CONNECTION_ENV_VARS name appears in the response (null when unset) so the UI
  * can render a complete form. Returns all-null when the vault is locked or
  * not yet set up — vault status is surfaced separately via GET /vault/status.
  */
@@ -60,11 +67,11 @@ export function getProviders(
   userId: string,
 ): { providers: Record<string, string | null> } {
   const providers: Record<string, string | null> = {};
-  for (const name of PROVIDER_KEY_VARS) {
+  for (const name of CONNECTION_ENV_VARS) {
     providers[name] = null;
   }
   if (vault.isLocked(userId)) return { providers };
-  for (const name of PROVIDER_KEY_VARS) {
+  for (const name of CONNECTION_ENV_VARS) {
     const secret = vault.get(userId, name);
     providers[name] = secret ? maskKey(secret.password) : null;
   }
@@ -86,7 +93,7 @@ export async function setProviders(
     throw new ValidationError("Missing providers object");
   }
   if (vault.isLocked(userId)) throw new VaultLockedError();
-  const allowed = new Set<string>(PROVIDER_KEY_VARS);
+  const allowed = new Set<string>(CONNECTION_ENV_VARS);
   for (const name of Object.keys(data.providers)) {
     if (!allowed.has(name)) {
       throw new ValidationError(`Unknown provider key: ${name}`);
@@ -100,6 +107,7 @@ export async function setProviders(
   for (const [name, value] of Object.entries(data.providers)) {
     if (value === null) {
       await vault.delete(userId, name);
+      await queries.userSettings.mergeProviderMeta(pool, userId, { [name]: null });
     } else {
       await vault.upsert(userId, { title: name, password: value });
     }
@@ -146,6 +154,27 @@ export async function setProvidersMeta(
   if (!data || typeof data.meta !== "object" || data.meta === null) {
     throw new ValidationError("Missing meta object");
   }
-  const meta = await queries.userSettings.mergeProviderMeta(pool, userId, data.meta);
+  const sanitized: Record<string, ProviderMetaEntry | null> = {};
+  for (const [key, entry] of Object.entries(data.meta)) {
+    if (entry === null) {
+      sanitized[key] = { name: undefined };
+      continue;
+    }
+    const next: ProviderMetaEntry = {};
+    if (Object.prototype.hasOwnProperty.call(entry, "name")) {
+      if (entry.name !== undefined && typeof entry.name !== "string") {
+        throw new ValidationError(`Provider meta ${key}.name must be a string`);
+      }
+      next.name = entry.name;
+    }
+    if (Object.prototype.hasOwnProperty.call(entry, "enabled")) {
+      if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+        throw new ValidationError(`Provider meta ${key}.enabled must be a boolean`);
+      }
+      next.enabled = entry.enabled;
+    }
+    sanitized[key] = next;
+  }
+  const meta = await queries.userSettings.mergeProviderMeta(pool, userId, sanitized);
   return { meta };
 }

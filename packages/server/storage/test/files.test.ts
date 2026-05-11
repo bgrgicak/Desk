@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { NotFoundError, ValidationError, MAX_UPLOAD_BYTES } from "@agent-desk/shared";
+import { NotFoundError, ValidationError } from "@agent-desk/shared";
 import {
   uploadArtifact,
   readFile,
@@ -102,18 +102,27 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
   });
 
   it("rejects files exceeding MAX_UPLOAD_BYTES", async () => {
-    const bigChunk = Buffer.alloc(MAX_UPLOAD_BYTES + 1, "x");
-    const stream = Readable.from(bigChunk);
+    vi.resetModules();
+    vi.doMock("@agent-desk/shared", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@agent-desk/shared")>()),
+      MAX_UPLOAD_BYTES: 8,
+    }));
 
-    await expect(
-      uploadArtifact(ctx, {
-        workspaceId: ctx.workspaceId,
-      workspaceSlug: ctx.workspaceSlug,
-        name: "toobig.bin",
-        mime: "application/octet-stream",
-        stream,
-      }),
-    ).rejects.toThrow(ValidationError);
+    try {
+      const { uploadArtifact: uploadWithSmallLimit } = await import("../src/files.js");
+      await expect(
+        uploadWithSmallLimit(ctx, {
+          workspaceId: ctx.workspaceId,
+          workspaceSlug: ctx.workspaceSlug,
+          name: "toobig.bin",
+          mime: "application/octet-stream",
+          stream: makeStream("more than eight bytes"),
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    } finally {
+      vi.doUnmock("@agent-desk/shared");
+      vi.resetModules();
+    }
   });
 });
 

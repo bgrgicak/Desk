@@ -1,39 +1,33 @@
 # Security
 
-## Provider API key storage
+## Connection credential storage
 
-User-supplied AI-provider API keys are stored in the `user_settings` table as an AES-256-GCM-encrypted BYTEA blob (`provider_keys_encrypted`). A fresh 12-byte IV is generated per encryption; the auth tag is appended to detect tampering.
+User-supplied connection credentials — AI-provider API keys plus sandbox tool tokens such as `GITHUB_TOKEN` — are stored in the per-user vault-backed provider/connection flow while preserving the `/me/providers` API shape.
 
-### Encryption key management
+### Vault key management
 
-The AES key is loaded by `packages/server/db/src/encryption.ts` → `ensureSecretKey()`. Current behaviour:
-
-1. Checks `DESK_SECRET_KEY` env var (base64-encoded 32 bytes) — injected at deploy time from a secrets manager so the key never touches the server filesystem.
-2. Falls back to a key file at `DESK_SECRET_KEY_PATH` (default `/home/desk/secret.key`, mode `0600`). Generated automatically on first boot.
-
-**Risk**: if the key file fallback is used, it lives on the same filesystem as the encrypted database. A full-disk backup or host compromise yields both. Mitigated by setting `DESK_SECRET_KEY` in production.
-
-**Dev**: `npm run dev` (via `packages/server/setup/scripts/dev.sh`) persists `DESK_SECRET_KEY` in the host's gitignored `.env`. The key is generated on first run and reused on subsequent runs, so encrypted rows decrypt across reboots and `~/Desk` wipes.
-
-**Generate a key**:
-```bash
-openssl rand -base64 32
-```
+The user sets a vault password via `POST /vault/setup` and unlocks it via
+`POST /vault/unlock`. The master password is never stored on disk; while
+unlocked it is held only in server memory and zero-filled on lock/logout. The
+KDBX file alone is not enough to recover connection credentials from a disk
+snapshot or backup.
 
 ### Key lifecycle
 
 | Operation | Code path | Notes |
 |-----------|-----------|-------|
-| Stored | `queries/userSettings.setProviderKeys` | Full overwrite, encrypted |
-| Updated / deleted | `queries/userSettings.mergeProviderKeys` | Selective patch |
-| Read for sandbox | `scheduler/src/runs.ts` | Decrypted into memory, injected as Docker env vars |
+| Stored | `api/src/routes/account.ts → setProviders` / `vault.upsert` | Selective write into the user's KDBX vault |
+| Deleted | `api/src/routes/account.ts → setProviders` / `vault.delete` | Selective delete from the user's KDBX vault |
+| Read for sandbox | `scheduler/src/runs.ts` | Decrypted into memory, injected as sandbox exec env vars |
 | Read for UI | `api/src/routes/account.ts → getProviders` | Always masked (`sk-ant-...nop`) before returning |
 
 Keys are never returned in plaintext over the API. The masking function lives in `api/src/routes/account.ts → maskKey()`.
 
 ### Docker sandbox injection
 
-Keys are passed to containers as environment variables via `runtime/src/docker.ts → providerKeyEnv()`. This means they are visible via `docker inspect` on the host. Because the sandboxed code must be able to use the keys, switching to a tmpfs file does not reduce exposure — any code running in the container can read either.
+Keys are passed to containers as environment variables via `runtime/src/docker.ts → providerKeyEnv()` at create time and `providerKeyExecEnv()` per run. This means container-scoped credentials are visible to code running in the sandbox; create-time values may also be visible via `docker inspect` on the host. Because sandboxed code must be able to use the keys, switching to a tmpfs file does not reduce exposure — any code running in the container can read either.
+
+GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Desk's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during OpenCode runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
 
 The real risk is `docker inspect` access on the host, which requires Docker socket access (root-equivalent). Mitigated sufficiently by host access controls.
 
@@ -43,7 +37,7 @@ The real risk is `docker inspect` access on the host, which requires Docker sock
 
 **Status**: implemented.
 
-Every read, write, and delete of provider keys is recorded in the `provider_key_access_log` table.
+Every read, write, and delete of provider/connection keys is recorded in the `provider_key_access_log` table.
 
 ### Schema
 
@@ -58,7 +52,7 @@ CREATE TABLE provider_key_access_log (
 );
 ```
 
-`providers[]` holds the key names (e.g. `["OPENAI_API_KEY"]`), never values.
+`providers[]` holds the key names (e.g. `["OPENAI_API_KEY"]` or `["GITHUB_TOKEN"]`), never values.
 
 ### Call sites
 

@@ -12,7 +12,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
+import {
+  CONNECTION_ENV_VARS,
+  MANAGED_CONNECTION_ENV_ALIASES,
+  managedConnectionDefinitions,
+  PROVIDER_KEY_VARS,
+  SANDBOX_CONNECTION_ENV_VARS,
+} from "@agent-desk/shared";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
   bindsFromPlan,
@@ -261,8 +267,10 @@ export async function ensureImage(): Promise<void> {
  * fresh host code had already moved on.
  *
  * `providerKeys` is an optional map of AI-provider credentials to inject as
- * env vars. When omitted the function falls back to reading the host env —
- * that legacy path is what tests without DB access use.
+ * create-time env vars. Sandbox tool connection tokens are intentionally not
+ * baked into the long-lived container config; they are injected per exec.
+ * When omitted the function falls back to reading the host env — that legacy
+ * path is what tests without DB access use.
  *
  * `extraEnv` carries non-key env vars (e.g. `OPENCODE_AUTH_CONTENT` for the
  * Codex/ChatGPT bridge) that should be present at container birth so the
@@ -466,17 +474,17 @@ function parseBindStrings(strings: string[]): BindMount[] {
 }
 
 /**
- * Formats AI-provider credentials as engine env entries.
+ * Formats AI-provider credentials as engine env entries for container create.
  *
  * With `keys` provided, uses that map (intersected with PROVIDER_KEY_VARS to
  * avoid leaking unrelated env into the container). Without, falls back to
  * the host process env — a legacy path for tests and dev flows that haven't
  * moved to DB-backed keys yet.
  *
- * `extraEnv` is emitted as-is, bypassing the PROVIDER_KEY_VARS allowlist.
- * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which
- * carry their own validation contract (the value is an opaque OAuth blob,
- * not a per-provider key name).
+ * `extraEnv` is emitted after filtering out managed connection key names.
+ * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which carry
+ * their own validation contract (the value is an opaque OAuth blob, not a
+ * per-provider key name).
  *
  * Only keys with non-empty values are emitted, so opencode's auto-detection
  * doesn't light up empty providers.
@@ -491,9 +499,61 @@ export function providerKeyEnv(
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
-  if (extraEnv) {
-    for (const [name, value] of Object.entries(extraEnv)) {
-      if (value && value.length > 0) out.push(`${name}=${value}`);
+  appendExtraEnv(out, extraEnv);
+  return out;
+}
+
+const MANAGED_CONNECTION_ENV_NAMES = new Set<string>([
+  ...CONNECTION_ENV_VARS,
+  ...MANAGED_CONNECTION_ENV_ALIASES,
+]);
+
+function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void {
+  if (!extraEnv) return;
+  for (const [name, value] of Object.entries(extraEnv)) {
+    if (MANAGED_CONNECTION_ENV_NAMES.has(name)) continue;
+    if (value && value.length > 0) out.push(`${name}=${value}`);
+  }
+}
+
+function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
+  const out: string[] = [];
+  if (!keys) return out;
+  const source: Record<string, string | undefined> = keys;
+  for (const name of SANDBOX_CONNECTION_ENV_VARS) {
+    const v = source[name];
+    if (v && v.length > 0) out.push(`${name}=${v}`);
+  }
+  return out;
+}
+
+/**
+ * Formats per-exec credential env for agent runs.
+ *
+ * A long-lived sandbox may have inherited legacy host env at container create
+ * time. When the caller supplies the current vault-backed key map, explicitly
+ * clear any allowed connection env var that is absent so deleted/disabled
+ * connections cannot leak back in from the warm container environment.
+ */
+export function providerKeyExecEnv(
+  keys?: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): string[] {
+  const out = [
+    ...providerKeyEnv(keys),
+    ...sandboxConnectionEnv(keys),
+  ];
+  appendExtraEnv(out, extraEnv);
+  if (!keys) return out;
+
+  const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
+  for (const name of CONNECTION_ENV_VARS) {
+    if (!emitted.has(name)) out.push(`${name}=`);
+  }
+
+  for (const definition of managedConnectionDefinitions()) {
+    for (const alias of definition.envAliases ?? []) {
+      out.push(`${alias}=${keys[definition.envKey] ?? ""}`);
     }
   }
   return out;

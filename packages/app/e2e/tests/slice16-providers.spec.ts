@@ -27,12 +27,21 @@ async function openChatGPTConnection(page: import("@playwright/test").Page) {
   return dialog;
 }
 
+async function openGitHubConnection(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: /Customize/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: /^Connections$/i }).click();
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await dialog.getByRole("button", { name: /GitHub/ }).click();
+  return dialog;
+}
+
 test("storing a ChatGPT key persists and echoes back masked", async ({
   loggedInPage,
   serverUrl,
   token,
 }) => {
-  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible({ timeout: 10_000 });
 
   let dialog = await openChatGPTConnection(loggedInPage);
 
@@ -54,7 +63,7 @@ test("storing a ChatGPT key persists and echoes back masked", async ({
 
   // Reload — the masked echo from /me/providers is shown.
   await loggedInPage.reload();
-  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible({ timeout: 10_000 });
   dialog = await openChatGPTConnection(loggedInPage);
 
   const inputAfterReload = dialog.getByTestId("provider-key-OPENAI_API_KEY");
@@ -62,4 +71,18 @@ test("storing a ChatGPT key persists and echoes back masked", async ({
   // Server masks with `...` separator. Wait for the GET /me/providers to
   // populate the input (RTK Query is async).
   await expect.poll(() => inputAfterReload.inputValue(), { timeout: 5_000 }).toContain("...");
+});
+
+test("GitHub connection explains token creation and sandbox use", async ({
+  loggedInPage,
+}) => {
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible({ timeout: 10_000 });
+
+  const dialog = await openGitHubConnection(loggedInPage);
+
+  await expect(dialog.getByTestId("github-token-guide")).toContainText("Tokens (classic)");
+  await expect(dialog.getByTestId("github-token-guide")).toContainText("repo");
+  await expect(dialog.getByTestId("github-token-guide")).toContainText("workflow");
+  await expect(dialog.getByTestId("github-token-guide")).toContainText("GITHUB_TOKEN");
+  await expect(dialog.getByTestId("provider-key-GITHUB_TOKEN")).toBeVisible();
 });

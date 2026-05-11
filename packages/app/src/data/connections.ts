@@ -1,9 +1,10 @@
 // Catalog + types for Settings → Connections.
 //
 // Connection state is derived from the real backend (currently
-// `/me/providers` for Claude/ChatGPT). The other kinds are listed in the
+// `/me/providers` for Claude/ChatGPT/GitHub). The other kinds are listed in the
 // catalog so they appear in the picker as a roadmap, but they're disabled
 // until a backend lands — there is no mock data seeded.
+import { managedConnectionDefinitions, type ManagedConnectionDefinition } from '@agent-desk/shared'
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt' | 'codex'
@@ -16,27 +17,49 @@ export interface ConnectionMeta {
   icon: string
 }
 
-export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
-  'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API',  icon: '🅰️' },
-  'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',     icon: '🅶' },
+const MANAGED_CONNECTION_CATALOG = Object.fromEntries(
+  managedConnectionDefinitions().map(definition => [definition.kind, {
+    name: definition.name,
+    description: definition.description,
+    icon: definition.icon,
+  }]),
+) as Partial<Record<ConnectionKind, ConnectionMeta>>
+
+export const CONNECTION_CATALOG = {
+  ...MANAGED_CONNECTION_CATALOG,
   'codex':        { name: 'Codex',        description: 'OpenAI models via your ChatGPT subscription (Codex on this machine)', icon: '🌀' },
   'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',              icon: '📁' },
   'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
-  'github':       { name: 'GitHub',       description: 'Repositories and issues',              icon: '🐙' },
   'slack':        { name: 'Slack',        description: 'Messages and channels',                icon: '💬' },
   'figma':        { name: 'Figma',        description: 'Design files and prototypes',          icon: '🎨' },
   'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',          icon: '🔷' },
   'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
-}
+} as Record<ConnectionKind, ConnectionMeta>
 
 // Maps a cloud connection kind to the env key in /me/providers where its
 // API key is persisted. Kinds not in this map have no cloud backend yet
 // and stay disabled in the picker. Local-source kinds (`codex`, future
 // `lm-studio`, `ollama`, …) are handled separately — see
 // `LOCAL_SOURCE_KINDS` and the /me/providers/local endpoints.
-export const PROVIDER_KEY_BY_KIND: Partial<Record<ConnectionKind, string>> = {
-  claude: 'ANTHROPIC_API_KEY',
-  chatgpt: 'OPENAI_API_KEY',
+export const CONNECTION_DEFINITIONS: Partial<Record<ConnectionKind, ManagedConnectionDefinition>> = Object.fromEntries(
+  managedConnectionDefinitions().map(definition => [definition.kind, definition]),
+) as Partial<Record<ConnectionKind, ManagedConnectionDefinition>>
+
+export const PROVIDER_KEY_BY_KIND: Partial<Record<ConnectionKind, string>> = Object.fromEntries(
+  managedConnectionDefinitions().map(definition => [definition.kind, definition.envKey]),
+) as Partial<Record<ConnectionKind, string>>
+
+export function managedConnectionDefinitionForKind(kind: ConnectionKind): ManagedConnectionDefinition | undefined {
+  return CONNECTION_DEFINITIONS[kind]
+}
+
+export function providerKeyForKind(kind: ConnectionKind): string | undefined {
+  return managedConnectionDefinitionForKind(kind)?.envKey
+}
+
+export function providerKeyEntries(): [ConnectionKind, string][] {
+  return managedConnectionDefinitions()
+    .map(definition => [definition.kind as ConnectionKind, definition.envKey] as [ConnectionKind, string])
 }
 
 /**

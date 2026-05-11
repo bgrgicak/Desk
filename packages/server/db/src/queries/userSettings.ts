@@ -57,7 +57,11 @@ export async function mergeProviderMeta(
     if (entry === null) {
       delete current[key];
     } else {
-      current[key] = { ...current[key], ...entry };
+      const next = { ...current[key], ...entry };
+      for (const [field, value] of Object.entries(entry)) {
+        if (value === undefined) delete next[field as keyof ProviderMetaEntry];
+      }
+      current[key] = next;
     }
   }
   const payload = encryptJson(current);

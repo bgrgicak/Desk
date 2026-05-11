@@ -83,16 +83,42 @@ describe("buildOpencodeCommand", () => {
     expect(shell).toContain("mkdir -p /tmp/desk-runs");
     expect(shell).toContain("pidfile='/tmp/desk-runs/run_cleanup_1.pid'");
     expect(shell).toContain("command -v setsid");
-    expect(shell).toContain("exec setsid --wait sh -c");
+    expect(shell).toContain("setsid --wait sh -c");
+    expect(shell).toContain("status=$?; exit \"$status\"");
     expect(shell).toContain("echo $$");
     expect(shell).toContain("opencode run");
+  });
+
+  it("prepares GitHub token auth for gh and git without requiring gh to be installed", () => {
+    const cmd = buildOpencodeCommand({ runId: "run_github_1" });
+    const shell = cmd[2];
+    expect(shell).toContain("/tmp/desk-github-askpass");
+    expect(shell).toContain("export GH_TOKEN=");
+    expect(shell).toContain("GIT_ASKPASS=\"$askpass\"");
+    expect(shell).toContain("GIT_TERMINAL_PROMPT=0");
+    expect(shell).toContain("x-access-token");
+    expect(shell).toContain("trap 'rm -f \"$askpass\"'");
+    expect(shell).toContain('"${GITHUB_TOKEN:-${GH_TOKEN:-}}"');
+  });
+
+  it("writes a GitHub askpass helper that returns the raw token", () => {
+    const cmd = buildOpencodeCommand({ runId: "run_github_askpass" });
+    const opencode = 'opencode run "$DESK_PROMPT" --dangerously-skip-permissions --format json';
+    const shell = cmd[2].split(opencode).join('sh "$GIT_ASKPASS" Password');
+    const result = spawnSync("sh", ["-c", shell], {
+      env: { ...process.env, GITHUB_TOKEN: "ghp_raw_token", DESK_PROMPT: "unused" },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("ghp_raw_token");
   });
 
   it("does not fail startup when setsid is missing", () => {
     const cmd = buildOpencodeCommand({ runId: "run_no_setsid_1" });
     const shell = cmd[2];
     expect(shell).toContain("setsid unavailable; process-tree cleanup degraded");
-    expect(shell).toContain("exec sh -c 'echo $$ >");
+    expect(shell).toContain("sh -c 'echo $$ >");
     expect(shell).not.toContain("exit 127");
   });
 

@@ -270,11 +270,10 @@ if `currentPassword` does not match.
 
 ### GET /me/providers
 
-Returns every known AI provider key name with its value either masked
+Returns every known connection credential name with its value either masked
 (first 6 + last 4 characters) or `null` when unset. Keys are encrypted
-at rest in the `user_settings` table using AES-256-GCM; the encryption
-key comes from `DESK_SECRET_KEY` (preferred) or a 32-byte file at
-`DESK_SECRET_KEY_PATH`.
+at rest in the user's vault-backed connection store. The current known set
+includes AI provider API keys and sandbox tool tokens such as `GITHUB_TOKEN`.
 
 ### PUT /me/providers
 
@@ -282,9 +281,14 @@ Partial update. Body is `{ providers: { NAME: VALUE | null, ... } }`. A
 `null` value deletes the named key; any string value sets it. Names not
 present in the body are left untouched. Unknown names return 400.
 
-The set of known names is `PROVIDER_KEY_VARS` in `@agent-desk/shared`. In
-dev, values seed from the repo's `.env` once per user (gated by `DESK_DEV=1`);
-in prod, the UI is the only way to populate them.
+The set of known names is `CONNECTION_ENV_VARS` in `@agent-desk/shared`. In
+dev, model-provider values seed from the repo's `.env` once per user (gated by
+`DESK_DEV=1`); in prod, the UI is the only way to populate them. A saved
+`GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN`, and
+OpenCode runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
+For GitHub, the Settings UI currently guides users to create a classic personal
+access token with the `repo` scope, plus `workflow` when agents should edit
+GitHub Actions workflow files.
 
 ### GET /me/providers/local
 
