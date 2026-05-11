@@ -28,6 +28,8 @@ import {
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
+import { VaultStore } from "./vault/store.js";
+import { resolveProviderKeys } from "./providerKeys.js";
 import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
@@ -136,10 +138,13 @@ async function main(): Promise<void> {
   );
   const broadcastUserId: string | undefined = rows[0]?.id;
 
+  const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
+
   const runManager = createRunManager({
     pool,
     home: DESK_HOME,
     reflectWorkspace: productionReflectWorkspace,
+    resolveProviderKeys: (userId) => resolveProviderKeys(pool, vault, userId),
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
@@ -176,6 +181,7 @@ async function main(): Promise<void> {
     pool,
     storage: { pool, home: DESK_HOME },
     runManager,
+    vault,
     broadcastUserId,
   });
 

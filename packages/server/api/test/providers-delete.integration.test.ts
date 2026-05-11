@@ -106,6 +106,9 @@ describe("PUT /me/providers — remove connection", () => {
       password: "prov-pass",
     });
     token = (res.body as { token: string }).token;
+    // Provider keys now live in the vault — set it up and unlock it so the
+    // PUT /me/providers tests can write keys.
+    await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
   });
 
   it("sending null removes the provider key so it no longer appears", async () => {

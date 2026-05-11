@@ -1,18 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { type Pool } from "../../src/pool.js";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as userSettings from "../../src/queries/userSettings.js";
 import * as users from "../../src/queries/users.js";
-import { resetSecretKeyCache } from "../../src/encryption.js";
 import { hashPassword } from "../../src/passwords.js";
+import type { Pool } from "../../src/pool.js";
 
 let pool: Pool;
-let keyDir: string;
-let prevEnv: string | undefined;
 
 beforeAll(async () => {
   pool = await setupTestDb();
@@ -20,20 +14,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestDb(pool);
-});
-
-beforeEach(() => {
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-usercfg-"));
-  prevEnv = process.env.DESK_SECRET_KEY_PATH;
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
-  resetSecretKeyCache();
-});
-
-afterEach(() => {
-  if (prevEnv === undefined) delete process.env.DESK_SECRET_KEY_PATH;
-  else process.env.DESK_SECRET_KEY_PATH = prevEnv;
-  resetSecretKeyCache();
-  fs.rmSync(keyDir, { recursive: true, force: true });
 });
 
 async function makeUser(username: string): Promise<string> {
@@ -48,100 +28,32 @@ async function makeUser(username: string): Promise<string> {
 }
 
 describe("user_settings queries", () => {
-  it("getProviderKeys returns empty object when no row exists", async () => {
-    const id = await makeUser("no-settings-user");
-    expect(await userSettings.getProviderKeys(pool, id)).toEqual({});
+  it("getProviderMeta returns empty object when no row exists", async () => {
+    const id = await makeUser("no-meta-user");
+    expect(await userSettings.getProviderMeta(pool, id)).toEqual({});
   });
 
-  it("setProviderKeys writes encrypted bytes; getProviderKeys decrypts", async () => {
-    const id = await makeUser("provider-user");
-    const keys = { GEMINI_API_KEY: "gem-test-abc", OPENAI_API_KEY: "sk-oai-xyz" };
-    await userSettings.setProviderKeys(pool, id, keys);
-
-    const { rows } = await pool.query(
-      "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = ?",
-      [id],
-    );
-    expect(rows.length).toBe(1);
-    const ct = rows[0].provider_keys_encrypted as Buffer;
-    // Encrypted bytes should never contain the plaintext value
-    expect(ct.toString("utf8")).not.toContain("gem-test-abc");
-    expect(ct.toString("utf8")).not.toContain("sk-oai-xyz");
-
-    expect(await userSettings.getProviderKeys(pool, id)).toEqual(keys);
-  });
-
-  it("setProviderKeys is a full overwrite", async () => {
-    const id = await makeUser("overwrite-user");
-    await userSettings.setProviderKeys(pool, id, {
-      GEMINI_API_KEY: "a",
-      OPENAI_API_KEY: "o",
-    });
-    await userSettings.setProviderKeys(pool, id, { GEMINI_API_KEY: "a2" });
-    expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      GEMINI_API_KEY: "a2",
-    });
-  });
-
-  it("mergeProviderKeys sets, updates, and deletes selectively", async () => {
-    const id = await makeUser("merge-user");
-    await userSettings.setProviderKeys(pool, id, {
-      GEMINI_API_KEY: "a",
-      OPENAI_API_KEY: "o",
-    });
-
-    await userSettings.mergeProviderKeys(pool, id, {
-      GEMINI_API_KEY: "a2",
-      GROQ_API_KEY: "g",
-    });
-    expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      GEMINI_API_KEY: "a2",
-      OPENAI_API_KEY: "o",
-      GROQ_API_KEY: "g",
-    });
-
-    await userSettings.mergeProviderKeys(pool, id, { OPENAI_API_KEY: null });
-    expect(await userSettings.getProviderKeys(pool, id)).toEqual({
-      GEMINI_API_KEY: "a2",
-      GROQ_API_KEY: "g",
-    });
-  });
-
-  it("getActiveProviderKeys filters out keys whose provider_meta.enabled is false", async () => {
-    const id = await makeUser("disabled-user");
-    await userSettings.setProviderKeys(pool, id, {
-      ANTHROPIC_API_KEY: "ant",
-      OPENAI_API_KEY: "oai",
-    });
-    // Disable just OpenAI; Anthropic stays on.
+  it("mergeProviderMeta sets and updates entries selectively", async () => {
+    const id = await makeUser("meta-user");
     await userSettings.mergeProviderMeta(pool, id, {
       OPENAI_API_KEY: { enabled: false },
+      GEMINI_API_KEY: { enabled: true, name: "Gemini" },
     });
+    const meta = await userSettings.getProviderMeta(pool, id);
+    expect(meta.OPENAI_API_KEY?.enabled).toBe(false);
+    expect(meta.GEMINI_API_KEY?.enabled).toBe(true);
+    expect(meta.GEMINI_API_KEY?.name).toBe("Gemini");
 
-    expect(await userSettings.getActiveProviderKeys(pool, id)).toEqual({
-      ANTHROPIC_API_KEY: "ant",
-    });
-
-    // Re-enable: explicit `true` should also surface, as should any non-false value.
-    await userSettings.mergeProviderMeta(pool, id, {
-      OPENAI_API_KEY: { enabled: true },
-    });
-    expect(await userSettings.getActiveProviderKeys(pool, id)).toEqual({
-      ANTHROPIC_API_KEY: "ant",
-      OPENAI_API_KEY: "oai",
-    });
-
-    // Missing meta entry means "active by default".
-    const id2 = await makeUser("default-active-user");
-    await userSettings.setProviderKeys(pool, id2, { OPENAI_API_KEY: "oai" });
-    expect(await userSettings.getActiveProviderKeys(pool, id2)).toEqual({
-      OPENAI_API_KEY: "oai",
-    });
+    // Partial update leaves other keys alone
+    await userSettings.mergeProviderMeta(pool, id, { OPENAI_API_KEY: { enabled: true } });
+    const updated = await userSettings.getProviderMeta(pool, id);
+    expect(updated.OPENAI_API_KEY?.enabled).toBe(true);
+    expect(updated.GEMINI_API_KEY?.enabled).toBe(true);
   });
 
   it("cascades on user delete", async () => {
     const id = await makeUser("cascade-user");
-    await userSettings.setProviderKeys(pool, id, { GEMINI_API_KEY: "x" });
+    await userSettings.mergeProviderMeta(pool, id, { GEMINI_API_KEY: { enabled: true } });
     await pool.query("DELETE FROM users WHERE id = ?", [id]);
     const { rows } = await pool.query(
       "SELECT 1 FROM user_settings WHERE user_id = ?",

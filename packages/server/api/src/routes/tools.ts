@@ -8,6 +8,7 @@ import {
   type ModelRef,
 } from "@agent-desk/runtime";
 import { resolveProviderKeys } from "../providerKeys.js";
+import type { VaultStore } from "../vault/store.js";
 
 /**
  * Lists AI models that are ready to use — every entry is a provider opencode
@@ -22,6 +23,7 @@ import { resolveProviderKeys } from "../providerKeys.js";
  */
 export async function listModels(
   pool: Pool,
+  vault: VaultStore | undefined,
   opts: { provider?: string; userId?: string },
 ): Promise<ModelRef[]> {
   if (opts.provider !== undefined && !/^[A-Za-z0-9_.-]+$/.test(opts.provider)) {
@@ -35,10 +37,8 @@ export async function listModels(
 
   let providerKeys: Record<string, string>;
   try {
-    providerKeys = await resolveProviderKeys(pool, opts.userId);
+    providerKeys = await resolveProviderKeys(pool, vault, opts.userId);
   } catch {
-    // Decryption failure (key rotation, corrupted data). Proceed with no keys
-    // so the sandbox can still list provider-agnostic models.
     providerKeys = {};
   }
 

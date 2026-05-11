@@ -36,6 +36,12 @@ export interface RunManagerOptions {
   pool: Pool;
   emit?: (event: WsEvent) => void;
   /**
+   * Resolves the active provider API keys for a given user. Injected by the
+   * API layer (which owns the vault) so the scheduler doesn't need to import
+   * VaultStore directly. Returns an empty object when the vault is locked.
+   */
+  resolveProviderKeys?: (userId: string) => Promise<Record<string, string>>;
+  /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
    * handles state transitions and child-message insertion.
@@ -75,6 +81,7 @@ function computeNextRun(cronExpr: string): string {
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
   const home = opts.home ?? resolveDeskHome();
+  const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
   const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
@@ -389,9 +396,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = msg.agentId ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
-    const providerKeys = userId
-      ? await queries.userSettings.getActiveProviderKeys(pool, userId)
-      : {};
+    const providerKeys = userId ? await resolveProviderKeys(userId) : {};
     const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
@@ -576,9 +581,7 @@ export function createRunManager(opts: RunManagerOptions) {
       logFile = path.join(logDir, `${runId}.log`);
       logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
-      const providerKeys = userId
-        ? await queries.userSettings.getActiveProviderKeys(pool, userId)
-        : {};
+      const providerKeys = userId ? await resolveProviderKeys(userId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
@@ -1002,7 +1005,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       try {
         const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await queries.userSettings.getActiveProviderKeys(pool, userId) : {};
+        const providerKeys = userId ? await resolveProviderKeys(userId) : {};
         const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
         const models = await listModels(workspaceId, workspaceSlug, {
           providerKeys,

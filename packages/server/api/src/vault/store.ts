@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as kdbxweb from "kdbxweb";
+import kdbxweb from "kdbxweb";
 import { argon2dAsync, argon2idAsync } from "@noble/hashes/argon2";
 import { VaultLockedError } from "@agent-desk/shared";
 
@@ -211,6 +211,23 @@ export class VaultStore {
     const found = findEntry(entry.db.getDefaultGroup(), title);
     if (!found) return null;
     return toSecretEntry(found);
+  }
+
+  /** Removes the entry with the given title. No-op if it doesn't exist. */
+  async delete(userId: string, title: string): Promise<void> {
+    const entry = this.requireUnlocked(userId);
+    await this.runExclusive(userId, async () => {
+      const group = entry.db.getDefaultGroup();
+      const kEntry = findEntry(group, title);
+      if (!kEntry) return;
+      // Remove directly from the parent group's entries array rather than
+      // using db.remove(), which moves the entry to the recycle bin sub-group
+      // where iterEntries would still find it.
+      const parent = kEntry.parentGroup ?? group;
+      const idx = parent.entries.indexOf(kEntry);
+      if (idx >= 0) parent.entries.splice(idx, 1);
+      await this.persist(userId);
+    });
   }
 
   /**

@@ -78,6 +78,12 @@ export interface AppOptions {
   pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
+  /**
+   * Shared vault instance. Pass this from the outer process so the scheduler
+   * and HTTP layer operate on the same in-memory unlock state. When omitted
+   * (tests, embedded usage) a fresh store is created from storage.home.
+   */
+  vault?: VaultStore;
   /** The userId to broadcast events to (v1: single user). */
   broadcastUserId?: string;
 }
@@ -258,12 +264,7 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
-
-  // Per-user secrets vault. KDBX files live under ${DESK_HOME}/vaults/.
-  // The store is created once per process and lives entirely in memory
-  // beyond the on-disk files; locks happen in-process and are dropped
-  // automatically on shutdown.
-  const vault = new VaultStore(pathJoin(storage.home, "vaults"));
+  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
 
   function emitEvent(event: WsEvent): void {
     if (opts.broadcastUserId) {
@@ -942,13 +943,13 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers" && method === "GET") {
-      const result = await accountRoutes.getProviders(pool, userId);
+      const result = accountRoutes.getProviders(vault, userId);
       sendJson(res, 200, result);
       return;
     }
     if (path === "/me/providers" && method === "PUT") {
       const body = await parseBody(req) as { providers: Record<string, string | null> };
-      const result = await accountRoutes.setProviders(pool, userId, body);
+      const result = await accountRoutes.setProviders(pool, vault, userId, body);
       sendJson(res, 200, result);
       return;
     }
@@ -1555,7 +1556,7 @@ export function createApp(opts: AppOptions): Server {
 
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {
-      const result = await toolRoutes.listModels(pool, {
+      const result = await toolRoutes.listModels(pool, vault, {
         provider: query.get("provider") ?? undefined,
         userId,
       });
