@@ -1,5 +1,5 @@
 import { type Pool } from "@agent-desk/db";
-import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
 import { queries } from "@agent-desk/db";
 import {
   listModels as runtimeListModels,
@@ -37,7 +37,12 @@ export async function listModels(
 
   let providerKeys: Record<string, string>;
   try {
-    providerKeys = await resolveProviderKeys(pool, vault, opts.userId);
+    const resolved = await resolveProviderKeys(pool, vault, opts.userId);
+    providerKeys = Object.fromEntries(
+      PROVIDER_KEY_VARS
+        .map((name) => [name, resolved[name]] as const)
+        .filter(([, value]) => typeof value === "string" && value.length > 0),
+    );
   } catch {
     providerKeys = {};
   }

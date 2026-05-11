@@ -120,12 +120,17 @@ describe("relabelOpenAiBySource — Codex vs OpenAI auth labeling", () => {
 describe("listModels — happy path", () => {
   it("returns all models when no provider filter is given", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
-    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
+    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test", GITHUB_TOKEN: "github_pat_test" });
     vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
 
     const models = await listModels(fakePool, undefined, {});
     expect(models.length).toBeGreaterThan(0);
     expect(models.some((m) => m.provider === "openai")).toBe(true);
+    expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
+      provider: undefined,
+      providerKeys: { OPENAI_API_KEY: "sk-test" },
+      env: {},
+    });
   });
 
   it("relabels openai/* models as 'codex' when only Codex is the active OpenAI source", async () => {

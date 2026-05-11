@@ -56,12 +56,15 @@ import {
 import type { ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
-  PROVIDER_KEY_BY_KIND,
   isLocalSourceKind,
+  managedConnectionDefinitionForKind,
+  providerKeyEntries,
+  providerKeyForKind,
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
+import type { ManagedConnectionDefinition } from '@agent-desk/shared'
 
 interface LocalSourceState {
   kind: string
@@ -69,6 +72,11 @@ interface LocalSourceState {
   enabled: boolean
   reason?: string
   detail?: Record<string, string | number | boolean>
+}
+
+type ProviderMetaEntry = {
+  name?: string
+  enabled?: boolean
 }
 
 /**
@@ -164,10 +172,10 @@ function isFunctionalKind(
   localSources: Record<string, LocalSourceState>,
 ): boolean {
   if (isLocalSourceKind(kind)) return localSources[kind]?.available === true
-  return PROVIDER_KEY_BY_KIND[kind] !== undefined
+  return providerKeyForKind(kind) !== undefined
 }
 
-// Build the connections list from the persisted provider keys + every
+// Build the connections list from the persisted connection keys + every
 // host-detected local source. Cloud (API-key) kinds show up once their
 // key is saved; local-source kinds show up whenever the host has them
 // available, and their switch reflects the per-user server-side opt-in.
@@ -178,7 +186,7 @@ function deriveConnections(
   localSources: Record<string, LocalSourceState>,
 ): Connection[] {
   const out: Connection[] = []
-  for (const [kind, envKey] of Object.entries(PROVIDER_KEY_BY_KIND) as [ConnectionKind, string][]) {
+  for (const [kind, envKey] of providerKeyEntries()) {
     if (providerKeys[envKey]) {
       const catalogMeta = CONNECTION_CATALOG[kind]
       const entry = providerMeta[envKey]
@@ -265,6 +273,100 @@ function Field({
       {children}
       {help && <p className="text-xs text-muted-foreground/80 break-words">{help}</p>}
     </div>
+  )
+}
+
+function GitHubTokenGuide() {
+  return (
+    <div
+      className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-2"
+      data-testid="github-token-guide"
+    >
+      <p className="font-medium text-foreground">Create a GitHub classic token for Desk</p>
+      <ol className="list-decimal space-y-1 pl-4">
+        <li>
+          Open{' '}
+          <a
+            className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
+            href="https://github.com/settings/tokens/new?description=Desk&scopes=repo,workflow"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub → Tokens (classic)
+          </a>
+          {' '}and create a token named “Desk”.
+        </li>
+        <li>Set an expiration you are comfortable with.</li>
+        <li>
+          Select the <strong>repo</strong> scope so agents can clone, push, open pull requests,
+          and work with issues across repositories your GitHub account can access.
+        </li>
+        <li>
+          Keep <strong>workflow</strong> selected if agents should edit GitHub Actions workflow files;
+          otherwise you can remove it.
+        </li>
+        <li>Copy the token once, paste it below, then Apply. Sandboxes receive it as <code>GITHUB_TOKEN</code> and <code>GH_TOKEN</code> for <code>git</code> and <code>gh</code>.</li>
+      </ol>
+      <p>
+        Classic tokens are the simplest path for now and match how <code>gh</code> and HTTPS <code>git</code>
+        expect to authenticate from a sandbox.
+      </p>
+    </div>
+  )
+}
+
+function connectionManualGuide(definition: ManagedConnectionDefinition | undefined): React.ReactNode {
+  switch (definition?.manualGuide) {
+    case 'github-pat':
+      return <GitHubTokenGuide />
+    default:
+      return null
+  }
+}
+
+function TokenConnectionForm({
+  definition, envKey, value, dirty, busy, onChange, onSave,
+}: {
+  definition: ManagedConnectionDefinition | undefined
+  envKey: string | undefined
+  value: string
+  dirty: boolean
+  busy: boolean
+  onChange: (value: string) => void
+  onSave: () => void
+}) {
+  return (
+    <>
+      {connectionManualGuide(definition)}
+      <Field
+        label={definition?.secretLabel ?? 'API key'}
+        help={envKey
+          ? 'Stored encrypted on the server. Saved keys appear masked on reload — submit a fresh value to overwrite.'
+          : 'Stored locally. Used to authenticate against the service.'}
+      >
+        <div className="flex min-w-0 max-w-full flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            type="password"
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            data-testid={envKey ? `provider-key-${envKey}` : undefined}
+            placeholder={definition?.secretPlaceholder ?? 'Paste the API key or token'}
+            className="min-w-0 flex-1"
+          />
+          {envKey && (
+            <Button
+              size="sm"
+              className="w-full sm:w-auto"
+              disabled={!dirty || busy}
+              data-testid={`provider-save-${envKey}`}
+              onClick={onSave}
+            >
+              {busy ? 'Saving…' : 'Apply'}
+            </Button>
+          )}
+        </div>
+      </Field>
+    </>
   )
 }
 
@@ -939,7 +1041,7 @@ function ConnectionDetail({
   connections: Connection[]
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   providerKeys: Record<string, string | null>
-  providerMeta: Record<string, { name?: string }>
+  providerMeta: Record<string, ProviderMetaEntry>
   localSource: LocalSourceState | undefined
   busySaveKey: boolean
   busySaveMeta: boolean
@@ -954,11 +1056,12 @@ function ConnectionDetail({
   const kind: ConnectionKind = existing?.kind ?? (focus.mode === 'new' ? focus.kind : 'claude')
   const catalogMeta = CONNECTION_CATALOG[kind]
 
-  const providerEnvKey = PROVIDER_KEY_BY_KIND[kind]
+  const providerEnvKey = providerKeyForKind(kind)
+  const connectionDefinition = managedConnectionDefinitionForKind(kind)
   const persistedKey = providerEnvKey ? providerKeys[providerEnvKey] ?? '' : ''
   const persistedName = providerEnvKey ? providerMeta[providerEnvKey]?.name ?? '' : ''
 
-  // For Claude/ChatGPT the API key is the persisted masked echo on first
+  // For API-key/token backed connections, the secret field is the persisted masked echo on first
   // load. The user has to type a fresh value to overwrite it.
   const [name, setName]       = useState(existing?.name ?? (persistedName || catalogMeta.name))
   const [apiKey, setApiKey]   = useState(persistedKey ?? '')
@@ -1084,34 +1187,15 @@ function ConnectionDetail({
           <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
         </Field>
 
-        <Field
-          label="API key"
-          help={providerEnvKey
-            ? 'Stored encrypted on the server. Saved keys appear masked on reload — submit a fresh value to overwrite.'
-            : 'Stored locally. Used to authenticate against the service.'}
-        >
-          <div className="flex min-w-0 max-w-full flex-col gap-2 sm:flex-row sm:items-center">
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
-              data-testid={providerEnvKey ? `provider-key-${providerEnvKey}` : undefined}
-              placeholder={kind === 'claude' ? 'sk-ant-…' : kind === 'chatgpt' ? 'sk-…' : 'Paste the API key or token'}
-              className="min-w-0 flex-1"
-            />
-            {providerEnvKey && (
-              <Button
-                size="sm"
-                className="w-full sm:w-auto"
-                disabled={!apiKeyDirty || busySaveKey}
-                data-testid={`provider-save-${providerEnvKey}`}
-                onClick={handleSaveKey}
-              >
-                {busySaveKey ? 'Saving…' : 'Apply'}
-              </Button>
-            )}
-          </div>
-        </Field>
+        <TokenConnectionForm
+          definition={connectionDefinition}
+          envKey={providerEnvKey}
+          value={apiKey}
+          dirty={apiKeyDirty}
+          busy={busySaveKey}
+          onChange={(value) => { setApiKey(value); setApiKeyDirty(true) }}
+          onSave={handleSaveKey}
+        />
       </div>
 
       <div
@@ -1401,8 +1485,8 @@ export function SettingsModal({
   }
 
   // ── Connections state ─────────────────────────────────────────────────────
-  // The connection list is derived from /me/providers — Claude / ChatGPT
-  // entries appear once their API key is saved. Other catalog kinds stay
+  // The connection list is derived from /me/providers — token-backed
+  // entries appear once their secret is saved. Other catalog kinds stay
   // disabled in the picker until a backend lands.
   const { data: providerKeys } = useGetProviderKeysQuery()
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
@@ -1460,13 +1544,14 @@ export function SettingsModal({
     }
     // Persist the display name to /me/providers/meta if this is a
     // functional (API-key-backed) connection kind.
-    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    const envKey = providerKeyForKind(conn.kind)
     if (envKey) {
       const catalogName = CONNECTION_CATALOG[conn.kind].name
-      // Only write if it differs from the catalog default or a prior custom name
+      // Only set a custom display name when it differs from the catalog
+      // default. Use an empty name to clear the custom label.
       const metaName = conn.name === catalogName ? '' : conn.name
       try {
-        await putProvidersMeta({ [envKey]: metaName ? { name: metaName } : null }).unwrap()
+        await putProvidersMeta({ [envKey]: { name: metaName } }).unwrap()
       } catch (err) {
         toast.error('Could not save connection name', { description: describeApiError(err) })
         return
@@ -1488,15 +1573,12 @@ export function SettingsModal({
       setConnectionsFocus(null)
       return
     }
-    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    const envKey = providerKeyForKind(conn.kind)
     if (envKey) {
       try {
         // null deletes the key server-side; "" would store an empty string
         // and the masked echo keeps the row visible.
         await putProviderKeys({ [envKey]: null }).unwrap()
-        // Drop any persisted display name so re-adding the connection
-        // starts from the catalog default.
-        await putProvidersMeta({ [envKey]: null }).unwrap()
       } catch (err) {
         toast.error('Could not remove connection', { description: describeApiError(err) })
         return
@@ -1526,7 +1608,7 @@ export function SettingsModal({
         ))
       return
     }
-    const envKey = PROVIDER_KEY_BY_KIND[conn.kind]
+    const envKey = providerKeyForKind(conn.kind)
     if (!envKey) return
     const next = !conn.enabled
     void putProvidersMeta({ [envKey]: { enabled: next } })

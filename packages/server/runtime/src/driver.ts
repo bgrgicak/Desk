@@ -1,5 +1,6 @@
 import { SANDBOX_HOME } from "./mounts.js";
 import type { Engine, ExecHandle } from "./engine.js";
+import { managedConnectionDefinitions } from "@agent-desk/shared";
 
 export interface RunOptions {
   runId: string;
@@ -161,10 +162,12 @@ export function buildOpencodeCommand(opts: {
   const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
   const promptExpr = opts.promptFile ? `"$(cat "$DESK_PROMPT_FILE")"` : `"$DESK_PROMPT"`;
   const pidFile = runPidFile(opts.runId ?? "unknown");
+  const sandboxAuthSetup = buildSandboxAuthSetup(opts.runId ?? "unknown");
   const opencode = `opencode run ${promptExpr}${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`;
   const script = [
     "mkdir -p /tmp/desk-runs",
     `pidfile=${shSingleQuote(pidFile)}`,
+    sandboxAuthSetup,
     "if command -v setsid >/dev/null 2>&1; then " +
       // setsid makes the OpenCode exec a process-group leader. --wait is
       // important: util-linux setsid may fork when its caller is already a
@@ -173,13 +176,13 @@ export function buildOpencodeCommand(opts: {
       // We write the leader PID before exec so cancel/finally cleanup can
       // signal the whole tree, including MCP/build grandchildren that would
       // otherwise survive.
-      `exec setsid --wait sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}`,
+      `setsid --wait sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}; status=$?; exit "$status"`,
     "else " +
       // Older/minimal sandbox images may not include util-linux/setsid. Do not
       // fail the run at startup in that case; record the opencode PID and run
       // normally. Cancellation can still fall back to killing the docker exec
       // wrapper, and the next rebuilt image can restore process-group cleanup.
-      `echo 'Desk runtime warning: setsid unavailable; process-tree cleanup degraded' >&2; exec sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}`,
+      `echo 'Desk runtime warning: setsid unavailable; process-tree cleanup degraded' >&2; sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}; status=$?; exit "$status"`,
     "fi",
   ].join("; ");
   return [
@@ -195,8 +198,37 @@ function runPidFile(runId: string): string {
   // Keep the filename shell-safe even if a test injects an odd id. Production
   // run ids are already generated identifiers, but cleanup commands are too
   // sensitive to trust that implicitly.
-  const safe = runId.replace(/[^A-Za-z0-9_.-]/g, "_");
-  return `/tmp/desk-runs/${safe}.pid`;
+  return `/tmp/desk-runs/${safeRunId(runId)}.pid`;
+}
+
+function buildSandboxAuthSetup(runId: string): string {
+  return managedConnectionDefinitions()
+    .map((definition) => {
+      const setup = definition.sandboxSetup ? SANDBOX_AUTH_SETUP_BUILDERS[definition.sandboxSetup] : undefined;
+      return setup ? setup(runId) : "";
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+const SANDBOX_AUTH_SETUP_BUILDERS = {
+  "github-askpass": buildGitHubAskpassSetup,
+} satisfies Record<string, (runId: string) => string>;
+
+function buildGitHubAskpassSetup(runId: string): string {
+  const askpassFile = `/tmp/desk-github-askpass-${safeRunId(runId)}`;
+  return "if [ -n \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\" ]; then " +
+    `askpass=${shSingleQuote(askpassFile)}; ` +
+    "umask 077; " +
+    "printf '%s\\n' '#!/bin/sh' 'case \"$1\" in' '  *Username*) printf '\''%s'\'' '\''x-access-token'\'' ;;' '  *) printf '\''%s'\'' \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\" ;;' 'esac' > \"$askpass\"; " +
+    "chmod 700 \"$askpass\"; " +
+    "trap 'rm -f \"$askpass\"' EXIT HUP INT TERM; " +
+    "export GH_TOKEN=\"${GH_TOKEN:-$GITHUB_TOKEN}\" GITHUB_TOKEN=\"${GITHUB_TOKEN:-$GH_TOKEN}\" GIT_ASKPASS=\"$askpass\" GIT_TERMINAL_PROMPT=0; " +
+    "fi";
+}
+
+function safeRunId(runId: string): string {
+  return runId.replace(/[^A-Za-z0-9_.-]/g, "_");
 }
 
 /**
@@ -292,7 +324,7 @@ async function cleanupRunProcessTree(
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, providerKeyEnv, sandboxUser } = await import("./docker.js");
+      const { createOrReuse, providerKeyExecEnv, sandboxUser } = await import("./docker.js");
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
@@ -334,8 +366,10 @@ function createRealDriver(): SandboxDriver {
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
           ...(opts.chatId ? [`DESK_CHAT_ID=${opts.chatId}`] : []),
           // Inject provider keys per-exec so a key added after the container
-          // was created takes effect immediately without recreation.
-          ...providerKeyEnv(opts.providerKeys, opts.extraEnv),
+          // was created takes effect immediately without recreation. Missing
+          // keys are cleared when a vault-backed map is supplied so warm
+          // containers cannot keep using deleted/disabled connections.
+          ...providerKeyExecEnv(opts.providerKeys, opts.extraEnv),
         ],
       });
 

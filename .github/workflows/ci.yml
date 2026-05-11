@@ -30,14 +30,12 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build @agent-desk/api (+ deps via nx) for tests
+      - name: Build server packages for tests
         # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
-        # spawns `node packages/server/api/dist/main.js`. nx's
-        # `build.dependsOn: ["^build"]` walks the dep graph (shared, db,
-        # storage, tools, runtime, scheduler) in topological order, so a
-        # single `nx build @agent-desk/api` produces every `dist/` the spawned
-        # process resolves through Node's default `import` condition.
-        run: npx nx build @agent-desk/api
+        # spawns `node packages/server/api/dist/main.js`. Build every server
+        # workspace so each package has the `dist/` output resolved by Node's
+        # default `import` condition.
+        run: npm -ws --if-present run build
 
       - name: Archive server build outputs
         run: tar -czf "$RUNNER_TEMP/server-dist.tar.gz" packages/server/*/dist

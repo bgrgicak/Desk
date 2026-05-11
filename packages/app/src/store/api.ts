@@ -250,7 +250,7 @@ export const api = createApi({
       }),
       transformResponse: (r: { providers: Record<string, string | null> }) =>
         r.providers,
-      invalidatesTags: ["ProviderKeys", "Models"],
+      invalidatesTags: ["ProviderKeys", "ProvidersMeta", "Models"],
     }),
     getProvidersMeta: build.query<
       Record<string, { name?: string; enabled?: boolean }>,
