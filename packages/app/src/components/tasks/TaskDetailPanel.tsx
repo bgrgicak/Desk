@@ -53,7 +53,6 @@ import {
   usePatchMessageMutation,
   useRunMessageMutation,
   usePostChatMessageMutation,
-  useDeleteChatMutation,
 } from '@/store/api'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -64,6 +63,7 @@ import { usePrefs } from '@/hooks/use-prefs'
 import { ScheduleEditor, type SchedulePatch } from './ScheduleEditor'
 import { describeCron } from './schedule-utils'
 import { taskOccurrenceFromMessage, taskRunMessageKinds } from '@/store/selectors/tasks'
+import { buildTaskLifecycleMove, buildTaskStatusMove } from '@/lib/task-status'
 
 type PanelTab = 'details' | 'chat'
 
@@ -175,7 +175,6 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
   )
   const [patchMessage, patchState] = usePatchMessageMutation()
   const [runMessage, runState] = useRunMessageMutation()
-  const [deleteChat] = useDeleteChatMutation()
 
   useEffect(() => {
     setShowAllHistory(false)
@@ -214,39 +213,35 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
   const visibleHistory = showAllHistory ? history : history.slice(0, 5)
 
-  const isPaused = task.statusText.toLowerCase().includes('paused')
+  const isPaused = task.messageState === 'paused'
 
-  async function transition(nextState: 'paused' | 'pending' | 'cancelled', extra?: { executeAt?: string | null }) {
+  async function applyStatusMove(move: ReturnType<typeof buildTaskStatusMove>, errorTitle = 'Action failed') {
     if (!task.chatId || !task.messageId) {
       toast.error('This task is not wired to a server message yet')
       return
     }
+    if (move.kind === 'none') return
     try {
-      await patchMessage({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        patch: { state: nextState, ...(extra ?? {}) },
-      }).unwrap()
+      if (move.kind === 'run') {
+        await runMessage({ chatId: task.chatId, messageId: task.messageId }).unwrap()
+      } else {
+        await patchMessage({
+          chatId: task.chatId,
+          messageId: task.messageId,
+          patch: move.patch,
+        }).unwrap()
+      }
     } catch (err) {
-      toast.error('Action failed', { description: describeApiError(err) })
+      toast.error(errorTitle, { description: describeApiError(err) })
     }
   }
 
   function changeStatus(next: Task['status']) {
-    if (next === task.status && !isPaused) return
-    if (next === 'active') {
-      if (!task.chatId || !task.messageId) {
-        toast.error('This task is not wired to a server message yet')
-        return
-      }
-      void runMessage({ chatId: task.chatId, messageId: task.messageId })
-        .unwrap()
-        .catch(err => toast.error('Action failed', { description: describeApiError(err) }))
-      return
-    }
-    if (next === 'todo')      void transition('pending', { executeAt: null })
-    if (next === 'complete')  void transition('cancelled')
-    if (next === 'scheduled') void transition('pending')
+    void applyStatusMove(buildTaskStatusMove(task, next, 'user'))
+  }
+
+  function changeLifecycle(action: 'pause' | 'resume') {
+    void applyStatusMove(buildTaskLifecycleMove(task, action, 'user'))
   }
 
   async function runNow() {
@@ -334,6 +329,28 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
     }
   }
 
+  async function removeTask() {
+    if (!task.chatId || !task.messageId) {
+      toast.error('This task is not wired to a server message yet')
+      return
+    }
+    try {
+      await patchMessage({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: {
+          kind: 'chat',
+          executeAt: null,
+          cron: null,
+          title: null,
+        },
+      }).unwrap()
+      onCollapse()
+    } catch (err) {
+      toast.error('Could not remove task', { description: describeApiError(err) })
+    }
+  }
+
   // What the Schedule row shows when not editing.
   const scheduleLabel = task.schedule
     ? describeCron(task.schedule)
@@ -392,7 +409,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-pause"
               title="Pause"
               disabled={busy}
-              onClick={() => void transition('paused')}
+              onClick={() => changeLifecycle('pause')}
             >
               <Pause className="h-4 w-4" />
             </Button>
@@ -405,7 +422,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-resume"
               title="Resume"
               disabled={busy}
-              onClick={() => void transition('pending')}
+              onClick={() => changeLifecycle('resume')}
             >
               <Play className="h-4 w-4" />
             </Button>
@@ -418,7 +435,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
               data-testid="task-cancel"
               title="Complete"
               disabled={busy}
-              onClick={() => void transition('cancelled')}
+              onClick={() => changeStatus('complete')}
             >
               <Check className="h-4 w-4" />
             </Button>
@@ -427,7 +444,7 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
-            title="Delete task"
+            title="Remove task"
             onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -724,22 +741,20 @@ export function TaskDetailPanel({ task, onCollapse }: TaskDetailPanelProps) {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete &ldquo;{task.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogTitle>Remove &ldquo;{task.name}&rdquo; from tasks?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deleting this task will cancel any scheduled runs and permanently
-              clear the conversation history with the AI. This action cannot be undone.
+              This will cancel any future schedule and turn the task-defining
+              message back into a regular chat message. Conversation history and
+              artifacts will be kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={async () => {
-                if (task.chatId) await deleteChat(task.chatId)
-                onCollapse()
-              }}
+              onClick={() => void removeTask()}
             >
-              Delete task
+              Remove task
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

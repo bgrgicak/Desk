@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Loader2 } from 'lucide-react'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
@@ -28,6 +28,36 @@ export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | nul
     }
   }
   return null
+}
+
+/**
+ * A successful agent turn can be visually silent in the normal chat stream when
+ * the run only emitted tool/event rows that are hidden outside developer mode.
+ * In that case render an explicit completion fallback so the chat doesn't look
+ * like the agent ignored the user.
+ */
+export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerMode: boolean): boolean {
+  if (developerMode) return false
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    const turn = items[i]
+    if (turn.content.type !== 'agent_turn') continue
+    if (turn.state !== 'succeeded') return false
+
+    let sawHiddenToolOutput = false
+    for (const later of items.slice(i + 1)) {
+      if (isMessageVisible(later, false)) return false
+      if (
+        later.role === 'agent' &&
+        (later.content.type === 'toolCall' || later.content.type === 'toolResult' || later.content.type === 'events')
+      ) {
+        sawHiddenToolOutput = true
+      }
+    }
+    return sawHiddenToolOutput
+  }
+
+  return false
 }
 
 export interface ChatThreadProps {
@@ -103,13 +133,13 @@ export function ChatThread({
   // request is in flight, instead of blanking out and remounting the
   // textarea/dropzone mid-interaction.
   const { data, isError } = useGetChatMessagesQuery(
-    { chatId },
+    { chatId, full: developerMode },
     { skip: skipQuery },
   )
 
   // Load older page when beforeCursor is set.
   const { isFetching: isFetchingOlder } = useGetChatMessagesQuery(
-    { chatId, before: beforeCursor! },
+    { chatId, before: beforeCursor!, full: developerMode },
     { skip: skipQuery || !beforeCursor },
   )
 
@@ -138,6 +168,12 @@ export function ChatThread({
     return findFailedAgentTurn(allItems)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, isTyping])
+
+  const showToolOnlyFallback = useMemo(
+    () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, developerMode, isTyping, failedAgentTurn],
+  )
 
   const messages: ServerMessage[] = useMemo(
     () => {
@@ -303,6 +339,11 @@ export function ChatThread({
               )}
             </div>
           ))}
+          {showToolOnlyFallback && (
+            <div className={resolvedStatusClassName}>
+              <ToolOnlyRunFallback />
+            </div>
+          )}
           {isTyping && (
             <div className={resolvedStatusClassName}>
               <StatusIndicator text={null} isTyping={isTyping} />
@@ -319,6 +360,22 @@ export function ChatThread({
         </div>
       </div>
       {footerSlot}
+    </div>
+  )
+}
+
+function ToolOnlyRunFallback() {
+  return (
+    <div className="min-w-0 max-w-full space-y-1.5" data-testid="tool-only-run-fallback">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1">
+          <CheckCircle2 className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+          <span className="text-xs text-muted-foreground">Desk</span>
+        </div>
+      </div>
+      <div className="rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm text-muted-foreground">
+        Done — I used tools for this run and didn&apos;t write a separate reply.
+      </div>
     </div>
   )
 }

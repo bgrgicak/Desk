@@ -448,8 +448,8 @@ export function createRunManager(opts: RunManagerOptions) {
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
    *   - `task`: inserts a fresh `task_run` child of the task and runs the
-   *     agent against it. The task definition is *not* mutated through
-   *     pending → running — it stays as the schedule. Each fire produces
+   *     agent against it. The scheduler does not mutate the parent through
+   *     pending → running; each fire produces
    *     a new run row with its own state/started_at/ended_at, so a cron
    *     task accumulates a real run history. Concurrent fires of the same
    *     task converge in `startTaskRun` (locks the task, refuses if a run
@@ -469,6 +469,11 @@ export function createRunManager(opts: RunManagerOptions) {
   async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
+    const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
+      `SELECT workspace_id FROM chats WHERE id = ?`,
+      [msg.chatId],
+    );
+    const eventWorkspaceId = fireChatRows[0]?.workspace_id;
 
     // Execution target: the row whose state/started_at/ended_at this fire
     // owns. For a task, it's a freshly-inserted task_run child; for other
@@ -487,10 +492,9 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       if (!run) return { fired: false, childIds: [] };
       runId = run.id;
-      emit({ type: "message.appended", payload: run });
-      // Emit parent task update so the kanban moves the card to Active.
-      const updatedTask = await queries.messages.findById(pool, messageId);
-      if (updatedTask) emit({ type: "message.updated", payload: updatedTask });
+      emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+      // The task_run child is the authoritative agent-owned Active signal. The
+      // parent is emitted only when a lifecycle policy below changes it.
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -729,16 +733,25 @@ export function createRunManager(opts: RunManagerOptions) {
         parentId: runId,
         ...(errorChildKind ? { kind: errorChildKind } : {}),
       });
-      emit({ type: "message.appended", payload: child });
+      emit({ type: "message.appended", payload: child, workspaceId: eventWorkspaceId });
       return { fired: true, childIds: [child.id] };
     }
   }
 
   /**
    * After a task run completes: cron tasks advance execute_at to the next
-   * occurrence and stay pending; one-shot tasks transition to the terminal
-   * state and clear execute_at.
+   * occurrence and stay pending; successful one-shot tasks transition to done
+   * and clear execute_at. Failed one-shot runs clear the missed occurrence but
+   * keep the parent task pending so an error does not count as completion.
    */
+  function isUnscheduledTask(task: Message): boolean {
+    // Unscheduled tasks are kanban cards first and execution prompts second.
+    // A completed agent run is history on a task_run child; it must not
+    // silently move the parent card out of Todo/Active regardless of who
+    // authored the parent task.
+    return task.kind === "task" && !task.executeAt && !task.cron;
+  }
+
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
@@ -771,11 +784,9 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    // User-created unscheduled tasks: the user owns their status. Leave
-    // the parent at 'running' so the card stays in the Active column.
-    if (task.role === "user" && !task.executeAt) return;
+    if (isUnscheduledTask(task)) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
-      state: terminal,
+      state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,
     });
     if (updated) emit({ type: "message.updated", payload: updated });

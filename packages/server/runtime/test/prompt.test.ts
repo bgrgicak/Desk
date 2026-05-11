@@ -78,6 +78,14 @@ describe("renderPromptBody", () => {
     expect(idxSkills).toBeGreaterThan(idxGoal);
   });
 
+  it("nudges every assistant run to end with visible user-facing text", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    expect(body).toContain("Always finish each assistant run with a visible user-facing response");
+    expect(body).toContain("completed work mostly through tool calls");
+    expect(body).toContain("briefly say what failed and the next\nuseful step");
+  });
+
   it("includes persistence guidance in chat-mode prompts", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
     expect(body).toContain("## Persistence (~/.deskrc)");
@@ -119,6 +127,9 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment includes the chat paths when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+    expect(body).toContain("Chat isolation is mandatory");
+    expect(body).toContain("Never create, edit, list, read, delete, or attach");
+    expect(body).toContain("another chat's `.chats/<otherId>/...` tree");
     expect(body).toContain("Chat artifacts:   ~/.chats/chat-abc/artifacts/");
     expect(body).toContain("Chat attachments: ~/.chats/chat-abc/attachments/");
     expect(body).toContain("Chat summaries:   ~/.chats/chat-abc/notes/");

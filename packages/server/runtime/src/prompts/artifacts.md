@@ -25,6 +25,12 @@ artifacts directory (`ls ~/.chats/{chatId}/artifacts/`), not just `attachments/`
 `notes/`. Your own deliverables live under artifacts/, not the reserved dirs.
 Chat summaries are Desk-managed and belong only in notes/.
 
+**Chat isolation is mandatory.** Never create, edit, list, read, delete, or attach
+files under another chat's `.chats/<otherId>/...` tree. If previous logs,
+search results, examples, or user text mention another chat id, treat it as
+historical context only; do not reuse that id for paths or `--chat`. The only
+chat-private paths you may use are the current chat paths shown below.
+
 Put work-in-progress and intermediate output in the artifacts directory
 by default; move finished output to ~/ (or a user folder) when the user asks to
 keep it.

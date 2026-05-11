@@ -172,13 +172,23 @@ async function issueSandboxToken(opts?: { runId?: string }): Promise<string> {
   return token;
 }
 
+async function createRunToken(runChatId = chatId): Promise<string> {
+  const runId = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, state)
+     VALUES (?, ?, 'system', ?, 'running')`,
+    [runId, runChatId, JSON.stringify({ type: "agent_turn", userMessageId: generateId("message") })],
+  );
+  return issueSandboxToken({ runId });
+}
+
 describe("POST /sandbox/artifacts", () => {
   it("creates an agent artifactRef message for a real chat artifact file", async () => {
     const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
     await fs.mkdir(artifactsDir, { recursive: true });
     await fs.writeFile(path.join(artifactsDir, "report.md"), "# Report\n", "utf8");
 
-    const token = await issueSandboxToken();
+    const token = await createRunToken();
     const relPath = `.chats/${chatId}/artifacts/report.md`;
 
     const res = await sandboxPost("/sandbox/artifacts", { chatId, path: relPath }, token);
@@ -202,13 +212,33 @@ describe("POST /sandbox/artifacts", () => {
     ))).toBe(true);
   });
 
+  it("derives the target chat from the live run token when chatId is omitted", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "derived-chat.md"), "# Derived chat\n", "utf8");
+
+    const token = await createRunToken();
+    const relPath = `.chats/${chatId}/artifacts/derived-chat.md`;
+
+    const res = await sandboxPost("/sandbox/artifacts", { path: relPath }, token);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      chatId,
+      content: {
+        type: "artifactRef",
+        path: relPath,
+      },
+    });
+  });
+
   it("creates an agent artifactRef message for a .app/ directory artifact", async () => {
     const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
     const appDir = path.join(artifactsDir, "my-todos.app");
     await fs.mkdir(path.join(appDir, "dist"), { recursive: true });
     await fs.writeFile(path.join(appDir, "dist", "index.html"), "<html></html>", "utf8");
 
-    const token = await issueSandboxToken();
+    const token = await createRunToken();
     const relPath = `.chats/${chatId}/artifacts/my-todos.app`;
 
     const res = await sandboxPost("/sandbox/artifacts", { chatId, path: relPath }, token);
@@ -259,14 +289,92 @@ describe("POST /sandbox/artifacts", () => {
     await fs.mkdir(otherArtifactsDir, { recursive: true });
     await fs.writeFile(path.join(otherArtifactsDir, "report.md"), "# Other\n", "utf8");
 
-    const token = await issueSandboxToken();
+    const token = await createRunToken();
     const res = await sandboxPost(
       "/sandbox/artifacts",
       { chatId: otherChatId, path: `.chats/${otherChatId}/artifacts/report.md` },
       token,
     );
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects artifact attachment from a workspace-scoped token without a run", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "unscoped-leak.md"), "# Should not attach\n", "utf8");
+
+    const token = await issueSandboxToken();
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId, path: `.chats/${chatId}/artifacts/unscoped-leak.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("unscoped-leak.md")
+    ))).toBe(false);
+  });
+
+  it("rejects artifact attachment from a run token to a different chat in the same workspace", async () => {
+    const sourceRunId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state)
+       VALUES (?, ?, 'system', ?, 'running')`,
+      [sourceRunId, chatId, JSON.stringify({ type: "agent_turn", userMessageId: generateId("message") })],
+    );
+
+    const otherChatId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [otherChatId, workspaceId, agentId, "Same Workspace Other Chat"],
+    );
+    const otherArtifactsDir = chatArtifactsDir(home, workspaceSlug, otherChatId);
+    await fs.mkdir(otherArtifactsDir, { recursive: true });
+    await fs.writeFile(path.join(otherArtifactsDir, "cross-chat.md"), "# Cross-chat\n", "utf8");
+
+    const token = await issueSandboxToken({ runId: sourceRunId });
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId: otherChatId, path: `.chats/${otherChatId}/artifacts/cross-chat.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, otherChatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("cross-chat.md")
+    ))).toBe(false);
+  });
+
+  it("rejects a different chat artifact path even when the request omits chatId", async () => {
+    const token = await createRunToken();
+
+    const otherChatId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [otherChatId, workspaceId, agentId, "Same Workspace Other Chat Path"],
+    );
+    const otherArtifactsDir = chatArtifactsDir(home, workspaceSlug, otherChatId);
+    await fs.mkdir(otherArtifactsDir, { recursive: true });
+    await fs.writeFile(path.join(otherArtifactsDir, "cross-chat-path.md"), "# Cross-chat path\n", "utf8");
+
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { path: `.chats/${otherChatId}/artifacts/cross-chat-path.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, otherChatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("cross-chat-path.md")
+    ))).toBe(false);
   });
 
   it("rejects artifact attachment from a live summary run token", async () => {
@@ -348,6 +456,33 @@ describe("POST /sandbox/artifacts", () => {
     expect(messages.items.some((message) => (
       message.content.type === "artifactRef"
       && message.content.path.endsWith("deleted-run-leak.md")
+    ))).toBe(false);
+  });
+
+  it("rejects artifact attachment from a terminal run token", async () => {
+    const artifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(artifactsDir, { recursive: true });
+    await fs.writeFile(path.join(artifactsDir, "terminal-run-leak.md"), "# Should not attach\n", "utf8");
+
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state)
+       VALUES (?, ?, 'system', ?, 'succeeded')`,
+      [runId, chatId, JSON.stringify({ type: "agent_turn", userMessageId: generateId("message") })],
+    );
+    const token = await issueSandboxToken({ runId });
+
+    const res = await sandboxPost(
+      "/sandbox/artifacts",
+      { chatId, path: `.chats/${chatId}/artifacts/terminal-run-leak.md` },
+      token,
+    );
+
+    expect(res.status).toBe(400);
+    const messages = await queries.messages.listByChat(pool, chatId);
+    expect(messages.items.some((message) => (
+      message.content.type === "artifactRef"
+      && message.content.path.endsWith("terminal-run-leak.md")
     ))).toBe(false);
   });
 });

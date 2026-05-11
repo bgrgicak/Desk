@@ -352,6 +352,28 @@ describe("GET /messages — unfiltered", () => {
       expect(ids.has(bId)).toBe(false);
     }
   });
+
+  it("view=compact keeps list metadata but strips hidden payload bulk", async () => {
+    const fullRes = await request("GET", "/messages?contentKind=toolCall", alpha.token);
+    expect(fullRes.status).toBe(200);
+    const fullToolCall = (fullRes.body as { items: Message[] }).items[0];
+    expect(fullToolCall.content).toMatchObject({
+      type: "toolCall",
+      toolName: "grep",
+      args: { q: "foo" },
+    });
+
+    const compactRes = await request("GET", "/messages?view=compact&contentKind=toolCall", alpha.token);
+    expect(compactRes.status).toBe(200);
+    const compactToolCall = (compactRes.body as { items: Message[] }).items[0];
+    expect(compactToolCall.id).toBe(fullToolCall.id);
+    expect(compactToolCall.chatId).toBe(fullToolCall.chatId);
+    expect(compactToolCall.content).toEqual({
+      type: "toolCall",
+      toolName: "grep",
+      args: {},
+    });
+  });
 });
 
 describe("GET /messages — workspace/chat scoping", () => {

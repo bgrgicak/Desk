@@ -613,22 +613,71 @@ export function createApp(opts: AppOptions): Server {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
       if (!body.chatId || typeof body.chatId !== "string") {
         throw new ValidationError("Missing chatId");
       }
-      const chatId = body.chatId;
-      await requireOwnedChat(pool, chatId, agent.userId);
+      const sourceChatId = body.chatId;
+      await requireOwnedChat(pool, sourceChatId, agent.userId);
+      let targetChatId = sourceChatId;
+      let createdChat: unknown;
+
+      const sendBody = { kind: "task", ...body };
+      delete (sendBody as { chatId?: string }).chatId;
+      delete (sendBody as { newChat?: boolean }).newChat;
+
+      const attachments = (sendBody as { attachments?: unknown }).attachments;
+      if (Array.isArray(attachments)) {
+        for (const attachment of attachments) {
+          const attachmentPath = (attachment as { path?: unknown })?.path;
+          if (typeof attachmentPath !== "string" || !attachmentPath.trim()) {
+            throw new ValidationError("Invalid attachment path");
+          }
+          if (attachmentPath.includes("\0") || attachmentPath.includes("\\") || attachmentPath.startsWith("/")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          const segments = attachmentPath.split("/");
+          if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          if (attachmentPath.startsWith(".chats/") && !attachmentPath.startsWith(`.chats/${sourceChatId}/artifacts/`)) {
+            throw new ValidationError("Sandbox task attachments must be library files or artifacts from the source chat");
+          }
+        }
+      }
+
+      if (body.newChat === true) {
+        if (typeof body.executeAt === "string" || typeof body.cron === "string") {
+          throw new ValidationError("newChat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
+        }
+        if (typeof body.kind === "string" && body.kind !== "task") {
+          throw new ValidationError("newChat is only for simple manual tasks; kind must be omitted or task");
+        }
+        sendBody.kind = "task";
+        const sourceChat = await chatRoutes.getChat(pool, sourceChatId);
+        const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
+        const rawContent = typeof body.content === "string" ? body.content.trim() : "";
+        if (typeof body.content === "string" && !body.content.includes(sourceChatId)) {
+          sendBody.content = `${body.content}\n\nOriginating chat: ${sourceChatId}`;
+        }
+        chatRoutes.validateSendMessageBody(sendBody);
+        createdChat = await chatRoutes.createChat(pool, {
+          workspaceId: sourceChat.workspaceId,
+          agentId: sourceChat.agentId,
+          title: rawTitle ?? (rawContent.slice(0, 80) || "New task"),
+          goal: "task",
+        });
+        targetChatId = (createdChat as { id: string }).id;
+      }
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
       // this from `desk-agent task schedule`, so a chat reply isn't the intent.
       // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
-      const sendBody = { kind: "task", ...body };
-      delete (sendBody as { chatId?: string }).chatId;
+      if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
 
-      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
-      sendJson(res, 201, userMessage);
+      const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emitEvent, { role: "agent" });
+      sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);
       return;
     }
 
@@ -793,24 +842,29 @@ export function createApp(opts: AppOptions): Server {
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { session, agent } = await authenticateSandboxToken(pool, token);
       const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
-      if (!body.chatId || typeof body.chatId !== "string") {
-        throw new ValidationError("Missing chatId");
+      if (!session.runId) {
+        throw new ValidationError("Sandbox artifact attachment requires a live run token");
       }
-      const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
+      const runMessage = await queries.messages.findById(pool, session.runId);
+      if (!runMessage) {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      if (runMessage.state !== "running") {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      const runChatId = runMessage.chatId;
+      if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
+        throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
+      }
+      if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+        throw new ValidationError("Summary runs cannot attach artifacts");
+      }
+      const chat = await requireOwnedChat(pool, runChatId, agent.userId);
       if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
-        throw new NotFoundError(`Chat not found: ${body.chatId}`);
-      }
-      if (session.runId) {
-        const runMessage = await queries.messages.findById(pool, session.runId);
-        if (!runMessage) {
-          throw new ValidationError("Sandbox run is no longer active");
-        }
-        if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
-          throw new ValidationError("Summary runs cannot attach artifacts");
-        }
+        throw new NotFoundError(`Chat not found: ${runChatId}`);
       }
 
-      const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
+      const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emitEvent, {
         agentId: agent.id,
         model: agent.model,
       });
@@ -1043,7 +1097,26 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
       const before = query.get("before") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor, before });
+      const limitRaw = query.get("limit");
+      let limit: number | undefined;
+      if (limitRaw !== null && limitRaw !== "") {
+        const parsed = Number(limitRaw);
+        if (!Number.isInteger(parsed) || parsed <= 0) throw new ValidationError(`Invalid limit: ${limitRaw}`);
+        limit = Math.min(parsed, 200);
+      }
+      const viewRaw = query.get("view") ?? undefined;
+      if (viewRaw !== undefined && viewRaw !== "full" && viewRaw !== "compact" && viewRaw !== "timeline") {
+        throw new ValidationError(`Invalid view: ${viewRaw}`);
+      }
+      const result = await chatRoutes.listMessages(pool, segments[1], {
+        cursor,
+        before,
+        limit,
+        // Normal chat API reads should use the payload-trimmed timeline by
+        // default. Full hidden tool/event/summary payloads remain available to
+        // developer/debug callers that explicitly request `view=full`.
+        view: (viewRaw ?? "timeline") as "full" | "compact" | "timeline",
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -1075,7 +1148,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; title?: string | null };
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: "chat" | "task" | "task_run" | "summary"; title?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
       sendJson(res, 200, result);
       return;

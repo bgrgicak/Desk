@@ -107,6 +107,7 @@ export async function execRun(
       promptFile: promptSandboxPath,
       home: opts.home,
       workspaceSlug: opts.workspaceSlug,
+      chatId: opts.chatId,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,

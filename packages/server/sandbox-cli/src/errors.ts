@@ -29,11 +29,22 @@ export function writeErrorAndExit(err: unknown): never {
  */
 export function parseFlags(
   argv: string[],
+  repeatableKeys?: string[],
+): { flags: Record<string, string | string[]>; positionals: string[] };
+export function parseFlags(
+  argv: string[],
+  repeatableKeys: string[] | undefined,
+  booleanKeys: string[],
+): { flags: Record<string, string | string[] | boolean>; positionals: string[] };
+export function parseFlags(
+  argv: string[],
   repeatableKeys: string[] = [],
-): { flags: Record<string, string | string[]>; positionals: string[] } {
-  const flags: Record<string, string | string[]> = {};
+  booleanKeys: string[] = [],
+): { flags: Record<string, string | string[] | boolean>; positionals: string[] } {
+  const flags: Record<string, string | string[] | boolean> = {};
   const positionals: string[] = [];
   const repeatSet = new Set(repeatableKeys);
+  const booleanSet = new Set(booleanKeys);
 
   let i = 0;
   while (i < argv.length) {
@@ -47,6 +58,11 @@ export function parseFlags(
         value = arg.slice(eqIdx + 1);
       } else {
         key = arg.slice(2);
+        if (booleanSet.has(key)) {
+          flags[key] = true;
+          i++;
+          continue;
+        }
         i++;
         if (i >= argv.length) {
           throw new CliError("INVALID_ARGS", `Missing value for --${key}`);
