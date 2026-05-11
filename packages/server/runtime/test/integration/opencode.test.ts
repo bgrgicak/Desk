@@ -66,8 +66,18 @@ describeIf("opencode end-to-end", () => {
     expect(result.exitCode).toBe(0);
     expect(logs.length).toBeGreaterThan(0);
 
+    // Recent opencode versions only emit step_finish when a step actually
+    // dispatches tool calls; a trivial single-message reply (this prompt has
+    // no tool use) goes step_start → text and exits. So assert "we saw a
+    // step_start and an answer-bearing event", not specifically step_finish.
     expect(logs.some((l) => l.payload.includes('"type":"step_start"'))).toBe(true);
-    expect(logs.some((l) => l.payload.includes('"type":"step_finish"'))).toBe(true);
+    expect(
+      logs.some(
+        (l) =>
+          l.payload.includes('"type":"step_finish"') ||
+          l.payload.includes('"type":"text"'),
+      ),
+    ).toBe(true);
 
     await stopSandbox(handle);
   }, 300_000); // 5 minutes — free model may be slower than paid
