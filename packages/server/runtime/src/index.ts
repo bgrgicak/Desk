@@ -6,8 +6,13 @@ export {
   pruneDriftedContainers,
   sandboxImage,
   providerKeyEnv,
+  classifyResourceError,
+  growSandboxForResourceError,
+  reapIdleSandboxes,
+  killClaimedRunsInContainers,
+  _resetGrowthStateForTest,
 } from "./docker.js";
-export type { SandboxHandle, SandboxBindDrift } from "./docker.js";
+export type { SandboxHandle, SandboxBindDrift, ResourceFailureKind, GrowthResult } from "./docker.js";
 export { detectEngine, ContainerRuntimeUnavailableError } from "./engine.js";
 export type {
   Engine,

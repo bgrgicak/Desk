@@ -239,6 +239,102 @@ export async function listByChat(
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
   const view = opts?.view ?? "full";
+
+  // Developer-mode (`view=full`) must be a strict superset of regular chat
+  // (`view=timeline`) for the same page. A raw "last 50 rows" full query can
+  // be smaller from the user's point of view because summaries/request rows
+  // consume slots and push ordinary chat messages out of the page. Anchor full
+  // pages on the same timeline-visible rows as regular mode, then include every
+  // raw row between that oldest visible boundary and the page edge.
+  if (view === "full" && opts?.cursor) {
+    const sep = opts.cursor.indexOf("|");
+    const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
+    const timeline = timelineFilterSql();
+    const { rows: boundaryRows } = await db.query<Record<string, unknown>>(
+      `SELECT id, created_at
+       FROM messages
+       WHERE chat_id = ?
+         AND (created_at, id) > (?, ?)
+         ${timeline.sql}
+       ORDER BY created_at, id
+       LIMIT ?`,
+      [chatId, cursorIso, cursorId, ...timeline.params, limit + 1],
+    );
+
+    if (boundaryRows.length > 0) {
+      const hasMore = boundaryRows.length > limit;
+      const pageTimelineRows = boundaryRows.slice(0, limit);
+      const newest = pageTimelineRows[pageTimelineRows.length - 1];
+
+      const { rows } = await db.query(
+        `SELECT ${FULL_MESSAGE_SELECT}
+         FROM messages
+         WHERE chat_id = ?
+           AND (created_at, id) > (?, ?)
+           AND (created_at, id) <= (?, ?)
+         ORDER BY created_at, id`,
+        [chatId, cursorIso, cursorId, newest.created_at, newest.id],
+      );
+
+      return {
+        items: rows.map(rowToMessage),
+        nextCursor: hasMore ? `${newest.created_at}|${newest.id}` : undefined,
+      };
+    }
+  }
+
+  if (view === "full" && !opts?.cursor) {
+    const beforeSql = opts?.before ? "AND (created_at, id) < (?, ?)" : "";
+    const boundaryParams: unknown[] = [chatId];
+    if (opts?.before) {
+      const sep = opts.before.indexOf("|");
+      boundaryParams.push(sep === -1 ? opts.before : opts.before.slice(0, sep));
+      boundaryParams.push(sep === -1 ? "" : opts.before.slice(sep + 1));
+    }
+    boundaryParams.push(limit + 1);
+
+    const timeline = timelineFilterSql();
+    const { rows: boundaryRows } = await db.query<Record<string, unknown>>(
+      `SELECT id, created_at
+       FROM messages
+       WHERE chat_id = ? ${beforeSql} ${timeline.sql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+      [...boundaryParams.slice(0, boundaryParams.length - 1), ...timeline.params, boundaryParams[boundaryParams.length - 1]],
+    );
+
+    if (boundaryRows.length > 0) {
+      const hasMore = boundaryRows.length > limit;
+      const pageTimelineRows = boundaryRows.slice(0, limit);
+      const oldest = pageTimelineRows[pageTimelineRows.length - 1];
+
+      const fullParams: unknown[] = [chatId, oldest.created_at, oldest.id];
+      let upperBoundSql = "";
+      if (opts?.before) {
+        const sep = opts.before.indexOf("|");
+        fullParams.push(sep === -1 ? opts.before : opts.before.slice(0, sep));
+        fullParams.push(sep === -1 ? "" : opts.before.slice(sep + 1));
+        upperBoundSql = "AND (created_at, id) < (?, ?)";
+      }
+
+      const { rows } = await db.query(
+        `SELECT ${FULL_MESSAGE_SELECT}
+         FROM messages
+         WHERE chat_id = ?
+           AND (created_at, id) >= (?, ?)
+           ${upperBoundSql}
+         ORDER BY created_at, id`,
+        fullParams,
+      );
+
+      return {
+        items: rows.map(rowToMessage),
+        prevCursor: hasMore ? `${oldest.created_at}|${oldest.id}` : undefined,
+      };
+    }
+  }
+
   const params: unknown[] = [chatId];
   let whereClause = "chat_id = ?";
 
@@ -340,17 +436,22 @@ export async function listAgentContextByChat(
        ORDER BY created_at DESC, id DESC
        LIMIT 1
      )
-     SELECT * FROM messages
-     WHERE chat_id = ?
-       AND (
-         NOT EXISTS (SELECT 1 FROM latest_summary)
-         OR created_at > (SELECT created_at FROM latest_summary)
-         OR (
-           created_at = (SELECT created_at FROM latest_summary)
-           AND id >= (SELECT id FROM latest_summary)
-         )
-       )
-      ORDER BY created_at, id
+     SELECT m.* FROM messages m
+      WHERE m.chat_id = ?
+        AND m.kind NOT IN ('task', 'task_run')
+        AND NOT EXISTS (
+          SELECT 1 FROM messages parent
+          WHERE parent.id = m.parent_id AND parent.kind = 'task_run'
+        )
+        AND (
+          NOT EXISTS (SELECT 1 FROM latest_summary)
+          OR m.created_at > (SELECT created_at FROM latest_summary)
+          OR (
+            m.created_at = (SELECT created_at FROM latest_summary)
+            AND m.id >= (SELECT id FROM latest_summary)
+          )
+        )
+       ORDER BY m.created_at, m.id
     `,
     [chatId, chatId],
   );

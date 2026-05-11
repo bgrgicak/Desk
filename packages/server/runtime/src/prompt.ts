@@ -109,6 +109,11 @@ type Fragment = (input: RenderPromptInput) => string | null;
 
 const SYSTEM_PROMPT_ORDER: Fragment[] = [
   (input) =>
+    loadAndSub("identity.md", {
+      agentName: input.agentName,
+      userName: input.userName,
+    }),
+  (input) =>
     loadAndSub("mandate.md", {
       agentName: input.agentName,
       userName: input.userName,
@@ -128,7 +133,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         `Chat summaries:   ~/.chats/${input.chatId}/notes/\n`
       : "";
     const attachArtifactInstruction = input.chatId
-      ? `**Surface in chat.** Always run \`desk-agent chat attach-artifact --chat ${input.chatId} "<path>"\` as the last step of any turn in which you create, significantly update, or retrieve from the current chat/workspace library an artifact the user is asking to see — no exceptions for type (file, app, directory, image, library item, etc.). Library search is scoped to the current chat/workspace; do not expect cross-workspace results. If the artifact is a directory (e.g. a Desk app), pass the directory path. Quote the path. Do not reply to the user until the attach command has been executed or you have determined no attachable current-workspace path exists. If the command fails, report the error inline instead of silently skipping. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples.`
+      ? `**Surface in chat.** When you create, significantly update, or retrieve from the current chat/workspace library an artifact the user is asking to see, run \`desk-agent chat attach-artifact --chat ${input.chatId} "<path>"\` as the last step before replying. This applies to files, apps, directories, images, and library items. Library search is scoped to the current chat/workspace. For directories, pass the directory path. Quote paths. Reply only after the attach command succeeds, fails, or no attachable current-workspace path exists; report failures inline. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples.`
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },

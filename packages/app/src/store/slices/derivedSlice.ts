@@ -33,12 +33,14 @@ export interface DerivedState {
    * indicator.
    */
   runningChatIds: string[]
+  /** Chat IDs whose latest agent turn failed and can be retried. */
+  failedChatIds: string[]
   /**
    * Chat IDs that WS has touched (marked running or idle) since the last
    * getChats fulfillment. Guards against both stale-refetch races:
    *   - WS marked idle, server still says running (Race 1)
    *   - WS marked running, server not yet updated (Race 2)
-   * For WS-known chats the current runningChatIds value wins over the
+   * For WS-known chats the current running/failed ID values win over the
    * server snapshot. Cleared after each matchFulfilled processes it.
    */
   wsKnownChatIds: string[]
@@ -56,6 +58,7 @@ const initialState: DerivedState = {
   fileChangeCounters: {},
   workspaceChangeCounters: {},
   runningChatIds: [],
+  failedChatIds: [],
   wsKnownChatIds: [],
   viewingChatId: null,
   currentUserId: null,
@@ -84,12 +87,28 @@ const slice = createSlice({
       if (!state.runningChatIds.includes(action.payload)) {
         state.runningChatIds.push(action.payload)
       }
+      state.failedChatIds = state.failedChatIds.filter(id => id !== action.payload)
       if (!state.wsKnownChatIds.includes(action.payload)) {
         state.wsKnownChatIds.push(action.payload)
       }
     },
     markChatIdle(state, action: PayloadAction<string>) {
       state.runningChatIds = state.runningChatIds.filter(id => id !== action.payload)
+      if (!state.wsKnownChatIds.includes(action.payload)) {
+        state.wsKnownChatIds.push(action.payload)
+      }
+    },
+    markChatFailed(state, action: PayloadAction<string>) {
+      state.runningChatIds = state.runningChatIds.filter(id => id !== action.payload)
+      if (!state.failedChatIds.includes(action.payload)) {
+        state.failedChatIds.push(action.payload)
+      }
+      if (!state.wsKnownChatIds.includes(action.payload)) {
+        state.wsKnownChatIds.push(action.payload)
+      }
+    },
+    clearChatFailed(state, action: PayloadAction<string>) {
+      state.failedChatIds = state.failedChatIds.filter(id => id !== action.payload)
       if (!state.wsKnownChatIds.includes(action.payload)) {
         state.wsKnownChatIds.push(action.payload)
       }
@@ -105,7 +124,7 @@ const slice = createSlice({
     builder.addMatcher(
       api.endpoints.getChats.matchFulfilled,
       (state, action) => {
-        const chats = action.payload as Array<{ id: string; running?: boolean }>
+        const chats = action.payload as Array<{ id: string; running?: boolean; failed?: boolean }>
         const wsKnownSet = new Set(state.wsKnownChatIds)
         // For non-WS-known chats, trust the server snapshot.
         const merged = new Set(
@@ -119,6 +138,14 @@ const slice = createSlice({
           if (wsKnownSet.has(id)) merged.add(id)
         }
         state.runningChatIds = Array.from(merged)
+
+        const failed = new Set(
+          chats.filter((c) => c.failed && !wsKnownSet.has(c.id)).map((c) => c.id),
+        )
+        for (const id of state.failedChatIds) {
+          if (wsKnownSet.has(id)) failed.add(id)
+        }
+        state.failedChatIds = Array.from(failed)
         state.wsKnownChatIds = []
       },
     )
@@ -144,10 +171,18 @@ const slice = createSlice({
         const latest = agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null
         const isRunning = latest !== null &&
           (latest.state === "pending" || latest.state === "running")
+        const isFailed = latest?.state === "failed"
         if (isRunning && !state.runningChatIds.includes(chatId)) {
           state.runningChatIds.push(chatId)
         } else if (!isRunning && state.runningChatIds.includes(chatId)) {
           state.runningChatIds = state.runningChatIds.filter(
+            (id) => id !== chatId,
+          )
+        }
+        if (isFailed && !state.failedChatIds.includes(chatId)) {
+          state.failedChatIds.push(chatId)
+        } else if (!isFailed && state.failedChatIds.includes(chatId)) {
+          state.failedChatIds = state.failedChatIds.filter(
             (id) => id !== chatId,
           )
         }
@@ -163,6 +198,8 @@ export const {
   bumpWorkspaceChangeCounter,
   markChatRunning,
   markChatIdle,
+  markChatFailed,
+  clearChatFailed,
   setViewingChat,
   clearWsKnownChatIds,
 } = slice.actions
@@ -179,6 +216,9 @@ export const selectWorkspaceChangeCounter = (s: RootState, wsId: string): number
 
 export const selectRunningChatIds = (s: RootState): string[] =>
   s.derived.runningChatIds
+
+export const selectFailedChatIds = (s: RootState): string[] =>
+  s.derived.failedChatIds
 
 export const selectViewingChatId = (s: RootState): string | null =>
   s.derived.viewingChatId

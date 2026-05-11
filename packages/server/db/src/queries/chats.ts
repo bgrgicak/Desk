@@ -38,6 +38,10 @@ export interface ChatWithLastMessage extends Chat {
    * True when the chat's most recent `agent_turn` message is pending/running.
    */
   running: boolean;
+  /**
+   * True when the chat's most recent `agent_turn` message failed and can be retried.
+   */
+  failed: boolean;
 }
 
 export async function listWithLatestMessage(
@@ -47,7 +51,8 @@ export async function listWithLatestMessage(
   const { rows } = await db.query(
     `SELECT c.*,
             c.list_kind AS kind,
-            c.list_running AS is_running
+            c.list_running AS is_running,
+            c.list_failed AS is_failed
       FROM chats c
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
@@ -58,6 +63,7 @@ export async function listWithLatestMessage(
     ...rowToChat(r),
     kind: r.kind as MessageKind,
     running: !!r.is_running,
+    failed: !!r.is_failed,
   }));
 }
 

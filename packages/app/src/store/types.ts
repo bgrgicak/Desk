@@ -94,6 +94,11 @@ export interface ServerChat {
    * events omit this.
    */
   running?: boolean;
+  /**
+   * True when the chat's most recent `agent_turn` failed and can be retried.
+   * Only populated by /chats list responses; WS message events refine it live.
+   */
+  failed?: boolean;
 }
 
 export interface AttachmentRef {

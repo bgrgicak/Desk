@@ -101,9 +101,9 @@ const baseQuery: BaseQueryFn<
   return result;
 };
 
-function buildMessagesQuery(f: MessagesFilter): string {
+export function buildMessagesQuery(f: MessagesFilter): string {
   const params = new URLSearchParams();
-  if (!f.full) params.set("view", "compact");
+  params.set("view", f.full ? "full" : "compact");
   if (f.workspaceId) params.set("workspaceId", f.workspaceId);
   if (f.chatId) params.set("chatId", f.chatId);
   if (f.state && f.state.length > 0) params.set("state", f.state.join(","));
@@ -120,6 +120,27 @@ function buildMessagesQuery(f: MessagesFilter): string {
   if (f.cursor) params.set("cursor", f.cursor);
   const qs = params.toString();
   return qs ? `/messages?${qs}` : "/messages";
+}
+
+export function buildChatMessagesQuery({ chatId, cursor, before, full, limit }: { chatId: string; cursor?: string; before?: string; full?: boolean; limit?: number }): string {
+  const params = new URLSearchParams();
+  if (cursor) params.set("cursor", cursor);
+  if (before) params.set("before", before);
+  params.set("view", full ? "full" : "timeline");
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return `/chats/${chatId}/messages${qs ? `?${qs}` : ""}`;
+}
+
+export type ChatMessagesQueryArgs = { chatId: string; cursor?: string; before?: string; full?: boolean; limit?: number };
+
+export function shouldForceRefetchChatMessages(currentArg?: ChatMessagesQueryArgs, previousArg?: ChatMessagesQueryArgs): boolean {
+  if (!currentArg || !previousArg) return currentArg !== previousArg;
+  return currentArg.chatId !== previousArg.chatId
+    || currentArg.cursor !== previousArg.cursor
+    || currentArg.before !== previousArg.before
+    || currentArg.full !== previousArg.full
+    || currentArg.limit !== previousArg.limit;
 }
 
 function updateLiveMessageCaches(
@@ -583,23 +604,15 @@ export const api = createApi({
     // ── Messages (per chat) ───────────────────────────────────────────
     getChatMessages: build.query<
       ListMessagesResponse,
-      { chatId: string; cursor?: string; before?: string; full?: boolean; limit?: number }
+      ChatMessagesQueryArgs
     >({
-      query: ({ chatId, cursor, before, full, limit }) => {
-        const params = new URLSearchParams();
-        if (cursor) params.set("cursor", cursor);
-        if (before) params.set("before", before);
-        if (!full) params.set("view", "timeline");
-        if (limit) params.set("limit", String(limit));
-        const qs = params.toString();
-        return `/chats/${chatId}/messages${qs ? `?${qs}` : ""}`;
-      },
+      query: buildChatMessagesQuery,
       providesTags: (_r, _e, { chatId }) => [
         { type: "Message", id: `CHAT_${chatId}` },
       ],
       // All pages for the same chatId share a single cache entry so
       // older pages merge into the existing array.
-      serializeQueryArgs: ({ queryArgs }) => `${queryArgs.chatId}:${queryArgs.full ? "full" : "compact"}`,
+      serializeQueryArgs: ({ queryArgs }) => `${queryArgs.chatId}:${queryArgs.full ? "full" : "timeline"}`,
       merge: (existing, incoming, { arg }) => {
         if (arg.before) {
           // Loading older messages — prepend to existing items, dedup by id.
@@ -626,9 +639,7 @@ export const api = createApi({
           existing.prevCursor = incoming.prevCursor;
         }
       },
-      forceRefetch: ({ currentArg, previousArg }) => {
-        return currentArg !== previousArg;
-      },
+      forceRefetch: ({ currentArg, previousArg }) => shouldForceRefetchChatMessages(currentArg, previousArg),
     }),
     postChatMessage: build.mutation<
       ServerMessage,

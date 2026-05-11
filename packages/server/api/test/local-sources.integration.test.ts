@@ -26,7 +26,7 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
-import { resolveLocalSourceEnv } from "@agent-desk/runtime";
+import { LOCAL_SOURCE_KINDS, resolveLocalSourceEnv } from "@agent-desk/runtime";
 
 let pool: Pool;
 let server: http.Server;
@@ -160,7 +160,7 @@ describe("/me/providers/local", () => {
     const res = await request("GET", "/me/providers/local", token);
     expect(res.status).toBe(200);
     const sources = (res.body as { sources: Array<{ kind: string; available: boolean; reason?: string; enabled: boolean }> }).sources;
-    expect(sources.length).toBeGreaterThanOrEqual(1);
+    expect(sources.map((s) => s.kind).sort()).toEqual([...LOCAL_SOURCE_KINDS].sort());
     const codex = sources.find((s) => s.kind === "codex");
     expect(codex).toBeDefined();
     expect(codex!.available).toBe(false);

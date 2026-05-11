@@ -34,6 +34,20 @@ body {
   overflow-y: hidden;
 }
 
+#root *,
+#root *::before,
+#root *::after {
+  min-width: 0;
+}
+
+pre,
+code,
+table,
+td,
+th {
+  max-width: 100%;
+}
+
 @media (max-width: 767px) {
   input,
   textarea,

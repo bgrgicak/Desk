@@ -1208,6 +1208,21 @@ export function createApp(opts: AppOptions): Server {
       const body = ct.startsWith("multipart/form-data")
         ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
         : await parseBody(req);
+
+      // If the previous agent_turn in this chat is hung (log file silent
+      // for the stale window), preempt it so the user's follow-up isn't
+      // racing a zombie opencode. Healthy runs — still emitting tokens,
+      // tool calls, or step events — are left alone. Scheduled task or
+      // summary sends never preempt: those are background work, not the
+      // chat-level conversation the user is actively interacting with.
+      const sendKind = (body as { kind?: string }).kind;
+      if (!sendKind || sendKind === "chat") {
+        await runManager.preemptStalledChatRun(segments[1]).catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.error(`preempt for chat ${segments[1]} failed:`, err);
+        });
+      }
+
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent, { actorUserId: userId });
 
       // Self-firing kinds (task / summary): execute_at is computed at insert

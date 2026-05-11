@@ -8,7 +8,7 @@ import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
-import { writeAgentFile, type AgentFileInput } from "./agentFile.js";
+import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
 
 export interface ExecRunOptions {
   runId: string;
@@ -89,6 +89,13 @@ export async function execRun(
   // goal fragment are part of the rendered system prompt — no separate
   // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
+  // Lazy MCP: refresh the workspace-level opencode config so playwright is
+  // only present when the chat goal actually needs a browser. Without this,
+  // every run preloads firefox + playwright-mcp (~100 MB resident, hundreds
+  // of pids over a long-lived sandbox) even for pure conversation.
+  await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
+    enablePlaywright: chatNeedsBrowser(opts.agent.goal),
+  });
 
   // Write the prompt to a file on the shared workspace mount instead of
   // passing it via DESK_PROMPT. Large chat transcripts can exceed ARG_MAX

@@ -245,6 +245,8 @@ export interface Chat {
   artifactIds?: string[]
   messages?: ChatMessage[]
   unread?: boolean
+  /** True when the latest agent turn failed and can be retried. */
+  failed?: boolean
   workspaceId?: string
   agentId?: string
   /** Persisted composer goal for this chat. */

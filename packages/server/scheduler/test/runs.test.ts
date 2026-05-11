@@ -381,6 +381,73 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     expect(capturedPrompt).toContain("Current task:\nbuild the app from that");
   });
 
+  it("does not include scheduled tasks or task runs as chat transcript context", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("context excludes tasks");
+    const taskId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Remind bero to make some tea before the call." },
+      kind: "task",
+      state: "succeeded",
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    const taskRunId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Remind bero to make some tea before the call." },
+      kind: "task_run",
+      state: "succeeded",
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+    await pool.query(`UPDATE messages SET parent_id = ? WHERE kind = 'task_run' AND chat_id = ?`, [taskId, contextChatId]);
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "summary", body: "condensed context after the task run parent" },
+      kind: "summary",
+      createdAt: "2026-05-05T00:01:15.000Z",
+    });
+    const taskOutputId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Tea reminder completed." },
+      kind: "chat",
+      state: null,
+      createdAt: "2026-05-05T00:01:30.000Z",
+    });
+    await pool.query(`UPDATE messages SET parent_id = ? WHERE id = ?`, [taskRunId, taskOutputId]);
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "Only one cup, please." },
+      createdAt: "2026-05-05T00:02:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "thanks" },
+      createdAt: "2026-05-05T00:03:00.000Z",
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toContain("Only one cup, please.");
+    expect(capturedPrompt).not.toContain("Remind bero to make some tea before the call.");
+    expect(capturedPrompt).not.toContain("Tea reminder completed.");
+    expect(capturedPrompt).toContain("Current task:\nthanks");
+  });
+
   it("uses the newest summary as the transcript boundary", async () => {
     let capturedPrompt = "";
     const mgr = createRunManager({
