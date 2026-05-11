@@ -140,6 +140,32 @@ async function main(): Promise<void> {
 
   const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
 
+  // If DESK_SECRET_KEY is explicitly set in the environment, use it as the
+  // vault master password so the vault is automatically unlocked on every
+  // boot — no UI prompt needed. Users who prefer an explicit vault master
+  // password leave DESK_SECRET_KEY unset and unlock via the browser UI.
+  if (process.env.DESK_SECRET_KEY) {
+    const vaultPassword = process.env.DESK_SECRET_KEY;
+    const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
+    for (const user of allUsers) {
+      const { exists } = await vault.status(user.id);
+      try {
+        if (!exists) {
+          await vault.setup(user.id, vaultPassword);
+          // eslint-disable-next-line no-console
+          console.log(`vault: auto-setup for user ${user.id} via DESK_SECRET_KEY`);
+        } else {
+          await vault.unlock(user.id, vaultPassword);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`vault: auto-unlock failed for user ${user.id}:`, err);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log("vault: auto-unlocked via DESK_SECRET_KEY");
+  }
+
   const runManager = createRunManager({
     pool,
     home: DESK_HOME,
