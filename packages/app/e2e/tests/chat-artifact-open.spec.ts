@@ -21,6 +21,14 @@ interface Agent {
 
 interface Chat {
   id: string;
+  workspaceId: string;
+}
+
+interface Message {
+  id: string;
+  parentId?: string | null;
+  role?: string;
+  state?: string;
 }
 
 test("clicking a chat artifact file opens it in the detail view", async ({
@@ -55,8 +63,10 @@ test("clicking a chat artifact file opens it in the detail view", async ({
     })
   ).json()) as Chat;
 
-  // Directly write a file into the chat's artifacts directory — simulates what
-  // the agent would do after a run.
+  // Write the artifact and attach it via an artifactRef message. listAttachments
+  // only surfaces files referenced by such a message (see `attachedArtifactPaths`
+  // in packages/server/api/src/routes/chats.ts). The PATCH-an-agent-reply trick
+  // matches what chat-artifact-inline-preview.spec.ts uses.
   const artifactDir = path.join(
     serverHome,
     ws.path,
@@ -66,11 +76,53 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   );
   await fs.mkdir(artifactDir, { recursive: true });
   const artifactName = `e2e-artifact-${Date.now()}.md`;
+  const artifactRelPath = `.chats/${chat.id}/artifacts/${artifactName}`;
   await fs.writeFile(
     path.join(artifactDir, artifactName),
     "# E2E test artifact\nHello from e2e.",
     "utf-8",
   );
+
+  const seed = await fetch(`${serverUrl}/chats/${chat.id}/messages`, {
+    method: "POST",
+    headers,
+    // Keep the seed content free of the artifact filename so the test's
+    // `getByText` only matches the panel entry, not this user message bubble.
+    body: JSON.stringify({ content: "seed for artifact attach" }),
+  });
+  expect(seed.status).toBe(201);
+  const userMessage = (await seed.json()) as Message;
+
+  let target: Message | undefined;
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const messages = (await (
+      await fetch(`${serverUrl}/chats/${chat.id}/messages`, { headers })
+    ).json()) as { items: Message[] };
+    target = messages.items.find(message =>
+      message.role !== "user"
+      && message.parentId === userMessage.id
+      && (message.state === undefined || message.state === "succeeded" || message.state === "failed")
+    );
+    if (target) break;
+    await page.waitForTimeout(100);
+  }
+  if (!target) throw new Error("No agent message available to patch with an artifactRef");
+
+  const patch = await fetch(`${serverUrl}/chats/${chat.id}/messages/${target.id}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      content: {
+        type: "artifactRef",
+        path: artifactRelPath,
+        workspaceId: ws.id,
+        name: artifactName,
+        mime: "text/markdown",
+      },
+    }),
+  });
+  expect(patch.status).toBe(200);
 
   // Navigate to the chat. Wait for the avatar to confirm the app is fully
   // bootstrapped before looking for the chat in the sidebar.
@@ -84,29 +136,19 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
   await chatButton.click();
 
-  // The Artifacts panel is open by default; wait for the file to appear.
-  await expect(page.getByText(artifactName).first()).toBeVisible({
-    timeout: 10_000,
-  });
+  // The Artifacts panel is open by default; wait for the entry to appear.
+  // Match the panel row via its aria-label rather than the file name, since
+  // the patched agent message also surfaces the filename in the chat thread.
+  const panelEntry = page.getByLabel(`Open ${artifactName}`).first();
+  await expect(panelEntry).toBeVisible({ timeout: 10_000 });
 
-  // Single-click the file row.
-  await page.getByText(artifactName).first().click();
-
-  // The file detail view should open — library-detail-more is the kebab menu
-  // that only renders when an item is selected in the detail pane.
+  // Single-click the file row — the new behaviour navigates to the
+  // context/library view with this artifact selected (see ArtifactsPanel in
+  // ChatView.tsx). The kebab menu rendered by ContextDetail confirms the
+  // detail pane opened.
+  await panelEntry.click();
+  await page.waitForURL(/\/context\?[^/]*\bitem=/, { timeout: 5_000 });
   await expect(page.getByTestId("library-detail-more")).toBeVisible({
     timeout: 5_000,
   });
-
-  // No staging chip should have appeared in the compose input area.
-  // The compose footer is always rendered; the staging tray only appears when
-  // at least one file is staged. A chip bearing the artifact name inside the
-  // footer would indicate the old staging behaviour fired instead.
-  const footer = page.locator("footer, [data-testid='chat-footer']").first();
-  // Give the old 250 ms debounce time to fire if the implementation hasn't
-  // changed yet — the test intentionally waits past it.
-  await page.waitForTimeout(400);
-  await expect(
-    page.getByText(artifactName).nth(0),
-  ).toBeVisible(); // still visible in the panel (not navigated away)
 });
