@@ -8,21 +8,10 @@ import {
   goalSkillName,
   writeDeskSkillFiles,
 } from "../src/goalSkills.js";
-import {
-  DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
-  DESK_CLI_SKILL_NAME,
-  DESK_FILE_TO_MARKDOWN_SKILL_NAME,
-  DESK_PERSISTENCE_SKILL_NAME,
-  DESK_TASK_SCHEDULE_SKILL_NAME,
-} from "../src/skills.js";
+import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
 
-const REFERENCE_SKILLS = [
-  DESK_CLI_SKILL_NAME,
-  DESK_TASK_SCHEDULE_SKILL_NAME,
-  DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
-  DESK_FILE_TO_MARKDOWN_SKILL_NAME,
-  DESK_PERSISTENCE_SKILL_NAME,
-] as const;
+const REFERENCE_SKILLS = DESK_REFERENCE_SKILLS.map((skill) => skill.name);
+const skillName = (name: string) => DESK_REFERENCE_SKILLS.find((skill) => skill.name === name)?.name ?? name;
 
 describe("Desk skills", () => {
   it("materializes Desk reference and goal prompts into the global skills directory", async () => {
@@ -47,7 +36,7 @@ describe("Desk skills", () => {
         expect(stat.isDirectory()).toBe(true);
         expect(name).toMatch(/^desk-[a-z0-9-]+$/);
         expect(skill).toContain(`name: ${name}\n`);
-        expect(skill).toMatch(/description: "?Use when/);
+        expect(skill).toMatch(/description: "?(Use when|Use before)/);
         expect(skill).toContain("compatibility: opencode");
         expect(skill).toContain("metadata:\n  source: desk");
         expect(skill).toMatch(/^---\n[\s\S]+\n---\n\n\S/);
@@ -66,11 +55,11 @@ describe("Desk skills", () => {
       await writeDeskSkillFiles(home);
 
       const skillsDir = path.join(home, ".skills");
-      const cli = await fs.readFile(path.join(skillsDir, DESK_CLI_SKILL_NAME, "SKILL.md"), "utf-8");
-      const schedule = await fs.readFile(path.join(skillsDir, DESK_TASK_SCHEDULE_SKILL_NAME, "SKILL.md"), "utf-8");
-      const attach = await fs.readFile(path.join(skillsDir, DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME, "SKILL.md"), "utf-8");
-      const convert = await fs.readFile(path.join(skillsDir, DESK_FILE_TO_MARKDOWN_SKILL_NAME, "SKILL.md"), "utf-8");
-      const persistence = await fs.readFile(path.join(skillsDir, DESK_PERSISTENCE_SKILL_NAME, "SKILL.md"), "utf-8");
+      const cli = await fs.readFile(path.join(skillsDir, skillName("desk-cli"), "SKILL.md"), "utf-8");
+      const schedule = await fs.readFile(path.join(skillsDir, skillName("desk-cli-task-schedule"), "SKILL.md"), "utf-8");
+      const attach = await fs.readFile(path.join(skillsDir, skillName("desk-cli-chat-attach-artifact"), "SKILL.md"), "utf-8");
+      const convert = await fs.readFile(path.join(skillsDir, skillName("desk-cli-file-to-markdown"), "SKILL.md"), "utf-8");
+      const persistence = await fs.readFile(path.join(skillsDir, skillName("desk-persistence"), "SKILL.md"), "utf-8");
 
       expect(cli).toContain("# Desk CLI");
       expect(cli).toContain("## desk-agent chat attach-artifact");

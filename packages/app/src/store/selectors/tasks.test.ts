@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { buildTaskLifecycleMove, buildTaskStatusMove } from '@/lib/task-status'
 import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from './tasks'
 import type { ServerMessage } from '../types'
 
@@ -168,6 +169,71 @@ describe('task selectors', () => {
     ])
   })
 
+  it('shows a parent task as active while an agent-owned task_run is running', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_running_child',
+      role: 'user',
+      kind: 'task',
+      title: 'Run check',
+      content: { type: 'text', text: 'Run check' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'pending',
+    }), [], [], [], [
+      message({
+        id: 'msg_run_active',
+        parentId: 'msg_parent_running_child',
+        kind: 'task_run',
+        state: 'running',
+        executeAt: undefined,
+        startedAt: '2099-05-07T08:00:10.000Z',
+      }),
+    ])
+
+    expect(task.status).toBe('active')
+  })
+
+  it('does not let completed agent runs move the parent task to complete', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_completed_child',
+      role: 'user',
+      kind: 'task',
+      title: 'Run check',
+      content: { type: 'text', text: 'Run check' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'pending',
+    }), [], [], [], [
+      message({
+        id: 'msg_run_done',
+        parentId: 'msg_parent_completed_child',
+        kind: 'task_run',
+        state: 'succeeded',
+        executeAt: undefined,
+        startedAt: '2099-05-07T08:00:10.000Z',
+        endedAt: '2099-05-07T08:00:30.000Z',
+      }),
+    ])
+
+    expect(task.status).toBe('todo')
+  })
+
+  it('does not show errored parent tasks as complete', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_failed',
+      role: 'user',
+      kind: 'task',
+      title: 'Run check',
+      content: { type: 'text', text: 'Run check' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'failed',
+    }), [])
+
+    expect(task.status).toBe('todo')
+    expect(task.statusText).toBe('Failed')
+  })
+
   it('falls back to a generic summary task name when the chat title is unavailable', () => {
     const task = toUiTask(message({ title: 'Summary refresh' }), [], [])
 
@@ -188,5 +254,113 @@ describe('task selectors', () => {
     expect(task.description).toBe('Compare revenue and expenses.')
     expect(task.messageKind).toBe('task')
     expect(task.messageContentType).toBe('text')
+    expect(task.messageRole).toBe('user')
+    expect(task.messageState).toBe('pending')
+  })
+
+  it('centralizes board status moves into run or patch actions', () => {
+    const base = toUiTask(message({
+      id: 'msg_user_task',
+      role: 'user',
+      kind: 'task',
+      content: { type: 'text', text: 'Ship it' },
+      executeAt: undefined,
+      cron: undefined,
+    }), [])
+
+    expect(buildTaskStatusMove(base, 'active')).toEqual({ kind: 'run', optimisticStatus: 'active' })
+    expect(buildTaskStatusMove({ ...base, status: 'active' }, 'complete')).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'complete',
+      patch: { state: 'cancelled' },
+    })
+    expect(buildTaskStatusMove({ ...base, status: 'complete' }, 'todo')).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'todo',
+      patch: { executeAt: null, cron: null, state: 'pending' },
+    })
+    expect(buildTaskStatusMove(base, 'scheduled', 'user', () => new Date('2099-05-07T10:00:00.000Z'))).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'scheduled',
+      patch: { state: 'pending', executeAt: '2099-05-08T10:00:00.000Z' },
+    })
+  })
+
+  it('uses the same status policy for paused sidebar tasks without reading labels', () => {
+    const paused = toUiTask(message({
+      id: 'msg_paused_task',
+      role: 'user',
+      kind: 'task',
+      content: { type: 'text', text: 'Paused task' },
+      state: 'paused',
+      executeAt: undefined,
+      cron: undefined,
+    }), [])
+
+    expect(paused.status).toBe('todo')
+    expect(paused.messageState).toBe('paused')
+    expect(buildTaskStatusMove(paused, 'todo')).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'todo',
+      patch: { executeAt: null, cron: null, state: 'pending' },
+    })
+    expect(buildTaskLifecycleMove(paused, 'resume')).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'todo',
+      patch: { state: 'pending' },
+    })
+    expect(buildTaskLifecycleMove(paused, 'pause')).toEqual({ kind: 'none' })
+  })
+
+  it('keeps sidebar lifecycle actions user-owned and task-only', () => {
+    const base = toUiTask(message({
+      id: 'msg_lifecycle_policy',
+      role: 'user',
+      kind: 'task',
+      content: { type: 'text', text: 'Lifecycle policy' },
+      executeAt: undefined,
+      cron: undefined,
+    }), [])
+
+    expect(buildTaskLifecycleMove(base, 'pause')).toEqual({
+      kind: 'patch',
+      optimisticStatus: 'todo',
+      patch: { state: 'paused' },
+    })
+    expect(buildTaskLifecycleMove(base, 'pause', 'agent')).toEqual({ kind: 'none' })
+    expect(buildTaskLifecycleMove({ ...base, messageKind: 'summary' }, 'pause')).toEqual({ kind: 'none' })
+  })
+
+  it('keeps parent task status moves user-gesture-only and task-only', () => {
+    const base = toUiTask(message({
+      id: 'msg_user_task_policy',
+      role: 'user',
+      kind: 'task',
+      content: { type: 'text', text: 'Policy check' },
+      executeAt: undefined,
+      cron: undefined,
+    }), [])
+
+    expect(buildTaskStatusMove(base, 'active', 'agent')).toEqual({ kind: 'none' })
+    expect(buildTaskStatusMove({ ...base, messageKind: 'summary' }, 'active', 'user')).toEqual({ kind: 'none' })
+    expect(buildTaskStatusMove({ ...base, messageRole: 'agent' }, 'active', 'agent')).toEqual({ kind: 'none' })
+    expect(buildTaskStatusMove({ ...base, messageRole: 'agent' }, 'active', 'user')).toEqual({
+      kind: 'run',
+      optimisticStatus: 'active',
+    })
+  })
+
+  it('uses the whole task message body as the description when the title is stored separately', () => {
+    const task = toUiTask(message({
+      id: 'msg_task_separate_title',
+      role: 'agent',
+      kind: 'task',
+      title: 'Show fallback for tool-only chat runs',
+      content: { type: 'text', text: 'Add a visible fallback reply when a chat run only emits tool calls.' },
+      executeAt: undefined,
+    }), [])
+
+    expect(task.name).toBe('Show fallback for tool-only chat runs')
+    expect(task.description).toBe('Add a visible fallback reply when a chat run only emits tool calls.')
   })
 })

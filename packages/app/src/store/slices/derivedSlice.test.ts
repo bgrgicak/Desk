@@ -4,8 +4,11 @@ import reducer, {
   selectFileChangeCounter,
   markChatRunning,
   markChatIdle,
+  markChatFailed,
+  clearChatFailed,
   clearWsKnownChatIds,
   selectRunningChatIds,
+  selectFailedChatIds,
 } from './derivedSlice'
 import { api } from '../api'
 
@@ -102,13 +105,27 @@ describe('running chat tracking', () => {
     state = reducer(state, clearWsKnownChatIds())
     expect(state.wsKnownChatIds).toEqual([])
   })
+
+  it('tracks failed chats separately and clears the failure when retrying', () => {
+    let state = reducer(undefined, { type: '@@INIT' })
+    state = reducer(state, markChatFailed('chat-1'))
+    expect(selectFailedChatIds(root(state))).toEqual(['chat-1'])
+    expect(selectRunningChatIds(root(state))).toEqual([])
+
+    state = reducer(state, markChatRunning('chat-1'))
+    expect(selectFailedChatIds(root(state))).toEqual([])
+    expect(selectRunningChatIds(root(state))).toEqual(['chat-1'])
+
+    state = reducer(state, clearChatFailed('chat-1'))
+    expect(selectFailedChatIds(root(state))).toEqual([])
+  })
 })
 
 describe('cold-start hydration via getChats', () => {
   const root = (s: ReturnType<typeof reducer>) => ({ derived: s }) as never
 
   /** Build a fake fulfilled action that matches api.endpoints.getChats.matchFulfilled */
-  function makeChatsFulfilledAction(chats: Array<{ id: string; running?: boolean }>) {
+  function makeChatsFulfilledAction(chats: Array<{ id: string; running?: boolean; failed?: boolean }>) {
     const action = {
       type: `${api.reducerPath}/executeQuery/fulfilled`,
       payload: chats,

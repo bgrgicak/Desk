@@ -18,6 +18,9 @@ import {
   buildDefaultMountPlan,
   createOrReuse,
   execRun as runtimeExecRun,
+  classifyResourceError,
+  growSandboxForResourceError,
+  reapIdleSandboxes,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   listModels,
@@ -36,6 +39,12 @@ import {
 export interface RunManagerOptions {
   pool: Pool;
   emit?: (event: WsEvent) => void;
+  /**
+   * Resolves the active provider API keys for a given user. Injected by the
+   * API layer (which owns the vault) so the scheduler doesn't need to import
+   * VaultStore directly. Returns an empty object when the vault is locked.
+   */
+  resolveProviderKeys?: (userId: string) => Promise<Record<string, string>>;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
@@ -76,6 +85,7 @@ function computeNextRun(cronExpr: string): string {
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
   const home = opts.home ?? resolveDeskHome();
+  const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
   const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
@@ -238,9 +248,17 @@ export function createRunManager(opts: RunManagerOptions) {
     };
   }
 
-  function shouldIncludeInPromptContext(message: Message): boolean {
+  function shouldIncludeInPromptContext(message: Message, taskRunParentIds: Set<string> = new Set()): boolean {
     const type = message.content.type;
     if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
+    // Scheduled task definitions and their run children are operational records,
+    // not conversational turns. If included as normal Agent/User transcript text,
+    // a later agent run can misread an old task as a fresh instruction and
+    // schedule it again.
+    if (message.kind === "task" || message.kind === "task_run") return false;
+    // Task run output is stored as a normal agent chat child under the task_run
+    // row, so exclude those children too.
+    if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
     if (message.state === "pending" || message.state === "running") return false;
     return message.role === "user" || message.role === "agent" || type === "summary";
   }
@@ -258,9 +276,10 @@ export function createRunManager(opts: RunManagerOptions) {
     currentUserMessageId?: string,
   ): Promise<string> {
     const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
+    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
     const entries = items
       .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
-      .filter(shouldIncludeInPromptContext)
+      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
       .map(formatMessageForPrompt)
       .filter((entry): entry is { role: string; text: string } => entry !== null);
 
@@ -390,9 +409,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = msg.agentId ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
-    const providerKeys = userId
-      ? await queries.userSettings.getActiveProviderKeys(pool, userId)
-      : {};
+    const providerKeys = userId ? await resolveProviderKeys(userId) : {};
     const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
@@ -449,8 +466,8 @@ export function createRunManager(opts: RunManagerOptions) {
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
    *   - `task`: inserts a fresh `task_run` child of the task and runs the
-   *     agent against it. The task definition is *not* mutated through
-   *     pending → running — it stays as the schedule. Each fire produces
+   *     agent against it. The scheduler does not mutate the parent through
+   *     pending → running; each fire produces
    *     a new run row with its own state/started_at/ended_at, so a cron
    *     task accumulates a real run history. Concurrent fires of the same
    *     task converge in `startTaskRun` (locks the task, refuses if a run
@@ -470,6 +487,11 @@ export function createRunManager(opts: RunManagerOptions) {
   async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
+    const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
+      `SELECT workspace_id FROM chats WHERE id = ?`,
+      [msg.chatId],
+    );
+    const eventWorkspaceId = fireChatRows[0]?.workspace_id;
 
     // Execution target: the row whose state/started_at/ended_at this fire
     // owns. For a task, it's a freshly-inserted task_run child; for other
@@ -488,10 +510,9 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       if (!run) return { fired: false, childIds: [] };
       runId = run.id;
-      emit({ type: "message.appended", payload: run });
-      // Emit parent task update so the kanban moves the card to Active.
-      const updatedTask = await queries.messages.findById(pool, messageId);
-      if (updatedTask) emit({ type: "message.updated", payload: updatedTask });
+      emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+      // The task_run child is the authoritative agent-owned Active signal. The
+      // parent is emitted only when a lifecycle policy below changes it.
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -577,9 +598,7 @@ export function createRunManager(opts: RunManagerOptions) {
       logFile = path.join(logDir, `${runId}.log`);
       logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
-      const providerKeys = userId
-        ? await queries.userSettings.getActiveProviderKeys(pool, userId)
-        : {};
+      const providerKeys = userId ? await resolveProviderKeys(userId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
@@ -606,6 +625,9 @@ export function createRunManager(opts: RunManagerOptions) {
 
       let result: { exitCode: number };
       if (msg.content.type === "reflection_request") {
+        // Reflections run in their own short-lived sandbox and never
+        // surface a non-zero exit through this path, so they bypass
+        // the resource-retry loop entirely.
         const journal = await fireReflectionTask(
           msg,
           workspaceId,
@@ -618,8 +640,6 @@ export function createRunManager(opts: RunManagerOptions) {
         );
         await logReflectionOutcome(runId, journal, onLog);
         result = { exitCode: 0 };
-      } else if (opts.execRunFn) {
-        result = await opts.execRunFn(runId, agentId, prompt, onLog, { agentFileInput, attachments });
       } else {
         // Hub mounts every owned project workspace read-only at
         // `~/workspaces/{slug}/`. Project-workspace runs get the default
@@ -632,31 +652,95 @@ export function createRunManager(opts: RunManagerOptions) {
         const mountPlan = workspaceKind === "hub"
           ? buildDefaultMountPlan(home, workspaceSlug, siblingSlugs)
           : undefined;
-        const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
-          ? { containerId: "fake-sandbox", workspaceId }
-          : await createOrReuse(
+
+        // Event-driven resource auto-scaling: capture stderr per-attempt
+        // and, if a non-zero exit looks resource-shaped (`spawn EAGAIN`,
+        // OOM-killer, ENOMEM), grow the sandbox in place and re-run the
+        // same message. The user sees a delay, not an error.
+        //
+        // MAX_RESOURCE_RETRIES caps both retry-loop runaway (a
+        // misclassified non-resource failure) and the reachable
+        // ceiling. From the 512 baseline, 3 retries hit 1024 → 2048
+        // → 4096, matching SANDBOX_MAX_PIDS / SANDBOX_MAX_MEMORY_BYTES.
+        const MAX_RESOURCE_RETRIES = 3;
+        // Keep only the tail of stderr — a long build can emit MBs of
+        // output, and we run `toLowerCase()` plus several regex/includes
+        // against this buffer every time we classify. Resource-failure
+        // markers all appear near the end of stderr, right before the
+        // process exits.
+        const STDERR_TAIL_BYTES = 8 * 1024;
+        let stderrCapture = "";
+        const captureStderr = (payload: string): void => {
+          stderrCapture += payload + "\n";
+          if (stderrCapture.length > STDERR_TAIL_BYTES) {
+            stderrCapture = stderrCapture.slice(-STDERR_TAIL_BYTES);
+          }
+        };
+        const onLogWithStderrCapture = async (evt: LogEvent) => {
+          if (evt.kind === "stderr") captureStderr(evt.payload);
+          await onLog(evt);
+        };
+        let attempt = 0;
+        while (true) {
+          if (opts.execRunFn) {
+            result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
+          } else {
+            const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
+              ? { containerId: "fake-sandbox", workspaceId }
+              : await createOrReuse(
+                  workspaceId,
+                  workspaceSlug,
+                  home,
+                  providerKeys,
+                  mountPlan,
+                  extraEnv,
+                  workspaceKind,
+                );
+            result = await runtimeExecRun(pool, handle, {
+              runId,
+              prompt,
+              home,
               workspaceId,
               workspaceSlug,
-              home,
-              providerKeys,
-              mountPlan,
-              extraEnv,
               workspaceKind,
+              chatId: msg.chatId,
+              agent: agentFileInput,
+              attachments,
+              providerKeys,
+              extraEnv,
+              onLog: onLogWithStderrCapture,
+            });
+          }
+          if (result.exitCode === 0) break;
+          if (attempt >= MAX_RESOURCE_RETRIES) break;
+          const failure = classifyResourceError(result.exitCode, stderrCapture);
+          if (!failure) break;
+          // Stop the current logStream and truncate the file so the retry
+          // log doesn't tail-mix with the failed attempt's events. The user
+          // shouldn't see "agent crashed then succeeded"; they should see
+          // only the successful attempt's events.
+          await new Promise<void>((resolve) => {
+            logStream!.once("close", resolve);
+            logStream!.end();
+          });
+          await fs.promises.truncate(logFile!, 0);
+          logStream = fs.createWriteStream(logFile!, { flags: "a" });
+          stderrCapture = "";
+          const growth = await growSandboxForResourceError(workspaceId, failure);
+          if (!growth.grew) {
+            // Already at the maximum — no point retrying. Fall through to
+            // finalise as failed; the user does see the failure in this case.
+            console.warn(
+              `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
             );
-        result = await runtimeExecRun(pool, handle, {
-          runId,
-          prompt,
-          home,
-          workspaceId,
-          workspaceSlug,
-          workspaceKind,
-          chatId: msg.chatId,
-          agent: agentFileInput,
-          attachments,
-          providerKeys,
-          extraEnv,
-          onLog,
-        });
+            break;
+          }
+          attempt++;
+          console.info(
+            `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
+              `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
+          );
+        }
       }
 
       // Wait for pending writes to flush before reading the file back.
@@ -755,16 +839,25 @@ export function createRunManager(opts: RunManagerOptions) {
         parentId: runId,
         ...(errorChildKind ? { kind: errorChildKind } : {}),
       });
-      emit({ type: "message.appended", payload: child });
+      emit({ type: "message.appended", payload: child, workspaceId: eventWorkspaceId });
       return { fired: true, childIds: [child.id] };
     }
   }
 
   /**
    * After a task run completes: cron tasks advance execute_at to the next
-   * occurrence and stay pending; one-shot tasks transition to the terminal
-   * state and clear execute_at.
+   * occurrence and stay pending; successful one-shot tasks transition to done
+   * and clear execute_at. Failed one-shot runs clear the missed occurrence but
+   * keep the parent task pending so an error does not count as completion.
    */
+  function isUnscheduledTask(task: Message): boolean {
+    // Unscheduled tasks are kanban cards first and execution prompts second.
+    // A completed agent run is history on a task_run child; it must not
+    // silently move the parent card out of Todo/Active regardless of who
+    // authored the parent task.
+    return task.kind === "task" && !task.executeAt && !task.cron;
+  }
+
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
@@ -797,11 +890,9 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    // User-created unscheduled tasks: the user owns their status. Leave
-    // the parent at 'running' so the card stays in the Active column.
-    if (task.role === "user" && !task.executeAt) return;
+    if (isUnscheduledTask(task)) return;
     const updated = await queries.messages.updateMessage(pool, task.id, {
-      state: terminal,
+      state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,
     });
     if (updated) emit({ type: "message.updated", payload: updated });
@@ -842,6 +933,67 @@ export function createRunManager(opts: RunManagerOptions) {
     timer.unref();
     return timer;
   }
+
+  /**
+   * Removes sandbox containers for workspaces that have had no
+   * `state='running'` rows and no message activity in the last
+   * `idleMs`. Next fire for that workspace builds a fresh container
+   * at the baseline 512 / 512 MB — so this also serves as the
+   * "scale back to baseline" mechanism, free of charge.
+   *
+   * One SQL query, one `docker ps`, then one `docker rm -f` per
+   * idle workspace. Cheap enough to live alongside the existing
+   * 60 s `pollTimer` without measurable cost.
+   */
+  /**
+   * Returns the set of workspace ids that should keep their sandbox
+   * alive: any workspace with a `state='running'` row, or any message
+   * whose `updated_at` is within `idleMs` of now. Exposed separately
+   * from `sweepIdleSandboxes` so tests can pin down the SQL-side
+   * decision directly without needing a real container engine.
+   */
+  async function getActiveWorkspaceIds(idleMs: number): Promise<Set<string>> {
+    const cutoff = new Date(Date.now() - idleMs).toISOString();
+    // Workspaces with *any* recent activity — running rows, just-fired
+    // pending rows, or just-edited rows — count as active and keep their
+    // sandbox. Joining through chats so we get workspace_id directly.
+    const { rows } = await pool.query<{ workspace_id: string }>(
+      `SELECT DISTINCT c.workspace_id
+       FROM messages m JOIN chats c ON c.id = m.chat_id
+       WHERE m.state = 'running'
+          OR m.updated_at >= ?`,
+      [cutoff],
+    );
+    return new Set(rows.map((r) => r.workspace_id));
+  }
+
+  async function sweepIdleSandboxes(
+    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
+  ): Promise<string[]> {
+    const active = await getActiveWorkspaceIds(idleMs);
+    // Pass `idleMs` as the per-container minimum age so a brand-new
+    // container created in the window between the SQL query and the
+    // `docker ps` can't be reaped — the very next sweep will see its
+    // first message row and treat the workspace as active.
+    return reapIdleSandboxes(active, idleMs);
+  }
+
+  function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      void sweepIdleSandboxes().catch((err) => {
+        console.warn("idle sandbox sweep failed:", err);
+      });
+    }, intervalMs);
+    timer.unref();
+    return timer;
+  }
+  // Note: an earlier draft of this file shipped a stale-run watchdog that
+  // cancelled any `state='running'` row whose `started_at` was older than
+  // 30 minutes. That was the wrong shape of fix — a single task should be
+  // free to run for 24-48 hours, and silently killing valid long jobs
+  // masks the actual root cause of any stuck rows we may see. If we end
+  // up with stuck rows in practice, fix the path that left them stuck
+  // instead of adding a watchdog that reaps them.
 
   /** Permanently deletes a message row. Used for ephemeral rows (e.g. summary) that should leave no trace. */
   async function cancelMessage(messageId: string): Promise<void> {
@@ -1017,7 +1169,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       try {
         const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await queries.userSettings.getActiveProviderKeys(pool, userId) : {};
+        const providerKeys = userId ? await resolveProviderKeys(userId) : {};
         const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
         const models = await listModels(workspaceId, workspaceSlug, {
           providerKeys,
@@ -1045,8 +1197,9 @@ export function createRunManager(opts: RunManagerOptions) {
 
   async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
     const items = await queries.messages.listAgentContextByChat(pool, chatId);
+    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
     const tokenized = items
-      .filter(shouldIncludeInPromptContext)
+      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
       .map((m) => {
         const formatted = formatMessageForPrompt(m);
         return formatted ? { role: formatted.role, text: formatted.text } : null;
@@ -1076,6 +1229,87 @@ export function createRunManager(opts: RunManagerOptions) {
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
     const msg = await queries.messages.findById(pool, messageId);
     if (msg) emit({ type: "message.updated", payload: msg });
+  }
+
+  /**
+   * If the chat's currently-running agent_turn has gone silent (no log
+   * activity for `staleAfterMs`), cancel it so a follow-up user message
+   * can be fired in its place. An active run — one whose opencode is
+   * still emitting events (tokens, tool calls, step boundaries) — is
+   * left untouched; a user follow-up sent while a healthy run is in
+   * flight will create a new agent_turn but won't interrupt the old one.
+   *
+   * The signal is *log mtime*, not wall-clock age of the row. Opencode
+   * writes to the per-message log file on every event via `onLog`, so a
+   * legitimately long-running step (large LLM stream, slow tool, chatty
+   * build) keeps the file growing and is never considered stalled. The
+   * file only stops growing when opencode is genuinely waiting on
+   * something that isn't coming back (deadlocked tool, dropped LLM
+   * connection, internal hang).
+   *
+   * Why this exists: the user noticed chats sitting in `state='running'`
+   * for very long stretches with no reply, and our previous behavior had
+   * no way to recover without a server restart. With this hook called
+   * from the POST /messages route, a follow-up like "Are you stuck?"
+   * unblocks the chat by preempting the hung run, while a follow-up to a
+   * healthy long task does nothing harmful.
+   */
+  async function preemptStalledChatRun(
+    chatId: string,
+    opts: { staleAfterMs?: number } = {},
+  ): Promise<{ preempted: string } | null> {
+    const staleAfterMs = opts.staleAfterMs
+      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+    // Only consider 'chat'-kind agent_turn rows: scheduled task_runs in the
+    // same chat have their own lifecycle and shouldn't be interrupted by a
+    // chat follow-up.
+    const { rows } = await pool.query<{
+      id: string;
+      workspace_slug: string;
+      started_at: string | null;
+    }>(
+      `SELECT m.id, w.path AS workspace_slug, m.started_at
+         FROM messages m
+         JOIN chats c ON c.id = m.chat_id
+         JOIN workspaces w ON w.id = c.workspace_id
+        WHERE m.chat_id = ?
+          AND m.state = 'running'
+          AND m.kind = 'chat'
+          AND json_valid(m.content)
+          AND json_extract(m.content, '$.type') = 'agent_turn'
+        ORDER BY m.created_at DESC
+        LIMIT 1`,
+      [chatId],
+    );
+    if (rows.length === 0) return null;
+    const running = rows[0];
+    const logPath = path.join(
+      home,
+      running.workspace_slug,
+      ".chats",
+      chatId,
+      "logs",
+      `${running.id}.log`,
+    );
+    let mtimeMs: number;
+    try {
+      const stat = await fsp.stat(logPath);
+      mtimeMs = stat.mtimeMs;
+    } catch {
+      // Deliberately conservative: a missing log file means opencode hasn't
+      // emitted its first event yet, which usually means the run is still
+      // in container-cold-start (entrypoint downloading deps, image pull,
+      // `.deskrc` running). Those legitimately take minutes; preempting
+      // there would abandon valid in-flight work. We only preempt when we
+      // have positive evidence of activity-then-silence — that's the
+      // "opencode wedged" signal. Stuck rows with no log ever are recovered
+      // by `recoverOrphanedRuns` at the requeue cap, not this hook.
+      return null;
+    }
+    const ageMs = Date.now() - mtimeMs;
+    if (ageMs < staleAfterMs) return null;
+    await cancelRun(running.id);
+    return { preempted: running.id };
   }
 
   /** Pauses a pending scheduled message: transitions state to 'paused'. */
@@ -1141,8 +1375,12 @@ export function createRunManager(opts: RunManagerOptions) {
     fireMessage,
     tickScheduled,
     startPolling,
+    sweepIdleSandboxes,
+    startIdleSweeper,
+    getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
+    preemptStalledChatRun,
     pauseMessage,
     resumeMessage,
     rescheduleMessage,

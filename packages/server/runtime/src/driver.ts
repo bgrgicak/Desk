@@ -1,4 +1,6 @@
 import { SANDBOX_HOME } from "./mounts.js";
+import type { Engine, ExecHandle } from "./engine.js";
+import { managedConnectionDefinitions } from "@agent-desk/shared";
 
 export interface RunOptions {
   runId: string;
@@ -21,6 +23,8 @@ export interface RunOptions {
   attachments?: string[];
   /** On-disk slug for the workspace this run belongs to — feeds the mount plan + container name. */
   workspaceSlug: string;
+  /** Chat this run belongs to. Exported so in-sandbox CLIs can reject cross-chat writes. */
+  chatId?: string;
   /** DESK_HOME root. When omitted, runtime storage resolution is used. */
   home?: string;
   /**
@@ -145,6 +149,7 @@ export function shSingleQuote(s: string): string {
  * Exported so the command synthesis is unit-testable without Docker.
  */
 export function buildOpencodeCommand(opts: {
+  runId?: string;
   agentFileId?: string;
   attachments?: string[];
   model?: string;
@@ -156,19 +161,170 @@ export function buildOpencodeCommand(opts: {
     .join("");
   const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
   const promptExpr = opts.promptFile ? `"$(cat "$DESK_PROMPT_FILE")"` : `"$DESK_PROMPT"`;
+  const pidFile = runPidFile(opts.runId ?? "unknown");
+  const sandboxAuthSetup = buildSandboxAuthSetup(opts.runId ?? "unknown");
+  const opencode = `opencode run ${promptExpr}${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`;
+  const script = [
+    "mkdir -p /tmp/desk-runs",
+    `pidfile=${shSingleQuote(pidFile)}`,
+    sandboxAuthSetup,
+    "if command -v setsid >/dev/null 2>&1; then " +
+      // setsid makes the OpenCode exec a process-group leader. --wait is
+      // important: util-linux setsid may fork when its caller is already a
+      // process-group leader. Without --wait the docker exec wrapper can exit
+      // immediately, causing our finally cleanup to kill the just-started run.
+      // We write the leader PID before exec so cancel/finally cleanup can
+      // signal the whole tree, including MCP/build grandchildren that would
+      // otherwise survive.
+      `setsid --wait sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}; status=$?; exit "$status"`,
+    "else " +
+      // Older/minimal sandbox images may not include util-linux/setsid. Do not
+      // fail the run at startup in that case; record the opencode PID and run
+      // normally. Cancellation can still fall back to killing the docker exec
+      // wrapper, and the next rebuilt image can restore process-group cleanup.
+      `echo 'Desk runtime warning: setsid unavailable; process-tree cleanup degraded' >&2; sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" ${opencode}; status=$?; exit "$status"`,
+    "fi",
+  ].join("; ");
   return [
     "sh", "-c",
-    `exec opencode run ${promptExpr}${agentFlag}${fileFlags}${modelFlag} --dangerously-skip-permissions --format json`,
+    script,
   ];
 }
 
 /** Tracks active execs by runId so cancelRun can find the in-container PID to kill. */
-const activeExecs = new Map<string, { containerId: string }>();
+const activeExecs = new Map<string, { containerId: string; pidFile: string; execHandle: ExecHandle }>();
+
+function runPidFile(runId: string): string {
+  // Keep the filename shell-safe even if a test injects an odd id. Production
+  // run ids are already generated identifiers, but cleanup commands are too
+  // sensitive to trust that implicitly.
+  return `/tmp/desk-runs/${safeRunId(runId)}.pid`;
+}
+
+function buildSandboxAuthSetup(runId: string): string {
+  return managedConnectionDefinitions()
+    .map((definition) => {
+      const setup = definition.sandboxSetup ? SANDBOX_AUTH_SETUP_BUILDERS[definition.sandboxSetup] : undefined;
+      return setup ? setup(runId) : "";
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+const SANDBOX_AUTH_SETUP_BUILDERS = {
+  "github-askpass": buildGitHubAskpassSetup,
+} satisfies Record<string, (runId: string) => string>;
+
+function buildGitHubAskpassSetup(runId: string): string {
+  const askpassFile = `/tmp/desk-github-askpass-${safeRunId(runId)}`;
+  return "if [ -n \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\" ]; then " +
+    `askpass=${shSingleQuote(askpassFile)}; ` +
+    "umask 077; " +
+    "printf '%s\\n' '#!/bin/sh' 'case \"$1\" in' '  *Username*) printf '\''%s'\'' '\''x-access-token'\'' ;;' '  *) printf '\''%s'\'' \"${GITHUB_TOKEN:-${GH_TOKEN:-}}\" ;;' 'esac' > \"$askpass\"; " +
+    "chmod 700 \"$askpass\"; " +
+    "trap 'rm -f \"$askpass\"' EXIT HUP INT TERM; " +
+    "export GH_TOKEN=\"${GH_TOKEN:-$GITHUB_TOKEN}\" GITHUB_TOKEN=\"${GITHUB_TOKEN:-$GH_TOKEN}\" GIT_ASKPASS=\"$askpass\" GIT_TERMINAL_PROMPT=0; " +
+    "fi";
+}
+
+function safeRunId(runId: string): string {
+  return runId.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+/**
+ * Force-kill a previously-started run's process tree, given its runId. Used
+ * at desk-server startup to reap opencode processes left alive in a sandbox
+ * by a previous desk-server (e.g. tsx-watch reload, crash) so the re-fire
+ * doesn't spawn a second opencode that fights the first for the workspace's
+ * `~/.local/share/opencode/opencode.db`. Returns true if a process group
+ * was signalled. Idempotent: if the pidfile is absent, the leader is dead,
+ * or the container exec fails, it resolves to false without throwing.
+ */
+export async function killRunProcessTreeByRunId(
+  engine: Engine,
+  containerId: string,
+  runId: string,
+): Promise<boolean> {
+  return cleanupRunProcessTree(engine, containerId, runPidFile(runId), {
+    waitForPidFileMs: 0,
+    removePidFileWhenMissing: true,
+  });
+}
+
+export async function _cleanupRunProcessTreeForTest(
+  engine: Engine,
+  containerId: string,
+  pidFile: string,
+  opts: Parameters<typeof cleanupRunProcessTree>[3] = {},
+): Promise<boolean> {
+  return cleanupRunProcessTree(engine, containerId, pidFile, opts);
+}
+
+async function cleanupRunProcessTree(
+  engine: Engine,
+  containerId: string,
+  pidFile: string,
+  opts: {
+    waitForPidFileMs?: number;
+    removePidFileWhenMissing?: boolean;
+  } = {},
+): Promise<boolean> {
+  let sawPidFile = false;
+  const waitForPidFile = async () => {
+    const deadline = Date.now() + (opts.waitForPidFileMs ?? 0);
+    while (true) {
+      const h = await engine.exec({
+        containerId,
+        cmd: ["sh", "-c", `[ -s ${shSingleQuote(pidFile)} ]`],
+      });
+      if ((await h.wait()) === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+
+  const execCleanup = async (signal: "TERM" | "KILL") => {
+    const script = [
+      `pidfile=${shSingleQuote(pidFile)}`,
+      'pid="$(cat "$pidfile" 2>/dev/null || true)"',
+      'case "$pid" in ""|*[!0-9]*) exit 0;; esac',
+      // Signal only the run's process group. Avoid a direct-PID fallback here:
+      // after the OpenCode leader exits, PID reuse inside a warm sandbox could
+      // otherwise terminate an unrelated process during final stale cleanup.
+      `kill -${signal} -- "-$pid" 2>/dev/null && exit 42`,
+      "exit 0",
+    ].join("; ");
+    const h = await engine.exec({ containerId, cmd: ["sh", "-c", script] });
+    return (await h.wait()) === 42;
+  };
+
+  const removePidFile = async () => {
+    const h = await engine.exec({
+      containerId,
+      cmd: ["sh", "-c", `rm -f ${shSingleQuote(pidFile)}`],
+    });
+    await h.wait();
+  };
+
+  try {
+    sawPidFile = await waitForPidFile();
+    const signalled = await execCleanup("TERM");
+    if (signalled) {
+      await new Promise((r) => setTimeout(r, 3000));
+      await execCleanup("KILL");
+    }
+    return signalled;
+  } finally {
+    if (sawPidFile || opts.removePidFileWhenMissing !== false) {
+      await removePidFile().catch(() => {});
+    }
+  }
+}
 
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, providerKeyEnv, sandboxUser } = await import("./docker.js");
+      const { createOrReuse, providerKeyExecEnv, sandboxUser } = await import("./docker.js");
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
@@ -188,11 +344,13 @@ function createRealDriver(): SandboxDriver {
       const fullPrompt = opts.prompt;
 
       const cmd = buildOpencodeCommand({
+        runId: opts.runId,
         agentFileId: opts.agentFileId,
         attachments: opts.attachments,
         model: opts.model,
         promptFile: opts.promptFile,
       });
+      const pidFile = runPidFile(opts.runId);
 
       const handle$ = await engine.exec({
         containerId: handle.containerId,
@@ -206,13 +364,16 @@ function createRealDriver(): SandboxDriver {
             : [`DESK_PROMPT=${fullPrompt}`]),
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
+          ...(opts.chatId ? [`DESK_CHAT_ID=${opts.chatId}`] : []),
           // Inject provider keys per-exec so a key added after the container
-          // was created takes effect immediately without recreation.
-          ...providerKeyEnv(opts.providerKeys, opts.extraEnv),
+          // was created takes effect immediately without recreation. Missing
+          // keys are cleared when a vault-backed map is supplied so warm
+          // containers cannot keep using deleted/disabled connections.
+          ...providerKeyExecEnv(opts.providerKeys, opts.extraEnv),
         ],
       });
 
-      activeExecs.set(opts.runId, { containerId: handle.containerId });
+      activeExecs.set(opts.runId, { containerId: handle.containerId, pidFile, execHandle: handle$ });
 
       let seq = 0;
       // The engine hands us already-demuxed stdout/stderr (the CLI
@@ -238,10 +399,27 @@ function createRealDriver(): SandboxDriver {
       handle$.stdout.on("data", emit("stdout"));
       handle$.stderr.on("data", emit("stderr"));
 
-      const exitCode = await handle$.wait();
-      await Promise.all(pendingLogs);
-      activeExecs.delete(opts.runId);
-      return { exitCode };
+      try {
+        const exitCode = await handle$.wait();
+        await Promise.all(pendingLogs);
+        return { exitCode };
+      } finally {
+        activeExecs.delete(opts.runId);
+        // Sweep the run's process group — opencode itself has exited (that's
+        // what made `wait()` resolve), but its descendants (playwright-mcp +
+        // firefox, npx wrappers, vite builds) may still be alive. Without
+        // this, every run leaks zombies into the long-lived sandbox until
+        // the container is recreated. We don't try to spare a still-alive
+        // leader: if the host wrapper died mid-run, the output stream is
+        // already gone, the work product is lost, and leaving the orphan
+        // alive just creates double-spawn contention on the next fire.
+        await cleanupRunProcessTree(engine, handle.containerId, pidFile, {
+          // If cancelRun had to kill the docker/nerdctl wrapper before the
+          // in-container shell wrote its pidfile, wait briefly here so the
+          // final cleanup still has a chance to address the process group.
+          waitForPidFileMs: 2000,
+        }).catch(() => {});
+      }
     },
 
     async cancelRun(runId) {
@@ -252,28 +430,11 @@ function createRealDriver(): SandboxDriver {
       const engine = await detectEngine();
 
       try {
-        const procs = await engine.top(tracked.containerId);
-        const target = procs.find((p) => p.cmd.includes("opencode"));
-        if (target) {
-          // SIGTERM first, then SIGKILL after a grace period if still
-          // alive. Both signals are dispatched via a short exec so the
-          // signal lands in the container's PID namespace, not the host.
-          const sendSignal = async (sig: "TERM" | "KILL") => {
-            const h = await engine.exec({
-              containerId: tracked.containerId,
-              cmd: ["kill", `-${sig}`, target.pid],
-            });
-            await h.wait();
-          };
-          await sendSignal("TERM");
-          await new Promise((r) => setTimeout(r, 3000));
-          if (activeExecs.has(runId)) {
-            const stillRunning = (await engine.top(tracked.containerId)).find(
-              (p) => p.pid === target.pid,
-            );
-            if (stillRunning) await sendSignal("KILL");
-          }
-        }
+        const signalled = await cleanupRunProcessTree(engine, tracked.containerId, tracked.pidFile, {
+          waitForPidFileMs: 2000,
+          removePidFileWhenMissing: false,
+        });
+        if (!signalled) await tracked.execHandle.cancel();
       } catch {
         // Container may have stopped or exec already finished.
       } finally {

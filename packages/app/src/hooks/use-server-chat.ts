@@ -67,7 +67,7 @@ export function useServerChat(
   const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
 
   const { data: messagesData } = useGetChatMessagesQuery(
-    { chatId: chatId! },
+    { chatId: chatId!, full: false },
     { skip: !chatId },
   )
 

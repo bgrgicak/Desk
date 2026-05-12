@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Loader2 } from 'lucide-react'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
 import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
+import type { ListMessagesResponse } from '@/store/types'
 import type { AttachmentRef, ServerMessage } from '@/store/types'
 
 // ── ChatThread ────────────────────────────────────────────────────────────────
@@ -28,6 +29,66 @@ export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | nul
     }
   }
   return null
+}
+
+/**
+ * A successful agent turn can be visually silent in the normal chat stream when
+ * the run only emitted tool/event rows that are hidden outside developer mode.
+ * In that case render an explicit completion fallback so the chat doesn't look
+ * like the agent ignored the user.
+ */
+export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerMode: boolean): boolean {
+  if (developerMode) return false
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    const turn = items[i]
+    if (turn.content.type !== 'agent_turn') continue
+    if (turn.state !== 'succeeded') return false
+
+    let sawHiddenToolOutput = false
+    for (const later of items.slice(i + 1)) {
+      if (isMessageVisible(later, false)) return false
+      if (
+        later.role === 'agent' &&
+        (later.content.type === 'toolCall' || later.content.type === 'toolResult' || later.content.type === 'events')
+      ) {
+        sawHiddenToolOutput = true
+      }
+    }
+    return sawHiddenToolOutput
+  }
+
+  return false
+}
+
+export function chatMessagesQueryKey(chatId: string, developerMode: boolean): string {
+  return `${chatId}:${developerMode ? 'full' : 'timeline'}`
+}
+
+export function shouldShowNewAssistantBadge(
+  message: ServerMessage,
+  lastAssistantId: string | null,
+  showNewBadge: boolean,
+  failedAgentTurn: ServerMessage | null,
+): boolean {
+  return showNewBadge && !failedAgentTurn && message.id === lastAssistantId
+}
+
+/**
+ * RTK Query's `data` intentionally keeps the previous successful result while a
+ * new arg is loading. That is useful for same-view refetches, but it is wrong
+ * when switching regular ⇄ developer mode: compact/timeline payloads have
+ * redacted tools and no summaries, so rendering them under developer-mode
+ * visibility makes tool calls appear inconsistently until the full request wins.
+ */
+export function currentChatMessagesData(
+  queryKey: string,
+  lastResolvedQueryKey: string,
+  currentData: ListMessagesResponse | undefined,
+  cachedData: ListMessagesResponse | undefined,
+): ListMessagesResponse | undefined {
+  if (currentData) return currentData
+  return lastResolvedQueryKey === queryKey ? cachedData : undefined
 }
 
 export interface ChatThreadProps {
@@ -91,10 +152,14 @@ export function ChatThread({
   // ── Scrollback state ─────────────────────────────────────────────────
   const [beforeCursor, setBeforeCursor] = useState<string | undefined>(undefined)
 
-  // Reset scrollback state when chatId changes.
-  const prevChatIdRef = useRef(chatId)
-  if (prevChatIdRef.current !== chatId) {
-    prevChatIdRef.current = chatId
+  // Reset scrollback state when the message source changes. Regular and
+  // developer mode use different server views/cursors, so carrying a regular
+  // scrollback cursor into developer mode can make the full view briefly load
+  // the wrong page and surface tool rows inconsistently.
+  const threadKey = `${chatId}:${developerMode ? 'full' : 'timeline'}`
+  const prevThreadKeyRef = useRef(threadKey)
+  if (prevThreadKeyRef.current !== threadKey) {
+    prevThreadKeyRef.current = threadKey
     setBeforeCursor(undefined)
   }
 
@@ -102,14 +167,18 @@ export function ChatThread({
   // so we keep showing the previous chat's messages while the next chat's
   // request is in flight, instead of blanking out and remounting the
   // textarea/dropzone mid-interaction.
-  const { data, isError } = useGetChatMessagesQuery(
-    { chatId },
+  const queryKey = chatMessagesQueryKey(chatId, developerMode)
+  const lastResolvedQueryKeyRef = useRef(queryKey)
+  const { data, currentData, isError } = useGetChatMessagesQuery(
+    { chatId, full: developerMode },
     { skip: skipQuery },
   )
+  if (currentData) lastResolvedQueryKeyRef.current = queryKey
+  const activeData = currentChatMessagesData(queryKey, lastResolvedQueryKeyRef.current, currentData, data)
 
   // Load older page when beforeCursor is set.
   const { isFetching: isFetchingOlder } = useGetChatMessagesQuery(
-    { chatId, before: beforeCursor! },
+    { chatId, before: beforeCursor!, full: developerMode },
     { skip: skipQuery || !beforeCursor },
   )
 
@@ -121,9 +190,9 @@ export function ChatThread({
    *  we can restore the scroll position after the DOM updates. */
   const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null)
 
-  const allItems = data?.items ?? []
-  const prevCursor = data?.prevCursor
-  const isInitialLoading = !skipQuery && !data && !isError
+  const allItems = activeData?.items ?? []
+  const prevCursor = activeData?.prevCursor
+  const isInitialLoading = !skipQuery && !activeData && !isError
 
   const hasPendingTrigger = allItems.some(
     m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
@@ -137,7 +206,13 @@ export function ChatThread({
     if (isTyping) return null
     return findFailedAgentTurn(allItems)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, isTyping])
+  }, [activeData, isTyping])
+
+  const showToolOnlyFallback = useMemo(
+    () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeData, developerMode, isTyping, failedAgentTurn],
+  )
 
   const messages: ServerMessage[] = useMemo(
     () => {
@@ -145,7 +220,7 @@ export function ChatThread({
       return filterMessage ? visible.filter(filterMessage) : visible
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, developerMode, filterMessage],
+    [activeData, developerMode, filterMessage],
   )
 
   const lastAssistantId = useMemo(() => {
@@ -204,10 +279,10 @@ export function ChatThread({
     }
   }, [isInitialLoading, messages.length])
 
-  // Reset initial scroll flag when chat changes.
+  // Reset initial scroll flag when the chat or backing message view changes.
   useEffect(() => {
     hasInitialScrolled.current = false
-  }, [chatId])
+  }, [chatId, developerMode])
 
   // ── Load older messages on scroll-to-top ─────────────────────────────
   const loadOlderMessages = useCallback(() => {
@@ -289,7 +364,7 @@ export function ChatThread({
                   workspaceId={workspaceId}
                   agentName={agentName}
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
-                  isNew={showNewBadge && msg.id === lastAssistantId}
+                  isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}
                   onAttachmentClick={onAttachmentClick}
                   agentHeaderClassName={agentHeaderClassName}
                   hideAgentHeader={msg.content.type === 'artifactRef'}
@@ -303,6 +378,11 @@ export function ChatThread({
               )}
             </div>
           ))}
+          {showToolOnlyFallback && (
+            <div className={resolvedStatusClassName}>
+              <ToolOnlyRunFallback />
+            </div>
+          )}
           {isTyping && (
             <div className={resolvedStatusClassName}>
               <StatusIndicator text={null} isTyping={isTyping} />
@@ -313,12 +393,29 @@ export function ChatThread({
               <FailedRunBanner
                 chatId={failedAgentTurn.chatId}
                 messageId={failedAgentTurn.id}
+                isNew={showNewBadge}
               />
             </div>
           )}
         </div>
       </div>
       {footerSlot}
+    </div>
+  )
+}
+
+function ToolOnlyRunFallback() {
+  return (
+    <div className="min-w-0 max-w-full space-y-1.5" data-testid="tool-only-run-fallback">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1">
+          <CheckCircle2 className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+          <span className="text-xs text-muted-foreground">Desk</span>
+        </div>
+      </div>
+      <div className="rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm text-muted-foreground">
+        Done — I used tools for this run and didn&apos;t write a separate reply.
+      </div>
     </div>
   )
 }

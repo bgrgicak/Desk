@@ -21,6 +21,7 @@ import {
 import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
+  killClaimedRunsInContainers,
   productionReflectWorkspace,
   pruneDriftedContainers,
   writeGoalSkillFiles,
@@ -29,6 +30,8 @@ import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
 import { ensureHubsForAllUsers } from "./routes/workspaces.js";
+import { VaultStore } from "./vault/store.js";
+import { resolveProviderKeys } from "./providerKeys.js";
 import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
@@ -104,6 +107,40 @@ async function main(): Promise<void> {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
   }
 
+  // Kill any opencode process trees left running in workspace sandboxes by
+  // the previous desk-server. The cleanup wrapper in `driver.ts` deliberately
+  // skips signalling when the leader is still alive (so a tsx-watch reload
+  // doesn't kill a valid run), which means the previous server's runs survive
+  // into this process — and if we requeue + re-fire them below, the new
+  // opencode contends with the survivor on `~/.local/share/opencode/opencode.db`
+  // and fails with "Failed to run the query 'PRAGMA journal_mode = WAL'".
+  // Reap once, then requeue.
+  const orphanRunRows = (await pool.query<{ run_id: string; workspace_id: string }>(
+    `SELECT m.id AS run_id, c.workspace_id
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+      WHERE m.state IN ('running', 'pending')
+        AND json_valid(m.content)
+        AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request')`,
+  )).rows;
+  if (orphanRunRows.length > 0) {
+    const runsByWorkspace = new Map<string, string[]>();
+    for (const r of orphanRunRows) {
+      const bucket = runsByWorkspace.get(r.workspace_id) ?? [];
+      bucket.push(r.run_id);
+      runsByWorkspace.set(r.workspace_id, bucket);
+    }
+    const killResults = await killClaimedRunsInContainers(runsByWorkspace);
+    const actuallyKilled = killResults.filter((r: { killed: boolean }) => r.killed).length;
+    if (actuallyKilled > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `killed ${actuallyKilled} orphaned opencode run(s) across ` +
+          `${runsByWorkspace.size} workspace(s) before requeue`,
+      );
+    }
+  }
+
   // Re-queue agent_turn / summary_request messages that were interrupted
   // by the previous server process (crash, hot-reload, etc.) so they are
   // retried rather than silently dropped. task_run orphans are failed so
@@ -154,10 +191,41 @@ async function main(): Promise<void> {
   );
   const broadcastUserId: string | undefined = rows[0]?.id;
 
+  const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
+
+  // If DESK_VAULT_PASSWORD is explicitly set in the environment, use it as
+  // the vault master password so the vault is automatically unlocked on
+  // every boot — no UI prompt needed. Users who prefer an explicit vault
+  // master password leave DESK_VAULT_PASSWORD unset and unlock via the
+  // browser UI. Note: this is intentionally a separate env var from
+  // DESK_SECRET_KEY (the AES-256 key for SQLite at-rest encryption).
+  if (process.env.DESK_VAULT_PASSWORD) {
+    const vaultPassword = process.env.DESK_VAULT_PASSWORD;
+    const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
+    for (const user of allUsers) {
+      const { exists } = await vault.status(user.id);
+      try {
+        if (!exists) {
+          await vault.setup(user.id, vaultPassword);
+          // eslint-disable-next-line no-console
+          console.log(`vault: auto-setup for user ${user.id} via DESK_SECRET_KEY`);
+        } else {
+          await vault.unlock(user.id, vaultPassword);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`vault: auto-unlock failed for user ${user.id}:`, err);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log("vault: auto-unlocked via DESK_SECRET_KEY");
+  }
+
   const runManager = createRunManager({
     pool,
     home: DESK_HOME,
     reflectWorkspace: productionReflectWorkspace,
+    resolveProviderKeys: (userId) => resolveProviderKeys(pool, vault, userId),
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },
@@ -173,6 +241,25 @@ async function main(): Promise<void> {
   if (orphaned.requeued.length > 0) {
     void runManager.tickScheduled();
   }
+
+  // Sandbox auto-scaling is event-driven inside the scheduler's
+  // `fireMessage`: when a run fails with `spawn EAGAIN` / exit 137 /
+  // ENOMEM, the scheduler grows the sandbox in place and re-fires the
+  // same message. No timer-based pressure scanner here — we react to
+  // actual failures instead of probing cgroups every minute.
+  //
+  // No stale-run watchdog either: a single task may legitimately run
+  // for hours, and silently killing one to "tidy up" would hide
+  // whatever real bug stranded its row in `running` state.
+  //
+  // Idle-sandbox sweeper: removes the container for any workspace
+  // with no message activity for `DESK_SANDBOX_IDLE_MS` (default
+  // 30 min). The next fire creates a fresh sandbox at the baseline
+  // size, which also serves as the "reset grown sandbox back to
+  // small" path. One SQL query + one `docker ps` per minute.
+  const idleSweepTimer = runManager.startIdleSweeper(
+    parseInt(process.env.DESK_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
+  );
 
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local
@@ -194,6 +281,7 @@ async function main(): Promise<void> {
     pool,
     storage: { pool, home: DESK_HOME },
     runManager,
+    vault,
     broadcastUserId,
   });
 
@@ -220,6 +308,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);
     clearInterval(pollTimer);
+    clearInterval(idleSweepTimer);
     clearInterval(retentionTimer);
     clearConnections();
     server.close();

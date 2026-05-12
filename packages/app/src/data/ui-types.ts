@@ -174,6 +174,10 @@ export interface Task {
   /** Backing message kind/content type. Used to avoid editing system rows as user task text. */
   messageKind?: 'chat' | 'task' | 'task_run' | 'summary'
   messageContentType?: string
+  /** Backing message author. Plain user-authored tasks keep kanban status under user control after runs. */
+  messageRole?: 'user' | 'agent' | 'system'
+  /** Raw server lifecycle state. UI status is derived from this plus schedule/run children. */
+  messageState?: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'paused'
   /** Chat the backing message lives in. */
   chatId?: string
   /** True when the task has actually fired at least once. */
@@ -241,6 +245,8 @@ export interface Chat {
   artifactIds?: string[]
   messages?: ChatMessage[]
   unread?: boolean
+  /** True when the latest agent turn failed and can be retried. */
+  failed?: boolean
   workspaceId?: string
   agentId?: string
   /** Persisted composer goal for this chat. */

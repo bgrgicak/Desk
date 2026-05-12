@@ -381,6 +381,73 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     expect(capturedPrompt).toContain("Current task:\nbuild the app from that");
   });
 
+  it("does not include scheduled tasks or task runs as chat transcript context", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("context excludes tasks");
+    const taskId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Remind bero to make some tea before the call." },
+      kind: "task",
+      state: "succeeded",
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    const taskRunId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Remind bero to make some tea before the call." },
+      kind: "task_run",
+      state: "succeeded",
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+    await pool.query(`UPDATE messages SET parent_id = ? WHERE kind = 'task_run' AND chat_id = ?`, [taskId, contextChatId]);
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "summary", body: "condensed context after the task run parent" },
+      kind: "summary",
+      createdAt: "2026-05-05T00:01:15.000Z",
+    });
+    const taskOutputId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: { type: "text", text: "Tea reminder completed." },
+      kind: "chat",
+      state: null,
+      createdAt: "2026-05-05T00:01:30.000Z",
+    });
+    await pool.query(`UPDATE messages SET parent_id = ? WHERE id = ?`, [taskRunId, taskOutputId]);
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "Only one cup, please." },
+      createdAt: "2026-05-05T00:02:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "thanks" },
+      createdAt: "2026-05-05T00:03:00.000Z",
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toContain("Only one cup, please.");
+    expect(capturedPrompt).not.toContain("Remind bero to make some tea before the call.");
+    expect(capturedPrompt).not.toContain("Tea reminder completed.");
+    expect(capturedPrompt).toContain("Current task:\nthanks");
+  });
+
   it("uses the newest summary as the transcript boundary", async () => {
     let capturedPrompt = "";
     const mgr = createRunManager({
@@ -657,7 +724,7 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     await runStarted;
 
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.state).toBe("pending");
 
     await queries.messages.updateMessage(pool, taskId, { state: "cancelled" });
     allowFinish();
@@ -696,8 +763,8 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     await mgr.rescheduleMessage(taskId);
 
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
-    expect(duringRun?.executeAt).toBeUndefined();
+    expect(duringRun?.state).toBe("pending");
+    expect(duringRun?.executeAt).toBeDefined();
 
     allowFinish();
     await fire;
@@ -708,7 +775,7 @@ execRunFn: async (_id, _agentId, _prompt, onLog) => {
     expect(parent?.executeAt).toBeDefined();
   });
 
-  it("task run failure marks the run failed and the one-shot parent failed", async () => {
+  it("task run failure marks the run failed without completing the one-shot parent", async () => {
     const mgr = createRunManager({
       pool,
 execRunFn: async () => ({ exitCode: 1 }),
@@ -721,13 +788,14 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("failed");
+    expect(parent?.state).toBe("pending");
+    expect(parent?.executeAt).toBeUndefined();
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("failed");
   });
 
-  it("parent task state is running while task_run is in-flight and stays running after (user controls status)", async () => {
+  it("task_run state, not the scheduler, is the agent-owned Active signal", async () => {
     let resolveRun!: () => void;
     const runStarted = new Promise<void>((r) => { resolveRun = r; });
     let allowFinish!: () => void;
@@ -752,20 +820,24 @@ execRunFn: async () => ({ exitCode: 1 }),
     const fire = mgr.fireMessage(taskId);
     await runStarted;
 
-    // While the run is in-flight the parent task must be 'running'.
+    // While the run is in-flight the parent task stays user-owned; the child
+    // task_run is what makes the board display the parent as Active.
     const duringRun = await queries.messages.findById(pool, taskId);
-    expect(duringRun?.state).toBe("running");
+    expect(duringRun?.state).toBe("pending");
+    const runningRuns = await listTaskRuns(taskId);
+    expect(runningRuns).toHaveLength(1);
+    expect(runningRuns[0].state).toBe("running");
 
     allowFinish();
     await fire;
 
-    // After the run completes the parent stays 'running' — the user placed
-    // it in Active and owns its status from here.
+    // After the run completes the scheduler still has not claimed ownership of
+    // the parent status.
     const afterRun = await queries.messages.findById(pool, taskId);
-    expect(afterRun?.state).toBe("running");
+    expect(afterRun?.state).toBe("pending");
   });
 
-  it("user-created unscheduled task: parent stays running after run (user owns status)", async () => {
+  it("user-created unscheduled task: direct scheduler fire does not move the parent", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -782,14 +854,14 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("running");
+    expect(parent?.state).toBe("pending");
 
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("succeeded");
   });
 
-  it("agent-created unscheduled task: parent state transitions to terminal after run", async () => {
+  it("agent-created unscheduled task: direct scheduler fire does not move the parent", async () => {
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -807,8 +879,36 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("succeeded");
+    expect(parent?.state).toBe("pending");
     expect(parent?.executeAt).toBeUndefined();
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("failed unscheduled task run does not complete the manually defined parent", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stderr", payload: "missing attachment" });
+        return { exitCode: 1 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "manual todo" },
+      // no executeAt, no cron — manually defined task
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("pending");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("failed");
   });
 
   it("declines to start a second concurrent run for the same task", async () => {

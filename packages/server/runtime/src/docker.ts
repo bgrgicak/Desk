@@ -12,7 +12,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { PROVIDER_KEY_VARS } from "@agent-desk/shared";
+import {
+  CONNECTION_ENV_VARS,
+  MANAGED_CONNECTION_ENV_ALIASES,
+  managedConnectionDefinitions,
+  PROVIDER_KEY_VARS,
+  SANDBOX_CONNECTION_ENV_VARS,
+} from "@agent-desk/shared";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
   bindsFromPlan,
@@ -20,6 +26,7 @@ import {
   type MountPlan,
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
+import { killRunProcessTreeByRunId } from "./driver.js";
 
 import type { WorkspaceKind } from "@agent-desk/shared";
 
@@ -55,14 +62,188 @@ export interface SandboxHandle {
   workspaceId: string;
 }
 
-const SANDBOX_PIDS_LIMIT = 1024;
-const SANDBOX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
-const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=1g" };
+/**
+ * Sandbox resource sizing.
+ *
+ * Every sandbox starts at the baseline. When a run fails with a
+ * resource-shaped error (`spawn EAGAIN`, OOM-kill, etc.) the scheduler
+ * calls `growSandboxForResourceError` to double the pressured dimension
+ * in place via `docker update`, capped at the maximum. No profiles, no
+ * tiers — just two pairs of numbers and a "double on demand" rule.
+ *
+ * The numbers were measured from real sandbox baseline (5 PIDs / ~50 MB
+ * idle, ~20 PIDs / 300-400 MB during a chat run, ~50-100 PIDs / ~1 GB
+ * for site/app work with firefox). 512 / 512 MB is comfortably above
+ * idle, ~50 % headroom for chat work, and growth handles the rest.
+ */
+const SANDBOX_BASELINE_PIDS = 512;
+const SANDBOX_BASELINE_MEMORY_BYTES = 512 * 1024 * 1024;
+const SANDBOX_MAX_PIDS = 4096;
+const SANDBOX_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
+const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=512m" };
 const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
 const SANDBOX_AGENT_USER_LABEL = "agent-desk.sandbox-agent-user";
-const SANDBOX_RESOURCE_PROFILE = "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo";
 const SANDBOX_CONTAINER_USER = "0:0";
 const SANDBOX_READY_TIMEOUT_MS = 300_000;
+
+/**
+ * Identity tag for the sandbox runtime contract. Bumped whenever a
+ * runtime-fundamental feature changes (e.g. tini PID 1, mount layout,
+ * user model) so old containers fail drift and get recreated *once*.
+ *
+ * **Deliberately omits the size profile.** Size used to be encoded here
+ * and that turned out to be catastrophic: two chats with different goals
+ * in the same workspace would fight over the container size, drift-
+ * recreating on every alternation and racing all other concurrent runs
+ * into "container name already in use". A sandbox should be a stable
+ * shared resource that any chat in the workspace can exec through,
+ * regardless of size preference. Size is now a first-create-only
+ * decision; growing an existing sandbox is a follow-up (see
+ * `packages/server/docs/plans/sandbox-autoscaling.md`).
+ */
+const SANDBOX_RUNTIME_TAG = "tini-v1";
+
+function resourceProfileString(): string {
+  return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
+}
+
+/**
+ * Resource-shaped failure modes the scheduler can recover from by
+ * growing the sandbox and re-firing the message. Anything else is a
+ * real run failure that propagates to the user.
+ */
+export type ResourceFailureKind = "pids" | "memory";
+
+/**
+ * Classifies a finished run's exit code + stderr (or buffered log text)
+ * as a sandbox resource exhaustion, or null if the failure is something
+ * else we shouldn't retry. We're deliberately conservative: a bad regex
+ * here means we retry a non-resource error in a loop, which is worse
+ * than surfacing a one-off transient.
+ */
+export function classifyResourceError(
+  exitCode: number,
+  stderr: string,
+): ResourceFailureKind | null {
+  if (exitCode === 0) return null;
+  // SIGKILL exit code. The cgroup OOM-killer fires SIGKILL when memory
+  // is over limit; nothing else routinely produces 137 on a successful
+  // CLI binary, so we treat it as an OOM signal.
+  if (exitCode === 137) return "memory";
+  const s = stderr.toLowerCase();
+  // Bun and Node both surface fork-limit hits as "spawn ... EAGAIN" or
+  // "Resource temporarily unavailable". Both mean the pids cgroup is
+  // exhausted — `man 2 fork` lists EAGAIN as "system-imposed limit on
+  // the number of processes was reached."
+  if (/\bspawn\b[\s\S]*\beagain\b/i.test(s)) return "pids";
+  if (s.includes("resource temporarily unavailable")) return "pids";
+  if (s.includes("fork: retry") || /\bfork failed\b/.test(s)) return "pids";
+  // Out-of-memory pattern from Bun, Node, libc malloc, etc.
+  if (s.includes("enomem")) return "memory";
+  if (s.includes("out of memory")) return "memory";
+  if (s.includes("cannot allocate memory")) return "memory";
+  // setsid (util-linux) wraps the opencode exec for process-group cleanup.
+  // Older setsid versions report a signal-killed child as
+  //   `setsid: child <pid> did not exit normally: Success`
+  // and exit 1 — so a cgroup OOM-kill (SIGKILL) reaches the runtime as
+  // exit 1 + this stderr line, never as the canonical 137 above. Without
+  // recognising it, the auto-grow path never fires for OOMs under the
+  // setsid wrapper. The stderr line is specific enough to be unambiguous;
+  // a non-OOM signal kill that hits this path will at worst grow the
+  // sandbox once before the user-visible failure surfaces.
+  if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
+  return null;
+}
+
+/**
+ * Per-container in-flight growth. When two runs fail simultaneously
+ * from the same OOM event, the first to call `growSandboxForResourceError`
+ * stores its in-progress Promise here; subsequent callers await it
+ * instead of double-growing the sandbox.
+ *
+ * Keyed by sandbox container name (stable across the run) rather than
+ * id, so concurrent fires before the second `inspect` agree on the
+ * lock target.
+ */
+const growthInFlight = new Map<string, Promise<GrowthResult>>();
+
+/** Test-only: clears the in-flight-growth lock and any related state. */
+export function _resetGrowthStateForTest(): void {
+  growthInFlight.clear();
+}
+
+export interface GrowthResult {
+  /** True if either limit was raised; false if the container was already at the max. */
+  grew: boolean;
+  /** Limit dimension that was actually raised; null when `grew=false`. */
+  dimension: ResourceFailureKind | null;
+  /** Post-update pids limit (current or new). */
+  pidsLimit: number;
+  /** Post-update memory limit in bytes (current or new). */
+  memoryBytes: number;
+  /** True when the sandbox is already at the max for the requested dimension. */
+  atMax: boolean;
+}
+
+/**
+ * Doubles the pressured dimension on `workspaceId`'s sandbox in place
+ * via `engine.update`. Coordinates concurrent failures so a single
+ * grow happens per OOM event even when multiple runs die at once.
+ *
+ * Returns a `GrowthResult` describing what happened. A `grew=false,
+ * atMax=true` result means the scheduler should surface the failure
+ * to the user instead of retrying.
+ */
+export async function growSandboxForResourceError(
+  workspaceId: string,
+  kind: ResourceFailureKind,
+): Promise<GrowthResult> {
+  const containerName = `desk-sandbox-${workspaceId}`;
+  const existing = growthInFlight.get(containerName);
+  if (existing) return existing;
+  const work = (async (): Promise<GrowthResult> => {
+    const engine = await detectEngine();
+    const info = await engine.inspect(containerName);
+    if (!info || !info.pidsLimit || !info.memoryBytes) {
+      // Container is gone (was removed mid-run) or has no cgroup limits
+      // configured. Either way, nothing useful to update — bail.
+      return {
+        grew: false,
+        dimension: null,
+        pidsLimit: info?.pidsLimit ?? 0,
+        memoryBytes: info?.memoryBytes ?? 0,
+        atMax: false,
+      };
+    }
+    if (kind === "pids") {
+      if (info.pidsLimit >= SANDBOX_MAX_PIDS) {
+        return { grew: false, dimension: "pids", pidsLimit: info.pidsLimit, memoryBytes: info.memoryBytes, atMax: true };
+      }
+      const next = Math.min(info.pidsLimit * 2, SANDBOX_MAX_PIDS);
+      const ok = await engine.update(containerName, { pidsLimit: next });
+      console.info(
+        `sandbox ${containerName} grew pids ${info.pidsLimit} → ${next} after resource failure (engine accepted=${ok})`,
+      );
+      return { grew: ok, dimension: "pids", pidsLimit: ok ? next : info.pidsLimit, memoryBytes: info.memoryBytes, atMax: false };
+    }
+    // memory
+    if (info.memoryBytes >= SANDBOX_MAX_MEMORY_BYTES) {
+      return { grew: false, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: info.memoryBytes, atMax: true };
+    }
+    const nextMem = Math.min(info.memoryBytes * 2, SANDBOX_MAX_MEMORY_BYTES);
+    const ok = await engine.update(containerName, { memoryBytes: nextMem });
+    console.info(
+      `sandbox ${containerName} grew memory ${info.memoryBytes} → ${nextMem} after resource failure (engine accepted=${ok})`,
+    );
+    return { grew: ok, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: ok ? nextMem : info.memoryBytes, atMax: false };
+  })();
+  growthInFlight.set(containerName, work);
+  try {
+    return await work;
+  } finally {
+    growthInFlight.delete(containerName);
+  }
+}
 
 /**
  * Ensures the sandbox image exists locally. If absent, attempts a pull —
@@ -100,8 +281,10 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
  * fresh host code had already moved on.
  *
  * `providerKeys` is an optional map of AI-provider credentials to inject as
- * env vars. When omitted the function falls back to reading the host env —
- * that legacy path is what tests without DB access use.
+ * create-time env vars. Sandbox tool connection tokens are intentionally not
+ * baked into the long-lived container config; they are injected per exec.
+ * When omitted the function falls back to reading the host env — that legacy
+ * path is what tests without DB access use.
  *
  * `extraEnv` carries non-key env vars (e.g. `OPENCODE_AUTH_CONTENT` for the
  * Codex/ChatGPT bridge) that should be present at container birth so the
@@ -118,6 +301,7 @@ export async function createOrReuse(
 ): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
+  const expectedResourceProfile = resourceProfileString();
 
   const deskHome = home ?? resolveDeskHome();
   const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
@@ -135,11 +319,16 @@ export async function createOrReuse(
     const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
     const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
-    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === SANDBOX_RESOURCE_PROFILE;
+    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
       await waitForEntrypointReady(engine, existing.id);
+      // Note: we never resize on plain reuse. Sandboxes start at the
+      // baseline and only grow when a run actually fails with a
+      // resource-shaped error — see `growSandboxForResourceError`. A
+      // re-use that *would* benefit from a larger sandbox surfaces that
+      // need by failing first, which is the correct signal.
       return { containerId: existing.id, workspaceId };
     }
     await engine.remove(containerName, true);
@@ -166,7 +355,7 @@ export async function createOrReuse(
         `DESK_SANDBOX_AGENT_USER=${agentUser}`,
       ],
       labels: {
-        [SANDBOX_RESOURCE_PROFILE_LABEL]: SANDBOX_RESOURCE_PROFILE,
+        [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
       network: "bridge",
@@ -175,14 +364,17 @@ export async function createOrReuse(
       // bridge default has no DNS name for the host, so the agent has no
       // route back to /sandbox/messages.
       extraHosts: ["host.docker.internal:host-gateway"],
-      // Modern JS tooling routinely uses worker threads and forked helper
-      // processes; keep a real blast-radius limit without blocking builds.
-      pidsLimit: SANDBOX_PIDS_LIMIT,
-      // 4 GiB — opencode + node + the LLM SDK plus enough headroom for Vite,
-      // Tailwind, Vitest, and package-manager subprocesses.
-      memoryBytes: SANDBOX_MEMORY_BYTES,
+      pidsLimit: SANDBOX_BASELINE_PIDS,
+      memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
+      // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
+      // children. The sandbox CMD is `sleep infinity`, which never reaps,
+      // so without this every npx/esbuild/playwright child that exits
+      // after its parent leaks a `<defunct>` slot until the container is
+      // restarted. The flag is part of the resource profile string above,
+      // so an old container created without it fails the drift check.
+      init: true,
     });
     await waitForEntrypointReady(engine, containerId);
     return { containerId, workspaceId };
@@ -192,12 +384,21 @@ export async function createOrReuse(
     // loser sees a name conflict. The winner has a usable container with
     // matching binds (we'd have reused it above otherwise), so reuse
     // it instead of failing the fire.
+    //
+    // The first inspect-after-conflict can briefly return null on dockerd
+    // when the winning `docker run` has registered the name but the
+    // container isn't fully created yet, so the loser sees neither
+    // "exists" nor a fresh slot. Poll for up to ~2 s before giving up.
     if ((err as { conflict?: boolean }).conflict) {
-      const winner = await engine.inspect(containerName);
-      if (winner) {
-        if (!winner.running) await engine.start(containerName);
-        await waitForEntrypointReady(engine, winner.id);
-        return { containerId: winner.id, workspaceId };
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const winner = await engine.inspect(containerName);
+        if (winner) {
+          if (!winner.running) await engine.start(containerName);
+          await waitForEntrypointReady(engine, winner.id);
+          return { containerId: winner.id, workspaceId };
+        }
+        await delay(100);
       }
     }
     throw err;
@@ -288,17 +489,17 @@ function parseBindStrings(strings: string[]): BindMount[] {
 }
 
 /**
- * Formats AI-provider credentials as engine env entries.
+ * Formats AI-provider credentials as engine env entries for container create.
  *
  * With `keys` provided, uses that map (intersected with PROVIDER_KEY_VARS to
  * avoid leaking unrelated env into the container). Without, falls back to
  * the host process env — a legacy path for tests and dev flows that haven't
  * moved to DB-backed keys yet.
  *
- * `extraEnv` is emitted as-is, bypassing the PROVIDER_KEY_VARS allowlist.
- * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which
- * carry their own validation contract (the value is an opaque OAuth blob,
- * not a per-provider key name).
+ * `extraEnv` is emitted after filtering out managed connection key names.
+ * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which carry
+ * their own validation contract (the value is an opaque OAuth blob, not a
+ * per-provider key name).
  *
  * Only keys with non-empty values are emitted, so opencode's auto-detection
  * doesn't light up empty providers.
@@ -313,9 +514,61 @@ export function providerKeyEnv(
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
-  if (extraEnv) {
-    for (const [name, value] of Object.entries(extraEnv)) {
-      if (value && value.length > 0) out.push(`${name}=${value}`);
+  appendExtraEnv(out, extraEnv);
+  return out;
+}
+
+const MANAGED_CONNECTION_ENV_NAMES = new Set<string>([
+  ...CONNECTION_ENV_VARS,
+  ...MANAGED_CONNECTION_ENV_ALIASES,
+]);
+
+function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void {
+  if (!extraEnv) return;
+  for (const [name, value] of Object.entries(extraEnv)) {
+    if (MANAGED_CONNECTION_ENV_NAMES.has(name)) continue;
+    if (value && value.length > 0) out.push(`${name}=${value}`);
+  }
+}
+
+function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
+  const out: string[] = [];
+  if (!keys) return out;
+  const source: Record<string, string | undefined> = keys;
+  for (const name of SANDBOX_CONNECTION_ENV_VARS) {
+    const v = source[name];
+    if (v && v.length > 0) out.push(`${name}=${v}`);
+  }
+  return out;
+}
+
+/**
+ * Formats per-exec credential env for agent runs.
+ *
+ * A long-lived sandbox may have inherited legacy host env at container create
+ * time. When the caller supplies the current vault-backed key map, explicitly
+ * clear any allowed connection env var that is absent so deleted/disabled
+ * connections cannot leak back in from the warm container environment.
+ */
+export function providerKeyExecEnv(
+  keys?: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): string[] {
+  const out = [
+    ...providerKeyEnv(keys),
+    ...sandboxConnectionEnv(keys),
+  ];
+  appendExtraEnv(out, extraEnv);
+  if (!keys) return out;
+
+  const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
+  for (const name of CONNECTION_ENV_VARS) {
+    if (!emitted.has(name)) out.push(`${name}=`);
+  }
+
+  for (const definition of managedConnectionDefinitions()) {
+    for (const alias of definition.envAliases ?? []) {
+      out.push(`${alias}=${keys[definition.envKey] ?? ""}`);
     }
   }
   return out;
@@ -372,6 +625,77 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
   return drift;
 }
 
+/**
+ * Removes any `desk-sandbox-*` container whose workspace has had no
+ * `state='running'` rows and no message activity in the last `idleMs`.
+ * The next fire's `createOrReuse` builds a fresh container at the
+ * baseline 512 / 512 MB — so this also naturally resets a grown
+ * sandbox back to the smallest size.
+ *
+ * `recentlyActiveWorkspaceIds` is supplied by the caller (typically
+ * from a DB query) so this module stays DB-agnostic. Containers younger
+ * than `minAgeMs` are skipped to protect against the race window between
+ * a fire's `createOrReuse` and the next sweep — without this guard, a
+ * brand-new container belonging to a workspace whose `messages.updated_at`
+ * hasn't been bumped yet can be yanked out from under the in-flight fire.
+ * Returns the names of containers it removed so callers can log / test.
+ */
+export async function reapIdleSandboxes(
+  recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  minAgeMs: number = 5 * 60 * 1000,
+): Promise<string[]> {
+  const removed: string[] = [];
+  let engine: Engine;
+  try {
+    engine = await detectEngine();
+  } catch {
+    return removed; // engine not reachable — best-effort
+  }
+  let containers: Array<{ id: string; name: string }>;
+  try {
+    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
+  } catch {
+    return removed;
+  }
+  const now = Date.now();
+  for (const c of containers) {
+    // Skip transient reflection sandboxes — they have their own
+    // workspace ids and own short lifecycles; a reaper that catches
+    // them mid-reflection would kill the in-flight reflection.
+    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
+    const workspaceId = c.name.slice("desk-sandbox-".length);
+    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
+    // Coordinate with an in-flight grow on the same container: if
+    // someone is mid-`docker update`, don't yank the container out
+    // from under them. The grow lock is keyed by container name.
+    if (growthInFlight.has(c.name)) continue;
+    // Skip just-created containers. The sweep's DB query and a fire's
+    // `createOrReuse` aren't strictly ordered, so a fire that started
+    // moments ago can have produced a container without yet having
+    // bumped any message row — meaning the workspace looks idle to the
+    // sweep. Inspecting Created here is one extra round-trip per
+    // candidate, but candidates are rare (idle workspaces only).
+    try {
+      const info = await engine.inspect(c.name);
+      if (info?.createdAt) {
+        const age = now - new Date(info.createdAt).getTime();
+        if (Number.isFinite(age) && age < minAgeMs) continue;
+      }
+    } catch {
+      // Inspect failed — treat as a transient and skip this round.
+      continue;
+    }
+    try {
+      await engine.remove(c.name, true);
+      removed.push(c.name);
+      console.info(`reaped idle sandbox ${c.name}`);
+    } catch (err) {
+      console.warn(`failed to reap ${c.name}:`, (err as Error).message);
+    }
+  }
+  return removed;
+}
+
 /** Stops a sandbox container. Idempotent. */
 export async function stopSandbox(handle: SandboxHandle): Promise<void> {
   try {
@@ -405,4 +729,77 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
   } catch {
     // Engine not reachable.
   }
+}
+
+/**
+ * Kill opencode process trees left running in sandbox containers by a prior
+ * desk-server. Called once at startup, before `recoverOrphanedRuns` requeues
+ * the rows that owned those processes.
+ *
+ * Why this matters: when a desk-server dies (tsx-watch reload, hard crash),
+ * the in-container opencode that was mid-run survives because the runtime's
+ * post-`wait()` cleanup uses `skipIfLeaderAlive` to keep dev-time restarts
+ * from killing valid runs. The output stream is gone, but the process keeps
+ * holding `~/.local/share/opencode/opencode.db`. If the next desk-server
+ * requeues the same message and fires a *new* opencode in the same sandbox,
+ * the two contend on the SQLite DB — the second hits "Failed to run the
+ * query 'PRAGMA journal_mode = WAL'" and the run fails.
+ *
+ * Caller supplies the (workspaceId → runIds) map so this module stays
+ * DB-agnostic, same pattern as `reapIdleSandboxes`. Returns one entry per
+ * runId we attempted, with `killed=true` if a process group was signalled.
+ */
+export async function killClaimedRunsInContainers(
+  runsByWorkspace: ReadonlyMap<string, ReadonlyArray<string>>,
+  engineOverride?: Engine,
+): Promise<Array<{ workspaceId: string; runId: string; killed: boolean }>> {
+  const results: Array<{ workspaceId: string; runId: string; killed: boolean }> = [];
+  if (runsByWorkspace.size === 0) return results;
+  let engine: Engine;
+  if (engineOverride) {
+    engine = engineOverride;
+  } else {
+    try {
+      engine = await detectEngine();
+    } catch {
+      return results;
+    }
+  }
+  // Run one workspace at a time but parallel within a workspace: kills in
+  // the same container all hit the same docker exec endpoint, but different
+  // workspaces are independent docker exec targets, and cleanupRunProcessTree
+  // has a TERM→3s→KILL grace period per pidfile. Serial across all orphans
+  // would be O(N × 3s); per-workspace parallel keeps startup near 3 s no
+  // matter how many runs were stranded.
+  const perWorkspace = Array.from(runsByWorkspace, ([workspaceId, runIds]) =>
+    (async () => {
+      const containerName = `desk-sandbox-${workspaceId}`;
+      let containerExists = false;
+      try {
+        containerExists = (await engine.inspect(containerName)) !== null;
+      } catch {
+        containerExists = false;
+      }
+      if (!containerExists) {
+        // No container means no surviving opencode for this workspace; the
+        // re-fire builds a fresh sandbox and there's nothing to contend with.
+        return runIds.map((runId) => ({ workspaceId, runId, killed: false }));
+      }
+      const killed = await Promise.all(
+        runIds.map(async (runId) => {
+          try {
+            return await killRunProcessTreeByRunId(engine, containerName, runId);
+          } catch {
+            // Engine errors here are best-effort — recoverOrphanedRuns will
+            // still requeue, and worst case the user sees a transient PRAGMA
+            // failure on the re-fire. Logged at the caller.
+            return false;
+          }
+        }),
+      );
+      return runIds.map((runId, i) => ({ workspaceId, runId, killed: killed[i] }));
+    })(),
+  );
+  for (const ws of await Promise.all(perWorkspace)) results.push(...ws);
+  return results;
 }

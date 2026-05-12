@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
@@ -8,6 +8,7 @@ import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
 import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
+import { buildPath } from '@/router/nav'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -57,6 +58,7 @@ export function MessageBubble({
               <AttachmentCard
                 key={att.path}
                 attachment={att}
+                workspaceId={workspaceId}
                 onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
               />
             ))}
@@ -91,7 +93,7 @@ export function MessageBubble({
       {hasAttachments && (
         <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden">
           {message.attachments!.map(att => (
-            <AttachmentCard key={att.path} attachment={att} />
+            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} />
           ))}
         </div>
       )}
@@ -161,10 +163,11 @@ function MessageContentView({
       if (!developerMode) return null
       return <SummaryView chatId={chatId} messageId={messageId} body={content.body} workspacePath={workspacePath} workspaceId={workspaceId} />
     case 'summary_request':
+    case 'reflection_request':
     case 'agent_turn':
       // Filtered out of the bubble stream upstream. summary_request /
-      // agent_turn drive the typing indicator. Render nothing if a stray row
-      // reaches this layer.
+      // reflection_request / agent_turn drive background runs and typing state.
+      // Render nothing if a stray row reaches this layer.
       return null
   }
 }
@@ -256,10 +259,24 @@ function isDirectoryArtifact(mime?: string | null) {
   return mime === 'inode/directory'
 }
 
-function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string; params?: Record<string, string>; onClick?: () => void }) {
+function artifactRefHref(workspaceId: string | undefined, path: string, mime?: string | null, params?: Record<string, string>) {
+  if (!workspaceId) return undefined
+  return buildPath(workspaceId, 'context', {
+    item: isDirectoryArtifact(mime) ? null : path,
+    folder: isDirectoryArtifact(mime) ? path : null,
+    artifactParams: params ? JSON.stringify(params) : null,
+  })
+}
+
+function plainLeftClick(e: MouseEvent<HTMLAnchorElement>) {
+  return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+}
+
+function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string | null; params?: Record<string, string>; onClick?: () => void }) {
   const label = name ?? basenamePath(path)
   const Icon = isDirectoryArtifact(mime) ? Folder : FileText
   const className = 'inline-flex max-w-full min-w-0 items-center gap-2 self-start overflow-hidden rounded-md border bg-background px-2.5 py-1.5 text-left text-xs align-top'
+  const href = artifactRefHref(workspaceId, path, mime, params)
   const inner = (
     <>
       <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
@@ -267,7 +284,16 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
       {name && <span className="hidden min-w-0 truncate text-muted-foreground sm:inline">{path}</span>}
     </>
   )
-  const fallback = !onClick ? <div className={className} data-testid="artifact-inline-fallback">{inner}</div> : (
+  const fallback = href ? (
+    <a
+      href={href}
+      onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+      className={`${className} hover:bg-muted/40 transition-colors`}
+      data-testid="artifact-inline-fallback"
+    >
+      {inner}
+    </a>
+  ) : !onClick ? <div className={className} data-testid="artifact-inline-fallback">{inner}</div> : (
     <button
       type="button"
       onClick={onClick}
@@ -286,6 +312,7 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
       mime={mime}
       params={params}
       onOpen={onClick}
+      openHref={href}
       fallback={fallback}
     />
   )
@@ -293,9 +320,11 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
 
 function AttachmentCard({
   attachment,
+  workspaceId,
   onClick,
 }: {
   attachment: AttachmentRef
+  workspaceId?: string
   onClick?: () => void
 }) {
   const appPreview = appAttachmentToPreview(attachment.path)
@@ -319,6 +348,18 @@ function AttachmentCard({
       </div>
     </>
   )
+  const href = artifactRefHref(attachment.workspaceId ?? workspaceId, attachment.path, attachment.mime, attachment.params)
+  if (href) {
+    return (
+      <a
+        href={href}
+        onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+        className={`${className} hover:bg-muted/40 transition-colors`}
+      >
+        {inner}
+      </a>
+    )
+  }
   if (!onClick) {
     return <div className={className}>{inner}</div>
   }
@@ -402,10 +443,17 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
       }
     } else if (entry.kind === 'stderr') {
       if (developerMode) appendStderr(entry.line)
-    } else if (!sawEvent) {
-      // Unparsed stdout from drivers that don't emit JSON events (fake
-      // driver, plain-text tests) — treat as text-like output.
-      appendText(entry.line)
+    } else if (entry.kind === 'unparsed') {
+      if (developerMode && sawEvent) {
+        // Once a structured event stream exists, raw stdout is diagnostic log
+        // material rather than assistant prose. Keep it in dev mode so malformed
+        // tool/error lines are not silently dropped.
+        appendStderr(entry.line)
+      } else if (!sawEvent) {
+        // Unparsed stdout from drivers that don't emit JSON events (fake
+        // driver, plain-text tests) — treat as text-like output.
+        appendText(entry.line)
+      }
     }
   }
 
@@ -465,7 +513,7 @@ function StderrBlock({ lines }: { lines: string[] }) {
         className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 transition-colors"
       >
         <AlertTriangle className="h-3 w-3" />
-        <span className="font-medium">{lines.length} stderr line{lines.length === 1 ? '' : 's'}</span>
+        <span className="font-medium">{lines.length} diagnostic/error line{lines.length === 1 ? '' : 's'}</span>
         <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (

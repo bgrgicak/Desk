@@ -1,90 +1,7 @@
 import { type Pool } from "../pool.js";
 import { encryptJson, decryptJson } from "../encryption.js";
 
-/**
- * Reads a user's provider keys. Returns an empty object if no row exists
- * or the stored payload is empty.
- */
-export async function getProviderKeys(
-  db: Pool,
-  userId: string,
-): Promise<Record<string, string>> {
-  const { rows } = await db.query(
-    "SELECT provider_keys_encrypted FROM user_settings WHERE user_id = ?",
-    [userId],
-  );
-  if (rows.length === 0) return {};
-  const ciphertext = rows[0].provider_keys_encrypted as Buffer | null;
-  if (!ciphertext || ciphertext.length === 0) return {};
-  return decryptJson<Record<string, string>>(ciphertext);
-}
-
-/**
- * Replaces a user's provider keys with the given map (full overwrite).
- * Upserts the user_settings row.
- */
-export async function setProviderKeys(
-  db: Pool,
-  userId: string,
-  keys: Record<string, string>,
-): Promise<void> {
-  const payload = encryptJson(keys);
-  await db.query(
-    `INSERT INTO user_settings (user_id, provider_keys_encrypted, updated_at)
-     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-     ON CONFLICT (user_id) DO UPDATE
-       SET provider_keys_encrypted = EXCLUDED.provider_keys_encrypted,
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
-    [userId, payload],
-  );
-}
-
-/**
- * Returns the user's provider keys with disabled entries filtered out.
- * "Disabled" means the user has toggled the connection off in Settings —
- * `provider_meta[envKey].enabled === false`. Used by every code path that
- * forwards keys to the runtime so disabled providers stop surfacing in
- * the model picker and stop being callable from the sandbox.
- */
-export async function getActiveProviderKeys(
-  db: Pool,
-  userId: string,
-): Promise<Record<string, string>> {
-  const [keys, meta] = await Promise.all([
-    getProviderKeys(db, userId),
-    getProviderMeta(db, userId),
-  ]);
-  const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(keys)) {
-    if (meta[name]?.enabled === false) continue;
-    out[name] = value;
-  }
-  return out;
-}
-
-/**
- * Merges the given map into the user's stored provider keys. A null value
- * deletes that key; any other value replaces it. Keys not mentioned are
- * preserved.
- */
-export async function mergeProviderKeys(
-  db: Pool,
-  userId: string,
-  patch: Record<string, string | null>,
-): Promise<Record<string, string>> {
-  const current = await getProviderKeys(db, userId);
-  for (const [name, value] of Object.entries(patch)) {
-    if (value === null) {
-      delete current[name];
-    } else {
-      current[name] = value;
-    }
-  }
-  await setProviderKeys(db, userId, current);
-  return current;
-}
-
-// ── Provider metadata (display names, etc.) ──────────────────────────────────
+// ── Provider metadata (display names, enabled/disabled) ──────────────────────
 
 export type ProviderMetaEntry = {
   name?: string;
@@ -112,7 +29,17 @@ export async function getProviderMeta(
   if (rows.length === 0) return {};
   const ciphertext = rows[0].provider_meta_encrypted as Buffer | null;
   if (!ciphertext || ciphertext.length === 0) return {};
-  return decryptJson<ProviderMetaMap>(ciphertext);
+  try {
+    return decryptJson<ProviderMetaMap>(ciphertext);
+  } catch {
+    // Decryption failed — likely a key rotation or corrupted data.
+    // Provider metadata is non-critical; treat it as absent so the
+    // caller gets a clean slate rather than a crash.
+    console.warn(
+      `[userSettings] provider_meta_encrypted for user ${userId} could not be decrypted; resetting to empty`,
+    );
+    return {};
+  }
 }
 
 /**
@@ -130,7 +57,11 @@ export async function mergeProviderMeta(
     if (entry === null) {
       delete current[key];
     } else {
-      current[key] = { ...current[key], ...entry };
+      const next = { ...current[key], ...entry };
+      for (const [field, value] of Object.entries(entry)) {
+        if (value === undefined) delete next[field as keyof ProviderMetaEntry];
+      }
+      current[key] = next;
     }
   }
   const payload = encryptJson(current);

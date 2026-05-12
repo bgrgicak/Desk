@@ -46,7 +46,11 @@ beforeAll(async () => {
 
   runManager = createRunManager({
     pool,
-    execRunFn: async (runId, _a, _p, onLog) => {
+    execRunFn: async (runId, _a, prompt, onLog) => {
+      if (prompt === "missing attachment failure" || prompt.endsWith("\nCurrent task:\nmissing attachment failure")) {
+        onLog({ runId, seq: 0, kind: "stderr", payload: "missing attachment" });
+        return { exitCode: 1 };
+      }
       onLog({ runId, seq: 0, kind: "stdout", payload: "## Summary\n\nThe chat discussed vacation plans." });
       return { exitCode: 0 };
     },
@@ -124,6 +128,26 @@ async function insertScheduledTask(content: unknown, executeAt: string): Promise
   return id;
 }
 
+async function insertPlainUserTask(content: unknown): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, kind, state)
+     VALUES (?, ?, 'user', ?, 'task', 'pending')`,
+    [id, chatId, JSON.stringify(content)],
+  );
+  return id;
+}
+
+async function insertPlainAgentTask(content: unknown): Promise<string> {
+  const id = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, kind, state)
+     VALUES (?, ?, 'agent', ?, 'task', 'pending')`,
+    [id, chatId, JSON.stringify(content)],
+  );
+  return id;
+}
+
 async function insertScheduledReflection(workspaceId: string, executeAt: string): Promise<string> {
   const id = generateId("message");
   await pool.query(
@@ -190,6 +214,36 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     const row = await queries.messages.findById(pool, mid);
     expect(row?.state).toBe("pending");
     expect(row?.executeAt).toBeUndefined();
+  });
+
+  it("PATCH kind:chat converts a task back to a regular chat message without deleting history", async () => {
+    const mid = await insertScheduledTask({ type: "text", text: "keep this task chat" }, new Date(Date.now() + 3_600_000).toISOString());
+
+    const res = await userRequest("PATCH", `/chats/${chatId}/messages/${mid}`, {
+      kind: "chat",
+      executeAt: null,
+      cron: null,
+      title: null,
+    });
+
+    expect(res.status).toBe(200);
+    const row = await queries.messages.findById(pool, mid);
+    expect(row).not.toBeNull();
+    expect(row?.kind).toBe("chat");
+    expect(row?.executeAt).toBeUndefined();
+    expect(row?.cron).toBeUndefined();
+    expect(row?.content).toEqual({ type: "text", text: "keep this task chat" });
+  });
+
+  it("PATCH kind rejects converting non-task messages or switching to another task kind", async () => {
+    const chatMid = await insertPendingMessage({ type: "text", text: "already chat" });
+    const taskMid = await insertPlainUserTask({ type: "text", text: "still task" });
+
+    const nonTask = await userRequest("PATCH", `/chats/${chatId}/messages/${chatMid}`, { kind: "chat" });
+    expect(nonTask.status).toBe(400);
+
+    const wrongKind = await userRequest("PATCH", `/chats/${chatId}/messages/${taskMid}`, { kind: "summary" });
+    expect(wrongKind.status).toBe(400);
   });
 
   it("PATCH state:pending+executeAt:null restores a cancelled row to plain todo", async () => {
@@ -348,6 +402,62 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
       [mid],
     );
     expect(JSON.parse(outputRows[0].content).type).toBe("events");
+  });
+
+  it("POST /run moves a plain user task parent to Active durably", async () => {
+    const mid = await insertPlainUserTask({ type: "text", text: "manual active" });
+
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+    expect((res.body as { kind: string; state: string }).kind).toBe("task");
+    expect((res.body as { state: string }).state).toBe("running");
+
+    for (let i = 0; i < 50; i++) {
+      const { rows } = await pool.query<{ state: string }>(
+        `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+        [mid],
+      );
+      if (rows[0]?.state === "succeeded") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const parent = await queries.messages.findById(pool, mid);
+    expect(parent?.state).toBe("running");
+
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+      [mid],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].state).toBe("succeeded");
+  });
+
+  it("POST /run keeps a manually activated agent task Active when the run fails", async () => {
+    const mid = await insertPlainAgentTask({ type: "text", text: "missing attachment failure" });
+
+    const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
+    expect(res.status).toBe(200);
+    expect((res.body as { kind: string; state: string }).kind).toBe("task");
+    expect((res.body as { state: string }).state).toBe("running");
+
+    for (let i = 0; i < 50; i++) {
+      const { rows } = await pool.query<{ state: string }>(
+        `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+        [mid],
+      );
+      if (rows[0]?.state === "failed") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const parent = await queries.messages.findById(pool, mid);
+    expect(parent?.state).toBe("running");
+
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
+      [mid],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].state).toBe("failed");
   });
 
   it("POST /run manually fires a scheduled reflection like a task", async () => {

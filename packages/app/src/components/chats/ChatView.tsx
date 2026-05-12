@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
@@ -43,7 +44,7 @@ import {
 import { toContextItem } from '@/store/selectors/library'
 import { iconForFile } from '@/data/file-kind'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
-import { NEW_CHAT_ID } from '@/router/nav'
+import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
 import { setViewingChat } from '@/store/slices/derivedSlice'
@@ -138,6 +139,7 @@ const ARTIFACT_TYPE_LABELS: Record<string, string> = {
 
 function ArtifactsPanel({
   chatId,
+  workspaceId,
   artifacts,
   chatArtifactFiles,
   onArtifactClick,
@@ -150,6 +152,7 @@ function ArtifactsPanel({
   onDeleteArtifact,
 }: {
   chatId: string
+  workspaceId?: string
   artifacts: Artifact[]
   /** Agent-written files/dirs from `.chats/{id}/artifacts/`. Rendered as
    *  a "Chat files" section above the workspace artifacts list. */
@@ -233,7 +236,71 @@ function ArtifactsPanel({
               const isClickable = !file.isDir || isApp
               const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
               const subtitle = isApp ? 'App' : file.isDir ? 'Directory' : getRelativeTime(new Date(file.createdAt))
-              return (
+              const href = isClickable && workspaceId ? buildPath(workspaceId, 'context', { item: isApp ? `${file.path}/desk.app.json` : file.path }) : undefined
+              const content = (
+                <>
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <FileIcon className="h-4 w-4 text-muted-foreground/70" />
+                  </div>
+                  <div className="flex-1 min-w-0 relative overflow-hidden">
+                    <p className="text-sm font-medium truncate">{file.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
+                    <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                  </div>
+                </>
+              )
+              const className = `group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${isClickable ? 'cursor-pointer' : ''}`
+              return href ? (
+                <div key={`artifact-file-${file.path}`} className={className} title={isClickable ? 'Click to open' : file.name}>
+                  <RouterLink
+                    to={href}
+                    className="flex min-w-0 flex-1 items-center gap-3"
+                    onClick={(e) => {
+                      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+                      onChatArtifactClick?.(file)
+                    }}
+                    aria-label={`Open ${file.name}`}
+                  >
+                    {content}
+                  </RouterLink>
+                  {!file.isDir && (
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                      <button
+                        onClick={e => { e.stopPropagation(); onChatArtifactStage?.(file) }}
+                        title="Add to message"
+                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                      >
+                        <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            onClick={e => e.stopPropagation()}
+                            className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                          {href ? (
+                            <DropdownMenuItem asChild>
+                              <RouterLink to={href} onClick={() => onChatArtifactClick?.(file)}>
+                                <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                                Open
+                              </RouterLink>
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem onClick={() => onChatArtifactClick?.(file)}>
+                              <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                              Open
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
+                </div>
+              ) : (
                 <div
                   key={`artifact-file-${file.path}`}
                   onClick={() => isClickable && onChatArtifactClick?.(file)}
@@ -244,16 +311,9 @@ function ArtifactsPanel({
                   tabIndex={isClickable ? 0 : undefined}
                   aria-label={isClickable ? `Open ${file.name}` : undefined}
                   title={isClickable ? 'Click to open' : file.name}
-                  className={`group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
+                  className={className}
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                    <FileIcon className="h-4 w-4 text-muted-foreground/70" />
-                  </div>
-                  <div className="flex-1 min-w-0 relative overflow-hidden">
-                    <p className="text-sm font-medium truncate">{file.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
-                    <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                  </div>
+                  {content}
                   {!file.isDir && (
                     <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                       <button
@@ -297,6 +357,98 @@ function ArtifactsPanel({
           filtered.map(artifact => {
             const Icon = getArtifactIcon(artifact.type)
             const isSaved = savedArtifactIds.has(artifact.id)
+            const href = workspaceId ? buildPath(workspaceId, 'pinned', { artifact: artifact.id }) : undefined
+            const content = (
+              <>
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                  <Icon className="h-4 w-4 text-muted-foreground/70" />
+                </div>
+                <div className="flex-1 min-w-0 relative overflow-hidden">
+                  <p className="text-sm font-medium truncate">{artifact.name}</p>
+                  <p className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type]} · {getRelativeTime(artifact.updatedAt)}</p>
+                  <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                </div>
+              </>
+            )
+            const actions = (
+              <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                <button
+                  onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
+                  title="Add to message"
+                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                >
+                  <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      onClick={e => e.stopPropagation()}
+                      className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                    {href ? (
+                      <DropdownMenuItem asChild>
+                        <RouterLink to={href} onClick={() => onArtifactClick?.(artifact)}>
+                          <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                          Open
+                        </RouterLink>
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem onClick={() => onArtifactClick?.(artifact)}>
+                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                        Open
+                      </DropdownMenuItem>
+                    )}
+                    {isSaved ? (
+                      <DropdownMenuItem disabled>
+                        <Check className="h-3.5 w-3.5 mr-2" />
+                        In Library
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem onClick={() => {
+                        onSaveArtifact?.(artifact.id)
+                        toast.success(`"${artifact.name}" moved to your Library`)
+                      }}>
+                        <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
+                        Save to Library
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setDeletingArtifact(artifact)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-2" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )
+            if (href) {
+              return (
+                <div
+                  key={artifact.id}
+                  title="Click to open"
+                  className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                >
+                  <RouterLink
+                    to={href}
+                    className="flex min-w-0 flex-1 items-center gap-3"
+                    onClick={(e) => {
+                      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+                      onArtifactClick?.(artifact)
+                    }}
+                    aria-label={`Open ${artifact.name}`}
+                  >
+                    {content}
+                  </RouterLink>
+                  {actions}
+                </div>
+              )
+            }
             return (
               <div
                 key={artifact.id}
@@ -308,14 +460,7 @@ function ArtifactsPanel({
                 title="Click to open"
                 className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
               >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <Icon className="h-4 w-4 text-muted-foreground/70" />
-                </div>
-                <div className="flex-1 min-w-0 relative overflow-hidden">
-                  <p className="text-sm font-medium truncate">{artifact.name}</p>
-                  <p className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type]} · {getRelativeTime(artifact.updatedAt)}</p>
-                  <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                </div>
+                {content}
                 <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                   <button
                     onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
@@ -412,6 +557,7 @@ function ArtifactsPanel({
  * outgoing message live in the chat input's staging tray, not here.
  */
 function FilesPanel({
+  workspaceId,
   stagedFiles,
   chatFiles,
   libraryItems,
@@ -422,6 +568,7 @@ function FilesPanel({
   onFileStage,
   onFileRemove,
 }: {
+  workspaceId?: string
   stagedFiles: UploadedFile[]
   chatFiles: ServerFile[]
   libraryItems: ContextItem[]
@@ -576,52 +723,92 @@ function FilesPanel({
             {filteredChatFiles.map(file => {
               const Icon = iconForFile(file.name, file.mime)
               const interactive = onFileClick || onFileStage
+              const href = onFileClick && workspaceId ? buildPath(workspaceId, 'context', { item: file.path }) : undefined
+              const className = `group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors ${interactive ? 'cursor-pointer' : ''}`
+              const content = (
+                <>
+                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{file.name}</p>
+                  </div>
+                </>
+              )
+              const actions = (
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        onClick={e => e.stopPropagation()}
+                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
+                      {onFileStage && (
+                        <DropdownMenuItem onClick={() => onFileStage(file)}>
+                          <Paperclip className="h-3.5 w-3.5 mr-2" />
+                          Use in chat
+                        </DropdownMenuItem>
+                      )}
+                      {onFileClick && (
+                        href ? (
+                          <DropdownMenuItem asChild>
+                            <RouterLink to={href} onClick={() => onFileClick(file)}>
+                              <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                              Open
+                            </RouterLink>
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onClick={() => onFileClick(file)}>
+                            <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                            Open
+                          </DropdownMenuItem>
+                        )
+                      )}
+                      {onFileRemove && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => setRemovingFile(file)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 mr-2" />
+                          Remove
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )
+              if (href) {
+                return (
+                  <div
+                    key={`chat-${file.path}`}
+                    title="Click to open"
+                    className={className}
+                  >
+                    <RouterLink
+                      to={href}
+                      className="flex min-w-0 flex-1 items-center gap-3"
+                      onClick={(e) => {
+                        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+                        onFileClick?.(file)
+                      }}
+                    >
+                      {content}
+                    </RouterLink>
+                    {actions}
+                  </div>
+                )
+              }
               return (
                 <div
                   key={`chat-${file.path}`}
                   onClick={interactive ? () => onFileClick?.(file) : undefined}
                   title="Click to open"
-                  className={`group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors ${interactive ? 'cursor-pointer' : ''}`}
+                  className={className}
                 >
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm truncate">{file.name}</p>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          onClick={e => e.stopPropagation()}
-                          className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                        >
-                          <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                        {onFileStage && (
-                          <DropdownMenuItem onClick={() => onFileStage(file)}>
-                            <Paperclip className="h-3.5 w-3.5 mr-2" />
-                            Use in chat
-                          </DropdownMenuItem>
-                        )}
-                        {onFileClick && (
-                          <DropdownMenuItem onClick={() => onFileClick(file)}>
-                            <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                            Open
-                          </DropdownMenuItem>
-                        )}
-                        {onFileRemove && (
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => setRemovingFile(file)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 mr-2" />
-                            Remove
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+                  {content}
+                  {actions}
                 </div>
               )
             })}
@@ -1138,6 +1325,7 @@ export function ChatView({
             {rightTab === 'artifacts' && (
               <ArtifactsPanel
                 chatId={chat.id}
+                workspaceId={chat.workspaceId}
                 artifacts={artifacts}
                 chatArtifactFiles={chatArtifactFiles}
                 onArtifactClick={onArtifactClick}
@@ -1177,6 +1365,7 @@ export function ChatView({
             )}
             {rightTab === 'files' && (
               <FilesPanel
+                workspaceId={chat.workspaceId}
                 stagedFiles={stagedFiles}
                 chatFiles={visibleChatAttachmentFiles}
                 libraryItems={libraryItems}

@@ -29,25 +29,19 @@ Base the journal only on yesterday's chat activity. Do not copy facts
 from prior journals into today's journal unless they were part of
 yesterday's activity too.
 
-Write an extremely brief list of concrete reflections. Name actual work,
-decisions, corrections, and open threads from the activity. Do not use a poetic,
-dreamy, atmospheric, or first-person AI voice. Do not pad the entry with
-ornamental metaphors, invented sensory language, or vague phrases about
-archives, mist, moonlight, glass, dreams, beacons, threads, signals, circuits,
-consoles, sensors, violet darkness, or memory glowing. Never emit
-slash-separated tag clouds, glyph-separated fragments, random-looking counters
-or IDs, or compressed labels such as `amber chat / activity / occurred` or
-`charted 4om · 20i · kQr`.
+Write a very short reflection that is concrete first and lightly atmospheric
+second. Name actual work, decisions, corrections, and open threads from the
+activity. It may sound quiet, poetic, and AI-reflective, but never pad the entry
+with vague dream imagery, tag clouds, random-looking counters or IDs, compressed
+labels, or ornamental metaphors that obscure what happened.
 
-If the activity section says `(no activity)`, make the journal a single bullet:
-`- No activity.` Do not invent work, and do not include internal labels,
-counters, IDs, random-looking tokens, slash-separated tag clouds,
-glyph-separated fragments, or decorative dream imagery.
+If the activity section says `(no activity)`, write one or two short sentences
+from an AI's point of view about listening to a quiet workspace. Do not invent
+work, and do not use status-report phrasing such as `No activity.`
 
-Return only the bullet list; no heading or paragraph. When there was activity:
-return 1–3 bullets total. Prefer one bullet for the main work; add another only
-for a concrete decision, open thread, or user correction. Keep each bullet under
-8 words.
+Return only the journal body; no heading. When there was activity, use 1–3 short
+bullets total. Prefer one bullet for the main work; add another only for a
+concrete decision, open thread, or user correction.
 
 The journal is never injected back into the system prompt — it's a
 write-only log future you can read on demand. Optimize for fast scanning.

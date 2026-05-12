@@ -30,7 +30,7 @@ import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
 import { GlobalPalette } from '@/components/global-palette/GlobalPalette'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
-import type { AttachmentRef } from '@/store/types'
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
@@ -39,6 +39,7 @@ import {
   useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
+  useGetChatQuery,
   useGetMeQuery,
   useCreateChatMutation,
   useDeleteChatMutation,
@@ -64,7 +65,7 @@ import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
-import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, toUiTask } from '@/store/selectors/tasks'
+import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem } from '@/store/selectors/library'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
@@ -72,6 +73,7 @@ import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
+import { buildTaskStatusMove } from '@/lib/task-status'
 import {
   acceptBrowserNotificationPermissionOffer,
   markBrowserNotificationPermissionOffered,
@@ -201,6 +203,7 @@ function AppInner() {
   const selectedContextPath = searchParams.get('item')
   const selectedMessageId = searchParams.get('message')
   const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
+  const shouldLoadTasksView = activeView === 'tasks'
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
@@ -212,7 +215,7 @@ function AppInner() {
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
-  const { data: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
+  const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
@@ -255,12 +258,14 @@ function AppInner() {
     }
   }, [selectedArtifactPath, artifactTransitionSource, dispatch])
 
-  // Use `data` (not `currentData`) so the chat list keeps showing the last
-  // fulfilled value during arg-change refetches. `currentData` would briefly
-  // return undefined and unmount ChatView mid-interaction (a file drop
-  // mid-flight loses its in-flight pendingFiles state).
+  // Use `currentData` for workspace-scoped queries. RTK Query's `data` keeps
+  // the previous arg's fulfilled value while the new arg loads, which makes a
+  // freshly selected workspace briefly render the old workspace's sidebar and
+  // views. `currentData` still uses the cache for this exact workspace when it
+  // exists; otherwise the UI shows a loader instead of stale cross-workspace
+  // content.
   const {
-    data: serverChats,
+    currentData: serverChats,
     isLoading: chatsLoading,
     isUninitialized: chatsUninitialized,
     isError: chatsError,
@@ -269,27 +274,70 @@ function AppInner() {
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
   const chats: Chat[] = (serverChats ?? []).map(toUiChat)
+  const selectedChatFromList = selectedChatId && selectedChatId !== NEW_CHAT_ID
+    ? chats.find(c => c.id === selectedChatId) ?? null
+    : null
+  // Fetch the selected chat independently of the sidebar list. The list can be
+  // relatively expensive on large workspaces; a direct chat URL should not wait
+  // for sidebar hydration before rendering the conversation surface.
+  const shouldFetchSelectedChatById = !!(
+    activeWorkspaceId &&
+    selectedChatId &&
+    selectedChatId !== NEW_CHAT_ID
+  )
+  const {
+    currentData: selectedServerChatById,
+    isLoading: selectedChatByIdLoading,
+    isFetching: selectedChatByIdFetching,
+  } = useGetChatQuery(selectedChatId ?? '', { skip: !shouldFetchSelectedChatById })
+  const selectedChatById = selectedServerChatById?.workspaceId === activeWorkspaceId
+    ? toUiChat(selectedServerChatById)
+    : null
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
-  const { data: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
+  const { currentData: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
     { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
-    { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
   )
-  const { data: summaryRequestTasksResp } = useGetMessagesQuery(
+  const { currentData: summaryRequestTasksResp } = useGetMessagesQuery(
     {
       workspaceId: activeWorkspaceId,
       kind: summaryRequestMessageKindsForDeveloperMode(developerMode),
       contentKind: ['summary_request'],
     },
-    { skip: !activeWorkspaceId || !developerMode, refetchOnMountOrArgChange: true },
+    { skip: !activeWorkspaceId || !developerMode || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
   )
+  const { currentData: taskRunsResp } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), limit: 500 },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
+  )
+  const { currentData: activeTaskRunsResp } = useGetMessagesQuery(
+    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), state: ['running'], limit: 200 },
+    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
+  )
+  const taskRunsByParent = new Map<string, ServerMessage[]>()
+  const taskRunsById = new Map<string, ServerMessage>()
+  for (const run of taskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
+  for (const run of activeTaskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
+  for (const run of taskRunsById.values()) {
+    if (!run.parentId) continue
+    const runs = taskRunsByParent.get(run.parentId) ?? []
+    runs.push(run)
+    taskRunsByParent.set(run.parentId, runs)
+  }
   const tasks = [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
     .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
-    .map(m => toUiTask(m, workspaceServerAgents ?? serverAgents ?? [], serverChats ?? [], serverWorkspaces ?? []))
+    .map(m => toUiTask(
+      m,
+      workspaceServerAgents ?? serverAgents ?? [],
+      serverChats ?? [],
+      serverWorkspaces ?? [],
+      taskRunsByParent.get(m.id) ?? [],
+    ))
   const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
@@ -531,7 +579,7 @@ function AppInner() {
   const unreadCount = awaitingResp?.items.length ?? 0
 
   const {
-    data: libraryResp,
+    currentData: libraryResp,
     isLoading: libraryLoading,
     isUninitialized: libraryUninitialized,
     isFetching: libraryFetching,
@@ -555,7 +603,7 @@ function AppInner() {
   }, [libraryResp, dispatch])
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
-  const selectedChat = (!isNewChat && selectedChatId) ? chats.find(c => c.id === selectedChatId) ?? null : null
+  const selectedChat = (!isNewChat && selectedChatId) ? selectedChatFromList ?? selectedChatById : null
   const chatsListLoading = !!activeWorkspaceId && !serverChats && !chatsError
   // `chatsFetching` flips true on every background refetch (WS reconnect,
   // tag invalidation, refetchOnMountOrArgChange). RTK Query keeps the
@@ -564,7 +612,8 @@ function AppInner() {
   // when we already have data — exactly the dev-server tab-switch
   // flicker. Keep this signal scoped to the genuinely-no-data case.
   const chatsListResolving = chatsListLoading || chatsLoading || chatsUninitialized
-  const isResolvingSelectedChat = !!selectedChatId && !isNewChat && !selectedChat && chatsListResolving
+  const selectedChatByIdResolving = shouldFetchSelectedChatById && (selectedChatByIdLoading || selectedChatByIdFetching)
+  const isResolvingSelectedChat = !!selectedChatId && !isNewChat && !selectedChat && selectedChatByIdResolving
   const isLoadingChatSurface = isResolvingSelectedChat || (activeView === 'pinned' && chatsListResolving)
 
   useEffect(() => {
@@ -592,7 +641,7 @@ function AppInner() {
   // by path so we can render the same ContextDetail view for them.
   const needsMetaFallback =
     !!effectiveItemPath && !libraryItem && !!activeWorkspaceId
-  const { data: fallbackFile, isFetching: fallbackFileFetching } = useGetLibraryFileQuery(
+  const { currentData: fallbackFile, isFetching: fallbackFileFetching } = useGetLibraryFileQuery(
     { workspaceId: activeWorkspaceId ?? '', path: effectiveItemPath ?? '' },
     { skip: !needsMetaFallback },
   )
@@ -743,21 +792,10 @@ function AppInner() {
             tasks={tasks}
             isLoading={tasksListLoading}
             onTaskMove={async (task, newStatus) => {
-              if (!task.chatId || !task.messageId) return
-              // UI column → server action:
-              //   active    → POST .../run (fires the agent now; server
-              //               flips state pending→running and back).
-              //   complete  → PATCH state:'cancelled' (terminal, allowed
-              //               from any non-running state).
-              //   todo      → PATCH executeAt+cron cleared and state:'pending'
-              //               so terminal rows (succeeded/failed/cancelled)
-              //               restore to the Todo column.
-              //   scheduled → PATCH state:'pending' + a default executeAt
-              //               (24h out) when the row has no schedule yet,
-              //               so the drop doesn't require a separate
-              //               "set a time" step. The user can edit the
-              //               time from the task detail panel.
-              if (newStatus === 'active') {
+              if (!task.chatId || !task.messageId) return false
+              const move = buildTaskStatusMove(task, newStatus, 'user')
+              if (move.kind === 'none') return false
+              if (move.kind === 'run') {
                 try {
                   await runMessageMutation({
                     chatId: task.chatId,
@@ -765,42 +803,21 @@ function AppInner() {
                   }).unwrap()
                 } catch (err) {
                   toast.error('Run failed', { description: extractApiError(err) })
+                  throw err
                 }
-                return
-              }
-
-              const hasSchedule = !!task.scheduledFor || !!task.schedule
-
-              const patch: {
-                state?: 'pending' | 'cancelled'
-                executeAt?: string | null
-                cron?: string | null
-              } = {}
-
-              if (newStatus === 'complete') {
-                patch.state = 'cancelled'
-              } else if (newStatus === 'todo') {
-                patch.executeAt = null
-                patch.cron = null
-                patch.state = 'pending'
-              } else if (newStatus === 'scheduled') {
-                patch.state = 'pending'
-                if (!hasSchedule) {
-                  // Default to 24 hours out so the drop succeeds without a
-                  // separate "set a time" prompt. The user can fine-tune
-                  // from the task detail panel.
-                  patch.executeAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-                }
+                return true
               }
 
               try {
                 await patchMessageMutation({
                   chatId: task.chatId,
                   messageId: task.messageId,
-                  patch,
+                  patch: move.patch,
                 }).unwrap()
+                return true
               } catch (err) {
                 toast.error('Move failed', { description: extractApiError(err) })
+                throw err
               }
             }}
             onCreateTask={async (input) => {

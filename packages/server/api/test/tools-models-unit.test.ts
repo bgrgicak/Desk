@@ -57,7 +57,7 @@ describe("listModels — no workspace", () => {
   it("throws NotFoundError when no workspace is available", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([]);
 
-    await expect(listModels(fakePool, {})).rejects.toThrow("No sandbox available");
+    await expect(listModels(fakePool, undefined, {})).rejects.toThrow("No sandbox available");
   });
 });
 
@@ -67,7 +67,7 @@ describe("listModels — decryption failure fallback", () => {
     vi.mocked(resolveProviderKeys).mockRejectedValue(new Error("Decryption failed: bad tag"));
     vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
 
-    const models = await listModels(fakePool, {});
+    const models = await listModels(fakePool, undefined, {});
     expect(models.length).toBeGreaterThan(0);
     expect(models.every((m) => m.id.startsWith(`${m.provider}/`))).toBe(true);
     // Called with empty keys (fallback)
@@ -120,12 +120,17 @@ describe("relabelOpenAiBySource — Codex vs OpenAI auth labeling", () => {
 describe("listModels — happy path", () => {
   it("returns all models when no provider filter is given", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
-    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
+    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test", GITHUB_TOKEN: "github_pat_test" });
     vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
 
-    const models = await listModels(fakePool, {});
+    const models = await listModels(fakePool, undefined, {});
     expect(models.length).toBeGreaterThan(0);
     expect(models.some((m) => m.provider === "openai")).toBe(true);
+    expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
+      provider: undefined,
+      providerKeys: { OPENAI_API_KEY: "sk-test" },
+      env: {},
+    });
   });
 
   it("relabels openai/* models as 'codex' when only Codex is the active OpenAI source", async () => {
@@ -136,7 +141,7 @@ describe("listModels — happy path", () => {
       .mockResolvedValue({ OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" });
     vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
 
-    const models = await listModels(fakePool, { userId: "usr_1" });
+    const models = await listModels(fakePool, undefined, { userId: "usr_1" });
     const openai = models.filter((m) => m.id.startsWith("openai/"));
     expect(openai.length).toBeGreaterThan(0);
     expect(openai.every((m) => m.provider === "codex")).toBe(true);
@@ -149,7 +154,7 @@ describe("listModels — happy path", () => {
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
     vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
 
-    const models = await listModels(fakePool, { provider: "opencode" });
+    const models = await listModels(fakePool, undefined, { provider: "opencode" });
     expect(models.length).toBeGreaterThan(0);
     expect(models.every((m) => m.provider === "opencode")).toBe(true);
     expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {

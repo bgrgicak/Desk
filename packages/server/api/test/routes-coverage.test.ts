@@ -209,6 +209,9 @@ describe("Routes coverage (real Postgres)", () => {
     });
     token = (res.body as { token: string }).token;
 
+    // Provider keys now live in the vault — set it up so PUT /me/providers works.
+    await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
+
     // Get seeded workspace and agent
     const wsRes = await request("GET", "/workspaces", token);
     workspaceId = (wsRes.body as Array<{ id: string }>)[0].id;
@@ -268,9 +271,10 @@ describe("Routes coverage (real Postgres)", () => {
     expect(res.status).toBe(200);
     const body = res.body as { providers: Record<string, string | null> };
     expect(typeof body.providers).toBe("object");
-    // Every PROVIDER_KEY_VARS entry must appear; exact names checked below.
+    // Every CONNECTION_ENV_VARS entry must appear; exact names checked below.
     expect(body.providers).toHaveProperty("GEMINI_API_KEY");
     expect(body.providers).toHaveProperty("OPENAI_API_KEY");
+    expect(body.providers).toHaveProperty("GITHUB_TOKEN");
     expect(body.providers).toHaveProperty("AWS_REGION");
   });
 
@@ -308,6 +312,52 @@ describe("Routes coverage (real Postgres)", () => {
     await request("PUT", "/me/providers", token, {
       providers: { OPENAI_API_KEY: null },
     });
+  });
+
+  it("PUT /me/providers — stores GitHub connection tokens in the vault", async () => {
+    const githubToken = "github_pat_1234567890abcdefghijklmnop";
+    const setRes = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: githubToken },
+    });
+    expect(setRes.status).toBe(200);
+    const setBody = setRes.body as { providers: Record<string, string | null> };
+    expect(setBody.providers.GITHUB_TOKEN).not.toBeNull();
+    expect(setBody.providers.GITHUB_TOKEN).not.toBe(githubToken);
+    expect(setBody.providers.GITHUB_TOKEN).toContain("...");
+
+    const delRes = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: null },
+    });
+    expect(delRes.status).toBe(200);
+    const delBody = delRes.body as { providers: Record<string, string | null> };
+    expect(delBody.providers.GITHUB_TOKEN).toBeNull();
+    const metaAfterDelete = await request("GET", "/me/providers/meta", token);
+    expect((metaAfterDelete.body as { meta: Record<string, unknown> }).meta.GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it("PUT /me/providers/meta — only accepts user-editable metadata", async () => {
+    await request("PUT", "/me/providers/meta", token, {
+      meta: {
+        GITHUB_TOKEN: {
+          name: "Work GitHub",
+          enabled: false,
+        },
+      },
+    });
+
+    const metaRes = await request("GET", "/me/providers/meta", token);
+    expect((metaRes.body as { meta: Record<string, unknown> }).meta.GITHUB_TOKEN).toEqual({
+      name: "Work GitHub",
+      enabled: false,
+    });
+
+    await request("PUT", "/me/providers/meta", token, { meta: { GITHUB_TOKEN: null } });
+    const clearedNameRes = await request("GET", "/me/providers/meta", token);
+    expect((clearedNameRes.body as { meta: Record<string, unknown> }).meta.GITHUB_TOKEN).toEqual({
+      enabled: false,
+    });
+
+    await request("PUT", "/me/providers", token, { providers: { GITHUB_TOKEN: null } });
   });
 
   it("PUT /me/providers — rejects unknown key names", async () => {

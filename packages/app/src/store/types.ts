@@ -89,11 +89,16 @@ export interface ServerChat {
   kind?: "chat" | "task" | "task_run";
   /**
    * True when the chat's most recent `agent_turn` message is in `pending`
-   * or `running` state. Only populated by /chats list responses (derived
-   * from a subquery, not a persisted column). WS `chat.updated` events
-   * omit this.
+   * or `running` state. Only populated by /chats list responses (maintained
+   * on the chat row so sidebar loads do not scan messages). WS `chat.updated`
+   * events omit this.
    */
   running?: boolean;
+  /**
+   * True when the chat's most recent `agent_turn` failed and can be retried.
+   * Only populated by /chats list responses; WS message events refine it live.
+   */
+  failed?: boolean;
 }
 
 export interface AttachmentRef {
@@ -188,6 +193,8 @@ export interface ListLibraryResponse extends Cursor {
 
 /** Cross-chat message listing query (/messages). */
 export interface MessagesFilter {
+  /** Request full message content instead of the compact UI payload. */
+  full?: boolean;
   workspaceId?: string;
   chatId?: string;
   state?: MessageState[];

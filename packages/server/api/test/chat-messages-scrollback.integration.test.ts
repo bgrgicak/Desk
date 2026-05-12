@@ -30,6 +30,8 @@ let home: string;
 let dbPath: string;
 let token: string;
 let chatId: string;
+let workspaceId: string;
+let agentId: string;
 
 /** IDs of the 12 seeded messages, in chronological insertion order. */
 const seededIds: string[] = [];
@@ -93,7 +95,7 @@ beforeAll(async () => {
     email: "scrollback@example.com",
   });
 
-  const agentId = generateId("agent");
+  agentId = generateId("agent");
   await queries.agents.insert(pool, {
     id: agentId,
     userId,
@@ -102,6 +104,7 @@ beforeAll(async () => {
   });
 
   const wsId = generateId("workspace");
+  workspaceId = wsId;
   await queries.workspaces.insert(pool, {
     id: wsId,
     userId,
@@ -358,5 +361,313 @@ describe("GET /chats/:id/messages — forward pagination (cursor)", () => {
       expect(m.createdAt >= third.createdAt).toBe(true);
       expect(m.id).not.toBe(third.id);
     }
+  });
+});
+
+describe("GET /chats/:id/messages — compact view", () => {
+  it("defaults to the payload-trimmed timeline view unless full is explicit", async () => {
+    const defaultChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: defaultChatId,
+      workspaceId,
+      agentId,
+      title: "Default trimmed payload chat",
+    });
+
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: defaultChatId,
+      role: "user",
+      content: { type: "text", text: "Visible prompt" },
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: defaultChatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "tool", part: { input: "hidden".repeat(2000) } } },
+          { kind: "event", event: { type: "text", part: { text: "Visible answer" } } },
+        ],
+      },
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: defaultChatId,
+      role: "agent",
+      content: { type: "toolResult", toolName: "large", result: { blob: "payload".repeat(2000) } },
+    });
+    const summaryId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: summaryId,
+      chatId: defaultChatId,
+      role: "system",
+      content: { type: "summary", body: "summary".repeat(2000) },
+    });
+    const summaryRequestId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: summaryRequestId,
+      chatId: defaultChatId,
+      role: "system",
+      content: { type: "summary_request", reason: "scheduled" },
+    });
+    const reflectionRequestId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: reflectionRequestId,
+      chatId: defaultChatId,
+      role: "system",
+      content: { type: "reflection_request", workspaceId },
+    });
+
+    const trimmed = await request("GET", `/chats/${defaultChatId}/messages`, token);
+    const full = await request("GET", `/chats/${defaultChatId}/messages?view=full`, token);
+    expect(trimmed.status).toBe(200);
+    expect(full.status).toBe(200);
+
+    const trimmedBody = trimmed.body as { items: Message[] };
+    const fullBody = full.body as { items: Message[] };
+    const trimmedJson = JSON.stringify(trimmedBody);
+    const fullJson = JSON.stringify(fullBody);
+
+    expect(trimmedJson.length).toBeLessThan(fullJson.length / 10);
+    expect(trimmedJson).not.toContain("hiddenhiddenhidden");
+    expect(trimmedJson).not.toContain("payloadpayloadpayload");
+    expect(trimmedBody.items.map((m) => m.id)).not.toContain(summaryId);
+    expect(trimmedBody.items.map((m) => m.id)).not.toContain(summaryRequestId);
+    expect(trimmedBody.items.map((m) => m.id)).not.toContain(reflectionRequestId);
+    expect(fullJson).toContain("hiddenhiddenhidden");
+    expect(fullJson).toContain("payloadpayloadpayload");
+    expect(fullBody.items.map((m) => m.id)).toContain(summaryId);
+    expect(fullBody.items.map((m) => m.id)).toContain(summaryRequestId);
+    expect(fullBody.items.map((m) => m.id)).toContain(reflectionRequestId);
+  });
+
+  it("omits hidden tool/event payloads while preserving visible text", async () => {
+    const compactChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: compactChatId,
+      workspaceId,
+      agentId,
+      title: "Compact payload chat",
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: compactChatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "unparsed", line: "Legacy visible line" },
+          { kind: "event", event: { type: "tool", part: { input: "x".repeat(5000) } } },
+          { kind: "event", event: { type: "text", part: { text: "Visible answer" } } },
+          { kind: "stderr", line: "debug".repeat(1000) },
+        ],
+      },
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: compactChatId,
+      role: "agent",
+      content: { type: "toolResult", toolName: "large", result: { blob: "y".repeat(5000) } },
+    });
+
+    const compact = await request("GET", `/chats/${compactChatId}/messages?view=compact`, token);
+    const full = await request("GET", `/chats/${compactChatId}/messages?view=full`, token);
+    expect(compact.status).toBe(200);
+    expect(full.status).toBe(200);
+
+    const compactBody = compact.body as { items: Message[] };
+    const fullBody = full.body as { items: Message[] };
+    expect(JSON.stringify(compactBody).length).toBeLessThan(JSON.stringify(fullBody).length / 4);
+    expect(JSON.stringify(compactBody)).not.toContain("x".repeat(100));
+    expect(JSON.stringify(compactBody)).not.toContain("y".repeat(100));
+    expect(JSON.stringify(compactBody)).not.toContain("debugdebugdebug");
+
+    const events = compactBody.items.find((m) => m.content.type === "events")!;
+    expect(events.content).toEqual({
+      type: "events",
+      log: [
+        { kind: "unparsed", line: "Legacy visible line" },
+        { kind: "event", event: { type: "text", part: { text: "Visible answer" } } },
+      ],
+    });
+    const toolResult = compactBody.items.find((m) => m.content.type === "toolResult")!;
+    expect(toolResult.content).toEqual({ type: "toolResult", toolName: "large", result: null });
+  });
+
+  it("timeline view keeps UI-critical rows and drops request-only rows", async () => {
+    const timelineChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: timelineChatId,
+      workspaceId,
+      agentId,
+      title: "Timeline payload chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"], state?: Message["state"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      await queries.messages.insert(pool, { id, chatId: timelineChatId, role, content, state });
+      inserted[name] = id;
+    }
+
+    await add("user", "user", { type: "text", text: "Visible prompt" });
+    await add("oldTurn", "system", { type: "agent_turn", userMessageId: inserted.user }, "succeeded");
+    await add("oldTool", "agent", { type: "toolResult", toolName: "old", result: { blob: "old".repeat(4000) } });
+    await add("oldSummary", "system", { type: "summary", body: "summary".repeat(1000) });
+    await add("answer", "agent", {
+      type: "events",
+      log: [
+        { kind: "unparsed", line: "Legacy visible line" },
+        { kind: "event", event: { type: "tool", part: { input: "hidden".repeat(1000) } } },
+      ],
+    });
+    await add("latestTurn", "system", { type: "agent_turn", userMessageId: inserted.user }, "succeeded");
+    await add("latestTool", "agent", { type: "toolResult", toolName: "latest", result: { blob: "new".repeat(4000) } });
+
+    const timeline = await request("GET", `/chats/${timelineChatId}/messages?view=timeline`, token);
+    const compact = await request("GET", `/chats/${timelineChatId}/messages?view=compact`, token);
+    expect(timeline.status).toBe(200);
+    expect(compact.status).toBe(200);
+
+    const timelineBody = timeline.body as { items: Message[] };
+    const compactBody = compact.body as { items: Message[] };
+    const ids = timelineBody.items.map((m) => m.id);
+    expect(ids).toContain(inserted.user);
+    expect(ids).toContain(inserted.oldTurn);
+    expect(ids).toContain(inserted.oldTool);
+    expect(ids).toContain(inserted.answer);
+    expect(ids).toContain(inserted.latestTurn);
+    // Keep hidden markers/triggers so the UI can still render typing/error and
+    // historical tool-only completion fallbacks, but drop summaries.
+    expect(ids).toContain(inserted.latestTool);
+    expect(ids).not.toContain(inserted.oldSummary);
+
+    expect(JSON.stringify(timelineBody).length).toBeLessThan(JSON.stringify(compactBody).length);
+    expect(JSON.stringify(timelineBody)).not.toContain("oldoldoldold");
+    expect(JSON.stringify(timelineBody)).not.toContain("newnewnewnew");
+    expect(JSON.stringify(timelineBody)).not.toContain("hiddenhiddenhidden");
+    const answer = timelineBody.items.find((m) => m.id === inserted.answer)!;
+    expect(answer.content).toEqual({ type: "events", log: [{ kind: "unparsed", line: "Legacy visible line" }] });
+  });
+
+  it("full/dev pages are a superset of regular timeline pages even when summaries are interleaved", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"], state?: Message["state"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      await queries.messages.insert(pool, { id, chatId: devChatId, role, content, state });
+      inserted[name] = id;
+    }
+
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("request1", "system", { type: "summary_request" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("tool", "agent", { type: "toolCall", toolName: "read", args: { filePath: "/home/agent/x" } });
+    await add("regular3", "user", { type: "text", text: "Regular 3" });
+
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", limit: 3 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", limit: 3 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular2, inserted.tool, inserted.regular3]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary2);
+    expect(full.items.length).toBeGreaterThan(timeline.items.length);
+    expect(full.prevCursor).toBe(timeline.prevCursor);
+  });
+
+  it("full/dev scrollback pages are a superset of regular timeline scrollback pages", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode scrollback superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    const created: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      const msg = await queries.messages.insert(pool, { id, chatId: devChatId, role, content });
+      inserted[name] = id;
+      created[name] = msg.createdAt;
+    }
+
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("tool", "agent", { type: "toolResult", toolName: "read", result: { ok: true } });
+    await add("before", "user", { type: "text", text: "Before cursor" });
+
+    const before = `${created.before}|${inserted.before}`;
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", before, limit: 2 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", before, limit: 2 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular2, inserted.tool]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary2);
+    expect(fullIds).not.toContain(inserted.before);
+    expect(full.prevCursor).toBe(timeline.prevCursor);
+  });
+
+  it("full/dev forward pages are a superset of regular timeline forward pages", async () => {
+    const devChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: devChatId,
+      workspaceId,
+      agentId,
+      title: "Dev mode forward superset chat",
+    });
+
+    const inserted: Record<string, string> = {};
+    const created: Record<string, string> = {};
+    async function add(name: string, role: "user" | "agent" | "system", content: Message["content"]) {
+      await new Promise((r) => setTimeout(r, 2));
+      const id = generateId("message");
+      const msg = await queries.messages.insert(pool, { id, chatId: devChatId, role, content });
+      inserted[name] = id;
+      created[name] = msg.createdAt;
+    }
+
+    await add("cursor", "user", { type: "text", text: "Before cursor" });
+    await add("regular1", "user", { type: "text", text: "Regular 1" });
+    await add("summary1", "system", { type: "summary", body: "Summary 1" });
+    await add("regular2", "agent", { type: "text", text: "Regular 2" });
+    await add("summary2", "system", { type: "summary", body: "Summary 2" });
+    await add("regular3", "user", { type: "text", text: "Regular 3" });
+
+    const cursor = `${created.cursor}|${inserted.cursor}`;
+    const timeline = await queries.messages.listByChat(pool, devChatId, { view: "timeline", cursor, limit: 2 });
+    const full = await queries.messages.listByChat(pool, devChatId, { view: "full", cursor, limit: 2 });
+
+    const timelineIds = timeline.items.map((m) => m.id);
+    const fullIds = full.items.map((m) => m.id);
+
+    expect(timelineIds).toEqual([inserted.regular1, inserted.regular2]);
+    for (const id of timelineIds) expect(fullIds).toContain(id);
+    expect(fullIds).toContain(inserted.summary1);
+    expect(fullIds).not.toContain(inserted.regular3);
+    expect(full.nextCursor).toBe(timeline.nextCursor);
   });
 });

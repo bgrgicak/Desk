@@ -110,6 +110,9 @@ export async function startDeskServer(
     // workspace. UI affordances for the hub are out of scope for this
     // change set — opt out at boot until the UI catches up.
     DESK_HUB_AUTO_CREATE: "off",
+    // Auto-setup and unlock the per-user vault on boot so e2e tests can
+    // read and write provider keys without going through the vault UI flow.
+    DESK_VAULT_PASSWORD: "e2e-vault-password",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {

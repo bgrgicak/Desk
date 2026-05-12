@@ -70,8 +70,12 @@ describeIf("sandbox integration", () => {
 
     const engine = await detectEngine();
     const info = await engine.inspect(handle.containerId);
+    // The resource-profile label is a stable runtime-feature tag, not a
+    // size descriptor. Size is set at first create only — see the comment
+    // on SANDBOX_RUNTIME_TAG in docker.ts for why size is deliberately
+    // excluded from the drift check.
     expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
-      "pids=1024,memory=4g,tmpfs=/tmp:size=1g,user=root+sudo",
+      "runtime=tini-v1,user=root+sudo",
     );
   });
 

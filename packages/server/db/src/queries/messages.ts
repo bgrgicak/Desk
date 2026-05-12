@@ -2,6 +2,142 @@ import { basename } from "node:path/posix";
 import { type Pool, transact } from "../pool.js";
 import { MessageSchema, type Message } from "@agent-desk/shared";
 
+type MessageListView = "full" | "compact" | "timeline";
+
+const FULL_MESSAGE_SELECT = `
+  id,
+  chat_id,
+  role,
+  content,
+  created_at,
+  updated_at,
+  execute_at,
+  cron,
+  state,
+  parent_id,
+  agent_id,
+  started_at,
+  ended_at,
+  model,
+  attachments,
+  kind,
+  title
+`;
+
+// Compact chat loads are the normal UI path. Build the compact JSON in SQL so
+// hidden tool/event/summary payloads never leave SQLite just to be discarded by
+// the API serializer. This keeps the feature surface (visible assistant text,
+// agent_turn state, tool-only fallback markers) without shipping megabytes of
+// tool inputs/results/log lines on every chat open.
+function compactContentSql(column = "content"): string {
+  return `
+  CASE json_extract(${column}, '$.type')
+    WHEN 'events' THEN json_object(
+      'type', 'events',
+      'log', json(COALESCE((
+        SELECT json_group_array(json(
+          CASE
+            WHEN json_extract(e.value, '$.kind') = 'event' THEN json_object(
+              'kind', 'event',
+              'event', json_object(
+                'type', 'text',
+                'part', json_object('text', json_extract(e.value, '$.event.part.text'))
+              )
+            )
+            ELSE json_object('kind', 'unparsed', 'line', json_extract(e.value, '$.line'))
+          END
+        ))
+        FROM json_each(${column}, '$.log') AS e
+        WHERE (
+          json_extract(e.value, '$.kind') = 'event'
+          AND json_extract(e.value, '$.event.type') = 'text'
+          AND json_type(e.value, '$.event.part.text') = 'text'
+        ) OR (
+          json_extract(e.value, '$.kind') = 'unparsed'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${column}, '$.log') AS e2
+            WHERE json_extract(e2.value, '$.kind') = 'event'
+              AND CAST(e2.key AS INTEGER) < CAST(e.key AS INTEGER)
+          )
+        )
+      ), '[]'))
+    )
+    WHEN 'toolCall' THEN json_object(
+      'type', 'toolCall',
+      'toolName', json_extract(${column}, '$.toolName'),
+      'args', json('{}')
+    )
+    WHEN 'toolResult' THEN json_object(
+      'type', 'toolResult',
+      'toolName', json_extract(${column}, '$.toolName'),
+      'result', NULL
+    )
+    WHEN 'summary' THEN json_object('type', 'summary', 'body', '')
+    ELSE ${column}
+  END
+`;
+}
+
+const COMPACT_MESSAGE_SELECT = FULL_MESSAGE_SELECT.replace("content,", `${compactContentSql()} AS content,`);
+
+const FULL_MESSAGE_SELECT_M = `
+  m.id,
+  m.chat_id,
+  m.role,
+  m.content,
+  m.created_at,
+  m.updated_at,
+  m.execute_at,
+  m.cron,
+  m.state,
+  m.parent_id,
+  m.agent_id,
+  m.started_at,
+  m.ended_at,
+  m.model,
+  m.attachments,
+  m.kind,
+  m.title
+`;
+
+const COMPACT_MESSAGE_SELECT_M = FULL_MESSAGE_SELECT_M.replace("m.content,", `${compactContentSql("m.content")} AS content,`);
+
+function messageSelect(view: MessageListView): string {
+  return view === "full" ? FULL_MESSAGE_SELECT : COMPACT_MESSAGE_SELECT;
+}
+
+function messageSelectFromAlias(view: MessageListView): string {
+  return view === "full" ? FULL_MESSAGE_SELECT_M : COMPACT_MESSAGE_SELECT_M;
+}
+
+const CONTENT_TYPE_SQL = "json_extract(content, '$.type')";
+
+// Normal chat rendering does not need summaries or scheduler-only request rows.
+// Keep rows that can render in the stream, agent_turn rows that drive
+// typing/error state, and compact tool/event marker rows so historical
+// tool-only turns can still show the completion fallback without shipping the
+// heavy tool inputs/results/logs.
+function timelineFilterSql(): { sql: string; params: unknown[] } {
+  return {
+    sql: `
+      AND (
+        ${CONTENT_TYPE_SQL} IN ('text', 'artifactRef', 'agent_turn', 'toolCall', 'toolResult', 'events')
+      )
+    `,
+    params: [],
+  };
+}
+
+async function timelineWhereClause(
+  _db: Pool,
+  chatId: string,
+  view: MessageListView,
+): Promise<{ sql: string; params: unknown[] }> {
+  void chatId;
+  if (view !== "timeline") return { sql: "", params: [] };
+  return timelineFilterSql();
+}
+
 // SQLite stores JSON columns as TEXT; parse at the boundary. Postgres
 // JSONB used to do this for us automatically.
 function parseJson<T>(v: unknown): T | undefined {
@@ -32,6 +168,46 @@ function rowToMessage(row: Record<string, unknown>): Message {
   });
 }
 
+function compactContent(content: Message["content"]): Message["content"] {
+  switch (content.type) {
+    case "events": {
+      const log: typeof content.log = [];
+      let sawStructuredEvent = false;
+      for (const entry of content.log) {
+        if (entry.kind === "event") {
+          sawStructuredEvent = true;
+          if (entry.event.type === "text") {
+            const text = entry.event.part?.text;
+            if (typeof text === "string") {
+              log.push({
+                kind: "event",
+                event: { type: "text", part: { text } },
+              });
+            }
+          }
+        } else if (entry.kind === "unparsed" && !sawStructuredEvent) {
+          log.push(entry);
+        }
+      }
+      return { type: "events", log };
+    }
+    case "toolCall":
+      return { type: "toolCall", toolName: content.toolName, args: {} };
+    case "toolResult":
+      return { type: "toolResult", toolName: content.toolName, result: null };
+    case "summary":
+      return { type: "summary", body: "" };
+    default:
+      return content;
+  }
+}
+
+function rowToListedMessage(row: Record<string, unknown>, view: MessageListView): Message {
+  const message = rowToMessage(row);
+  if (view === "full") return message;
+  return { ...message, content: compactContent(message.content) };
+}
+
 export interface PaginatedMessages {
   items: Message[];
   nextCursor?: string;
@@ -59,9 +235,106 @@ export interface PaginatedMessages {
 export async function listByChat(
   db: Pool,
   chatId: string,
-  opts?: { cursor?: string; before?: string; limit?: number },
+  opts?: { cursor?: string; before?: string; limit?: number; view?: MessageListView },
 ): Promise<PaginatedMessages> {
   const limit = opts?.limit ?? 50;
+  const view = opts?.view ?? "full";
+
+  // Developer-mode (`view=full`) must be a strict superset of regular chat
+  // (`view=timeline`) for the same page. A raw "last 50 rows" full query can
+  // be smaller from the user's point of view because summaries/request rows
+  // consume slots and push ordinary chat messages out of the page. Anchor full
+  // pages on the same timeline-visible rows as regular mode, then include every
+  // raw row between that oldest visible boundary and the page edge.
+  if (view === "full" && opts?.cursor) {
+    const sep = opts.cursor.indexOf("|");
+    const cursorIso = sep === -1 ? opts.cursor : opts.cursor.slice(0, sep);
+    const cursorId = sep === -1 ? "" : opts.cursor.slice(sep + 1);
+    const timeline = timelineFilterSql();
+    const { rows: boundaryRows } = await db.query<Record<string, unknown>>(
+      `SELECT id, created_at
+       FROM messages
+       WHERE chat_id = ?
+         AND (created_at, id) > (?, ?)
+         ${timeline.sql}
+       ORDER BY created_at, id
+       LIMIT ?`,
+      [chatId, cursorIso, cursorId, ...timeline.params, limit + 1],
+    );
+
+    if (boundaryRows.length > 0) {
+      const hasMore = boundaryRows.length > limit;
+      const pageTimelineRows = boundaryRows.slice(0, limit);
+      const newest = pageTimelineRows[pageTimelineRows.length - 1];
+
+      const { rows } = await db.query(
+        `SELECT ${FULL_MESSAGE_SELECT}
+         FROM messages
+         WHERE chat_id = ?
+           AND (created_at, id) > (?, ?)
+           AND (created_at, id) <= (?, ?)
+         ORDER BY created_at, id`,
+        [chatId, cursorIso, cursorId, newest.created_at, newest.id],
+      );
+
+      return {
+        items: rows.map(rowToMessage),
+        nextCursor: hasMore ? `${newest.created_at}|${newest.id}` : undefined,
+      };
+    }
+  }
+
+  if (view === "full" && !opts?.cursor) {
+    const beforeSql = opts?.before ? "AND (created_at, id) < (?, ?)" : "";
+    const boundaryParams: unknown[] = [chatId];
+    if (opts?.before) {
+      const sep = opts.before.indexOf("|");
+      boundaryParams.push(sep === -1 ? opts.before : opts.before.slice(0, sep));
+      boundaryParams.push(sep === -1 ? "" : opts.before.slice(sep + 1));
+    }
+    boundaryParams.push(limit + 1);
+
+    const timeline = timelineFilterSql();
+    const { rows: boundaryRows } = await db.query<Record<string, unknown>>(
+      `SELECT id, created_at
+       FROM messages
+       WHERE chat_id = ? ${beforeSql} ${timeline.sql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+      [...boundaryParams.slice(0, boundaryParams.length - 1), ...timeline.params, boundaryParams[boundaryParams.length - 1]],
+    );
+
+    if (boundaryRows.length > 0) {
+      const hasMore = boundaryRows.length > limit;
+      const pageTimelineRows = boundaryRows.slice(0, limit);
+      const oldest = pageTimelineRows[pageTimelineRows.length - 1];
+
+      const fullParams: unknown[] = [chatId, oldest.created_at, oldest.id];
+      let upperBoundSql = "";
+      if (opts?.before) {
+        const sep = opts.before.indexOf("|");
+        fullParams.push(sep === -1 ? opts.before : opts.before.slice(0, sep));
+        fullParams.push(sep === -1 ? "" : opts.before.slice(sep + 1));
+        upperBoundSql = "AND (created_at, id) < (?, ?)";
+      }
+
+      const { rows } = await db.query(
+        `SELECT ${FULL_MESSAGE_SELECT}
+         FROM messages
+         WHERE chat_id = ?
+           AND (created_at, id) >= (?, ?)
+           ${upperBoundSql}
+         ORDER BY created_at, id`,
+        fullParams,
+      );
+
+      return {
+        items: rows.map(rowToMessage),
+        prevCursor: hasMore ? `${oldest.created_at}|${oldest.id}` : undefined,
+      };
+    }
+  }
+
   const params: unknown[] = [chatId];
   let whereClause = "chat_id = ?";
 
@@ -73,19 +346,21 @@ export async function listByChat(
     whereClause += " AND (created_at, id) < (?, ?)";
     params.push(cursorIso);
     params.push(cursorId);
+    const timeline = await timelineWhereClause(db, chatId, view);
+    params.push(...timeline.params);
     params.push(limit + 1);
 
     // Fetch in DESC order so LIMIT clips the *oldest* surplus row, then
     // reverse to ASC for the caller.
     const { rows } = await db.query(
-      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
       params,
     );
 
     const hasMore = rows.length > limit;
     // Drop the extra row (oldest) and reverse to chronological order.
     const slice = rows.slice(0, limit).reverse();
-    const items = slice.map(rowToMessage);
+    const items = slice.map((row) => rowToListedMessage(row, view));
     let prevCursor: string | undefined;
     if (hasMore && items.length > 0) {
       const oldest = items[0];
@@ -103,15 +378,17 @@ export async function listByChat(
     whereClause += " AND (created_at, id) > (?, ?)";
     params.push(cursorIso);
     params.push(cursorId);
+    const timeline = await timelineWhereClause(db, chatId, view);
+    params.push(...timeline.params);
     params.push(limit + 1);
 
     const { rows } = await db.query(
-      `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at, id LIMIT ?`,
+      `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at, id LIMIT ?`,
       params,
     );
 
     const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit).map(rowToMessage);
+    const items = rows.slice(0, limit).map((row) => rowToListedMessage(row, view));
     let nextCursor: string | undefined;
     if (hasMore && items.length > 0) {
       const last = items[items.length - 1];
@@ -123,15 +400,17 @@ export async function listByChat(
   // No cursor at all → return the *last* `limit` messages (newest page)
   // so the chat opens at the bottom. Include a prevCursor when there are
   // older messages.
+  const timeline = await timelineWhereClause(db, chatId, view);
+  params.push(...timeline.params);
   params.push(limit + 1);
   const { rows } = await db.query(
-    `SELECT * FROM messages WHERE ${whereClause} ORDER BY created_at DESC, id DESC LIMIT ?`,
+    `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
     params,
   );
 
   const hasMore = rows.length > limit;
   const slice = rows.slice(0, limit).reverse();
-  const items = slice.map(rowToMessage);
+  const items = slice.map((row) => rowToListedMessage(row, view));
   let prevCursor: string | undefined;
   if (hasMore && items.length > 0) {
     const oldest = items[0];
@@ -157,17 +436,22 @@ export async function listAgentContextByChat(
        ORDER BY created_at DESC, id DESC
        LIMIT 1
      )
-     SELECT * FROM messages
-     WHERE chat_id = ?
-       AND (
-         NOT EXISTS (SELECT 1 FROM latest_summary)
-         OR created_at > (SELECT created_at FROM latest_summary)
-         OR (
-           created_at = (SELECT created_at FROM latest_summary)
-           AND id >= (SELECT id FROM latest_summary)
-         )
-       )
-      ORDER BY created_at, id
+     SELECT m.* FROM messages m
+      WHERE m.chat_id = ?
+        AND m.kind NOT IN ('task', 'task_run')
+        AND NOT EXISTS (
+          SELECT 1 FROM messages parent
+          WHERE parent.id = m.parent_id AND parent.kind = 'task_run'
+        )
+        AND (
+          NOT EXISTS (SELECT 1 FROM latest_summary)
+          OR m.created_at > (SELECT created_at FROM latest_summary)
+          OR (
+            m.created_at = (SELECT created_at FROM latest_summary)
+            AND m.id >= (SELECT id FROM latest_summary)
+          )
+        )
+       ORDER BY m.created_at, m.id
     `,
     [chatId, chatId],
   );
@@ -344,6 +628,11 @@ export async function claimPending(db: Pool, id: string): Promise<boolean> {
  * `started_at = strftime(... 'now')`. Returns the run row, or null if the task is
  * missing / not a task / already firing.
  *
+ * This intentionally does not mutate the parent task status. The run row owns
+ * agent execution state; explicit user actions that move a plain task to
+ * Active update the parent before calling the scheduler, while automatic or
+ * scheduled fires remain visible through their task_run child.
+ *
  * Concurrency model: the body runs inside a synchronous `transact`
  * (BEGIN IMMEDIATE). better-sqlite3's transaction wrapper + SQLite's
  * file lock serialize the entire callback, so the existence check and
@@ -392,13 +681,6 @@ export async function startTaskRun(
         args.model ?? null,
       ],
     );
-    // Mark the parent task as running so the kanban moves the card to Active.
-    client.querySync(
-      `UPDATE messages SET state = 'running',
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND kind = 'task'`,
-      [args.taskId],
-    );
     client.querySync(
       "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
       [args.chatId],
@@ -439,6 +721,7 @@ export async function updateMessage(
     state?: string;
     executeAt?: string | null;
     cron?: string | null;
+    kind?: string;
     title?: string | null;
   },
 ): Promise<Message | null> {
@@ -459,6 +742,10 @@ export async function updateMessage(
   if (patch.cron !== undefined) {
     sets.push(`cron = ?`);
     params.push(patch.cron);
+  }
+  if (patch.kind !== undefined) {
+    sets.push(`kind = ?`);
+    params.push(patch.kind);
   }
   if (patch.title !== undefined) {
     sets.push(`title = ?`);
@@ -580,6 +867,7 @@ export interface CrossChatListOptions {
   since?: string;
   cursor?: string;
   limit?: number;
+  view?: MessageListView;
 }
 
 /**
@@ -637,17 +925,29 @@ export async function listCrossChat(
     conditions.push(`m.created_at > ?`);
     params.push(new Date(opts.since));
   }
-  // `awaitingUser=true`: a message is "awaiting user" when it's the latest row
-  // in a chat whose awaiting_user flag is set, authored by the agent in a
-  // succeeded state. `false` returns the complement.
+  // `awaitingUser=true`: a message is "awaiting user" when it's the latest
+  // user-visible row in a chat whose awaiting_user flag is set, authored by the
+  // agent in a succeeded state. Internal rows such as chat summaries are
+  // ignored for this latest-message check so background compaction does not
+  // create or clear user-facing new-message badges.
   // SQLite stores BOOLEAN as INTEGER 0/1.
+  const nonInternalClause = `(NOT (
+    (json_valid(m.content) AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    OR m.kind = 'summary'
+  ))`;
+  const nonInternalLatestClause = `(NOT (
+    (json_valid(m2.content) AND json_extract(m2.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    OR m2.kind = 'summary'
+  ))`;
   const awaitingClause = `(
     c.awaiting_user = 1
+    AND ${nonInternalClause}
     AND m.role = 'agent'
     AND m.state = 'succeeded'
     AND m.id = (
       SELECT m2.id FROM messages m2
       WHERE m2.chat_id = m.chat_id
+        AND ${nonInternalLatestClause}
       ORDER BY m2.created_at DESC, m2.id DESC
       LIMIT 1
     )
@@ -672,7 +972,7 @@ export async function listCrossChat(
   params.push(limit + 1);
 
   const sql = `
-    SELECT m.*
+    SELECT ${messageSelectFromAlias(opts.view ?? "full")}
     FROM messages m
     JOIN chats c ON c.id = m.chat_id
     JOIN workspaces w ON w.id = c.workspace_id
@@ -683,7 +983,8 @@ export async function listCrossChat(
 
   const { rows } = await db.query(sql, params);
   const hasMore = rows.length > limit;
-  const items = rows.slice(0, limit).map(rowToMessage);
+  const view = opts.view ?? "full";
+  const items = rows.slice(0, limit).map((row) => rowToListedMessage(row, view));
   let nextCursor: string | undefined;
   if (hasMore && items.length > 0) {
     const last = items[items.length - 1];

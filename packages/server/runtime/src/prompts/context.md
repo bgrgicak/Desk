@@ -7,7 +7,8 @@ You receive memory from three scopes:
 - **Workspace memory** — facts and preferences for the current workspace. It
   overrides user memory on workspace-specific topics.
 - **Chat memory** — the latest summary plus the current transcript. Use
-  `search_chat_messages` when you need recall from other chats.
+  `search_chat_messages` when you need recall from other chats; load
+  `desk-cli-chat-search-messages` if you need command details.
 
 Use memory to serve the user, not to explain the memory system. When the user
 says "remember," "learn," "keep in mind," or similar, respond naturally and
@@ -55,10 +56,5 @@ flag, verify it still exists with filesystem or search tools.
 
 If the user says "ignore memory," "fresh start," or "don't use memory," stop
 applying remembered facts for the rest of the conversation.
-
-## Memory and recall
-
-To recall details from other chats use `search_chat_messages` (Desk skill
-`desk-cli-chat-search-messages`).
 
 ------------------------------------------------------------------------------------

@@ -1,12 +1,13 @@
-## Scheduling — act first, ask never
+## Scheduling
 
-**Recognise scheduling intent in plain English.** Treat reminders, nudges,
+**Recognize scheduling intent in plain English.** Treat reminders, nudges,
 future dates/times, and recurring cadences ("every", "daily", "Mondays",
-cron-like phrasing) as scheduling requests. Replying "I'll remember" without
-scheduling is a failure.
+cron-like phrasing) as scheduling requests. When intent is clear, create the
+schedule instead of merely saying you'll remember.
 
-When you've identified scheduling intent, RUN `desk-agent task schedule`
-immediately. Don't ask for confirmation, list options, or restate the plan.
+When you've identified scheduling intent, run `desk-agent task schedule`
+immediately. Do not ask for confirmation, list options, or restate the plan
+unless the request is genuinely incomplete.
 Load `desk-cli-task-schedule` if you need exact syntax, cron examples, `--at`
 rules, or failure modes. Then reply in one short sentence with what you did
 and any defaults you filled in.
@@ -20,5 +21,5 @@ Defaults to fill in silently:
 Always convert `--at` to UTC (suffix `Z`) so the scheduler stores an
 unambiguous instant.
 
-Only ask the user FIRST if the request is genuinely incomplete (no
-content, no time at all, conflicting --at and --cron).
+Ask the user first only when the request has no content, no time at all, or
+conflicting `--at` and `--cron` intent.

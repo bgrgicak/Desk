@@ -32,28 +32,16 @@ function rowToChat(row: Record<string, unknown>): Chat {
 }
 
 export interface ChatWithLastMessage extends Chat {
-  lastMessageContent?: unknown;
-  /**
-   * Kind that drives the chat-list icon when no chat goal is persisted.
-   * Newest message kind in the chat that represents a user action —
- * currently `task` and `task_run`. `chat` (conversation) and `summary`
- * (system-scheduled summary refresh) are
-   * treated as fallbacks so they don't hijack the icon. Falls back to
-   * 'chat' when no user-action messages exist.
-   */
+  /** Kind that drives the chat-list icon when no chat goal is persisted. */
   kind: MessageKind;
   /**
-   * True when the chat's **most recent** `agent_turn` message is in
-   * `pending` or `running` state. Derived from a correlated subquery at
-   * query time — not a persisted column. Only the latest `agent_turn`
-   * is checked so orphaned older turns (e.g. from a server crash
-   * recovery re-queue) don't falsely light up the sidebar spinner.
-   * `task` messages stay `running` as a kanban signal and
-   * `summary_request` is background work — neither is checked.
-   * The frontend uses this to hydrate the sidebar spinner on cold start
-   * (before any WS events arrive).
+   * True when the chat's most recent `agent_turn` message is pending/running.
    */
   running: boolean;
+  /**
+   * True when the chat's most recent `agent_turn` message failed and can be retried.
+   */
+  failed: boolean;
 }
 
 export async function listWithLatestMessage(
@@ -62,39 +50,20 @@ export async function listWithLatestMessage(
 ): Promise<ChatWithLastMessage[]> {
   const { rows } = await db.query(
     `SELECT c.*,
-            (SELECT m.content FROM messages m
-               WHERE m.chat_id = c.id
-                 AND json_extract(m.content, '$.type') NOT IN ('agent_turn', 'summary_request', 'summary', 'artifactRef')
-               ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
-            COALESCE(
-              (SELECT m.kind FROM messages m
-                 WHERE m.chat_id = c.id AND m.kind NOT IN ('chat', 'summary', 'reflection')
-                 ORDER BY m.created_at DESC LIMIT 1),
-              'chat'
-            ) AS kind,
-            COALESCE(
-              (SELECT m.state IN ('pending', 'running') FROM messages m
-               WHERE m.chat_id = c.id
-                 AND json_extract(m.content, '$.type') = 'agent_turn'
-               ORDER BY m.created_at DESC LIMIT 1),
-              0
-            ) AS is_running
-     FROM chats c
-     WHERE c.workspace_id = ?
-       AND NOT EXISTS (
-         SELECT 1 FROM messages internal_m
-         WHERE internal_m.chat_id = c.id
-           AND json_valid(internal_m.content)
-           AND json_extract(internal_m.content, '$.type') = 'reflection_request'
-       )
-     ORDER BY c.updated_at DESC`,
+            c.list_kind AS kind,
+            c.list_running AS is_running,
+            c.list_failed AS is_failed
+      FROM chats c
+      WHERE c.workspace_id = ?
+        AND c.list_internal = 0
+      ORDER BY c.updated_at DESC`,
     [workspaceId],
   );
   return rows.map((r) => ({
     ...rowToChat(r),
-    lastMessageContent: r.last_message_content ?? undefined,
     kind: r.kind as MessageKind,
     running: !!r.is_running,
+    failed: !!r.is_failed,
   }));
 }
 

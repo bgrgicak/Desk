@@ -352,6 +352,28 @@ describe("GET /messages — unfiltered", () => {
       expect(ids.has(bId)).toBe(false);
     }
   });
+
+  it("view=compact keeps list metadata but strips hidden payload bulk", async () => {
+    const fullRes = await request("GET", "/messages?contentKind=toolCall", alpha.token);
+    expect(fullRes.status).toBe(200);
+    const fullToolCall = (fullRes.body as { items: Message[] }).items[0];
+    expect(fullToolCall.content).toMatchObject({
+      type: "toolCall",
+      toolName: "grep",
+      args: { q: "foo" },
+    });
+
+    const compactRes = await request("GET", "/messages?view=compact&contentKind=toolCall", alpha.token);
+    expect(compactRes.status).toBe(200);
+    const compactToolCall = (compactRes.body as { items: Message[] }).items[0];
+    expect(compactToolCall.id).toBe(fullToolCall.id);
+    expect(compactToolCall.chatId).toBe(fullToolCall.chatId);
+    expect(compactToolCall.content).toEqual({
+      type: "toolCall",
+      toolName: "grep",
+      args: {},
+    });
+  });
 });
 
 describe("GET /messages — workspace/chat scoping", () => {
@@ -533,6 +555,42 @@ describe("GET /messages — awaitingUser", () => {
     expect(items[0].chatId).toBe(alpha.chatA1);
     expect(items[0].role).toBe("agent");
     expect(items[0].state).toBe("succeeded");
+  });
+
+  it("ignores newer summary rows when deciding awaiting-user notifications", async () => {
+    const chatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: chatId,
+      workspaceId: beta.wsA,
+      agentId: beta.agentId,
+      title: "awaiting summary noise",
+    });
+    await queries.chats.setAwaitingUser(pool, chatId, true);
+
+    const visibleAgentMessageId = await insertMessage(beta, {
+      chatId,
+      role: "agent",
+      content: { type: "text", text: "real reply" },
+      state: "succeeded",
+    });
+    await insertMessage(beta, {
+      chatId,
+      role: "agent",
+      content: { type: "summary", body: "# Chat Summary\nCompacted context." },
+      state: "succeeded",
+      kind: "summary",
+    });
+
+    const res = await request(
+      "GET",
+      `/messages?awaitingUser=true&chatId=${encodeURIComponent(chatId)}`,
+      beta.token,
+    );
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Message[] }).items;
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe(visibleAgentMessageId);
+    expect(items[0].content.type).toBe("text");
   });
 });
 

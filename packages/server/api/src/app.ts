@@ -41,6 +41,8 @@ import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import * as vaultRoutes from "./routes/vault.js";
+import { VaultStore } from "./vault/store.js";
 import * as appsRoutes from "./routes/apps.js";
 import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
@@ -77,6 +79,12 @@ export interface AppOptions {
   pool: Pool;
   storage: StorageContext;
   runManager: RunManager;
+  /**
+   * Shared vault instance. Pass this from the outer process so the scheduler
+   * and HTTP layer operate on the same in-memory unlock state. When omitted
+   * (tests, embedded usage) a fresh store is created from storage.home.
+   */
+  vault?: VaultStore;
   /** The userId to broadcast events to (v1: single user). */
   broadcastUserId?: string;
 }
@@ -257,6 +265,7 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
+  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
 
   function emitEvent(event: WsEvent): void {
     if (opts.broadcastUserId) {
@@ -492,6 +501,31 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Sandbox secrets — agent-side reads. The sandbox token resolves to
+    // (session, agent); the agent's userId is what we read from. There's
+    // no agent-side write path: secrets come in through the user UI.
+    if (path === "/sandbox/secrets" && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const result = vaultRoutes.sandboxList(vault, agent.userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "sandbox" && segments[1] === "secrets" && segments.length === 3 && method === "GET") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const title = decodeURIComponent(segments[2]);
+      const result = vaultRoutes.sandboxGet(vault, agent.userId, title);
+      if (!result) {
+        sendJson(res, 404, { code: "NOT_FOUND", message: "No such secret" });
+        return;
+      }
+      sendJson(res, 200, result);
+      return;
+    }
+
     // Per-app storage routes (PR-H). Match before the static-app
     // dispatcher so a request to `.../storage/...` doesn't get caught
     // by the dist-serve branch.
@@ -614,22 +648,71 @@ export function createApp(opts: AppOptions): Server {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
+      const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
       if (!body.chatId || typeof body.chatId !== "string") {
         throw new ValidationError("Missing chatId");
       }
-      const chatId = body.chatId;
-      await requireOwnedChat(pool, chatId, agent.userId);
+      const sourceChatId = body.chatId;
+      await requireOwnedChat(pool, sourceChatId, agent.userId);
+      let targetChatId = sourceChatId;
+      let createdChat: unknown;
+
+      const sendBody = { kind: "task", ...body };
+      delete (sendBody as { chatId?: string }).chatId;
+      delete (sendBody as { newChat?: boolean }).newChat;
+
+      const attachments = (sendBody as { attachments?: unknown }).attachments;
+      if (Array.isArray(attachments)) {
+        for (const attachment of attachments) {
+          const attachmentPath = (attachment as { path?: unknown })?.path;
+          if (typeof attachmentPath !== "string" || !attachmentPath.trim()) {
+            throw new ValidationError("Invalid attachment path");
+          }
+          if (attachmentPath.includes("\0") || attachmentPath.includes("\\") || attachmentPath.startsWith("/")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          const segments = attachmentPath.split("/");
+          if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
+          }
+          if (attachmentPath.startsWith(".chats/") && !attachmentPath.startsWith(`.chats/${sourceChatId}/artifacts/`)) {
+            throw new ValidationError("Sandbox task attachments must be library files or artifacts from the source chat");
+          }
+        }
+      }
+
+      if (body.newChat === true) {
+        if (typeof body.executeAt === "string" || typeof body.cron === "string") {
+          throw new ValidationError("newChat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
+        }
+        if (typeof body.kind === "string" && body.kind !== "task") {
+          throw new ValidationError("newChat is only for simple manual tasks; kind must be omitted or task");
+        }
+        sendBody.kind = "task";
+        const sourceChat = await chatRoutes.getChat(pool, sourceChatId);
+        const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
+        const rawContent = typeof body.content === "string" ? body.content.trim() : "";
+        if (typeof body.content === "string" && !body.content.includes(sourceChatId)) {
+          sendBody.content = `${body.content}\n\nOriginating chat: ${sourceChatId}`;
+        }
+        chatRoutes.validateSendMessageBody(sendBody);
+        createdChat = await chatRoutes.createChat(pool, {
+          workspaceId: sourceChat.workspaceId,
+          agentId: sourceChat.agentId,
+          title: rawTitle ?? (rawContent.slice(0, 80) || "New task"),
+          goal: "task",
+        });
+        targetChatId = (createdChat as { id: string }).id;
+      }
 
       // Default kind = "task" for sandbox-issued messages: the agent calls
       // this from `desk-agent task schedule`, so a chat reply isn't the intent.
       // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
-      const sendBody = { kind: "task", ...body };
-      delete (sendBody as { chatId?: string }).chatId;
+      if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
 
-      const { userMessage } = await chatRoutes.sendMessage(pool, chatId, sendBody, emitEvent, { role: "agent" });
-      sendJson(res, 201, userMessage);
+      const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emitEvent, { role: "agent" });
+      sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);
       return;
     }
 
@@ -836,24 +919,29 @@ export function createApp(opts: AppOptions): Server {
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const { session, agent } = await authenticateSandboxToken(pool, token);
       const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
-      if (!body.chatId || typeof body.chatId !== "string") {
-        throw new ValidationError("Missing chatId");
+      if (!session.runId) {
+        throw new ValidationError("Sandbox artifact attachment requires a live run token");
       }
-      const chat = await requireOwnedChat(pool, body.chatId, agent.userId);
+      const runMessage = await queries.messages.findById(pool, session.runId);
+      if (!runMessage) {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      if (runMessage.state !== "running") {
+        throw new ValidationError("Sandbox run is no longer active");
+      }
+      const runChatId = runMessage.chatId;
+      if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
+        throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
+      }
+      if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
+        throw new ValidationError("Summary runs cannot attach artifacts");
+      }
+      const chat = await requireOwnedChat(pool, runChatId, agent.userId);
       if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
-        throw new NotFoundError(`Chat not found: ${body.chatId}`);
-      }
-      if (session.runId) {
-        const runMessage = await queries.messages.findById(pool, session.runId);
-        if (!runMessage) {
-          throw new ValidationError("Sandbox run is no longer active");
-        }
-        if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
-          throw new ValidationError("Summary runs cannot attach artifacts");
-        }
+        throw new NotFoundError(`Chat not found: ${runChatId}`);
       }
 
-      const message = await chatRoutes.attachArtifactRef(storage, body, emitEvent, {
+      const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emitEvent, {
         agentId: agent.id,
         model: agent.model,
       });
@@ -869,7 +957,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/logout" && method === "POST") {
-      const result = await authRoutes.handleLogout(pool, req.headers.authorization);
+      const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
       sendJson(res, 200, result);
       return;
     }
@@ -898,13 +986,13 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers" && method === "GET") {
-      const result = await accountRoutes.getProviders(pool, userId);
+      const result = accountRoutes.getProviders(vault, userId);
       sendJson(res, 200, result);
       return;
     }
     if (path === "/me/providers" && method === "PUT") {
       const body = await parseBody(req) as { providers: Record<string, string | null> };
-      const result = await accountRoutes.setProviders(pool, userId, body);
+      const result = await accountRoutes.setProviders(pool, vault, userId, body);
       sendJson(res, 200, result);
       return;
     }
@@ -932,6 +1020,54 @@ export function createApp(opts: AppOptions): Server {
         sendJson(res, 200, result);
         return;
       }
+    }
+
+    // Vault — per-user secrets vault setup/unlock/lock/status. Secrets
+    // themselves are read/written via /secrets and /sandbox/secrets.
+    if (path === "/vault/status" && method === "GET") {
+      const result = await vaultRoutes.getStatus(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/setup" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.setup(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/unlock" && method === "POST") {
+      const body = await parseBody(req) as { password?: unknown };
+      const result = await vaultRoutes.unlock(vault, userId, body);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/vault/lock" && method === "POST") {
+      const result = vaultRoutes.lock(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Secrets — user side. Metadata-only on list/get; create + overwrite
+    // are the only mutations. There's deliberately no reveal endpoint:
+    // even a hijacked SPA session can't exfiltrate plaintext, only
+    // sandboxed agents (via /sandbox/secrets/:title) can.
+    if (path === "/secrets" && method === "GET") {
+      const result = vaultRoutes.listSecrets(vault, userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/secrets" && method === "POST") {
+      const body = await parseBody(req);
+      const result = await vaultRoutes.createSecret(vault, userId, body);
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "secrets" && segments.length === 2 && method === "PUT") {
+      const body = await parseBody(req);
+      const title = decodeURIComponent(segments[1]);
+      const result = await vaultRoutes.updateSecret(vault, userId, title, body);
+      sendJson(res, 200, result);
+      return;
     }
 
     // Workspace routes — all scoped to the authenticated user. Non-owned
@@ -1140,7 +1276,26 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedChat(pool, segments[1], userId);
       const cursor = query.get("cursor") ?? undefined;
       const before = query.get("before") ?? undefined;
-      const result = await chatRoutes.listMessages(pool, segments[1], { cursor, before });
+      const limitRaw = query.get("limit");
+      let limit: number | undefined;
+      if (limitRaw !== null && limitRaw !== "") {
+        const parsed = Number(limitRaw);
+        if (!Number.isInteger(parsed) || parsed <= 0) throw new ValidationError(`Invalid limit: ${limitRaw}`);
+        limit = Math.min(parsed, 200);
+      }
+      const viewRaw = query.get("view") ?? undefined;
+      if (viewRaw !== undefined && viewRaw !== "full" && viewRaw !== "compact" && viewRaw !== "timeline") {
+        throw new ValidationError(`Invalid view: ${viewRaw}`);
+      }
+      const result = await chatRoutes.listMessages(pool, segments[1], {
+        cursor,
+        before,
+        limit,
+        // Normal chat API reads should use the payload-trimmed timeline by
+        // default. Full hidden tool/event/summary payloads remain available to
+        // developer/debug callers that explicitly request `view=full`.
+        view: (viewRaw ?? "timeline") as "full" | "compact" | "timeline",
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -1150,6 +1305,21 @@ export function createApp(opts: AppOptions): Server {
       const body = ct.startsWith("multipart/form-data")
         ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
         : await parseBody(req);
+
+      // If the previous agent_turn in this chat is hung (log file silent
+      // for the stale window), preempt it so the user's follow-up isn't
+      // racing a zombie opencode. Healthy runs — still emitting tokens,
+      // tool calls, or step events — are left alone. Scheduled task or
+      // summary sends never preempt: those are background work, not the
+      // chat-level conversation the user is actively interacting with.
+      const sendKind = (body as { kind?: string }).kind;
+      if (!sendKind || sendKind === "chat") {
+        await runManager.preemptStalledChatRun(segments[1]).catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.error(`preempt for chat ${segments[1]} failed:`, err);
+        });
+      }
+
       const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent, { actorUserId: userId });
 
       // Self-firing kinds (task / summary): execute_at is computed at insert
@@ -1172,7 +1342,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; title?: string | null };
+      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: "chat" | "task" | "task_run" | "summary"; title?: string | null };
       const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
       sendJson(res, 200, result);
       return;
@@ -1498,7 +1668,7 @@ export function createApp(opts: AppOptions): Server {
 
     // Tools (host-initiated sandbox queries)
     if (path === "/tools/models" && method === "GET") {
-      const result = await toolRoutes.listModels(pool, {
+      const result = await toolRoutes.listModels(pool, vault, {
         provider: query.get("provider") ?? undefined,
         userId,
       });

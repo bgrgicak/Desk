@@ -49,6 +49,13 @@ export async function run(argv: string[]): Promise<void> {
   if (typeof chatId !== "string" || !chatId) {
     throw new CliError("INVALID_ARGS", "Missing --chat <id>. Usage:\n" + usage);
   }
+  const currentChatId = process.env.DESK_CHAT_ID;
+  if (currentChatId && chatId !== currentChatId) {
+    throw new CliError(
+      "WRONG_CHAT",
+      `Refusing to attach artifact to ${chatId}; this sandbox run belongs to ${currentChatId}`,
+    );
+  }
   if (!artifactPath) {
     throw new CliError("INVALID_ARGS", "Missing artifact path. Usage:\n" + usage);
   }
