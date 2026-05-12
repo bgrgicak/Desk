@@ -104,6 +104,12 @@ export async function startDeskServer(
     DESK_FAKE_DRIVER_STEP_DELAY_MS: "500",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
     DESK_SCHEDULER_POLL_INTERVAL_MS: "2000",
+    // The current app UI bounces to `workspaces[0]` and expects the seeded
+    // "Desk" project workspace to live there. The hub workspace would sort
+    // first if auto-created, breaking every test that selects the default
+    // workspace. UI affordances for the hub are out of scope for this
+    // change set — opt out at boot until the UI catches up.
+    DESK_HUB_AUTO_CREATE: "off",
     // Auto-setup and unlock the per-user vault on boot so e2e tests can
     // read and write provider keys without going through the vault UI flow.
     DESK_VAULT_PASSWORD: "e2e-vault-password",

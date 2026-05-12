@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type GoalKey } from "@agent-desk/shared";
+import { type GoalKey, type WorkspaceKind } from "@agent-desk/shared";
 import {
   userMemoryIndexPath,
   workspaceMemoryIndexPath,
@@ -72,6 +72,12 @@ export interface RenderPromptInput {
    * with `home`; without both, workspace memory is skipped.
    */
   workspaceSlug?: string;
+  /**
+   * Kind of the workspace this run belongs to. Drives kind-specific
+   * prompt fragments — currently the `hub.md` section, only injected
+   * when `kind === 'hub'`.
+   */
+  workspaceKind?: WorkspaceKind;
 }
 
 const EMPTY_USER_MEMORY = `# User memory\n\n_(empty — nothing remembered yet)_\n`;
@@ -162,6 +168,14 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
   (input) =>
     input.runMode !== "summary" && input.runMode !== "reflection" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
   (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("desk-skills.md", {}),
+  // Hub-only section. Explains the hub's extra abilities (cross-workspace
+  // FS read, cross-workspace API call, pinning, route_to_workspace
+  // handoff). Only rendered when the request originates from the hub
+  // workspace; never injected into project-workspace runs.
+  (input) =>
+    input.runMode === "summary" || input.runMode === "reflection" || input.workspaceKind !== "hub"
+      ? null
+      : loadAndSub("hub.md", { userName: input.userName }),
 ];
 
 /**

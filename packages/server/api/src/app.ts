@@ -7,7 +7,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type PinKind, type WsEvent } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
   ReplaceLibraryAppConflictError,
@@ -34,6 +34,7 @@ import * as authRoutes from "./routes/auth.js";
 import * as accountRoutes from "./routes/account.js";
 import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
+import * as pinRoutes from "./routes/pins.js";
 import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
@@ -750,12 +751,12 @@ export function createApp(opts: AppOptions): Server {
 
     // Memory-system P3.5 — full-text search for the in-sandbox agent.
     // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
-    // session's workspace; cross-workspace recall requires a future
-    // explicit home-workspace exception, not workspace=*.
+    // session's workspace by default; the hub session widens to all
+    // workspaces the user owns (scope.kind === 'owned').
     if (path === "/sandbox/search/messages" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent, workspace, scope } = await authenticateSandboxToken(pool, token);
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
       const q = params.get("q") ?? params.get("query") ?? "";
       const chatIdParam = params.get("chat") ?? undefined;
@@ -763,21 +764,46 @@ export function createApp(opts: AppOptions): Server {
       const kindParam = params.get("kind") ?? "any";
       const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
 
-      if (!session.workspaceId) {
+      if (!session.workspaceId || !workspace) {
         throw new NotFoundError("Workspace not found for sandbox session");
       }
-      const ws = await queries.workspaces.findById(pool, session.workspaceId);
-      if (!ws || ws.userId !== agent.userId) {
+      if (workspace.userId !== agent.userId) {
         throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
       }
-      if (workspaceParam && workspaceParam !== ws.path && workspaceParam !== "*") {
-        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      // For non-hub sessions, the workspace param must match the session
+      // workspace (or `*`). Hub sessions accept any owned workspace's
+      // slug or id; the search routes themselves still enforce
+      // `user_id` equality so leakage is impossible.
+      let workspaceSlugFilter: string | undefined = workspace.path;
+      let workspaceSlugsFilter: string[] | undefined;
+      if (workspaceParam && workspaceParam !== "*") {
+        if (scope.kind === "owned") {
+          const owned = await queries.workspaces.listByUser(pool, agent.userId);
+          const match = owned.find(
+            (w) => w.path === workspaceParam || w.id === workspaceParam,
+          );
+          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+          workspaceSlugFilter = match.path;
+        } else if (workspaceParam !== workspace.path) {
+          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        }
+      } else if (workspaceParam === "*" || scope.kind === "owned") {
+        // Hub sessions (scope.kind === "owned") default to all owned workspaces,
+        // whether or not workspace=* is explicit. Project sessions that pass
+        // workspace=* enter this branch but the inner guard is false — they fall
+        // through with workspaceSlugFilter unchanged (session workspace only).
+        // This is correct: project tokens cannot broaden beyond their workspace.
+        if (scope.kind === "owned") {
+          const owned = await queries.workspaces.listByUser(pool, agent.userId);
+          workspaceSlugsFilter = owned.map((w) => w.path);
+          workspaceSlugFilter = undefined;
+        }
       }
 
       // When chatId is supplied, gate ownership.
       if (chatIdParam) {
         const chat = await requireOwnedChat(pool, chatIdParam, agent.userId);
-        if (chat.workspaceId !== session.workspaceId) {
+        if (scope.kind === "single" && chat.workspaceId !== session.workspaceId) {
           throw new NotFoundError(`Chat not found: ${chatIdParam}`);
         }
       }
@@ -785,7 +811,7 @@ export function createApp(opts: AppOptions): Server {
       const hits = await queries.search.searchChatMessages(pool, {
         query: q,
         chatId: chatIdParam,
-        workspaceSlug: ws.path,
+        ...(workspaceSlugsFilter ? { workspaceSlugs: workspaceSlugsFilter } : { workspaceSlug: workspaceSlugFilter ?? workspace.path }),
         kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
         limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
       });
@@ -797,7 +823,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/sandbox/search" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent, scope } = await authenticateSandboxToken(pool, token);
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
       const q = params.get("q") ?? params.get("query") ?? "";
       const workspaceParam = params.get("workspace") ?? undefined;
@@ -809,13 +835,23 @@ export function createApp(opts: AppOptions): Server {
       if (!sessionWorkspace) {
         throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
       }
-      if (
-        workspaceParam &&
-        workspaceParam !== "*" &&
-        workspaceParam !== sessionWorkspace.path &&
-        workspaceParam !== sessionWorkspace.id
-      ) {
-        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      // Resolve the search workspace. Hub sessions can target any owned
+      // workspace via path or id, or omit the param to search the
+      // session workspace; project sessions can only target their own.
+      let resolvedWorkspace = sessionWorkspace;
+      if (workspaceParam && workspaceParam !== "*") {
+        if (scope.kind === "owned") {
+          const match = ownedWorkspaces.find(
+            (w) => w.path === workspaceParam || w.id === workspaceParam,
+          );
+          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+          resolvedWorkspace = match;
+        } else if (
+          workspaceParam !== sessionWorkspace.path &&
+          workspaceParam !== sessionWorkspace.id
+        ) {
+          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        }
       }
       const result = await searchRoutes.search(
         pool,
@@ -824,7 +860,7 @@ export function createApp(opts: AppOptions): Server {
         q,
         parseSearchScope(params.get("scope")),
         {
-          workspaceId: sessionWorkspace.id,
+          workspaceId: resolvedWorkspace.id,
           chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
           kinds: parseSearchKinds(params.get("kind")),
           showHidden: params.get("showHidden") === "true",
@@ -837,7 +873,7 @@ export function createApp(opts: AppOptions): Server {
     if ((path === "/sandbox/find/library" || path === "/sandbox/find/artifacts") && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent, scope } = await authenticateSandboxToken(pool, token);
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
       const workspaceParam = params.get("workspace") ?? undefined;
       const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
@@ -848,13 +884,20 @@ export function createApp(opts: AppOptions): Server {
       if (!sessionWorkspace) {
         throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
       }
-      if (
-        workspaceParam &&
-        workspaceParam !== "*" &&
-        workspaceParam !== sessionWorkspace.path &&
-        workspaceParam !== sessionWorkspace.id
-      ) {
-        throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+      let resolvedWorkspace = sessionWorkspace;
+      if (workspaceParam && workspaceParam !== "*") {
+        if (scope.kind === "owned") {
+          const match = ownedWorkspaces.find(
+            (w) => w.path === workspaceParam || w.id === workspaceParam,
+          );
+          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+          resolvedWorkspace = match;
+        } else if (
+          workspaceParam !== sessionWorkspace.path &&
+          workspaceParam !== sessionWorkspace.id
+        ) {
+          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
+        }
       }
       const kindParam = params.get("kind") ?? "any";
       const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
@@ -864,7 +907,7 @@ export function createApp(opts: AppOptions): Server {
           kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"
             ? kindParam
             : "any",
-        workspaceId: sessionWorkspace.id,
+        workspaceId: resolvedWorkspace.id,
         limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
       });
       sendJson(res, 200, { hits: result });
@@ -1035,8 +1078,19 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/workspaces" && method === "POST") {
-      const body = await parseBody(req) as { name: string; description?: string; icon?: string; color?: string };
-      const result = await workspaceRoutes.createWorkspace(pool, userId, storage.home, body);
+      const body = (await parseBody(req)) as Record<string, unknown>;
+      // `kind` is server-only; the API never trusts a client-supplied
+      // value. Internal callers (createHub) bypass this layer entirely.
+      if ("kind" in body) {
+        throw new ValidationError("`kind` is not accepted in workspace creation requests");
+      }
+      const data = {
+        name: typeof body.name === "string" ? body.name : "",
+        description: typeof body.description === "string" ? body.description : undefined,
+        icon: typeof body.icon === "string" ? body.icon : undefined,
+        color: typeof body.color === "string" ? body.color : undefined,
+      };
+      const result = await workspaceRoutes.createWorkspace(pool, userId, storage.home, data);
       sendJson(res, 201, result);
       return;
     }
@@ -1048,8 +1102,17 @@ export function createApp(opts: AppOptions): Server {
     }
     if (segments[0] === "workspaces" && segments.length === 2 && method === "PATCH") {
       await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as { name?: string; description?: string; icon?: string; color?: string };
-      const result = await workspaceRoutes.patchWorkspace(pool, storage.home, segments[1], body);
+      const body = (await parseBody(req)) as Record<string, unknown>;
+      if ("kind" in body) {
+        throw new ValidationError("`kind` is not accepted in workspace patch requests");
+      }
+      const data = {
+        name: typeof body.name === "string" ? body.name : undefined,
+        description: typeof body.description === "string" ? body.description : undefined,
+        icon: typeof body.icon === "string" ? body.icon : undefined,
+        color: typeof body.color === "string" ? body.color : undefined,
+      };
+      const result = await workspaceRoutes.patchWorkspace(pool, storage.home, segments[1], data);
       sendJson(res, 200, result);
       return;
     }
@@ -1076,6 +1139,40 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 4 && method === "DELETE") {
       await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.removeAgentFromWorkspace(pool, segments[1], segments[3]);
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Cross-workspace pin routes (hub only). The within-workspace
+    // library-pins endpoints below remain — they're a separate concept
+    // (toggle a file's "pinned" flag inside the same workspace).
+    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 3 && method === "GET") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const result = await pinRoutes.listPins(pool, segments[1], userId);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 3 && method === "POST") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = (await parseBody(req)) as {
+        sourceWorkspaceId?: unknown;
+        kind?: unknown;
+        refId?: unknown;
+      };
+      const sourceWorkspaceId = typeof body.sourceWorkspaceId === "string" ? body.sourceWorkspaceId : "";
+      const kind = typeof body.kind === "string" ? body.kind : "";
+      const refId = typeof body.refId === "string" ? body.refId : "";
+      const result = await pinRoutes.createPin(pool, segments[1], userId, {
+        sourceWorkspaceId,
+        kind: kind as PinKind,
+        refId,
+      });
+      sendJson(res, 201, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 4 && method === "DELETE") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const result = await pinRoutes.deletePin(pool, segments[1], userId, segments[3]);
       sendJson(res, 200, result);
       return;
     }

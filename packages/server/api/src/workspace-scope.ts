@@ -7,38 +7,94 @@ import { requireOwnedChat, requireOwnedWorkspace } from "./auth/ownership.js";
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;
 
 /**
- * Resolves the workspace scope for flat list/mutation routes that accept
- * `?workspaceId=`. When provided, the id is validated and ownership is
- * enforced via `requireOwnedWorkspace` (404 on mismatch, not 403, per the
- * existing convention). When absent, falls back to the caller's first
- * workspace for backwards-compat with older clients.
+ * Workspace scope of an authenticated request. Threaded from the request
+ * entry point through every downstream query so endpoints never re-derive
+ * scope from user input — user-supplied IDs can only narrow the scope, not
+ * widen it.
  *
- * Returns null only when both (a) no query param was given and (b) the user
- * has zero workspaces — the caller decides whether that's an empty response
- * (list endpoints) or an error (mutating endpoints).
+ * - `single` — request may only access data belonging to one workspace.
+ *   This is the scope for every project-workspace request (and the scope
+ *   a hub request gets when it explicitly narrows to a single workspace).
+ * - `owned` — request may access data from any workspace where
+ *   `workspace.user_id = userId`. Granted only when the requesting
+ *   workspace's `kind === 'hub'`. Both forms carry `userId`; `owned` just
+ *   omits the per-workspace filter, it never relaxes the per-user filter.
+ */
+export type WorkspaceScope =
+  | { kind: "single"; userId: string; workspaceId: string }
+  | { kind: "owned"; userId: string };
+
+/**
+ * Resolves a request's workspace scope from the `?workspaceId=` query
+ * param. The kind of the resolved workspace drives the scope: `hub`
+ * workspaces get `{ kind: 'owned' }` (cross-workspace reach for the
+ * single requesting user); `project` workspaces get `{ kind: 'single' }`
+ * narrowed to that one workspace.
+ *
+ * No implicit fallback — callers must either supply `workspaceId` or
+ * handle the missing case explicitly. The old "use the first workspace"
+ * shortcut was removed once the hub started sorting first; without an
+ * explicit param, the hub would silently widen every legacy call.
+ */
+export async function resolveWorkspaceScope(
+  pool: Pool,
+  userId: string,
+  query: URLSearchParams,
+): Promise<WorkspaceScope | null> {
+  const q = query.get("workspaceId");
+  if (q === null || q === "") return null;
+  if (!WORKSPACE_ID_PATTERN.test(q)) {
+    throw new ValidationError(`Invalid workspaceId: ${q}`);
+  }
+  await requireOwnedWorkspace(pool, q, userId);
+  const ws = await queries.workspaces.findById(pool, q);
+  if (!ws) throw new NotFoundError(`Workspace not found: ${q}`);
+  if (ws.kind === "hub") {
+    return { kind: "owned", userId };
+  }
+  return { kind: "single", userId, workspaceId: q };
+}
+
+/**
+ * Like `resolveWorkspaceScope` but throws when no workspace is supplied.
+ * Used by mutating endpoints (POST/DELETE) where the operation has to
+ * land somewhere.
+ */
+export async function requireWorkspaceScope(
+  pool: Pool,
+  userId: string,
+  query: URLSearchParams,
+): Promise<WorkspaceScope> {
+  const scope = await resolveWorkspaceScope(pool, userId, query);
+  if (!scope) throw new NotFoundError("No workspace available");
+  return scope;
+}
+
+/**
+ * Compatibility helper for endpoints that operate on a single workspace
+ * (chats, library files, etc.). Returns the explicit workspaceId from the
+ * query param, regardless of whether the workspace is a hub or project. The
+ * hub is a valid single workspace for CRUD purposes; `owned` (cross-workspace)
+ * scope is only meaningful for sandbox search endpoints, which derive scope
+ * from the sandbox token rather than from this helper.
  */
 export async function resolveWorkspaceId(
   pool: Pool,
   userId: string,
   query: URLSearchParams,
 ): Promise<string | null> {
-  const q = query.get("workspaceId");
-  if (q !== null && q !== "") {
-    if (!WORKSPACE_ID_PATTERN.test(q)) {
-      throw new ValidationError(`Invalid workspaceId: ${q}`);
-    }
-    await requireOwnedWorkspace(pool, q, userId);
-    return q;
+  const scope = await resolveWorkspaceScope(pool, userId, query);
+  if (!scope) return null;
+  if (scope.kind === "owned") {
+    // Hub workspace: the caller explicitly supplied the hub's workspaceId.
+    // Return it so single-workspace endpoints (chats, library, …) operate on
+    // the hub's own data. Cross-workspace expansion only applies to sandbox
+    // endpoints, which derive scope from the sandbox token, not this helper.
+    return query.get("workspaceId")!;
   }
-  const workspaces = await queries.workspaces.listByUser(pool, userId);
-  return workspaces.length > 0 ? workspaces[0].id : null;
+  return scope.workspaceId;
 }
 
-/**
- * Like `resolveWorkspaceId` but throws `NotFoundError` when the user has no
- * workspaces — used by mutating routes (POST/DELETE) where an empty list
- * response makes no sense.
- */
 export async function requireWorkspaceId(
   pool: Pool,
   userId: string,

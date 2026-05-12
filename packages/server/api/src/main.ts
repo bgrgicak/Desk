@@ -29,6 +29,7 @@ import {
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
+import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
 import type { WsEvent } from "@agent-desk/shared";
@@ -82,6 +83,23 @@ async function main(): Promise<void> {
   }
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
+  // Per-user hub auto-create. Runs before the workspace layout backfill
+  // so a fresh hub immediately has its on-disk tree. Idempotent — does
+  // nothing for users that already have a hub.
+  //
+  // Opt-out via `DESK_HUB_AUTO_CREATE=off` for environments whose tests
+  // still assume the seeded user has a single project workspace (e.g. the
+  // Playwright e2e harness). Production deployments leave it on so the
+  // hub is always available.
+  const hubAutoCreateDisabled =
+    (process.env.DESK_HUB_AUTO_CREATE ?? "on").toLowerCase() === "off";
+  if (!hubAutoCreateDisabled) {
+    await ensureHubsForAllUsers(pool, DESK_HOME);
+  } else {
+    // eslint-disable-next-line no-console
+    console.log("hub auto-create: disabled via DESK_HUB_AUTO_CREATE=off");
+  }
+
   // Ensure every existing workspace has its on-disk tree, so a server
   // started after migration 0010 backfill still has folders for rows
   // that were created before per-workspace dirs existed.

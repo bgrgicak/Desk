@@ -6,6 +6,7 @@ export const ID_PREFIXES = {
   message: "msg_",
   sandboxSession: "sbs_",
   appSession: "aps_",
+  pin: "pin_",
 } as const;
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;

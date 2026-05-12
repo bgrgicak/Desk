@@ -145,12 +145,15 @@ describe("multi-client WS sync", () => {
 
     // Create a chat via HTTP (this emits no broadcast — but sending a message does)
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    // Use the project workspace — hub sorts first after the Hub PR and this
+    // test should validate that broadcasts work for ordinary project chats too.
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Multi WS Chat",
     });

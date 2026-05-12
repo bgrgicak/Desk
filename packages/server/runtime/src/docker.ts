@@ -28,17 +28,31 @@ import {
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
 import { killRunProcessTreeByRunId } from "./driver.js";
 
+import type { WorkspaceKind } from "@agent-desk/shared";
+
 /**
- * The sandbox container image used for every desk-agent run. Resolves
- * lazily so a test can flip DESK_SANDBOX_IMAGE between cases (the value
- * is read on every call rather than cached at import time).
+ * The sandbox container image used for a desk-agent run. Resolves lazily
+ * so a test can flip DESK_SANDBOX_IMAGE between cases (the value is
+ * read on every call rather than cached at import time).
  *
- * Default `desk/sandbox:v1` matches what `docker build -t desk/sandbox:v1
- * packages/server/runtime/Dockerfile.sandbox` produces — the path
- * documented in the README. The CLI overrides this in published mode to
- * a registry-published, version-pinned tag (see §4 of npm-publish.md).
+ * `kind` lets the hub take a different image than project workspaces
+ * once a distinct hub image is built. Today they resolve to the same
+ * image — the env hook is wired up but falls back to
+ * `DESK_SANDBOX_IMAGE` so a divergence is one env-var flip away. The
+ * default `desk/sandbox:v1` matches what
+ * `docker build -t desk/sandbox:v1 packages/server/runtime/Dockerfile.sandbox`
+ * produces (documented in the README). The CLI overrides this in
+ * published mode to a registry-published, version-pinned tag (see §4 of
+ * npm-publish.md).
  */
-export function sandboxImage(): string {
+export function sandboxImage(kind: WorkspaceKind = "project"): string {
+  if (kind === "hub") {
+    return (
+      process.env.DESK_HUB_SANDBOX_IMAGE ??
+      process.env.DESK_SANDBOX_IMAGE ??
+      "desk/sandbox:v1"
+    );
+  }
   return process.env.DESK_SANDBOX_IMAGE ?? "desk/sandbox:v1";
 }
 
@@ -238,9 +252,9 @@ export async function growSandboxForResourceError(
  * from the in-tree Dockerfile, so the pull fails cleanly and we log a
  * warning that points at the build command.
  */
-export async function ensureImage(): Promise<void> {
+export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void> {
   const engine = await detectEngine();
-  const image = sandboxImage();
+  const image = sandboxImage(kind);
   if (await engine.imageId(image)) return;
   try {
     await engine.imagePull(image, (line) => {
@@ -283,6 +297,7 @@ export async function createOrReuse(
   providerKeys?: Record<string, string>,
   mountPlan?: MountPlan,
   extraEnv?: Record<string, string>,
+  workspaceKind: WorkspaceKind = "project",
 ): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
@@ -300,7 +315,7 @@ export async function createOrReuse(
   // through to the create path. Bind order isn't meaningful, compare as sets.
   const existing = await engine.inspect(containerName);
   if (existing) {
-    const currentImageId = await engine.imageId(sandboxImage());
+    const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
     const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
     const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
@@ -329,7 +344,7 @@ export async function createOrReuse(
   try {
     const containerId = await engine.create({
       name: containerName,
-      image: sandboxImage(),
+      image: sandboxImage(workspaceKind),
       // Start the long-lived container as root so the entrypoint can wire up
       // the per-host `agent` user and passwordless sudo. Individual agent
       // execs still run as `sandboxUser()` below, keeping normal workspace

@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { workspaceRootPath } from "@agent-desk/storage";
-import { type GoalKey } from "@agent-desk/shared";
+import { type GoalKey, type WorkspaceKind } from "@agent-desk/shared";
 import { renderPromptBody } from "./prompt.js";
 
 export interface AgentFileInput {
@@ -52,6 +52,12 @@ export interface AgentFileInput {
   /** Workspace slug for resolving the workspace memory index. */
   workspaceSlug?: string;
   /**
+   * Kind of the workspace this agent file is being rendered for. Drives
+   * kind-specific prompt fragments (e.g. the hub-only `hub.md` section).
+   * Defaults to `project` so existing callers stay unchanged.
+   */
+  workspaceKind?: WorkspaceKind;
+  /**
    * When false, the goal-autodetect fragment is omitted from the prompt.
    * Defaults to true.
    */
@@ -79,6 +85,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     runMode: input.runMode ?? "chat",
     home: input.home,
     workspaceSlug: input.workspaceSlug,
+    workspaceKind: input.workspaceKind ?? "project",
     includeGoalAutodetect: input.includeGoalAutodetect,
   });
 

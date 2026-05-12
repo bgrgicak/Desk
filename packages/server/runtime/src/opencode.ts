@@ -3,6 +3,7 @@ import { networkInterfaces } from "node:os";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { workspaceRootPath } from "@agent-desk/storage";
+import { type WorkspaceKind } from "@agent-desk/shared";
 import type { SandboxHandle } from "./docker.js";
 import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -16,6 +17,13 @@ export interface ExecRunOptions {
   home: string;
   workspaceId: string;
   workspaceSlug: string;
+  /**
+   * Kind of the requesting workspace. Threaded from the caller (the
+   * scheduler) so the runtime never re-derives kind from the DB. Drives
+   * the prompt fragment selection and the sandbox image selection. Defaults
+   * to `project` so callers that don't yet pass it stay unchanged.
+   */
+  workspaceKind?: WorkspaceKind;
   chatId?: string;
   agent: AgentFileInput;
   /** Workspace-relative paths to forward to opencode as `--file` flags. */

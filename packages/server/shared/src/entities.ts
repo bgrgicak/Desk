@@ -32,6 +32,10 @@ export const WorkspaceAgentSchema = z.object({
 });
 export type WorkspaceAgent = z.infer<typeof WorkspaceAgentSchema>;
 
+export const WORKSPACE_KINDS = ["project", "hub"] as const;
+export const WorkspaceKindSchema = z.enum(WORKSPACE_KINDS);
+export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
+
 export const WorkspaceSchema = z.object({
   id: z.string(),
   userId: z.string(),
@@ -42,9 +46,32 @@ export const WorkspaceSchema = z.object({
   /** On-disk directory name under `~/Desk/`. Derived from `name`
    * at create time, renamed in lock-step when the workspace is renamed. */
   path: z.string(),
+  /** Discriminator that drives capability resolution at the API layer.
+   * `project` is the default and the only kind users can create directly;
+   * `hub` is the per-user home base, created server-side. */
+  kind: WorkspaceKindSchema.default("project"),
   createdAt: z.string(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
+
+export const PIN_KINDS = ["chat", "library_file", "app", "fragment", "artifact"] as const;
+export const PinKindSchema = z.enum(PIN_KINDS);
+export type PinKind = z.infer<typeof PinKindSchema>;
+
+export const PinSchema = z.object({
+  id: z.string(),
+  /** Workspace the pin lives in (the hub). */
+  workspaceId: z.string(),
+  /** Workspace the pinned item originates from. */
+  sourceWorkspaceId: z.string(),
+  kind: PinKindSchema,
+  /** Interpretation depends on `kind`:
+   *  - chat / app / artifact: row primary-key id
+   *  - library_file / fragment: workspace-relative file path */
+  refId: z.string(),
+  pinnedAt: z.string(),
+});
+export type Pin = z.infer<typeof PinSchema>;
 
 export const ChatSchema = z.object({
   id: z.string(),

@@ -60,7 +60,7 @@ describe("AgentSchema", () => {
 });
 
 describe("WorkspaceSchema", () => {
-  const valid = { id: "wks_abc", userId: "usr_abc", name: "My WS", description: "desc", icon: "star", color: "#fce7f3", path: "my-ws", createdAt: now };
+  const valid = { id: "wks_abc", userId: "usr_abc", name: "My WS", description: "desc", icon: "star", color: "#fce7f3", path: "my-ws", kind: "project" as const, createdAt: now };
 
   it("parses a valid workspace", () => {
     expect(WorkspaceSchema.parse(valid)).toEqual(valid);
@@ -68,6 +68,15 @@ describe("WorkspaceSchema", () => {
 
   it("rejects missing userId", () => {
     expect(() => WorkspaceSchema.parse({ id: "wks_abc", name: "n", description: "d", icon: "i", createdAt: now })).toThrow();
+  });
+
+  it("defaults kind to 'project' when omitted", () => {
+    const { kind: _, ...withoutKind } = valid;
+    expect(WorkspaceSchema.parse(withoutKind)).toEqual(valid);
+  });
+
+  it("accepts 'hub' as a valid kind", () => {
+    expect(WorkspaceSchema.parse({ ...valid, kind: "hub" }).kind).toBe("hub");
   });
 
   it("round-trips through JSON", () => {

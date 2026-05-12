@@ -212,9 +212,12 @@ describe("Routes coverage (real Postgres)", () => {
     // Provider keys now live in the vault — set it up so PUT /me/providers works.
     await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
 
-    // Get seeded workspace and agent
+    // Get seeded workspace and agent. The hub workspace sorts first after the
+    // Hub PR; use the project workspace explicitly so these tests validate the
+    // project-workspace code path rather than silently running against the hub.
     const wsRes = await request("GET", "/workspaces", token);
-    workspaceId = (wsRes.body as Array<{ id: string }>)[0].id;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    workspaceId = (workspaces.find((w) => w.kind !== "hub") ?? workspaces[0]).id;
     const agRes = await request("GET", "/agents", token);
     agentId = (agRes.body as Array<{ id: string }>)[0].id;
   });
@@ -836,7 +839,7 @@ describe("Routes coverage (real Postgres)", () => {
     const content = "file to delete";
     const uploadRes = await requestMultipart(
       "POST",
-      "/library",
+      `/library?workspaceId=${workspaceId}`,
       token,
       [{ name: "file", filename: "to-delete.txt", contentType: "text/plain", body: Buffer.from(content) }],
     );
@@ -846,7 +849,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Delete moves the file to the trash.
     const delRes = await request(
       "DELETE",
-      `/library?path=${encodeURIComponent(file.path)}`,
+      `/library?workspaceId=${workspaceId}&path=${encodeURIComponent(file.path)}`,
       token,
     );
     expect(delRes.status).toBe(200);
@@ -855,7 +858,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Subsequent stat through the API fails (file was moved to .trash).
     const statRes = await request(
       "GET",
-      `/library/meta?path=${encodeURIComponent(file.path)}`,
+      `/library/meta?workspaceId=${workspaceId}&path=${encodeURIComponent(file.path)}`,
       token,
     );
     expect(statRes.status).toBe(404);

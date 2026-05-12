@@ -1,11 +1,36 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError, slugifyWorkspaceName } from "@agent-desk/shared";
+import {
+  generateId,
+  hubSlugForUser,
+  isReservedWorkspaceSlug,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+  slugifyWorkspaceName,
+  type Workspace,
+} from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
 import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 
 const DEFAULT_AGENT_NAME = "Desk";
 const DEFAULT_AGENT_MODEL = "opencode/big-pickle";
+
+const HUB_NAME = "Hub";
+const HUB_DESCRIPTION = "Your home base across all workspaces.";
+
+/**
+ * The opening message the hub agent posts when the hub is created. Loose,
+ * friendly tone — meeting someone for the first time. Used as the basis
+ * for the first summary and the first reflection.
+ */
+const HUB_INITIAL_AGENT_MESSAGE =
+  "Hi! I'm your hub — a single place we can keep coming back to as you " +
+  "work across all your other Desk workspaces. I can pull together what's " +
+  "happening across them, hand off into a focused workspace when one " +
+  "deserves its own room, and remember the threads you care about. " +
+  "What's on your mind today, or what would you like me to help you " +
+  "keep an eye on?";
 
 export async function listWorkspaces(pool: Pool, userId?: string) {
   if (userId) return queries.workspaces.listByUser(pool, userId);
@@ -28,6 +53,115 @@ async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: str
 }
 
 /**
+ * Creates the per-user hub workspace. The slug shape is
+ * `{user-slug}-hub` so the user can identify the hub by name when
+ * browsing the host filesystem; the suffix is in the reserved-slug list
+ * so users cannot create or rename a workspace into this slot.
+ *
+ * Idempotent — if the user already has a hub, returns it. Internal
+ * server code is the only allowed caller of this function; the API
+ * never accepts a `kind` parameter.
+ */
+export async function createHub(
+  pool: Pool,
+  home: string,
+  userId: string,
+  userSlug: string,
+): Promise<Workspace> {
+  // Step 1: workspace row — idempotent.
+  const existing = await queries.workspaces.findHubByUser(pool, userId);
+  let ws: Workspace;
+  if (existing) {
+    ws = existing;
+  } else {
+    const slug = hubSlugForUser(userSlug);
+    await ensureWorkspaceLayout(home, slug);
+    ws = await queries.workspaces.insert(pool, {
+      id: generateId("workspace"),
+      userId,
+      name: HUB_NAME,
+      description: HUB_DESCRIPTION,
+      path: slug,
+      kind: "hub",
+    });
+    await ensureWorkspaceAgent(pool, ws.id, userId);
+  }
+
+  // Step 2: seed chat + message — each step is independently idempotent so
+  // a partially-completed previous boot pass is repaired on the next call.
+  // This avoids the failure mode where the workspace row exists but the chat
+  // or message insert failed, leaving the hub permanently unseeded.
+  const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
+  const agentId = memberships[0]?.agentId;
+  if (agentId) {
+    const { rows: existingChats } = await pool.query<{ id: string }>(
+      `SELECT id FROM chats WHERE workspace_id = ? LIMIT 1`,
+      [ws.id],
+    );
+    let chatId: string;
+    if (existingChats.length > 0) {
+      chatId = existingChats[0].id;
+    } else {
+      const chat = await queries.chats.insert(pool, {
+        id: generateId("chat"),
+        workspaceId: ws.id,
+        agentId,
+        title: HUB_NAME,
+      });
+      chatId = chat.id;
+    }
+    const { rows: existingMessages } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages WHERE chat_id = ? AND role = 'agent' LIMIT 1`,
+      [chatId],
+    );
+    if (existingMessages.length === 0) {
+      await queries.messages.insert(pool, {
+        id: generateId("message"),
+        chatId,
+        role: "agent",
+        content: { type: "text", text: HUB_INITIAL_AGENT_MESSAGE },
+        agentId,
+      });
+    }
+  }
+
+  if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
+    await ensureDailyReflectionTasks({
+      pool,
+      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+    });
+  }
+  return ws;
+}
+
+/**
+ * Walks every user and ensures a hub workspace exists. Called from the
+ * server boot pass so existing users predating the hub feature get one
+ * on next start, and any user whose hub was deleted via direct DB access
+ * gets it re-created. Idempotent.
+ *
+ * Errors from one user's hub creation (slug collision with another user's
+ * existing workspace, FS permission issues, etc.) are logged and the loop
+ * continues — one bad row should not block every later user from getting
+ * a hub on this boot.
+ */
+export async function ensureHubsForAllUsers(pool: Pool, home: string): Promise<void> {
+  const { rows } = await pool.query<{ id: string; username: string }>(
+    `SELECT id, username FROM users`,
+  );
+  for (const row of rows) {
+    try {
+      await createHub(pool, home, row.id, row.username);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `ensureHubsForAllUsers: failed to create hub for user ${row.id} (${row.username}): ${(err as Error).message}`,
+      );
+    }
+  }
+}
+
+/**
  * Creates a workspace and ensures it has at least one enrolled agent. If the
  * caller has no agents yet, creates a default opencode-backed agent first.
  * Without this, chat creation would 400 on every agentId in the new workspace.
@@ -37,6 +171,11 @@ async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: str
  * created before the DB insert so every successful insert has a matching
  * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
  * collision so two workspaces can't share a directory.
+ *
+ * The API never accepts a `kind` parameter — every API-created workspace
+ * is `project`. The slug is also checked against the reserved-suffix list
+ * so a user can't impersonate another user's `-hub` slot. Both rules are
+ * the user-facing safety net behind the DB constraints.
  */
 export async function createWorkspace(
   pool: Pool,
@@ -45,6 +184,11 @@ export async function createWorkspace(
   data: { name: string; description?: string; icon?: string; color?: string },
 ) {
   const path = await queries.workspaces.reserveWorkspacePath(pool, data.name);
+  if (isReservedWorkspaceSlug(path)) {
+    throw new ValidationError(
+      `Workspace name resolves to a reserved slug "${path}"; pick a different name.`,
+    );
+  }
   await ensureWorkspaceLayout(home, path);
   const ws = await queries.workspaces.insert(pool, {
     id: generateId("workspace"),
@@ -73,6 +217,11 @@ export async function getWorkspace(pool: Pool, id: string) {
  * from the new name; if it differs from the current slug and is free,
  * renames the on-disk directory and updates the `path` column to match.
  * All other changes are pure metadata and skip the filesystem op.
+ *
+ * Renames into a reserved suffix are rejected so a user can't take over
+ * an internal slot. Hubs themselves cannot be renamed via this endpoint
+ * (the hub's slug is part of how the user identifies their slice on
+ * disk; allowing renames would break that landmark).
  */
 export async function patchWorkspace(
   pool: Pool,
@@ -85,9 +234,17 @@ export async function patchWorkspace(
 
   let newPath: string | undefined;
   if (data.name !== undefined && data.name !== current.name) {
+    if (current.kind === "hub") {
+      throw new ForbiddenError("The hub workspace cannot be renamed.");
+    }
     const desired = slugifyWorkspaceName(data.name);
     if (desired !== current.path) {
       newPath = await queries.workspaces.reserveWorkspacePath(pool, data.name, id);
+      if (isReservedWorkspaceSlug(newPath)) {
+        throw new ValidationError(
+          `Workspace name resolves to a reserved slug "${newPath}"; pick a different name.`,
+        );
+      }
       await renameWorkspaceDir(home, current.path, newPath);
     }
   }
@@ -103,7 +260,11 @@ export async function patchWorkspace(
 /**
  * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents)
  * and moves its on-disk directory into `~/Desk/.trash/workspaces/`.
- * Refuses to delete the user's last workspace — the app requires at least one.
+ * Refuses to delete the user's last *project* workspace — the app
+ * requires at least one (the hub doesn't satisfy this because the hub
+ * has different capabilities and isn't a substitute for a project
+ * workspace). The hub itself is non-deletable via this endpoint; if
+ * deleted via direct DB access, the boot pass recreates it.
  */
 export async function deleteWorkspace(
   pool: Pool,
@@ -113,8 +274,12 @@ export async function deleteWorkspace(
 ) {
   const ws = await queries.workspaces.findById(pool, id);
   if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
+  if (ws.kind === "hub") {
+    throw new ForbiddenError("The hub workspace cannot be deleted.");
+  }
   const owned = await queries.workspaces.listByUser(pool, userId);
-  if (owned.length <= 1) {
+  const projectCount = owned.filter((w) => w.kind === "project").length;
+  if (projectCount <= 1) {
     throw new ValidationError(
       "Cannot delete the last workspace; create another one first.",
     );

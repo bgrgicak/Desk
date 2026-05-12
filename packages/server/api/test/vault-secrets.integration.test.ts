@@ -25,6 +25,7 @@ import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { generateId } from "@agent-desk/shared";
 import { createApp } from "../src/app.js";
+import { ensureHubsForAllUsers } from "../src/routes/workspaces.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
@@ -63,6 +64,12 @@ beforeAll(async () => {
 
   const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id as string;
+
+  // The hub PR requires sandbox sessions to carry a workspaceId; without one
+  // the auth middleware throws 401 before vault checks run. Ensure each user
+  // has a hub workspace so we can bind the sandbox token to it.
+  await ensureHubsForAllUsers(pool, home);
+
   server = createApp({ pool, storage, runManager, broadcastUserId: userId });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as net.AddressInfo).port;
@@ -85,10 +92,16 @@ beforeAll(async () => {
     instructions: "",
     model: "claude-sonnet-4-6",
   });
+  const { rows: wsRows } = await pool.query(
+    "SELECT id FROM workspaces WHERE user_id = ? LIMIT 1",
+    [userId],
+  );
+  const workspaceId = wsRows[0]?.id as string;
   sandboxToken = "sb_" + crypto.randomBytes(16).toString("hex");
   await queries.sandboxSessions.issue(pool, {
     id: generateId("sbs"),
     agentId,
+    workspaceId,
     tokenHash: crypto.createHash("sha256").update(sandboxToken).digest("hex"),
   });
 });
