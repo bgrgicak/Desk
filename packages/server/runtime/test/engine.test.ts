@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
-import { detectEngine, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
+import { detectEngine, hasReadOnlyCgroupV2Mount, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
 import { DeskError } from "@agent-desk/shared";
 
 const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
@@ -94,9 +94,30 @@ describe("exec handle stream lifecycle", () => {
   });
 });
 
-/** True if `<bin> info` exits 0 — same probe detectEngine uses. */
+describe("cgroup mount detection", () => {
+  it("detects read-only cgroup v2 mounts that make nested Docker unusable", () => {
+    const mountInfo = [
+      "9174 9169 0:168 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro",
+      "9175 9174 0:29 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate,memory_recursiveprot",
+    ].join("\n");
+
+    expect(hasReadOnlyCgroupV2Mount(mountInfo)).toBe(true);
+  });
+
+  it("allows writable cgroup v2 mounts", () => {
+    const mountInfo = "1 0 0:29 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw";
+
+    expect(hasReadOnlyCgroupV2Mount(mountInfo)).toBe(false);
+  });
+});
+
+/** True if `<bin> info` exits 0 and the local cgroup mount is not known-broken. */
 async function binaryWorks(name: EngineName): Promise<boolean> {
   const { spawn } = await import("node:child_process");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { readFile } = await import("node:fs/promises");
+  const execFileAsync = promisify(execFile);
   return new Promise((resolve) => {
     const child = spawn(
       name,
@@ -123,6 +144,25 @@ async function binaryWorks(name: EngineName): Promise<boolean> {
       done(false);
     }, 3000);
     child.on("error", () => done(false));
-    child.on("exit", (code) => done(code === 0));
+    child.on("exit", async (code) => {
+      if (code !== 0) return done(false);
+      try {
+        const { stdout } = await execFileAsync(name, ["info", "--format", "{{.CgroupDriver}} {{.CgroupVersion}}"], {
+          env:
+            name === "nerdctl"
+              ? { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}` }
+              : process.env,
+          timeout: 3000,
+          killSignal: "SIGKILL",
+        });
+        if (stdout.trim() === "cgroupfs 2" && hasReadOnlyCgroupV2Mount(await readFile("/proc/self/mountinfo", "utf8"))) {
+          return done(false);
+        }
+      } catch {
+        // Keep parity with detectEngine: if the richer cgroup probe fails,
+        // don't reject the runtime just because the diagnostic is unavailable.
+      }
+      done(true);
+    });
   });
 }

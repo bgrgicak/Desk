@@ -32,6 +32,33 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
+if ! docker info >/dev/null 2>&1; then
+  echo "==> sandbox image: docker daemon is not reachable; skipping rebuild (image=${IMAGE})." >&2
+  exit 0
+fi
+
+# `docker info` can succeed in nested dev containers even when the daemon
+# cannot start build/run containers because the cgroup v2 mount is read-only.
+# Without this guard, `npm run dev` spends time building sandbox-cli and then
+# fails with Docker's opaque:
+#   unable to apply cgroup configuration: mkdir /sys/fs/cgroup/docker: read-only file system
+# The app can still boot with an existing/published image or with sandbox tests
+# skipped; surface the environment problem early and keep dev startup moving.
+if docker info --format '{{.CgroupDriver}} {{.CgroupVersion}}' 2>/dev/null | grep -qx 'cgroupfs 2'; then
+  if awk '
+    {
+      sep=0
+      for (i=1; i<=NF; i++) if ($i == "-") { sep=i; break }
+      if (sep && $5 == "/sys/fs/cgroup" && $6 ~ /(^|,)ro(,|$)/ && $(sep+1) == "cgroup2" && $(sep+2) == "cgroup") found=1
+    }
+    END { exit found ? 0 : 1 }
+  ' /proc/self/mountinfo; then
+    echo "==> sandbox image: docker is available, but cgroup v2 is mounted read-only; skipping rebuild." >&2
+    echo "    Relaunch this dev container with a writable cgroup mount or use a host Docker socket to run sandbox E2E." >&2
+    exit 0
+  fi
+fi
+
 echo "==> sandbox image: rebuilding ${IMAGE} (fingerprint ${FINGERPRINT:0:12}…)"
 
 # Fresh sandbox-cli bundle — the docker build COPYs from the repo, so

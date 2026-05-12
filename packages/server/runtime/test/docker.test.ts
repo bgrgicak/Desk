@@ -129,6 +129,13 @@ describe("providerKeyExecEnv", () => {
     expect(env).toContain("GH_TOKEN=");
     expect(env).toContain("OPENCODE_AUTH_CONTENT=codex");
   });
+
+  it("clears stale opaque credential blobs when current extra env omits them", () => {
+    const env = providerKeyExecEnv({ OPENAI_API_KEY: "sk-test" }, {});
+
+    expect(env).toContain("OPENCODE_AUTH_CONTENT=");
+    expect(env).toContain("PI_AUTH_CONTENT=");
+  });
 });
 
 describe("killClaimedRunsInContainers", () => {

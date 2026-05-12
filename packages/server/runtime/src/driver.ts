@@ -1,4 +1,4 @@
-import { SANDBOX_HOME } from "./mounts.js";
+import { SANDBOX_HOME, SKILLS_SANDBOX_DIR } from "./mounts.js";
 import type { Engine, ExecHandle } from "./engine.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 
@@ -13,6 +13,8 @@ export interface RunOptions {
    * The caller is responsible for writing and cleaning up this file.
    */
   promptFile?: string;
+  /** Sandbox-absolute path to a file containing the full system prompt for runtimes that accept it. */
+  systemPromptFile?: string;
   agentFileId?: string;
   /**
    * Workspace-relative paths the user attached to this message. The driver
@@ -36,8 +38,8 @@ export interface RunOptions {
    */
   onLog: (event: LogEvent) => void | Promise<void>;
   /**
-   * Opencode model id to pass via `--model`, e.g. "opencode/big-pickle".
-   * When omitted, opencode picks its default.
+   * Agent runtime model id to pass via `--model`, e.g. "opencode/big-pickle".
+   * When omitted, the selected runtime picks its default.
    */
   model?: string;
   /**
@@ -78,7 +80,7 @@ export interface ExecResult {
 }
 
 export interface SandboxDriver {
-  /** Kicks off an opencode run in the given workspace's sandbox. */
+  /** Kicks off an agent-runtime run in the given workspace's sandbox. */
   execRun(workspaceId: string, opts: RunOptions): Promise<ExecResult>;
   cancelRun(runId: string): Promise<void>;
 }
@@ -191,8 +193,124 @@ export function buildOpencodeCommand(opts: {
   ];
 }
 
+/**
+ * Builds the `sh -c` invocation that runs Pi inside the sandbox.
+ *
+ * Pi uses `@file` positional arguments for attachments. Desk writes the full
+ * runtime system prompt to a workspace-local `.pi/SYSTEM-<run>.md` file and
+ * appends it explicitly, while `--no-context-files` suppresses unrelated
+ * AGENTS.md/CLAUDE.md files.
+ */
+export function buildPiCommand(opts: {
+  runId?: string;
+  attachments?: string[];
+  model?: string;
+  promptFile?: string;
+  systemPromptFile?: string;
+}): string[] {
+  const fileArgs = (opts.attachments ?? [])
+    .map((p) => ` ${shSingleQuote(`@${toSandboxPath(p)}`)}`)
+    .join("");
+  const modelFlag = opts.model ? ` --model ${shSingleQuote(opts.model)}` : "";
+  const promptPipe = opts.promptFile ? `cat "$DESK_PROMPT_FILE" | ` : "";
+  const promptArg = opts.promptFile ? "" : ` "$DESK_PROMPT"`;
+  // Pi resolves --append-system-prompt as either literal text or a readable
+  // file path. Pass the file path directly instead of command-substituting the
+  // contents into argv, otherwise a large Desk prompt can still hit ARG_MAX.
+  const systemPromptFlag = opts.systemPromptFile ? ` --append-system-prompt "$DESK_PI_SYSTEM_PROMPT_FILE"` : "";
+  const pidFile = runPidFile(opts.runId ?? "unknown");
+  const piAgentDir = piAgentDirForRun(opts.runId ?? "unknown");
+  const piAuthSetup = buildPiAuthSetup(piAgentDir);
+  // Keep Pi's built-in tool set aligned with OpenCode while also enabling the
+  // pi-mcp-adapter proxy tool. Pi applies `--tools` as a global allowlist across
+  // built-in, extension, and custom tools; omitting `mcp` would load the adapter
+  // but make browser/MCP tools unreachable.
+  const toolsFlag = " --tools read,write,edit,bash,grep,find,ls,mcp";
+  const skillFlag = ` --skill ${shSingleQuote(SKILLS_SANDBOX_DIR)}`;
+  const extensionFlag = " --extension '/opt/pi-extensions/mcp-adapter/node_modules/pi-mcp-adapter/index.ts'";
+  const pi = `cd "$HOME" && ${promptPipe}PI_CODING_AGENT_DIR=${shSingleQuote(piAgentDir)} PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1 PI_OFFLINE=1 pi --offline --mode json -p --no-session --no-context-files${systemPromptFlag}${toolsFlag}${skillFlag}${extensionFlag}${modelFlag}${fileArgs}${promptArg}`;
+  const piScriptArg = shSingleQuote(pi);
+  const script = [
+    "mkdir -p /tmp/desk-runs",
+    `pidfile=${shSingleQuote(pidFile)}`,
+    piAuthSetup,
+    "if command -v setsid >/dev/null 2>&1; then " +
+      `exec setsid --wait sh -c 'echo $$ > "$1"; shift; exec sh -c "$1"' sh "$pidfile" ${piScriptArg}`,
+    "else " +
+      `echo 'Desk runtime warning: setsid unavailable; process-tree cleanup degraded' >&2; exec sh -c 'echo $$ > "$1"; shift; exec sh -c "$1"' sh "$pidfile" ${piScriptArg}`,
+    "fi",
+  ].join("; ");
+  return ["sh", "-c", script];
+}
+
+export function buildPiAuthSetup(agentDir: string): string {
+  const dir = shSingleQuote(agentDir);
+  return `pi_agent_dir=${dir}; mkdir -p "$pi_agent_dir"; ` +
+    "if [ -n \"${PI_AUTH_CONTENT:-}\" ]; then " +
+    "printf '%s' \"$PI_AUTH_CONTENT\" > \"$pi_agent_dir/auth.json\" && chmod 600 \"$pi_agent_dir/auth.json\"; " +
+    "elif [ -n \"${OPENCODE_AUTH_CONTENT:-}\" ]; then " +
+    "printf '%s' \"$OPENCODE_AUTH_CONTENT\" | jq -c '{\"openai-codex\":(.openai // .[\"openai-codex\"])} | with_entries(select(.value != null))' > \"$pi_agent_dir/auth.json\" && chmod 600 \"$pi_agent_dir/auth.json\"; " +
+    "fi";
+}
+
+export function piAgentDirForRun(runId: string): string {
+  return `/tmp/desk-runs/pi-agent-${safeRunId(runId)}`;
+}
+
+function selectedAgentRuntime(): "opencode" | "pi" {
+  return process.env.DESK_AGENT_RUNTIME === "pi" ? "pi" : "opencode";
+}
+
+export function runtimeModelForPi(model: string | undefined, extraEnv: Record<string, string> | undefined): string | undefined {
+  if (process.env.DESK_PI_MODEL) return process.env.DESK_PI_MODEL;
+  const hasCodexAuth = Boolean(extraEnv?.PI_AUTH_CONTENT || extraEnv?.OPENCODE_AUTH_CONTENT);
+  if (!model || model.startsWith("opencode/")) return hasCodexAuth ? "openai-codex/gpt-5.5" : undefined;
+  // OpenCode consumes Desk's Codex bridge as openai/*; Pi exposes the same
+  // ChatGPT subscription as openai-codex/*. Map existing agent selections when
+  // Codex auth is present so switching DESK_AGENT_RUNTIME=pi keeps working.
+  if (hasCodexAuth && model.startsWith("openai/")) {
+    return `openai-codex/${model.slice("openai/".length)}`;
+  }
+  return model;
+}
+
 /** Tracks active execs by runId so cancelRun can find the in-container PID to kill. */
 const activeExecs = new Map<string, { containerId: string; pidFile: string; execHandle: ExecHandle }>();
+
+export function createRuntimeLogLineEmitter(
+  emitLine: (kind: "stdout" | "stderr", line: string) => void,
+): {
+  ingest(kind: "stdout" | "stderr", chunk: Buffer | string): void;
+  flush(): void;
+} {
+  const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+
+  const emitBufferedLines = (kind: "stdout" | "stderr") => {
+    let buffer = buffers[kind];
+    let newlineIdx = buffer.indexOf("\n");
+    while (newlineIdx >= 0) {
+      const line = buffer.slice(0, newlineIdx).replace(/\r$/, "");
+      emitLine(kind, line);
+      buffer = buffer.slice(newlineIdx + 1);
+      newlineIdx = buffer.indexOf("\n");
+    }
+    buffers[kind] = buffer;
+  };
+
+  return {
+    ingest(kind, chunk) {
+      buffers[kind] += chunk.toString();
+      emitBufferedLines(kind);
+    },
+    flush() {
+      for (const kind of ["stdout", "stderr"] as const) {
+        const line = buffers[kind].replace(/\r$/, "");
+        buffers[kind] = "";
+        if (line) emitLine(kind, line);
+      }
+    },
+  };
+}
 
 function runPidFile(runId: string): string {
   // Keep the filename shell-safe even if a test injects an odd id. Production
@@ -343,11 +461,21 @@ function createRealDriver(): SandboxDriver {
       // user's text.
       const fullPrompt = opts.prompt;
 
-      const cmd = buildOpencodeCommand({
+      const runtime = selectedAgentRuntime();
+      const runtimeModel = runtime === "pi"
+        ? runtimeModelForPi(opts.model, opts.extraEnv)
+        : opts.model;
+      const cmd = runtime === "pi" ? buildPiCommand({
+        runId: opts.runId,
+        attachments: opts.attachments,
+        model: runtimeModel,
+        promptFile: opts.promptFile,
+        systemPromptFile: opts.systemPromptFile,
+      }) : buildOpencodeCommand({
         runId: opts.runId,
         agentFileId: opts.agentFileId,
         attachments: opts.attachments,
-        model: opts.model,
+        model: runtimeModel,
         promptFile: opts.promptFile,
       });
       const pidFile = runPidFile(opts.runId);
@@ -362,6 +490,7 @@ function createRealDriver(): SandboxDriver {
           ...(opts.promptFile
             ? [`DESK_PROMPT_FILE=${opts.promptFile}`]
             : [`DESK_PROMPT=${fullPrompt}`]),
+          ...(opts.systemPromptFile ? [`DESK_PI_SYSTEM_PROMPT_FILE=${opts.systemPromptFile}`] : []),
           ...(opts.sandboxToken ? [`DESK_SANDBOX_TOKEN=${opts.sandboxToken}`] : []),
           ...(opts.apiUrl ? [`DESK_API_URL=${opts.apiUrl}`] : []),
           ...(opts.chatId ? [`DESK_CHAT_ID=${opts.chatId}`] : []),
@@ -383,9 +512,16 @@ function createRealDriver(): SandboxDriver {
       // race the stream 'end' against the last DB INSERTs and leave the
       // assistant-message write pointing at zero events.
       const pendingLogs: Promise<unknown>[] = [];
-      const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
-        const text = chunk.toString("utf8").replace(/\r?\n$/, "");
+      let sawRuntimeFailureEvent = false;
+      const emitLine = (kind: "stdout" | "stderr", text: string) => {
         if (!text) return;
+        if (
+          runtime === "pi" &&
+          kind === "stdout" &&
+          (text.includes('"stopReason":"error"') || text.includes('"stopReason":"aborted"'))
+        ) {
+          sawRuntimeFailureEvent = true;
+        }
         const ret = opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
         if (ret && typeof (ret as Promise<void>).then === "function") {
           pendingLogs.push(
@@ -396,13 +532,15 @@ function createRealDriver(): SandboxDriver {
           );
         }
       };
-      handle$.stdout.on("data", emit("stdout"));
-      handle$.stderr.on("data", emit("stderr"));
+      const lineEmitter = createRuntimeLogLineEmitter(emitLine);
+      handle$.stdout.on("data", (chunk: Buffer) => lineEmitter.ingest("stdout", chunk));
+      handle$.stderr.on("data", (chunk: Buffer) => lineEmitter.ingest("stderr", chunk));
 
       try {
         const exitCode = await handle$.wait();
+        lineEmitter.flush();
         await Promise.all(pendingLogs);
-        return { exitCode };
+        return { exitCode: exitCode === 0 && sawRuntimeFailureEvent ? 1 : exitCode };
       } finally {
         activeExecs.delete(opts.runId);
         // Sweep the run's process group — opencode itself has exited (that's

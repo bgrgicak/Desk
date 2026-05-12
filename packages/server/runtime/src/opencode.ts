@@ -8,7 +8,7 @@ import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
-import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
+import { writeAgentFile, writePiSystemFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
 
 export interface ExecRunOptions {
   runId: string;
@@ -56,6 +56,10 @@ function defaultSandboxApiUrl(): string {
   return `http://${host}:${port}`;
 }
 
+function safeRunFilePart(runId: string): string {
+  return runId.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
 /**
  * Executes a run inside a sandbox.
  * Mints a session token, projects mounts, runs OpenCode, then cleans up.
@@ -89,6 +93,10 @@ export async function execRun(
   // goal fragment are part of the rendered system prompt — no separate
   // chatContext prefix on the user prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
+  const piSystemFileName = `SYSTEM-${safeRunFilePart(opts.runId)}.md`;
+  const piSystemHostPath = await writePiSystemFile(opts.home, opts.workspaceSlug, opts.agent, {
+    fileName: piSystemFileName,
+  });
   // Lazy MCP: refresh the workspace-level opencode config so playwright is
   // only present when the chat goal actually needs a browser. Without this,
   // every run preloads firefox + playwright-mcp (~100 MB resident, hundreds
@@ -104,6 +112,7 @@ export async function execRun(
   const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
   const promptHostPath = path.join(wsRoot, `.desk-prompt-${opts.runId}`);
   const promptSandboxPath = `${SANDBOX_HOME}/.desk-prompt-${opts.runId}`;
+  const systemPromptSandboxPath = `${SANDBOX_HOME}/.pi/${piSystemFileName}`;
   await fsp.writeFile(promptHostPath, opts.prompt, "utf8");
 
   try {
@@ -112,11 +121,13 @@ export async function execRun(
       runId: opts.runId,
       prompt: opts.prompt,
       promptFile: promptSandboxPath,
+      systemPromptFile: systemPromptSandboxPath,
       home: opts.home,
       workspaceSlug: opts.workspaceSlug,
       chatId: opts.chatId,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
+      model: opts.agent.model,
       sandboxToken: token,
       apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
       providerKeys: opts.providerKeys,
@@ -129,6 +140,7 @@ export async function execRun(
     await revokeToken(pool, session.id);
     await teardownMounts(handle, opts.runId);
     await fsp.unlink(promptHostPath).catch(() => {});
+    await fsp.unlink(piSystemHostPath).catch(() => {});
   }
 }
 

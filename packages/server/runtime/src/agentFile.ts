@@ -1,5 +1,5 @@
 /**
- * Generates and writes OpenCode agent definition files.
+ * Generates and writes agent runtime prompt/config files.
  *
  * Under the workspace-as-home model the sandbox's `$HOME` is a bind-mount
  * of the workspace root, so the agent file lives at
@@ -85,6 +85,21 @@ export function renderAgentFile(input: AgentFileInput): string {
   return `${frontmatter}\n\n${body}\n`;
 }
 
+/** Renders the full Desk system prompt for Pi, without OpenCode frontmatter. */
+export function renderPiSystemPrompt(input: AgentFileInput): string {
+  return `${renderPromptBody({
+    agentName: input.agentName,
+    userName: input.userName,
+    userTimezone: input.userTimezone,
+    chatId: input.chatId,
+    goal: input.goal ?? null,
+    runMode: input.runMode ?? "chat",
+    home: input.home,
+    workspaceSlug: input.workspaceSlug,
+    includeGoalAutodetect: input.includeGoalAutodetect,
+  })}\n`;
+}
+
 /**
  * Writes the agent definition file to the host workspace so it's visible
  * inside the sandbox via the `~/` bind-mount. Idempotent — overwrites
@@ -104,6 +119,26 @@ export async function writeAgentFile(
   const filePath = path.join(agentDir, `${input.agentId}.md`);
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");
+}
+
+/**
+ * Writes Pi's project-local system prompt so the Pi runtime receives the same
+ * Desk identity/rules as OpenCode without loading unrelated project AGENTS.md
+ * files. Callers may provide a per-run filename to avoid concurrent runs in
+ * the same workspace racing on `.pi/SYSTEM.md`.
+ */
+export async function writePiSystemFile(
+  home: string,
+  workspaceSlug: string,
+  input: AgentFileInput,
+  opts: { fileName?: string } = {},
+): Promise<string> {
+  const content = renderPiSystemPrompt({ ...input, home, workspaceSlug });
+  const dir = path.join(workspaceRootPath(home, workspaceSlug), ".pi");
+  const filePath = path.join(dir, opts.fileName ?? "SYSTEM.md");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(filePath, content, "utf-8");
+  return filePath;
 }
 
 /**
@@ -161,4 +196,22 @@ export async function writeWorkspaceMcpConfig(
   const dir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+
+  // Pi does not ship MCP in core, but the pi-mcp-adapter extension reads
+  // `.pi/mcp.json`. Keep this separate from shared `.mcp.json` so Desk's lazy
+  // browser wiring does not overwrite a user's own cross-tool MCP config.
+  const piConfig = {
+    mcpServers: opts.enablePlaywright
+      ? {
+          playwright: {
+            command: "playwright-mcp",
+            args: ["--browser", "firefox"],
+            lifecycle: "lazy",
+          },
+        }
+      : {},
+  };
+  const piDir = path.join(workspaceRootPath(home, workspaceSlug), ".pi");
+  await fs.mkdir(piDir, { recursive: true });
+  await fs.writeFile(path.join(piDir, "mcp.json"), JSON.stringify(piConfig, null, 2) + "\n", "utf-8");
 }

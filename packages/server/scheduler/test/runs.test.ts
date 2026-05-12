@@ -207,6 +207,31 @@ emit: (evt) => events.push(evt),
     expect(appended.length).toBe(1);
   });
 
+  it("emits server-side progress before runtime logs are available", async () => {
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (messageId, _agentId, _prompt, onLog) => {
+        const progressEvents = events.filter((e) => e.type === "message.log_appended");
+        expect(progressEvents.length).toBeGreaterThan(0);
+        expect(progressEvents[0]).toMatchObject({
+          type: "message.log_appended",
+          payload: {
+            messageId,
+            kind: "event",
+            line: JSON.stringify({ type: "progress", part: { label: "Preparing prompt…", phase: "prepare_prompt" } }),
+          },
+        });
+        await onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "done" } }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "show progress early" });
+    await mgr.fireMessage(messageId);
+  });
+
   it("summary_request content produces a summary-content child", async () => {
     let capturedPrompt = "";
     let capturedRunMode: string | undefined;
@@ -250,6 +275,40 @@ execRunFn: async (messageId, _a, _p, onLog) => {
     expect(content.body).toBe("# Chat Summary — Final\n\n## What we built\n\nA clean summary.");
   });
 
+  it("summary output can use Pi message_end final assistant text", async () => {
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({
+          runId: messageId,
+          seq: 0,
+          kind: "stdout",
+          payload: JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "draft" },
+            message: { role: "assistant", content: [{ type: "text", text: "draft" }] },
+          }),
+        });
+        onLog({
+          runId: messageId,
+          seq: 1,
+          kind: "stdout",
+          payload: JSON.stringify({
+            type: "message_end",
+            message: { role: "assistant", content: [{ type: "text", text: "# Pi Summary\n\nClean final." }] },
+          }),
+        });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "summary_request" });
+    const result = await mgr.fireMessage(messageId);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as { type: string; body?: string };
+    expect(content.body).toBe("# Pi Summary\n\nClean final.");
+  });
+
   it("is idempotent — second fire on same message is a no-op", async () => {
     const mgr = createRunManager({
       pool,
@@ -284,6 +343,85 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(messageId);
     const msg = await queries.messages.findById(pool, messageId);
     expect(msg?.state).toBe("failed");
+  });
+
+  it("automatically retries a failed chat agent turn once on the server", async () => {
+    const retryChatId = await createChat("server auto retry");
+    const userId = await insertChatRow({
+      targetChatId: retryChatId,
+      role: "user",
+      content: { type: "text", text: "please retry on the server" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    let attempts = 0;
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (messageId, _agentId, _prompt, onLog) => {
+        attempts++;
+        await onLog({
+          runId: messageId,
+          seq: 0,
+          kind: "stdout",
+          payload: JSON.stringify({ type: "text", part: { text: attempts === 1 ? "first attempt" : "retry succeeded" } }),
+        });
+        return { exitCode: attempts === 1 ? 1 : 0 };
+      },
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: userId }, retryChatId);
+    const result = await mgr.fireMessage(triggerId);
+
+    expect(attempts).toBe(2);
+    expect(result.childIds).toHaveLength(1);
+    const msg = await queries.messages.findById(pool, triggerId);
+    expect(msg?.state).toBe("succeeded");
+    const { rows } = await pool.query<{ auto_retry_count: number }>(
+      `SELECT auto_retry_count FROM messages WHERE id = ?`,
+      [triggerId],
+    );
+    expect(rows[0].auto_retry_count).toBe(1);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    expect(JSON.stringify(child?.content)).toContain("retry succeeded");
+    expect(JSON.stringify(child?.content)).not.toContain("first attempt");
+    const stateUpdates = events
+      .filter((event): event is Extract<WsEvent, { type: "message.updated" }> => event.type === "message.updated")
+      .filter((event) => event.payload.id === triggerId)
+      .map((event) => event.payload.state);
+    expect(stateUpdates).toContain("pending");
+    expect(stateUpdates).toContain("succeeded");
+    expect(stateUpdates).not.toContain("failed");
+  });
+
+  it("surfaces a failed chat agent turn after the server retry also fails", async () => {
+    const retryChatId = await createChat("server auto retry failure");
+    const userId = await insertChatRow({
+      targetChatId: retryChatId,
+      role: "user",
+      content: { type: "text", text: "fail twice" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    let attempts = 0;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (messageId, _agentId, _prompt, onLog) => {
+        attempts++;
+        await onLog({ runId: messageId, seq: 0, kind: "stderr", payload: `failed attempt ${attempts}` });
+        return { exitCode: 1 };
+      },
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: userId }, retryChatId);
+    const result = await mgr.fireMessage(triggerId);
+
+    expect(attempts).toBe(2);
+    const msg = await queries.messages.findById(pool, triggerId);
+    expect(msg?.state).toBe("failed");
+    expect(result.childIds).toHaveLength(1);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    expect(JSON.stringify(child?.content)).toContain("failed attempt 2");
+    expect(JSON.stringify(child?.content)).not.toContain("failed attempt 1");
   });
 
   it("thrown run setup errors are appended as stderr event messages", async () => {
@@ -321,7 +459,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     let capturedPrompt = "";
     const mgr = createRunManager({
       pool,
-execRunFn: async (_id, _agentId, prompt, onLog) => {
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
         capturedPrompt = prompt;
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
         return { exitCode: 0 };
@@ -379,6 +517,106 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
     expect(capturedPrompt).toContain("first pasted source material");
     expect(capturedPrompt).toContain("Attached artifact: walkthrough.md (.chats/abc/artifacts/walkthrough.md)");
     expect(capturedPrompt).toContain("Current task:\nbuild the app from that");
+  });
+
+  it("excludes prior output children of a manually retried agent turn from transcript context", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("manual retry context");
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "safe prior context" },
+      createdAt: "2026-05-04T23:59:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "try the original request again" },
+      createdAt: "2026-05-05T00:00:00.000Z",
+    });
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await pool.query(
+      `UPDATE messages SET state = 'pending', created_at = ? WHERE id = ?`,
+      ["2026-05-05T00:01:00.000Z", triggerId],
+    );
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, parent_id, created_at)
+       VALUES (?, ?, 'agent', ?, ?, ?)`,
+      [
+        generateId("message"),
+        contextChatId,
+        JSON.stringify({ type: "text", text: "stale failure output that must not be retried as context" }),
+        triggerId,
+        "2026-05-05T00:02:00.000Z",
+      ],
+    );
+
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toContain("safe prior context");
+    expect(capturedPrompt).toContain("Current task:\ntry the original request again");
+    expect(capturedPrompt).not.toContain("stale failure output");
+  });
+
+  it("derives prior assistant text from Pi message_end events in transcript context", async () => {
+    let capturedPrompt = "";
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, prompt, onLog) => {
+        capturedPrompt = prompt;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const contextChatId = await createChat("context with pi events");
+    await insertChatRow({
+      targetChatId: contextChatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "session", id: "pi-session" } },
+          {
+            kind: "event",
+            event: {
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "partial" },
+              message: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+            },
+          },
+          {
+            kind: "event",
+            event: {
+              type: "message_end",
+              message: { role: "assistant", content: [{ type: "text", text: "Final Pi answer." }] },
+            },
+          },
+        ],
+      },
+      createdAt: "2026-05-05T00:01:00.000Z",
+    });
+    const currentUserId = await insertChatRow({
+      targetChatId: contextChatId,
+      role: "user",
+      content: { type: "text", text: "what did pi say?" },
+      createdAt: "2026-05-05T00:02:00.000Z",
+    });
+
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId: currentUserId }, contextChatId);
+    await mgr.fireMessage(triggerId);
+
+    expect(capturedPrompt).toContain("Agent:\nFinal Pi answer.");
+    expect(capturedPrompt).not.toContain("Agent:\npartial");
   });
 
   it("does not include scheduled tasks or task runs as chat transcript context", async () => {

@@ -88,7 +88,7 @@ describe("Codex local source", () => {
     expect(detectLocalSource("codex")?.reason).toBe("no_tokens");
   });
 
-  it("loadEnv() emits OPENCODE_AUTH_CONTENT in OpenCode auth-blob format", () => {
+  it("loadEnv() emits OpenCode and Pi auth blobs for the Codex source", () => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
     const access = jwt({ exp });
     fs.writeFileSync(authPath, JSON.stringify({
@@ -108,6 +108,12 @@ describe("Codex local source", () => {
     expect(blob.openai.access).toBe(access);
     expect(blob.openai.accountId).toBe("acct-7");
     expect(blob.openai.expires).toBe(exp * 1000);
+    const piBlob = JSON.parse(env!.PI_AUTH_CONTENT);
+    expect(piBlob["openai-codex"].type).toBe("oauth");
+    expect(piBlob["openai-codex"].refresh).toBe("rt_yyy");
+    expect(piBlob["openai-codex"].access).toBe(access);
+    expect(piBlob["openai-codex"].accountId).toBe("acct-7");
+    expect(piBlob["openai-codex"].expires).toBe(exp * 1000);
   });
 
   it("loadEnv() returns null when the host file is missing or incomplete", () => {

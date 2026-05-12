@@ -3,10 +3,10 @@
  *
  * The Codex CLI on the host stores OAuth tokens in `~/.codex/auth.json`. The
  * OpenCode CLI we ship in the sandbox uses the same OAuth client and accepts
- * an out-of-band auth blob via `OPENCODE_AUTH_CONTENT`. So when the user
- * opts in to the Codex source, we read the host's tokens, translate them
- * into OpenCode's schema, and inject them into every sandbox exec — no
- * Codex binary, no bind-mount, no API key required.
+ * an out-of-band auth blob via `OPENCODE_AUTH_CONTENT`. Pi uses the same token
+ * shape in `~/.pi/agent/auth.json` under the `openai-codex` provider key, so
+ * we also emit `PI_AUTH_CONTENT` for the Pi runtime to write before launch.
+ * No Codex binary, no bind-mount, no API key required.
  *
  * Token refresh: OpenCode refreshes inline when needed by hitting OpenAI's
  * oauth/token endpoint. The host's Codex CLI does the same independently —
@@ -130,7 +130,7 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
   const expSec = accessClaims?.exp ?? 0;
   const expiresAt = expSec ? expSec * 1000 : Date.now() + 60 * 60 * 1000;
 
-  const blob = {
+  const openCodeBlob = {
     openai: {
       type: "oauth",
       refresh: tokens.refresh_token,
@@ -139,7 +139,19 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
       accountId,
     },
   };
-  return { OPENCODE_AUTH_CONTENT: JSON.stringify(blob) };
+  const piBlob = {
+    "openai-codex": {
+      type: "oauth",
+      refresh: tokens.refresh_token,
+      access: tokens.access_token,
+      expires: expiresAt,
+      accountId,
+    },
+  };
+  return {
+    OPENCODE_AUTH_CONTENT: JSON.stringify(openCodeBlob),
+    PI_AUTH_CONTENT: JSON.stringify(piBlob),
+  };
 }
 
 export const codexLocalSource: LocalSource = {

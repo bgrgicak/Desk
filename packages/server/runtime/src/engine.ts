@@ -26,6 +26,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
+import * as fs from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { promisify } from "node:util";
 import { DeskError } from "@agent-desk/shared";
@@ -553,11 +554,12 @@ export async function detectEngine(): Promise<Engine> {
 
   const errors: string[] = [];
   for (const candidate of order) {
-    if (await probe(candidate)) {
+    const failure = await probe(candidate);
+    if (!failure) {
       _engine = new CliEngine(candidate);
       return _engine;
     }
-    errors.push(`${candidate} info failed`);
+    errors.push(failure);
   }
   throw new ContainerRuntimeUnavailableError(
     `No container runtime available. Tried: ${errors.join(", ")}. ` +
@@ -565,9 +567,12 @@ export async function detectEngine(): Promise<Engine> {
   );
 }
 
-/** True if `<binary> info` exits 0. Quick — no caching, called once. */
-async function probe(binary: EngineName): Promise<boolean> {
-  return new Promise((resolve) => {
+/**
+ * Returns null when `<binary>` is usable enough to start containers; otherwise
+ * a short diagnostic string. Quick — no caching, called once.
+ */
+async function probe(binary: EngineName): Promise<string | null> {
+  const infoOk = await new Promise<boolean>((resolve) => {
     const child = spawn(binary, ["info", "--format", "{{.ID}}"], {
       env: engineEnv(binary),
       stdio: "ignore",
@@ -587,5 +592,44 @@ async function probe(binary: EngineName): Promise<boolean> {
     }, 5000);
     child.on("error", () => done(false));
     child.on("exit", (code) => done(code === 0));
+  });
+  if (!infoOk) return `${binary} info failed`;
+  const cgroupFailure = await cgroupProbeFailure(binary);
+  return cgroupFailure ?? null;
+}
+
+async function cgroupProbeFailure(binary: EngineName): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(binary, ["info", "--format", "{{.CgroupDriver}} {{.CgroupVersion}}"], {
+      env: engineEnv(binary),
+      timeout: ENGINE_COMMAND_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    if (stdout.trim() !== "cgroupfs 2") return null;
+    const mountInfo = await fs.readFile("/proc/self/mountinfo", "utf8");
+    if (!hasReadOnlyCgroupV2Mount(mountInfo)) return null;
+    return `${binary} uses cgroupfs on cgroup v2, but /sys/fs/cgroup is read-only; containers cannot start`;
+  } catch {
+    // If the richer cgroup probe itself fails, keep the engine available and
+    // let the normal operation surface the concrete runtime error.
+    return null;
+  }
+}
+
+export function hasReadOnlyCgroupV2Mount(mountInfo: string): boolean {
+  return mountInfo.split(/\r?\n/).some((line) => {
+    const parts = line.split(" ");
+    const sep = parts.indexOf("-");
+    if (sep === -1) return false;
+    const mountPoint = parts[4];
+    const mountOptions = parts[5] ?? "";
+    const fsType = parts[sep + 1];
+    const source = parts[sep + 2];
+    return (
+      mountPoint === "/sys/fs/cgroup" &&
+      fsType === "cgroup2" &&
+      source === "cgroup" &&
+      mountOptions.split(",").includes("ro")
+    );
   });
 }

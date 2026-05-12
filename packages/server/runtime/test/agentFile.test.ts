@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { renderAgentFile, chatNeedsBrowser, writeWorkspaceMcpConfig } from "../src/agentFile.js";
+import { renderAgentFile, chatNeedsBrowser, writePiSystemFile, writeWorkspaceMcpConfig } from "../src/agentFile.js";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 
 describe("renderAgentFile", () => {
@@ -207,6 +207,28 @@ describe("chatNeedsBrowser", () => {
   });
 });
 
+describe("writePiSystemFile", () => {
+  it("can write a per-run system prompt file to avoid concurrent-run races", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-pi-system-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "pi-ws");
+      const filePath = await writePiSystemFile(home, "pi-ws", {
+        agentId: "agt_pi",
+        agentName: "Helper",
+        model: "openrouter/anthropic/claude-sonnet-4.5",
+        userName: "Desk",
+      }, { fileName: "SYSTEM-run_pi_1.md" });
+      expect(filePath).toBe(path.join(workspaceRootPath(home, "pi-ws"), ".pi", "SYSTEM-run_pi_1.md"));
+      const content = await fs.readFile(filePath, "utf-8");
+      expect(content).toContain("You are Helper, call me Desk.");
+      expect(content).not.toContain("model: openrouter/anthropic/claude-sonnet-4.5");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("writeWorkspaceMcpConfig", () => {
   it("writes playwright with enabled=true when the chat needs a browser", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
@@ -219,6 +241,12 @@ describe("writeWorkspaceMcpConfig", () => {
       );
       expect(cfg.mcp.playwright.enabled).toBe(true);
       expect(cfg.mcp.playwright.command).toEqual(["playwright-mcp", "--browser", "firefox"]);
+      const piCfg = JSON.parse(
+        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".pi", "mcp.json"), "utf-8"),
+      );
+      expect(piCfg.mcpServers.playwright.command).toBe("playwright-mcp");
+      expect(piCfg.mcpServers.playwright.args).toEqual(["--browser", "firefox"]);
+      expect(piCfg.mcpServers.playwright.lifecycle).toBe("lazy");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -237,6 +265,10 @@ describe("writeWorkspaceMcpConfig", () => {
       // `playwright.enabled=true` win the merge and keep firefox running.
       expect(cfg.mcp.playwright).toBeDefined();
       expect(cfg.mcp.playwright.enabled).toBe(false);
+      const piCfg = JSON.parse(
+        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".pi", "mcp.json"), "utf-8"),
+      );
+      expect(piCfg.mcpServers).toEqual({});
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

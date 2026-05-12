@@ -43,7 +43,7 @@ export interface RunManagerOptions {
    * API layer (which owns the vault) so the scheduler doesn't need to import
    * VaultStore directly. Returns an empty object when the vault is locked.
    */
-  resolveProviderKeys?: (userId: string) => Promise<Record<string, string>>;
+  resolveProviderKeys?: (userId: string, workspaceId?: string) => Promise<Record<string, string>>;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
@@ -75,6 +75,8 @@ export interface FireMessageOptions {
   manual?: boolean;
 }
 
+const MAX_FAILED_CHAT_AUTO_RETRIES = 1;
+
 function computeNextRun(cronExpr: string): string {
   const next = new Cron(cronExpr).nextRun();
   if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
@@ -88,6 +90,36 @@ export function createRunManager(opts: RunManagerOptions) {
   const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
+
+  async function retryFailedChatRunOnce(msg: Message, runId: string, logFile?: string): Promise<{ retried: boolean; result: { fired: boolean; childIds: string[] } }> {
+    if (msg.kind !== "chat" || msg.content.type !== "agent_turn") {
+      return { retried: false, result: { fired: true, childIds: [] } };
+    }
+
+    const { rows } = await pool.query<Record<string, unknown>>(
+      `UPDATE messages
+       SET state = 'pending',
+           started_at = NULL,
+           ended_at = NULL,
+           auto_retry_count = auto_retry_count + 1,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?
+         AND state = 'failed'
+         AND kind = 'chat'
+         AND json_extract(content, '$.type') = 'agent_turn'
+         AND auto_retry_count < ?
+       RETURNING *`,
+      [runId, MAX_FAILED_CHAT_AUTO_RETRIES],
+    );
+    if (rows.length === 0) return { retried: false, result: { fired: true, childIds: [] } };
+
+    if (logFile) {
+      await fsp.truncate(logFile, 0).catch(() => { /* best-effort: retry can still proceed */ });
+    }
+    const queued = await queries.messages.findById(pool, runId);
+    if (queued) emit({ type: "message.updated", payload: queued });
+    return { retried: true, result: await fireMessage(runId) };
+  }
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
 
   async function getDefaultAgentId(): Promise<string> {
@@ -159,6 +191,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * `unparsed` lines so plain-string test drivers still produce output. */
   function deriveTextFromLog(entries: AgentLogEntry[]): string {
     const parts: string[] = [];
+    let piFinalText = "";
     let sawEvent = false;
     for (const e of entries) {
       if (e.kind === "event") {
@@ -167,8 +200,14 @@ export function createRunManager(opts: RunManagerOptions) {
           const t = e.event.part?.text;
           if (typeof t === "string") parts.push(t);
         }
+        // Pi JSON mode streams `message_update` deltas and finishes with a
+        // `message_end` carrying the complete assistant message. Prefer that
+        // final text so we don't duplicate deltas with the completed content.
+        const finalText = piAssistantMessageText(e.event);
+        if (finalText) piFinalText = finalText;
       }
     }
+    if (piFinalText) return piFinalText.trim();
     if (sawEvent) return parts.join("").trim();
     // No structured events — fall back to unparsed stdout lines.
     return entries
@@ -193,6 +232,8 @@ export function createRunManager(opts: RunManagerOptions) {
         const t = e.event.part?.text;
         if (typeof t === "string" && t.trim()) lastText = t;
       }
+      const finalText = piAssistantMessageText(e.event);
+      if (finalText.trim()) lastText = finalText;
     }
     if (lastText) return lastText.trim();
     if (sawEvent) return "";
@@ -201,6 +242,21 @@ export function createRunManager(opts: RunManagerOptions) {
       .map((e) => (e as { line: string }).line)
       .join("\n")
       .trim();
+  }
+
+  function piAssistantMessageText(event: Record<string, unknown>): string {
+    if (event.type !== "message_end" && event.type !== "turn_end") return "";
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object") return "";
+    const msg = message as { role?: unknown; content?: unknown };
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) return "";
+    return msg.content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        const p = part as { type?: unknown; text?: unknown };
+        return p.type === "text" && typeof p.text === "string" ? p.text : "";
+      })
+      .join("");
   }
 
   const CHAT_SUMMARY_PROMPT = [
@@ -278,6 +334,10 @@ export function createRunManager(opts: RunManagerOptions) {
     const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
     const entries = items
       .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
+      // Manual Try Again reuses the same agent_turn. Keep any output from
+      // previous attempts attached to that turn out of the next prompt so a
+      // stale failure transcript cannot contaminate the retry.
+      .filter((message) => message.parentId !== currentMessage.id)
       .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
       .map(formatMessageForPrompt)
       .filter((entry): entry is { role: string; text: string } => entry !== null);
@@ -408,7 +468,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = msg.agentId ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
-    const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+    const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
     const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
@@ -538,17 +598,30 @@ export function createRunManager(opts: RunManagerOptions) {
       // readLogEntries can't associate continuation lines with a kind.
       for (const line of evt.payload.split("\n")) {
         logStream.write(`${evt.kind}\t${line}\n`);
+        emit({
+          type: "message.log_appended",
+          payload: { messageId: runId, kind: evt.kind, line },
+        });
       }
+    };
+
+    const emitProgress = (label: string, phase: string) => {
       emit({
         type: "message.log_appended",
-        payload: { messageId: runId, kind: evt.kind, line: evt.payload },
+        payload: {
+          messageId: runId,
+          kind: "event",
+          line: JSON.stringify({ type: "progress", part: { label, phase } }),
+        },
       });
     };
 
     try {
+      emitProgress("Preparing prompt…", "prepare_prompt");
       const { prompt, attachments } = await derivePromptInputs(msg);
       const outputKind = outputContentTypeFor(msg);
 
+      emitProgress("Loading workspace context…", "load_workspace_context");
       // Single JOIN resolves workspace slug, agent, user, timezone, and the
       // chat's persistent goal in one round-trip. `chat_goal` feeds the
       // per-chat goal fragment into the rendered system prompt.
@@ -592,8 +665,9 @@ export function createRunManager(opts: RunManagerOptions) {
       const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
       logFile = path.join(logDir, `${runId}.log`);
       logStream = fs.createWriteStream(logFile, { flags: "a" });
+      emitProgress("Resolving agent and credentials…", "resolve_agent_credentials");
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
-      const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+      const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
@@ -665,11 +739,14 @@ export function createRunManager(opts: RunManagerOptions) {
         let attempt = 0;
         while (true) {
           if (opts.execRunFn) {
+            emitProgress("Launching model runtime…", "launch_runtime");
             result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
           } else {
+            emitProgress("Starting sandbox…", "start_sandbox");
             const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
               ? { containerId: "fake-sandbox", workspaceId }
               : await createOrReuse(workspaceId, workspaceSlug, home, providerKeys, undefined, extraEnv);
+            emitProgress("Launching model runtime…", "launch_runtime");
             result = await runtimeExecRun(pool, handle, {
               runId,
               prompt,
@@ -723,10 +800,19 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       const terminal = result.exitCode === 0 ? "succeeded" : "failed";
       await queries.messages.finalizeExecution(pool, runId, terminal);
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, runId))!,
-      });
+
+      if (terminal === "failed") {
+        const retry = await retryFailedChatRunOnce(msg, runId, logFile);
+        if (retry.retried) return retry.result;
+      }
+
+      const finalized = await queries.messages.findById(pool, runId);
+      if (finalized) {
+        emit({
+          type: "message.updated",
+          payload: finalized,
+        });
+      }
       await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
@@ -793,6 +879,8 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       await queries.messages.finalizeExecution(pool, runId, "failed");
       const failedMsg = await queries.messages.findById(pool, runId);
+      const retry = await retryFailedChatRunOnce(msg, runId, logFile);
+      if (retry.retried) return retry.result;
       if (failedMsg) emit({ type: "message.updated", payload: failedMsg });
       await afterTaskRun(msg, "failed", fireOptions);
       if (!logFile) return { fired: true, childIds: [] };
@@ -1142,7 +1230,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       try {
         const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+        const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
         const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
         const models = await listModels(workspaceId, workspaceSlug, {
           providerKeys,

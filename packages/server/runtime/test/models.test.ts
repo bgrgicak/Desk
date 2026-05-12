@@ -57,6 +57,28 @@ opencode/big-pickle
       { id: "ok/yes", provider: "ok" },
     ]);
   });
+
+  it("parses Pi --list-models table output", () => {
+    const out = parseModelsOutput(`provider        model                   context  max-out  thinking  images
+github-copilot  claude-sonnet-4.5       144K     32K      yes       yes
+openrouter      anthropic/claude-3.7    200K     16K      yes       no
+google          gemini-3-pro-preview    1.0M     65.5K    yes       yes
+`);
+    expect(out).toEqual([
+      { id: "github-copilot/claude-sonnet-4.5", provider: "github-copilot", contextWindow: 144_000, outputLimit: 32_000 },
+      { id: "openrouter/anthropic/claude-3.7", provider: "openrouter", contextWindow: 200_000, outputLimit: 16_000 },
+      { id: "google/gemini-3-pro-preview", provider: "google", contextWindow: 1_000_000, outputLimit: 65_500 },
+    ]);
+  });
+
+  it("does not treat Pi no-provider guidance as model rows", () => {
+    const out = parseModelsOutput(`No models available. Use /login to log into a provider via OAuth or API key. See:
+  /opt/node/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
+  /opt/node/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md
+`);
+
+    expect(out).toEqual([]);
+  });
 });
 
 describe("listModels", () => {

@@ -33,11 +33,11 @@ else
   cp -rn /etc/skel/. "${HOME:-/home/agent}/" 2>/dev/null || true
 fi
 
-link_skills='skills_target=$1; skills_link=$2; mkdir -p "$(dirname "$skills_link")"; if [ -L "$skills_link" ]; then ln -sfn "$skills_target" "$skills_link"; elif [ ! -e "$skills_link" ]; then ln -s "$skills_target" "$skills_link"; elif [ -d "$skills_link" ] && rmdir "$skills_link" 2>/dev/null; then ln -s "$skills_target" "$skills_link"; fi'
+link_skills='skills_target=$1; shift; for skills_link in "$@"; do mkdir -p "$(dirname "$skills_link")"; if [ -L "$skills_link" ]; then ln -sfn "$skills_target" "$skills_link"; elif [ ! -e "$skills_link" ]; then ln -s "$skills_target" "$skills_link"; elif [ -d "$skills_link" ] && rmdir "$skills_link" 2>/dev/null; then ln -s "$skills_target" "$skills_link"; fi; done'
 if [ "$(id -u)" = "0" ] && [ "${DESK_SANDBOX_AGENT_USER:-}" != "0:0" ]; then
-  runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" || true
+  runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" "${HOME:-/home/agent}/.pi/agent/skills" "${HOME:-/home/agent}/.agents/skills" || true
 else
-  sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" || true
+  sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" "${HOME:-/home/agent}/.pi/agent/skills" "${HOME:-/home/agent}/.agents/skills" || true
 fi
 
 if [ -f "${HOME:-/home/agent}/.deskrc" ]; then

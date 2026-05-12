@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
-import { buildOpencodeCommand, _cleanupRunProcessTreeForTest } from "../src/driver.js";
+import { buildOpencodeCommand, buildPiAuthSetup, buildPiCommand, createRuntimeLogLineEmitter, runtimeModelForPi, _cleanupRunProcessTreeForTest } from "../src/driver.js";
 import type { Engine, ExecHandle, ExecSpec } from "../src/engine.js";
 import { SANDBOX_HOME } from "../src/mounts.js";
 
@@ -137,6 +137,135 @@ describe("buildOpencodeCommand", () => {
     });
     const checked = spawnSync("sh", ["-n", "-c", cmd[2]], { encoding: "utf8" });
     expect(checked.status, checked.stderr).toBe(0);
+  });
+});
+
+describe("buildPiCommand", () => {
+  it("translates attachments to Pi @file arguments", () => {
+    const cmd = buildPiCommand({
+      attachments: ["Notes/work.md", "My Docs/quote's.md"],
+    });
+    const shell = cmd[2];
+    expect(shell).toContain(`@${SANDBOX_HOME}/Notes/work.md`);
+    expect(shell).toContain("@/home/agent/My Docs/quote");
+    expect(shell).toContain("s.md");
+    expect(shell).not.toContain("--file");
+  });
+
+  it("passes model, JSON mode, no-session, and appends Desk system prompt explicitly", () => {
+    const cmd = buildPiCommand({
+      runId: "run_pi_1",
+      model: "openrouter/anthropic/claude-sonnet-4.5",
+      promptFile: `${SANDBOX_HOME}/.desk-prompt-run_pi_1`,
+      systemPromptFile: `${SANDBOX_HOME}/.pi/SYSTEM.md`,
+    });
+    const shell = cmd[2];
+    expect(shell).toContain('cd "$HOME" && cat "$DESK_PROMPT_FILE" | PI_CODING_AGENT_DIR=');
+    expect(shell).toContain("pi --offline --mode json -p --no-session --no-context-files");
+    expect(shell).toContain("/tmp/desk-runs/pi-agent-run_pi_1");
+    expect(shell).toContain("PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1");
+    expect(shell).toContain("PI_OFFLINE=1");
+    expect(shell).toContain("--tools read,write,edit,bash,grep,find,ls,mcp");
+    expect(shell).toContain("--skill");
+    expect(shell).toContain("/home/agent/.config/opencode/skills");
+    expect(shell).toContain('--append-system-prompt "$DESK_PI_SYSTEM_PROMPT_FILE"');
+    expect(shell).toContain("--extension");
+    expect(shell).toContain("/opt/pi-extensions/mcp-adapter/node_modules/pi-mcp-adapter/index.ts");
+    expect(shell).toContain("--model");
+    expect(shell).toContain("openrouter/anthropic/claude-sonnet-4.5");
+    expect(shell).not.toContain(`"$(cat \"$DESK_PROMPT_FILE\")"`);
+  });
+
+  it("starts Pi as a cleanup-addressable process group", () => {
+    const cmd = buildPiCommand({ runId: "run_pi_cleanup_1" });
+    const shell = cmd[2];
+    expect(shell).toContain("mkdir -p /tmp/desk-runs");
+    expect(shell).toContain("pidfile='/tmp/desk-runs/run_pi_cleanup_1.pid'");
+    expect(shell).toContain("pi_agent_dir='/tmp/desk-runs/pi-agent-run_pi_cleanup_1'");
+    expect(shell).toContain("command -v setsid");
+    expect(shell).toContain("exec setsid --wait sh -c");
+    expect(shell).toContain('exec sh -c "$1"');
+    expect(shell).not.toContain('"$pidfile" cd "$HOME"');
+    expect(shell).toContain(" pi --offline --mode json -p");
+  });
+
+  it("generates syntactically valid POSIX shell", () => {
+    const cmd = buildPiCommand({
+      runId: "run_pi_shell_check_1",
+      attachments: ["My Docs/quote's.md"],
+      model: "anthropic/claude-sonnet-4.5",
+      promptFile: `${SANDBOX_HOME}/.desk-prompt-msg_1`,
+      systemPromptFile: `${SANDBOX_HOME}/.pi/SYSTEM.md`,
+    });
+    const checked = spawnSync("sh", ["-n", "-c", cmd[2]], { encoding: "utf8" });
+    expect(checked.status, checked.stderr).toBe(0);
+  });
+
+  it("bridges Desk Codex auth into Pi's openai-codex auth file", () => {
+    const setup = buildPiAuthSetup("/tmp/desk-runs/pi-agent-test");
+    const script = `unset PI_AUTH_CONTENT; OPENCODE_AUTH_CONTENT='{ "openai": { "type": "oauth", "access": "at", "refresh": "rt", "expires": 999, "accountId": "acct" } }'; ${setup}; cat /tmp/desk-runs/pi-agent-test/auth.json`;
+    const checked = spawnSync("sh", ["-c", script], { encoding: "utf8" });
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(JSON.parse(checked.stdout)).toEqual({
+      "openai-codex": { type: "oauth", access: "at", refresh: "rt", expires: 999, accountId: "acct" },
+    });
+  });
+
+  it("prefers direct Pi auth content when present", () => {
+    const setup = buildPiAuthSetup("/tmp/desk-runs/pi-agent-test-direct");
+    const script = `PI_AUTH_CONTENT='{ "openai-codex": { "type": "oauth", "access": "at2", "refresh": "rt2", "expires": 1000, "accountId": "acct2" } }'; ${setup}; cat /tmp/desk-runs/pi-agent-test-direct/auth.json`;
+    const checked = spawnSync("sh", ["-c", script], { encoding: "utf8" });
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(JSON.parse(checked.stdout)).toEqual({
+      "openai-codex": { type: "oauth", access: "at2", refresh: "rt2", expires: 1000, accountId: "acct2" },
+    });
+  });
+});
+
+describe("runtimeModelForPi", () => {
+  it("maps OpenCode Codex-backed openai models to Pi openai-codex models", () => {
+    expect(runtimeModelForPi("openai/gpt-5.4", { PI_AUTH_CONTENT: "{}" })).toBe("openai-codex/gpt-5.4");
+    expect(runtimeModelForPi("openai/gpt-5.4", { OPENCODE_AUTH_CONTENT: "{}" })).toBe("openai-codex/gpt-5.4");
+  });
+
+  it("uses Codex when the selected model is OpenCode-only and Codex auth is present", () => {
+    expect(runtimeModelForPi("opencode/big-pickle", { PI_AUTH_CONTENT: "{}" })).toBe("openai-codex/gpt-5.5");
+  });
+
+  it("lets Pi choose its default when the selected model is OpenCode-only without Codex auth", () => {
+    expect(runtimeModelForPi("opencode/big-pickle", {})).toBeUndefined();
+  });
+});
+
+describe("createRuntimeLogLineEmitter", () => {
+  it("emits complete JSON lines as soon as the runtime finishes each line", () => {
+    const lines: Array<{ kind: "stdout" | "stderr"; line: string }> = [];
+    const emitter = createRuntimeLogLineEmitter((kind, line) => lines.push({ kind, line }));
+
+    emitter.ingest("stdout", '{"type":"reasoning","part":{"text":"checking');
+    expect(lines).toEqual([]);
+
+    emitter.ingest("stdout", ' files"}}\n{"type":"tool_use"');
+    expect(lines).toEqual([
+      { kind: "stdout", line: '{"type":"reasoning","part":{"text":"checking files"}}' },
+    ]);
+
+    emitter.ingest("stdout", '}\n');
+    expect(lines).toEqual([
+      { kind: "stdout", line: '{"type":"reasoning","part":{"text":"checking files"}}' },
+      { kind: "stdout", line: '{"type":"tool_use"}' },
+    ]);
+  });
+
+  it("flushes the final unterminated line when the runtime exits", () => {
+    const lines: Array<{ kind: "stdout" | "stderr"; line: string }> = [];
+    const emitter = createRuntimeLogLineEmitter((kind, line) => lines.push({ kind, line }));
+
+    emitter.ingest("stderr", "last warning");
+    expect(lines).toEqual([]);
+
+    emitter.flush();
+    expect(lines).toEqual([{ kind: "stderr", line: "last warning" }]);
   });
 });
 

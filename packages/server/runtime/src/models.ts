@@ -1,14 +1,15 @@
 /**
  * Queries the list of AI models available inside an agent's sandbox by running
- * `opencode models` there. The sandbox is the source of truth for what models
- * are reachable, because the provider config (API keys, registered providers)
- * lives with the in-sandbox OpenCode installation.
+ * the selected agent runtime there. The sandbox is the source of truth for what
+ * models are reachable, because provider config (API keys, registered
+ * providers) lives with the in-sandbox runtime installation.
  */
 
 import { execInSandbox } from "./sandboxExec.js";
+import { buildPiAuthSetup, piAgentDirForRun, shSingleQuote } from "./driver.js";
 
 export interface ModelRef {
-  /** Opencode's canonical model id, e.g. "opencode/big-pickle". Pass this to `opencode run --model`. */
+  /** Runtime canonical model id, e.g. "opencode/big-pickle" or "anthropic/claude-sonnet-4-5". */
   id: string;
   /** Provider portion of `id`, denormalised so UIs can group/filter without parsing. */
   provider: string;
@@ -28,7 +29,7 @@ export interface ListModelsOptions {
   providerKeys?: Record<string, string>;
   /**
    * Extra env vars (typically from local sources — Codex, LM Studio, Ollama)
-   * forwarded into the `opencode models` exec so those providers light up.
+   * forwarded into the model-list exec so those providers light up.
    */
   env?: Record<string, string>;
 }
@@ -48,6 +49,10 @@ const FAKE_DRIVER_MODELS: ModelRef[] = [
   { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
 ];
 
+function selectedAgentRuntime(): "opencode" | "pi" {
+  return process.env.DESK_AGENT_RUNTIME === "pi" ? "pi" : "opencode";
+}
+
 export async function listModels(
   workspaceId: string,
   workspaceSlug: string,
@@ -59,19 +64,27 @@ export async function listModels(
       : FAKE_DRIVER_MODELS;
   }
 
-  const argv = ["opencode", "models", "--verbose"];
-  if (opts.provider) argv.push(opts.provider);
+  const runtime = selectedAgentRuntime();
+  const argv = runtime === "pi" ? ["pi", "--list-models"] : ["opencode", "models", "--verbose"];
+  if (opts.provider) {
+    if (runtime === "pi") argv.push(opts.provider);
+    else argv.push(opts.provider);
+  }
+
+  const execArgv = runtime === "pi" ? buildPiListModelsCommand(argv) : argv;
 
   const result = await execInSandbox(workspaceId, workspaceSlug, {
-    argv,
+    argv: execArgv,
     timeoutMs: opts.timeoutMs ?? 15_000,
     providerKeys: opts.providerKeys,
-    env: opts.env,
+    env: runtime === "pi"
+      ? { PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", ...opts.env }
+      : opts.env,
   });
 
   if (result.exitCode !== 0) {
     throw new SandboxExecError(
-      `opencode models failed (exit ${result.exitCode})`,
+      `${runtime} model listing failed (exit ${result.exitCode})`,
       result.exitCode,
       result.stderr,
     );
@@ -80,7 +93,17 @@ export async function listModels(
   return parseModelsOutput(result.stdout);
 }
 
-/** Parses `opencode models` output, including verbose JSON metadata when present. */
+function buildPiListModelsCommand(argv: string[]): string[] {
+  const agentDir = piAgentDirForRun("model-list");
+  const setup = buildPiAuthSetup(agentDir);
+  const command = argv.map(shSingleQuote).join(" ");
+  return [
+    "sh", "-c",
+    `${setup}; PI_CODING_AGENT_DIR=${shSingleQuote(agentDir)} PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1 PI_OFFLINE=1 exec ${command}`,
+  ];
+}
+
+/** Parses runtime model-list output, including OpenCode verbose JSON metadata when present. */
 export function parseModelsOutput(stdout: string): ModelRef[] {
   const models: ModelRef[] = [];
   const lines = stdout.split("\n");
@@ -88,8 +111,21 @@ export function parseModelsOutput(stdout: string): ModelRef[] {
     const raw = lines[i];
     const line = raw.trim();
     if (!line) continue;
+    const tableRef = parsePiTableModelLine(line);
+    if (tableRef) {
+      models.push(tableRef);
+      continue;
+    }
+    // Pi prints human guidance when no providers/models are configured. Some
+    // guidance lines contain slash-prefixed commands such as `/login`; don't let
+    // the generic OpenCode `provider/model` parser turn those into fake models.
+    if (isPiGuidanceLine(line)) {
+      continue;
+    }
     const slash = line.indexOf("/");
-    if (slash <= 0) continue;
+    if (slash <= 0) {
+      continue;
+    }
     const provider = line.slice(0, slash);
     const rest = line.slice(slash + 1);
     if (!rest) continue;
@@ -142,6 +178,48 @@ export function parseModelsOutput(stdout: string): ModelRef[] {
     }
   }
   return models;
+}
+
+function isPiGuidanceLine(line: string): boolean {
+  return line.startsWith("No models ") || line.startsWith("Use /") || line.startsWith("See:");
+}
+
+function parsePiTableModelLine(line: string): ModelRef | null {
+  // Pi's `--list-models` output is a fixed-width-ish table:
+  // provider        model                   context  max-out  thinking  images
+  // github-copilot  claude-sonnet-4.5       144K     32K      yes       yes
+  const parts = line.split(/\s+/).filter(Boolean);
+  if (parts[0] === "provider" || parts[1] === "model") return null;
+  // When Pi has no configured providers, `--list-models` prints guidance such
+  // as `Use /login to log into...`. That superficially looks like a provider +
+  // slash-containing model pair, so require the real table's metric columns
+  // before treating a whitespace-delimited line as a model row.
+  if (parts.length < 4) return null;
+  const [provider, model, context, output] = parts;
+  if (line.startsWith("No models ")) return null;
+  if (!provider || !model || provider.includes(":") || provider.includes("/")) return null;
+  if (model.startsWith("/") || model.includes(":")) return null;
+  const contextWindow = parseTokenCount(context);
+  const outputLimit = parseTokenCount(output);
+  if (contextWindow === undefined && outputLimit === undefined) return null;
+  return {
+    id: `${provider}/${model}`,
+    provider,
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(outputLimit !== undefined ? { outputLimit } : {}),
+  };
+}
+
+function parseTokenCount(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^(\d+(?:\.\d+)?)([KkMm])?$/);
+  if (!match) return undefined;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  const unit = match[2]?.toLowerCase();
+  if (unit === "m") return Math.round(n * 1_000_000);
+  if (unit === "k") return Math.round(n * 1_000);
+  return Math.round(n);
 }
 
 function positiveNumber(value: unknown): number | undefined {

@@ -5,8 +5,9 @@
  * memoryEdits — without locking us into a specific journal body the
  * model is free to vary.
  *
- * Skipped when `opencode` isn't on PATH so CI environments without the
- * CLI don't fail this test. The local `npm run ci:local` mirror has it.
+ * Skipped when `opencode` isn't on PATH or the sandbox image is absent so
+ * CI/dev environments without the full runtime prerequisites don't fail this
+ * test. The local `npm run ci:local` mirror has both.
  */
 import { afterAll, beforeAll, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -27,7 +28,17 @@ function opencodeAvailable(): boolean {
   }
 }
 
-const SKIP = !opencodeAvailable();
+function sandboxImageAvailable(): boolean {
+  try {
+    const image = process.env.DESK_SANDBOX_IMAGE ?? "desk/sandbox:v1";
+    const result = spawnSync("docker", ["image", "inspect", image], { stdio: "ignore" });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !opencodeAvailable() || !sandboxImageAvailable();
 const describeIf = SKIP ? describe.skip : describe;
 
 let pool: Pool;

@@ -87,7 +87,7 @@ const SANDBOX_READY_TIMEOUT_MS = 300_000;
  * decision; growing an existing sandbox is a follow-up (see
  * `packages/server/docs/plans/sandbox-autoscaling.md`).
  */
-const SANDBOX_RUNTIME_TAG = "tini-v1";
+const SANDBOX_RUNTIME_TAG = "pi-runtime-v1";
 
 function resourceProfileString(): string {
   return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
@@ -499,6 +499,15 @@ export function providerKeyEnv(
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
+  // Runtime compatibility aliases. Pi expects GEMINI_API_KEY and
+  // AZURE_OPENAI_API_KEY, while older Desk/OpenCode setups may only have the
+  // broader Google/Azure names stored.
+  if (!source.GEMINI_API_KEY && source.GOOGLE_GENERATIVE_AI_API_KEY) {
+    out.push(`GEMINI_API_KEY=${source.GOOGLE_GENERATIVE_AI_API_KEY}`);
+  }
+  if (!source.AZURE_OPENAI_API_KEY && source.AZURE_API_KEY) {
+    out.push(`AZURE_OPENAI_API_KEY=${source.AZURE_API_KEY}`);
+  }
   appendExtraEnv(out, extraEnv);
   return out;
 }
@@ -507,6 +516,11 @@ const MANAGED_CONNECTION_ENV_NAMES = new Set<string>([
   ...CONNECTION_ENV_VARS,
   ...MANAGED_CONNECTION_ENV_ALIASES,
 ]);
+
+const OPAQUE_CREDENTIAL_ENV_NAMES = [
+  "OPENCODE_AUTH_CONTENT",
+  "PI_AUTH_CONTENT",
+];
 
 function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void {
   if (!extraEnv) return;
@@ -549,6 +563,12 @@ export function providerKeyExecEnv(
   const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
   for (const name of CONNECTION_ENV_VARS) {
     if (!emitted.has(name)) out.push(`${name}=`);
+  }
+
+  if (extraEnv) {
+    for (const name of OPAQUE_CREDENTIAL_ENV_NAMES) {
+      if (!emitted.has(name)) out.push(`${name}=`);
+    }
   }
 
   for (const definition of managedConnectionDefinitions()) {

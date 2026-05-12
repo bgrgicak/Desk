@@ -18,12 +18,13 @@ export const MESSAGE_ROLES = ["user", "agent", "system"] as const;
 export const MESSAGE_LOG_KINDS = ["stdout", "stderr", "event"] as const;
 
 /**
- * AI-provider credentials known to opencode. Used both for forwarding host
- * env into sandboxes and for model provider keys the user can manage via
+ * AI-provider credentials known to the supported agent runtimes. Used both for
+ * forwarding host env into sandboxes and for keys the user can manage via
  * /me/providers.
  */
 export const PROVIDER_KEY_VARS = [
   "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
@@ -38,8 +39,27 @@ export const PROVIDER_KEY_VARS = [
   "FIREWORKS_API_KEY",
   "CEREBRAS_API_KEY",
   "AZURE_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_BASE_URL",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "AZURE_OPENAI_API_VERSION",
+  "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+  "AI_GATEWAY_API_KEY",
+  "OPENCODE_API_KEY",
+  "KIMI_API_KEY",
+  "MINIMAX_API_KEY",
+  "MOONSHOT_API_KEY",
+  "ZAI_API_KEY",
+  "CLOUDFLARE_API_KEY",
+  "CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_GATEWAY_ID",
+  "XIAOMI_API_KEY",
+  "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+  "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+  "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
+  "AWS_BEARER_TOKEN_BEDROCK",
   // Bedrock needs these alongside the AWS pair above to actually reach a
   // regional endpoint — not opencode-recognized auth keys on their own.
   "AWS_SESSION_TOKEN",

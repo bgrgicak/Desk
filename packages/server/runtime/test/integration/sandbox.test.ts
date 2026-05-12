@@ -75,7 +75,7 @@ describeIf("sandbox integration", () => {
     // on SANDBOX_RUNTIME_TAG in docker.ts for why size is deliberately
     // excluded from the drift check.
     expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
-      "runtime=tini-v1,user=root+sudo",
+      "runtime=pi-runtime-v1,user=root+sudo",
     );
   });
 

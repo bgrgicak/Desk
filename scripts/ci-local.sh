@@ -57,7 +57,7 @@ pids="$pids $typecheck_pid"
 
 (
   npm run build --workspace=@agent-desk/sandbox-cli
-  docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+  packages/server/setup/scripts/ensure-sandbox-image.sh
 ) &
 sandbox_pid=$!
 pids="$pids $sandbox_pid"
@@ -76,7 +76,7 @@ npx vitest run --passWithNoTests --retry=2 &
 vitest_pid=$!
 pids="$pids $vitest_pid"
 
-npx nx build @agent-desk/api &
+npm -w @agent-desk/api run build &
 api_build_pid=$!
 pids="$pids $api_build_pid"
 
