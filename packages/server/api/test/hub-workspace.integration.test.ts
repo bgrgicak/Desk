@@ -328,6 +328,86 @@ describe("pins — hub capabilities", () => {
   });
 });
 
+describe("project workspace chats/messages with hub present", () => {
+  // Regression guard: the Hub PR changed workspace ordering so that hub sorts
+  // first. Tests and frontend code that blindly pick workspaces[0] now get the
+  // hub instead of the project workspace, silently skipping project-path coverage.
+  // This suite verifies that project workspace chats and their messages are
+  // fully accessible via the API after ensureHubsForAllUsers has run.
+  let projectId: string;
+  let agentId: string;
+
+  beforeAll(async () => {
+    // Create a project workspace with an agent — mirrors what the DB seed
+    // does for a real installation.
+    const create = await request("POST", "/workspaces", token, { name: "Project With Messages" });
+    expect(create.status).toBe(201);
+    projectId = (create.body as { id: string }).id;
+
+    // Reuse the user's existing agent (created during ensureHubsForAllUsers).
+    const workspaces = await queries.workspaces.listByUser(pool, userId);
+    const hub = workspaces.find((w) => w.kind === "hub")!;
+    const memberships = await queries.workspaceAgents.listForWorkspace(pool, hub.id);
+    agentId = memberships[0].agentId;
+
+    // Enrol the agent in the project workspace (idempotent — hub init may have
+    // already enrolled the same agent in a shared test DB).
+    await pool.query(
+      `INSERT OR IGNORE INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?)`,
+      [projectId, agentId],
+    );
+  });
+
+  it("GET /chats?workspaceId=<project-id> lists project chats (not hub chats)", async () => {
+    const res = await request("GET", `/chats?workspaceId=${projectId}`, token);
+    expect(res.status).toBe(200);
+    const chats = res.body as Array<{ id: string; workspaceId: string }>;
+    // Any chats returned must belong to the project workspace, not the hub.
+    for (const c of chats) {
+      expect(c.workspaceId).toBe(projectId);
+    }
+  });
+
+  it("POST /chats in project workspace then GET /chats/{id}/messages returns messages", async () => {
+    // Create a chat in the project workspace.
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId: projectId,
+      agentId,
+      title: "Project Test Chat",
+    });
+    expect(chatRes.status).toBe(201);
+    const chatId = (chatRes.body as { id: string }).id;
+
+    // Send a user message — stored as content.type = 'text', included in the
+    // default timeline view.
+    const msgRes = await request("POST", `/chats/${chatId}/messages`, token, {
+      content: "hello from project workspace",
+    });
+    expect(msgRes.status).toBe(201);
+
+    // Retrieve messages with the default timeline view.
+    const listRes = await request("GET", `/chats/${chatId}/messages`, token);
+    expect(listRes.status).toBe(200);
+    const body = listRes.body as { items: Array<{ content: { type: string; text?: string } }> };
+    const textMessages = body.items.filter((m) => m.content.type === "text");
+    expect(textMessages.length).toBeGreaterThanOrEqual(1);
+    expect(textMessages[0].content.text).toBe("hello from project workspace");
+  });
+
+  it("GET /chats/{project-chat-id} returns 200 with correct workspaceId", async () => {
+    const chatRes = await request("POST", "/chats", token, {
+      workspaceId: projectId,
+      agentId,
+      title: "Get By Id Test",
+    });
+    const chatId = (chatRes.body as { id: string }).id;
+
+    const getRes = await request("GET", `/chats/${chatId}`, token);
+    expect(getRes.status).toBe(200);
+    expect((getRes.body as { workspaceId: string }).workspaceId).toBe(projectId);
+  });
+});
+
 describe("pins — project workspaces cannot use hub-only pin endpoints", () => {
   let projectId: string;
 

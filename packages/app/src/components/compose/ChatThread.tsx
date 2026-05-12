@@ -341,7 +341,12 @@ export function ChatThread({
               Beginning of conversation
             </p>
           )}
-          {messages.length === 0 && !isInitialLoading && (
+          {isError && (
+            <p className="text-xs text-destructive text-center pt-4">
+              Failed to load messages. Try refreshing.
+            </p>
+          )}
+          {messages.length === 0 && !isInitialLoading && !isError && (
             emptySlot ?? (
               <p className="text-xs text-muted-foreground text-center pt-4" data-testid="task-chat-empty">
                 No messages yet. Ask a question or request changes.

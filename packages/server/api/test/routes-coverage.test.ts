@@ -212,9 +212,12 @@ describe("Routes coverage (real Postgres)", () => {
     // Provider keys now live in the vault — set it up so PUT /me/providers works.
     await request("POST", "/vault/setup", token, { password: "test-vault-pass" });
 
-    // Get seeded workspace and agent
+    // Get seeded workspace and agent. The hub workspace sorts first after the
+    // Hub PR; use the project workspace explicitly so these tests validate the
+    // project-workspace code path rather than silently running against the hub.
     const wsRes = await request("GET", "/workspaces", token);
-    workspaceId = (wsRes.body as Array<{ id: string }>)[0].id;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    workspaceId = (workspaces.find((w) => w.kind !== "hub") ?? workspaces[0]).id;
     const agRes = await request("GET", "/agents", token);
     agentId = (agRes.body as Array<{ id: string }>)[0].id;
   });

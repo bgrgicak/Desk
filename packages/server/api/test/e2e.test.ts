@@ -244,12 +244,13 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /chats/:id/messages creates a user message and fires a trigger that produces an agent reply", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string; path: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; path: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Message Test Chat",
     });
@@ -280,12 +281,13 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /chats/:id/messages with kind=task creates one self-firing row (no agent_turn pair)", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Task Test Chat",
     });
@@ -324,7 +326,7 @@ describe("API e2e (real Postgres)", () => {
     // its own schedule).
     const kindRes = await request(
       "GET",
-      `/messages?kind=task&workspaceId=${workspaces[0].id}`,
+      `/messages?kind=task&workspaceId=${projectWorkspace.id}`,
       token,
     );
     const kindItems = (kindRes.body as { items: Array<{ id: string }> }).items;
@@ -332,7 +334,7 @@ describe("API e2e (real Postgres)", () => {
 
     const schedRes = await request(
       "GET",
-      `/messages?scheduled=true&workspaceId=${workspaces[0].id}`,
+      `/messages?scheduled=true&workspaceId=${projectWorkspace.id}`,
       token,
     );
     const schedItems = (schedRes.body as { items: Array<{ id: string }> }).items;
@@ -387,12 +389,13 @@ describe("API e2e (real Postgres)", () => {
 
     // Send a message to trigger a run (which emits events via broadcast)
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "WS Test Chat",
     });
@@ -745,12 +748,13 @@ describe("API e2e (real Postgres)", () => {
 
   it("GET /chats/:id/attachments returns attachments tagged with kind='attachment' and excludes notes", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string; path: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; path: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Summaries In Files Tab Chat",
     });
@@ -769,7 +773,7 @@ describe("API e2e (real Postgres)", () => {
 
     // Materialize a summary so we can verify it is NOT returned in the attachments list.
     const fakeMessageId = "msg_notespec000000000000000";
-    await materializeSummary(home, workspaces[0].path, chat.id, fakeMessageId, "summary body");
+    await materializeSummary(home, projectWorkspace.path, chat.id, fakeMessageId, "summary body");
 
     const res = await request("GET", `/chats/${chat.id}/attachments`, token);
     expect(res.status).toBe(200);
@@ -782,12 +786,13 @@ describe("API e2e (real Postgres)", () => {
   // Gap 6: Search returns uploaded artifacts and indexed chat messages.
   it("search returns known artifact and message-backed chat IDs", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; path: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Indexed Search Chat",
     });
@@ -822,7 +827,7 @@ describe("API e2e (real Postgres)", () => {
 
     const libraryUploadRes = await requestMultipart(
       "POST",
-      `/library?workspaceId=${workspaces[0].id}`,
+      `/library?workspaceId=${projectWorkspace.id}`,
       token,
       [
         {
@@ -890,7 +895,7 @@ describe("API e2e (real Postgres)", () => {
           `test-all-crowd-${i}.md`,
           `Searchable Searchable Searchable crowded file ${i}`,
           `Searchable Searchable Searchable crowded file ${i}`,
-          workspaces[0].path,
+          projectWorkspace.path,
           new Date(Date.now() + i).toISOString(),
         ],
       );
@@ -942,12 +947,13 @@ describe("API e2e (real Postgres)", () => {
   // GET /chats/{id}/messages/{messageId}/logs.
   it("GET /chats/{id}/messages/{messageId}/logs returns the fired message's log body", async () => {
     const wsRes = await request("GET", "/workspaces", token);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await request("GET", "/agents", token);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     const chatRes = await request("POST", "/chats", token, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Logs Chat",
     });
@@ -1124,13 +1130,14 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
     // Get workspace + agent
     const wsRes = await realRequest("GET", "/workspaces", realToken);
-    const workspaces = wsRes.body as Array<{ id: string }>;
+    const workspaces = wsRes.body as Array<{ id: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
     const agentsRes = await realRequest("GET", "/agents", realToken);
     const agents = agentsRes.body as Array<{ id: string }>;
 
     // Create a chat
     const chatRes = await realRequest("POST", "/chats", realToken, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId: agents[0].id,
       title: "Real Stack E2E Chat",
     });
@@ -1188,11 +1195,12 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     const agentId = agents[0].id;
 
     const wsRes = await realRequest("GET", "/workspaces", realToken);
-    const workspaces = wsRes.body as Array<{ id: string; path: string }>;
-    const workspaceSlug = workspaces[0].path;
+    const workspaces = wsRes.body as Array<{ id: string; path: string; kind: string }>;
+    const projectWorkspace = workspaces.find((w) => w.kind !== "hub") ?? workspaces[0];
+    const workspaceSlug = projectWorkspace.path;
 
     const chatRes = await realRequest("POST", "/chats", realToken, {
-      workspaceId: workspaces[0].id,
+      workspaceId: projectWorkspace.id,
       agentId,
       title: "G10 User Memory Test Chat",
     });
