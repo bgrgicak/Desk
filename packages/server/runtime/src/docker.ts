@@ -696,6 +696,109 @@ export async function reapIdleSandboxes(
   return removed;
 }
 
+/**
+ * Pre-fire sweep: kill any OpenCode setsid wrapper inside `containerId`
+ * whose pidfile path is NOT in `expectedPidFiles`. Returns the number of
+ * trees that were SIGKILL'd.
+ *
+ * Why this exists: every leak scenario we've observed reduces to the same
+ * shape — a previous run's process group survived past `cleanupRunProcessTree`
+ * (engine.exec failure, OOM-killed sibling holding the wrapper hostage,
+ * pidfile overwritten by a re-fire of the same runId, server restart that
+ * raced the boot-time kill, etc.). The pidfile-based cleanup can no longer
+ * find these trees because either the pidfile is gone or it now points at a
+ * different fire. Walking the container's actual process table sidesteps all
+ * of that: any `setsid --wait sh -c ... /tmp/desk-runs/<runId>.pid ...`
+ * wrapper whose pidfile we're not actively driving is by definition a leak.
+ *
+ * `expectedPidFiles` is the source of truth for "do not touch": pass the
+ * pidfile path of every run this server is currently driving in this
+ * container. Anything else is fair game for SIGKILL. The check uses whole-
+ * token matching (with leading/trailing spaces around each path) so a
+ * pidfile substring can't accidentally protect an unrelated wrapper.
+ *
+ * Best-effort. Engine errors, missing `/proc`, ps failures, and partial
+ * kills all degrade to "reaped 0" — a regression here must never block a
+ * legitimate fire. The new fire will still proceed and hit memory pressure;
+ * the operator will see that, not a mysterious deadlock.
+ */
+export async function reapStaleSandboxTrees(
+  engine: Engine,
+  containerId: string,
+  expectedPidFiles: ReadonlyArray<string>,
+): Promise<{ reaped: number }> {
+  // Wrap in spaces so case patterns can match whole tokens via `*" <path> "*`.
+  const expectedEnv = ` ${expectedPidFiles.join(" ")} `;
+  // Scan /proc/*/cmdline directly rather than filtering ps by `comm == setsid`.
+  // The wrapper is `setsid --wait sh -c '... pidfile ...' opencode ...`, and
+  // setsid only stays in argv[0] if it forked — which only happens when the
+  // calling shell is itself a process-group leader. Both cases show up in prod
+  // (the runtime's outer `exec setsid` forks; a re-fire shell that's
+  // backgrounded does not) and both must be caught here. Reading
+  // /proc/<pid>/cmdline matches "cmdline starts with setsid" no matter what
+  // /comm reports after a subsequent exec.
+  const script = [
+    "set -u",
+    "REAPED=0",
+    "for pid_dir in /proc/[0-9]*; do",
+    "  pid=${pid_dir#/proc/}",
+    '  [ -r "$pid_dir/cmdline" ] || continue',
+    '  cmdline=$(tr "\\0" " " < "$pid_dir/cmdline" 2>/dev/null)',
+    // Must start with "setsid " and reference a desk-runs pidfile somewhere.
+    '  case "$cmdline" in',
+    '    "setsid "*"/tmp/desk-runs/"*) ;;',
+    "    *) continue ;;",
+    "  esac",
+    '  pidfile=""',
+    "  for tok in $cmdline; do",
+    '    case "$tok" in',
+    "      /tmp/desk-runs/*.pid) pidfile=$tok; break ;;",
+    "    esac",
+    "  done",
+    '  [ -z "$pidfile" ] && continue',
+    // Whole-token match against the expected set. Skip wrappers we're driving.
+    '  case "$EXPECTED_PIDFILES" in',
+    '    *" $pidfile "*) continue ;;',
+    "  esac",
+    // Kill three targets to cover both the forked-parent case (setsid waits
+    // on a child in a different pgid) and the non-forked case (setsid
+    // exec'd directly, so $pid IS the leader after its setsid() call):
+    //   1. child's pgid — kills opencode + its in-pgid descendants
+    //   2. $pid as a pgid — kills the chain when setsid didn't fork
+    //   3. $pid directly — kills the waiting setsid parent when it did fork
+    '  child=$(ps -o pid= --ppid "$pid" 2>/dev/null | head -1 | tr -d " ")',
+    // NOTE: dash's builtin kill rejects `--` as "Illegal number" — so we
+    // must NOT use `kill -KILL -- "-$pgid"`. The signal-then-PID order
+    // (`kill -KILL "-$pgid"`) is unambiguous because `-KILL` is a known
+    // signal flag and `-N` is then parsed as a negative-pid argument.
+    '  case "$child" in',
+    "    \"\"|*[!0-9]*) ;;",
+    '    *) kill -KILL "-$child" 2>/dev/null ;;',
+    "  esac",
+    '  kill -KILL "-$pid" 2>/dev/null',
+    '  kill -KILL "$pid" 2>/dev/null',
+    "  REAPED=$((REAPED+1))",
+    "done",
+    'echo "REAPED=$REAPED"',
+  ].join("\n");
+  try {
+    const handle = await engine.exec({
+      containerId,
+      cmd: ["sh", "-c", script],
+      env: [`EXPECTED_PIDFILES=${expectedEnv}`],
+    });
+    const stdoutChunks: Buffer[] = [];
+    handle.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    const exitCode = await handle.wait();
+    if (exitCode !== 0) return { reaped: 0 };
+    const out = Buffer.concat(stdoutChunks).toString("utf8");
+    const match = out.match(/REAPED=(\d+)/);
+    return { reaped: match ? parseInt(match[1], 10) : 0 };
+  } catch {
+    return { reaped: 0 };
+  }
+}
+
 /** Stops a sandbox container. Idempotent. */
 export async function stopSandbox(handle: SandboxHandle): Promise<void> {
   try {

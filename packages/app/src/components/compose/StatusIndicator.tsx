@@ -19,7 +19,7 @@ export function StatusIndicator({ text, isTyping }: StatusIndicatorProps) {
         >
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
-            {text || 'Thinking...'}
+            {text || 'Thinking'}
           </span>
         </motion.div>
       )}

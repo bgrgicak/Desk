@@ -260,6 +260,65 @@ export async function _cleanupRunProcessTreeForTest(
   return cleanupRunProcessTree(engine, containerId, pidFile, opts);
 }
 
+export function _extractCompleteJsonValuesForTest(input: string): { values: string[]; rest: string } {
+  return extractCompleteJsonValues(input);
+}
+
+function extractCompleteJsonValues(input: string): { values: string[]; rest: string } {
+  const values: string[] = [];
+  let rest = input;
+
+  while (true) {
+    const leading = rest.match(/^\s*/)?.[0].length ?? 0;
+    const start = leading;
+    const first = rest[start];
+    if (first !== "{" && first !== "[") break;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+
+    for (let i = start; i < rest.length; i++) {
+      const ch = rest[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === "{" || ch === "[") {
+        depth++;
+      } else if (ch === "}" || ch === "]") {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (end < 0) break;
+    const candidate = rest.slice(start, end);
+    try {
+      JSON.parse(candidate);
+    } catch {
+      break;
+    }
+    values.push(candidate);
+    rest = rest.slice(end);
+  }
+
+  return { values, rest: rest.trim() ? rest : "" };
+}
+
 async function cleanupRunProcessTree(
   engine: Engine,
   containerId: string,
@@ -291,7 +350,14 @@ async function cleanupRunProcessTree(
       // Signal only the run's process group. Avoid a direct-PID fallback here:
       // after the OpenCode leader exits, PID reuse inside a warm sandbox could
       // otherwise terminate an unrelated process during final stale cleanup.
-      `kill -${signal} -- "-$pid" 2>/dev/null && exit 42`,
+      //
+      // NOTE: do NOT add `--` between the signal flag and `-$pid`. The
+      // sandbox image's /bin/sh is dash, whose builtin `kill` rejects `--`
+      // with "Illegal number: -" and silently fails — which is exactly the
+      // bug that caused every opencode tree this cleanup was supposed to
+      // kill to leak instead. `kill -SIG -PID` is unambiguous (signal is a
+      // named flag, the negative-int is a PID/PGID argument).
+      `kill -${signal} "-$pid" 2>/dev/null && exit 42`,
       "exit 0",
     ].join("; ");
     const h = await engine.exec({ containerId, cmd: ["sh", "-c", script] });
@@ -324,7 +390,7 @@ async function cleanupRunProcessTree(
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
-      const { createOrReuse, providerKeyExecEnv, sandboxUser } = await import("./docker.js");
+      const { createOrReuse, providerKeyExecEnv, sandboxUser, reapStaleSandboxTrees } = await import("./docker.js");
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
@@ -336,6 +402,25 @@ function createRealDriver(): SandboxDriver {
         undefined,
         opts.extraEnv,
       );
+
+      // Pre-fire sweep: reap any OpenCode wrappers left behind by previous
+      // attempts or prior server lifetimes whose `finally` cleanup failed to
+      // terminate them (silent engine.exec failures, pidfile-overwrite races
+      // on resource-retry, server kills that beat the cleanup). The
+      // expected-pidfile set is exactly the wrappers this server is actively
+      // driving in this container; everything else is a leak by definition.
+      // Anything reaped here would otherwise sit at ~300 MB RSS until the
+      // 30-min idle sweep recreates the sandbox — long enough for an actively-
+      // used workspace to fill its 8 GiB ceiling with corpses.
+      const expectedPidFiles = Array.from(activeExecs.values())
+        .filter((entry) => entry.containerId === handle.containerId)
+        .map((entry) => entry.pidFile);
+      const sweep = await reapStaleSandboxTrees(engine, handle.containerId, expectedPidFiles);
+      if (sweep.reaped > 0) {
+        console.info(
+          `runtime: reaped ${sweep.reaped} stale opencode tree(s) in ${handle.containerId} before runId=${opts.runId}`,
+        );
+      }
 
       // The system prompt — including the per-chat artifact paths and the
       // user's goal fragment — lives entirely in the OpenCode agent file
@@ -377,14 +462,18 @@ function createRealDriver(): SandboxDriver {
 
       let seq = 0;
       // The engine hands us already-demuxed stdout/stderr (the CLI
-      // separates them when neither -t nor -T is in play). We track every
-      // onLog return so the final resolve waits for async event appends to
-      // commit — fast-exiting opencode runs (sub-second) would otherwise
-      // race the stream 'end' against the last DB INSERTs and leave the
-      // assistant-message write pointing at zero events.
+      // separates them when neither -t nor -T is in play). OpenCode emits one
+      // JSON event per line, but Node may deliver several lines in one data
+      // chunk (or split a line across chunks). Buffer per stream and forward
+      // complete lines immediately so tool/reasoning events reach the UI as
+      // soon as OpenCode flushes them, not only as a final combined blob.
+      // We track every onLog return so the final resolve waits for async event
+      // appends to commit — fast-exiting opencode runs (sub-second) would
+      // otherwise race the stream 'end' against the last DB INSERTs and leave
+      // the assistant-message write pointing at zero events.
       const pendingLogs: Promise<unknown>[] = [];
-      const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
-        const text = chunk.toString("utf8").replace(/\r?\n$/, "");
+      const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+      const emitLine = (kind: "stdout" | "stderr", text: string) => {
         if (!text) return;
         const ret = opts.onLog({ runId: opts.runId, seq: seq++, kind, payload: text });
         if (ret && typeof (ret as Promise<void>).then === "function") {
@@ -396,8 +485,33 @@ function createRealDriver(): SandboxDriver {
           );
         }
       };
+      const emit = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
+        buffers[kind] += chunk.toString("utf8");
+        const parts = buffers[kind].split(/\r?\n/);
+        buffers[kind] = parts.pop() ?? "";
+        for (const line of parts) emitLine(kind, line);
+
+        // OpenCode normally writes newline-delimited JSON, but some versions
+        // and host/container combinations can deliver complete JSON events
+        // before the trailing newline is flushed. If we only wait for `\n`,
+        // the UI sees all tool calls at process exit. Opportunistically peel
+        // complete JSON values out of stdout as soon as they are syntactically
+        // closed, while leaving plain/unclosed text buffered until newline/end.
+        if (kind === "stdout") {
+          const extracted = extractCompleteJsonValues(buffers.stdout);
+          for (const line of extracted.values) emitLine("stdout", line);
+          buffers.stdout = extracted.rest;
+        }
+      };
+      const flush = (kind: "stdout" | "stderr") => () => {
+        const tail = buffers[kind];
+        buffers[kind] = "";
+        emitLine(kind, tail);
+      };
       handle$.stdout.on("data", emit("stdout"));
       handle$.stderr.on("data", emit("stderr"));
+      handle$.stdout.on("end", flush("stdout"));
+      handle$.stderr.on("end", flush("stderr"));
 
       try {
         const exitCode = await handle$.wait();
@@ -418,7 +532,19 @@ function createRealDriver(): SandboxDriver {
           // in-container shell wrote its pidfile, wait briefly here so the
           // final cleanup still has a chance to address the process group.
           waitForPidFileMs: 2000,
-        }).catch(() => {});
+        }).catch((err) => {
+          // Surface the failure instead of swallowing it silently. A
+          // swallowed cleanup error is exactly how OpenCode trees leak —
+          // the runtime thinks the run is done while ~300 MB of opencode
+          // keeps sitting in the sandbox. The next fire's pre-fire sweep
+          // (`reapStaleSandboxTrees`) is the safety net, but operators
+          // need to see *that* it happens to know whether the cleanup
+          // path itself is degrading.
+          console.warn(
+            `runtime: cleanupRunProcessTree failed for runId=${opts.runId} (pidFile=${pidFile}):`,
+            (err as Error)?.message ?? err,
+          );
+        });
       }
     },
 

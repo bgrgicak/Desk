@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
-import { buildOpencodeCommand, _cleanupRunProcessTreeForTest } from "../src/driver.js";
+import { buildOpencodeCommand, _cleanupRunProcessTreeForTest, _extractCompleteJsonValuesForTest } from "../src/driver.js";
 import type { Engine, ExecHandle, ExecSpec } from "../src/engine.js";
 import { SANDBOX_HOME } from "../src/mounts.js";
 
@@ -140,6 +140,30 @@ describe("buildOpencodeCommand", () => {
   });
 });
 
+describe("OpenCode stdout parsing", () => {
+  it("extracts complete JSON events before a trailing newline arrives", () => {
+    const first = JSON.stringify({ type: "tool_use", part: { tool: "read" } });
+    const second = JSON.stringify({ type: "tool_result", part: { name: "read" } });
+
+    expect(_extractCompleteJsonValuesForTest(first)).toEqual({ values: [first], rest: "" });
+    expect(_extractCompleteJsonValuesForTest(`${first}${second.slice(0, 12)}`)).toEqual({
+      values: [first],
+      rest: second.slice(0, 12),
+    });
+  });
+
+  it("keeps incomplete or plain stdout buffered for normal line/end flushing", () => {
+    expect(_extractCompleteJsonValuesForTest('{"type":"tool_use"')).toEqual({
+      values: [],
+      rest: '{"type":"tool_use"',
+    });
+    expect(_extractCompleteJsonValuesForTest("plain progress without newline")).toEqual({
+      values: [],
+      rest: "plain progress without newline",
+    });
+  });
+});
+
 describe("cleanupRunProcessTree", () => {
   // Minimal Engine fake: each `exec` runs the supplied shell-script string
   // through a handler that returns an exit code. We track the commands the
@@ -207,5 +231,27 @@ describe("cleanupRunProcessTree", () => {
     });
     const signalled = await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {});
     expect(signalled).toBe(false);
+  });
+
+  it("does NOT use `kill -- -PID` syntax (dash builtin rejects --)", async () => {
+    // Regression guard. The sandbox image's /bin/sh is dash, whose builtin
+    // `kill` interprets `--` as a literal argument and exits 2 with
+    // "Illegal number: -". This silently broke cleanup for OpenCode runs
+    // for months: every TERM/KILL was an exit-2 no-op, so opencode trees
+    // accumulated at ~300 MB each until the sandbox hit its memory cap.
+    // The fix uses `kill -SIG -PID` (no `--`) which dash parses correctly
+    // because `-SIG` is a recognised signal flag and `-PID` is then the
+    // negative-PID argument. Future refactors must keep this property —
+    // adding `--` back here regresses leak-cleanup across the whole fleet.
+    const { engine, calls } = fakeEngine((script) => {
+      if (script.includes("[ -s ")) return 0;
+      if (script.includes("kill -TERM")) return 42;
+      if (script.includes("kill -KILL")) return 42;
+      return 0;
+    });
+    await _cleanupRunProcessTreeForTest(engine, "c", "/tmp/desk-runs/x.pid", {});
+    for (const c of calls) {
+      expect(c, "cleanup script must not invoke `kill ... -- -PID`").not.toMatch(/kill\s+-\S+\s+--\s+["']?-/);
+    }
   });
 });

@@ -27,6 +27,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { PassThrough, type Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { DeskError } from "@agent-desk/shared";
 
@@ -35,6 +36,7 @@ const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
   process.env.DESK_CONTAINER_ENGINE_TIMEOUT_MS ?? "10000",
   10,
 );
+const REMOVE_IN_PROGRESS_POLL_MS = 100;
 
 export type EngineName = "docker" | "nerdctl";
 
@@ -411,8 +413,25 @@ class CliEngine implements Engine {
     } catch (err) {
       const stderr = ((err as { stderr?: string }).stderr ?? "").toLowerCase();
       if (stderr.includes("no such")) return;
+      if (isRemovalAlreadyInProgress(stderr)) {
+        const gone = await this.waitForContainerRemoval(nameOrId);
+        if (gone) return;
+      }
       throw err;
     }
+  }
+
+  private async waitForContainerRemoval(nameOrId: string): Promise<boolean> {
+    const deadline = Date.now() + ENGINE_COMMAND_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const out = await this.runOrNull(
+        ["inspect", "--format", "{{.Id}}", nameOrId],
+        ["no such object", "no such container", "not found"],
+      );
+      if (!out) return true;
+      await delay(REMOVE_IN_PROGRESS_POLL_MS);
+    }
+    return false;
   }
 
   async list(opts: { namePrefix?: string; all?: boolean }): Promise<Array<{ id: string; name: string }>> {
@@ -519,6 +538,14 @@ function wrapExecChild(child: ChildProcess): ExecHandle {
 }
 
 export const _wrapExecChildForTest = wrapExecChild;
+
+export function _isRemovalAlreadyInProgressForTest(stderr: string): boolean {
+  return isRemovalAlreadyInProgress(stderr.toLowerCase());
+}
+
+function isRemovalAlreadyInProgress(stderr: string): boolean {
+  return stderr.includes("removal of container") && stderr.includes("already in progress");
+}
 
 /** Subset of the `docker inspect` / `nerdctl inspect` JSON we care about. */
 interface ContainerInspect {

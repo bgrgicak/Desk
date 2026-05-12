@@ -537,13 +537,15 @@ export function createRunManager(opts: RunManagerOptions) {
       // events concatenated by the driver (a stdout chunk covering
       // multiple lines); without splitting, the \n framing breaks and
       // readLogEntries can't associate continuation lines with a kind.
-      for (const line of evt.payload.split("\n")) {
+      const lines = evt.payload.split("\n");
+      for (const line of lines) {
+        if (!line) continue;
         logStream.write(`${evt.kind}\t${line}\n`);
+        emit({
+          type: "message.log_appended",
+          payload: { messageId: runId, kind: evt.kind, line },
+        });
       }
-      emit({
-        type: "message.log_appended",
-        payload: { messageId: runId, kind: evt.kind, line: evt.payload },
-      });
     };
 
     try {

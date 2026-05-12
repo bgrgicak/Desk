@@ -207,6 +207,28 @@ emit: (evt) => events.push(evt),
     expect(appended.length).toBe(1);
   });
 
+  it("streams each newline-delimited tool event as its own log_appended event", async () => {
+    const events: WsEvent[] = [];
+    const toolUse = JSON.stringify({ type: "tool_use", part: { tool: "read" } });
+    const toolResult = JSON.stringify({ type: "tool_result", part: { name: "read" } });
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async (messageId, _agentId, _prompt, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: `${toolUse}\n${toolResult}` });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "stream tools" });
+    await mgr.fireMessage(messageId);
+
+    const streamed = events.filter((e) => e.type === "message.log_appended");
+    expect(streamed.map((e) => e.payload.line)).toContain(toolUse);
+    expect(streamed.map((e) => e.payload.line)).toContain(toolResult);
+    expect(streamed.some((e) => e.type === "message.log_appended" && e.payload.line.includes("\n"))).toBe(false);
+  });
+
   it("summary_request content produces a summary-content child", async () => {
     let capturedPrompt = "";
     let capturedRunMode: string | undefined;
