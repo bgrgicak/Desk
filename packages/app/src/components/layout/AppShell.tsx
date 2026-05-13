@@ -636,8 +636,8 @@ export function AppShell({
                 <SidebarMenu>
                   {!isChatsLoading && visibleChats.map(chat => {
                     const ChatIcon = getChatIcon(chat)
-                    const isRunning = runningChatIds.includes(chat.id)
-                    const isFailed = failedChatIds.includes(chat.id) || !!chat.failed
+                    const isRunning = runningChatIds.includes(chat.id) || !!chat.running
+                    const isFailed = !isRunning && (failedChatIds.includes(chat.id) || !!chat.failed)
                     return (
                       <SidebarMenuItem key={chat.id}>
                         <MobileDismissSidebarMenuButton

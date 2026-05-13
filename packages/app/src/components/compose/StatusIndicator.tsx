@@ -14,7 +14,7 @@ export function StatusIndicator({ text, isTyping }: StatusIndicatorProps) {
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -4 }}
-          className="flex items-center gap-2 px-4 py-2"
+          className="flex w-full items-center gap-2 py-2"
           key={text || 'typing'}
         >
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />

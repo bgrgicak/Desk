@@ -71,6 +71,9 @@ const STARTER_CHIPS = [
   'Design a color palette',
 ]
 
+const CHAT_COLUMN_CLASS = 'w-full max-w-2xl min-w-0 mx-auto'
+const CHAT_GUTTER_CLASS = 'px-4 sm:px-6'
+
 function isSmallScreen() {
   return isSmallChatViewport()
 }
@@ -1152,13 +1155,13 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName="px-4 sm:px-6 py-8 space-y-6"
+          innerClassName={`${CHAT_GUTTER_CLASS} py-8 space-y-6`}
           messageClassName={message => {
-            if (message.content.type !== 'artifactRef') return 'max-w-2xl min-w-0 mx-auto'
-            return 'max-w-2xl min-w-0 mx-auto'
+            if (message.content.type !== 'artifactRef') return CHAT_COLUMN_CLASS
+            return CHAT_COLUMN_CLASS
           }}
-          statusClassName="max-w-2xl min-w-0 mx-auto"
-          agentHeaderClassName="max-w-2xl min-w-0 mx-auto"
+          statusClassName={CHAT_COLUMN_CLASS}
+          agentHeaderClassName={CHAT_COLUMN_CLASS}
           lastAssistantSlotClassName="w-full min-w-0"
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
@@ -1200,11 +1203,15 @@ export function ChatView({
             </div>
           ) : undefined}
           footerSlot={
-            <div className="border-t shrink-0 min-w-0 max-w-full overflow-hidden">
-              <div className="w-full max-w-2xl min-w-0 mx-auto px-4 sm:px-6 py-4">
-                <ChatInput
-                  focusRef={focusInputRef}
-                  onSend={(msg, uploads, options) => {
+            <div
+              className="border-t shrink-0 min-w-0 max-w-full overflow-hidden"
+              style={{ paddingRight: 'var(--chat-thread-scrollbar-width, 0px)' }}
+            >
+              <div className={`w-full min-w-0 ${CHAT_GUTTER_CLASS} py-4`}>
+                <div className={CHAT_COLUMN_CLASS}>
+                  <ChatInput
+                    focusRef={focusInputRef}
+                    onSend={(msg, uploads, options) => {
                     // `uploads` carries library-mention refs (path set) plus
                     // pending-file chips (path undefined — the actual File
                     // object lives in `pendingFiles` state below). De-dupe
@@ -1260,32 +1267,33 @@ export function ChatView({
                     }
                     setPrefillText(undefined)
                   }}
-                  placeholder={isNewChat ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
-                  compact={true}
-                  showGoalPicker={true}
-                  goal={chat.goal ?? null}
-                  prefillValue={prefillText}
-                  chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
-                  chatWorkspaceId={chat.workspaceId}
-                  chatId={chat.id}
-                  onAgentChange={handleAgentChange}
-                  draftKey={`chat:${chat.id}`}
-                  onOpenUploadPicker={openPicker}
-                  extraUploads={[
-                    ...pendingFiles.map(p => ({
-                      id: p.id,
-                      name: p.file.name,
-                      mime: p.file.type,
-                      size: p.file.size,
-                    })),
-                    ...stagedFiles,
-                  ]}
-                  onRemoveExtraUpload={(id) => {
-                    removePendingFile(id)
-                    removeStaged(id)
-                  }}
-                  uploadInProgress={false}
-                />
+                    placeholder={isNewChat ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
+                    compact={true}
+                    showGoalPicker={true}
+                    goal={chat.goal ?? null}
+                    prefillValue={prefillText}
+                    chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
+                    chatWorkspaceId={chat.workspaceId}
+                    chatId={chat.id}
+                    onAgentChange={handleAgentChange}
+                    draftKey={`chat:${chat.id}`}
+                    onOpenUploadPicker={openPicker}
+                    extraUploads={[
+                      ...pendingFiles.map(p => ({
+                        id: p.id,
+                        name: p.file.name,
+                        mime: p.file.type,
+                        size: p.file.size,
+                      })),
+                      ...stagedFiles,
+                    ]}
+                    onRemoveExtraUpload={(id) => {
+                      removePendingFile(id)
+                      removeStaged(id)
+                    }}
+                    uploadInProgress={false}
+                  />
+                </div>
               </div>
             </div>
           }

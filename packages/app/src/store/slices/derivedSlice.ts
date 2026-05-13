@@ -126,6 +126,7 @@ const slice = createSlice({
       (state, action) => {
         const chats = action.payload as Array<{ id: string; running?: boolean; failed?: boolean }>
         const wsKnownSet = new Set(state.wsKnownChatIds)
+        const chatsById = new Map(chats.map((chat) => [chat.id, chat]))
         // For non-WS-known chats, trust the server snapshot.
         const merged = new Set(
           chats.filter((c) => c.running && !wsKnownSet.has(c.id)).map((c) => c.id),
@@ -139,14 +140,23 @@ const slice = createSlice({
         }
         state.runningChatIds = Array.from(merged)
 
+        const runningSet = new Set(state.runningChatIds)
         const failed = new Set(
-          chats.filter((c) => c.failed && !wsKnownSet.has(c.id)).map((c) => c.id),
+          chats
+            .filter((c) => c.failed && !c.running && !wsKnownSet.has(c.id))
+            .map((c) => c.id),
         )
         for (const id of state.failedChatIds) {
-          if (wsKnownSet.has(id)) failed.add(id)
+          if (wsKnownSet.has(id) && !runningSet.has(id)) failed.add(id)
         }
         state.failedChatIds = Array.from(failed)
-        state.wsKnownChatIds = []
+        state.wsKnownChatIds = state.wsKnownChatIds.filter((id) => {
+          const chat = chatsById.get(id)
+          if (!chat) return true
+          const serverRunning = !!chat.running
+          const serverFailed = !!chat.failed && !serverRunning
+          return serverRunning !== runningSet.has(id) || serverFailed !== failed.has(id)
+        })
       },
     )
 
@@ -172,6 +182,9 @@ const slice = createSlice({
         const isRunning = latest !== null &&
           (latest.state === "pending" || latest.state === "running")
         const isFailed = latest?.state === "failed"
+        if (latest !== null && !state.wsKnownChatIds.includes(chatId)) {
+          state.wsKnownChatIds.push(chatId)
+        }
         if (isRunning && !state.runningChatIds.includes(chatId)) {
           state.runningChatIds.push(chatId)
         } else if (!isRunning && state.runningChatIds.includes(chatId)) {
