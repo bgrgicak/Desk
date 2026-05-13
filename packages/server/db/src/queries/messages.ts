@@ -267,7 +267,7 @@ export async function listByChat(
   // the start of the transcript, and backward pagination only reaches
   // the start when `prevCursor` is undefined.
   if (!opts?.cursor && result.prevCursor === undefined) {
-    const anchor = await findAnchorForThreadChat(db, chatId);
+    const anchor = await findAnchorForThreadChat(db, chatId, opts?.view ?? "full");
     if (anchor) {
       result.items = [anchor, ...result.items];
     }
@@ -698,13 +698,19 @@ export async function findById(db: Pool, id: string): Promise<Message | null> {
  * Returns the anchor (parent) message of the given thread chat, or null
  * if the chat is not a thread or its anchor was deleted. The anchor lives
  * in the parent chat; `thread_chat_id = chat.id` is the link.
+ *
+ * Pass `view` to apply the same compact content stripping used by
+ * `listByChat` — omit (or pass "full") when the caller needs raw content
+ * (e.g. agent context, scheduler prompt).
  */
 export async function findAnchorForThreadChat(
   db: Pool,
   threadChatId: string,
+  view: MessageListView = "full",
 ): Promise<Message | null> {
+  const sel = messageSelect(view);
   const { rows } = await db.query(
-    "SELECT * FROM messages WHERE thread_chat_id = ? LIMIT 1",
+    `SELECT ${sel} FROM messages WHERE thread_chat_id = ? LIMIT 1`,
     [threadChatId],
   );
   return rows.length ? rowToMessage(rows[0]) : null;
