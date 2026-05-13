@@ -267,6 +267,10 @@ export const MessageSchema = z.object({
   kind: z.enum(MESSAGE_KINDS).default("chat"),
   /** Display name for tasks; null for ordinary chat messages. */
   title: z.string().nullable().optional(),
+
+  /** When set, this message is the anchor of a thread; the referenced
+   * chat holds the thread transcript. */
+  threadChatId: z.string().optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 
