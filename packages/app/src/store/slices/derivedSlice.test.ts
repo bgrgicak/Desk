@@ -156,6 +156,17 @@ describe('cold-start hydration via getChats', () => {
     expect(selectRunningChatIds(root(state))).toEqual(['chat-1', 'chat-3'])
   })
 
+  it('does not hydrate failed state for chats that are currently running', () => {
+    let state = reducer(undefined, { type: '@@INIT' })
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-working', running: true, failed: true },
+      { id: 'chat-failed', running: false, failed: true },
+    ]))
+
+    expect(selectRunningChatIds(root(state))).toContain('chat-working')
+    expect(selectFailedChatIds(root(state))).toEqual(['chat-failed'])
+  })
+
   it('WS-known running chat is preserved when stale server says not running', () => {
     let state = reducer(undefined, { type: '@@INIT' })
     // WS event fires — chat-ws is running
@@ -305,6 +316,20 @@ describe('cold-start hydration via getChats', () => {
     expect(selectRunningChatIds(root(state))).toEqual(['chat-A'])
   })
 
+  it('stale-refetch race: WS markChatRunning clears stale failed state', () => {
+    let state = reducer(undefined, { type: '@@INIT' })
+    state = reducer(state, markChatFailed('chat-A'))
+    expect(selectFailedChatIds(root(state))).toEqual(['chat-A'])
+
+    state = reducer(state, markChatRunning('chat-A'))
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-A', running: false, failed: true },
+    ]))
+
+    expect(selectRunningChatIds(root(state))).toEqual(['chat-A'])
+    expect(selectFailedChatIds(root(state))).toEqual([])
+  })
+
   it('after clearWsKnownChatIds, server response is fully authoritative', () => {
     // Simulates WS reconnect: clearWsKnownChatIds is dispatched, then
     // the server refetch result should be trusted completely.
@@ -371,6 +396,26 @@ describe('cold-start hydration via getChatMessages', () => {
     }
   }
 
+  function makeChatsFulfilledAction(chats: Array<{ id: string; running?: boolean; failed?: boolean }>) {
+    const action = {
+      type: `${api.reducerPath}/executeQuery/fulfilled`,
+      payload: chats,
+      meta: {
+        arg: {
+          type: 'query' as const,
+          endpointName: 'getChats',
+          originalArgs: { workspaceId: 'ws-1' },
+          queryCacheKey: 'getChats({"workspaceId":"ws-1"})',
+        },
+        requestId: 'test-req-id',
+        requestStatus: 'fulfilled' as const,
+        fulfilledTimeStamp: Date.now(),
+      },
+    }
+    expect(api.endpoints.getChats.matchFulfilled(action)).toBe(true)
+    return action
+  }
+
   it('marks a chat running when the latest agent_turn is running', () => {
     let state = reducer(undefined, { type: '@@INIT' })
     state = reducer(state, makeFulfilledAction('chat-1', [
@@ -378,6 +423,43 @@ describe('cold-start hydration via getChatMessages', () => {
       { content: { type: 'agent_turn' }, state: 'running' },
     ]))
     expect(selectRunningChatIds(root(state))).toEqual(['chat-1'])
+  })
+
+  it('preserves active-chat running state over a stale failed chat-list refetch', () => {
+    let state = reducer(undefined, { type: '@@INIT' })
+    state = reducer(state, makeFulfilledAction('chat-1', [
+      { content: { type: 'agent_turn' }, state: 'running' },
+    ]))
+
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-1', running: false, failed: true },
+    ]))
+
+    expect(selectRunningChatIds(root(state))).toEqual(['chat-1'])
+    expect(selectFailedChatIds(root(state))).toEqual([])
+  })
+
+  it('keeps the active-chat guard until chat-list state agrees', () => {
+    let state = reducer(undefined, { type: '@@INIT' })
+    state = reducer(state, makeFulfilledAction('chat-1', [
+      { content: { type: 'agent_turn' }, state: 'running' },
+    ]))
+
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-other', running: false, failed: false },
+    ]))
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-1', running: false, failed: true },
+    ]))
+
+    expect(selectRunningChatIds(root(state))).toEqual(['chat-1'])
+    expect(selectFailedChatIds(root(state))).toEqual([])
+
+    state = reducer(state, makeChatsFulfilledAction([
+      { id: 'chat-1', running: true, failed: false },
+    ]))
+
+    expect(state.wsKnownChatIds).toEqual([])
   })
 
   it('marks a chat running when the latest agent_turn is pending', () => {
