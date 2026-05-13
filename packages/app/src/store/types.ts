@@ -136,6 +136,8 @@ export interface ServerMessage {
   kind?: "chat" | "task" | "task_run" | "summary";
   /** Display name for tasks; null/missing for ordinary chat messages. */
   title?: string | null;
+  /** Live runtime/progress entries appended over WS while an agent_turn runs. */
+  progressLog?: AgentLogEntry[];
 }
 
 export interface ServerFile {

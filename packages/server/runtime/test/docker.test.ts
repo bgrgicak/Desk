@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
-import { classifyResourceError, killClaimedRunsInContainers, providerKeyEnv, providerKeyExecEnv } from "../src/docker.js";
+import {
+  classifyResourceError,
+  killClaimedRunsInContainers,
+  providerKeyEnv,
+  providerKeyExecEnv,
+  reapStaleSandboxTrees,
+} from "../src/docker.js";
 import type { Engine, ExecHandle, ExecSpec, ContainerInfo } from "../src/engine.js";
 
 describe("classifyResourceError", () => {
@@ -280,5 +286,116 @@ describe("killClaimedRunsInContainers", () => {
     const results = await killClaimedRunsInContainers(new Map(), engine);
     expect(results).toEqual([]);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("reapStaleSandboxTrees", () => {
+  // The sweep script is a shell program; we exercise its IO contract
+  // (env-var passing, stdout parsing, error tolerance) against a fake
+  // engine rather than re-implementing /proc inspection here. The actual
+  // shell logic is covered by the runtime integration suite where a real
+  // sandbox container with seeded leaked processes verifies that the
+  // script identifies and SIGKILLs them.
+  function fakeEngineForSweep(
+    handler: (containerId: string, env: Readonly<string[]>) => { exitCode: number; stdout: string },
+  ): { engine: Engine; calls: Array<{ container: string; env: string[]; cmd: string[] }> } {
+    const calls: Array<{ container: string; env: string[]; cmd: string[] }> = [];
+    const exec = async (spec: ExecSpec): Promise<ExecHandle> => {
+      const env = [...(spec.env ?? [])];
+      calls.push({ container: spec.containerId, env, cmd: spec.cmd });
+      const { exitCode, stdout } = handler(spec.containerId, env);
+      const out = new PassThrough();
+      const err = new PassThrough();
+      // Defer the stdout write so the caller's `on("data", ...)` handler
+      // (attached after `engine.exec` returns) actually catches it. The
+      // real wrapExecChild gates wait() on the child's "close" event,
+      // which fires after stdout closes — replicate that ordering here
+      // so the production parser can read stdoutChunks.
+      const drained = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          out.end(stdout);
+          err.end();
+          out.once("end", () => resolve());
+        });
+      });
+      return {
+        stdout: out,
+        stderr: err,
+        wait: async () => {
+          await drained;
+          return exitCode;
+        },
+        cancel: async () => {},
+      };
+    };
+    return {
+      calls,
+      engine: { name: "docker", exec } as unknown as Engine,
+    };
+  }
+
+  it("parses the reaped count from REAPED=<n> on stdout", async () => {
+    // The sweep echoes a single REAPED=<n> line at the end. The runtime
+    // surfaces this count in logs so an operator can see leaks getting
+    // cleaned up post-deploy — a regression in the parser would silently
+    // make the metric report zero forever.
+    const { engine } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=3\n" }));
+    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
+    expect(result.reaped).toBe(3);
+  });
+
+  it("passes the expected pidfile set as a space-framed env var", async () => {
+    // Whole-token matching in the shell requires every pidfile to be
+    // surrounded by spaces, including the first and last. Without the
+    // outer padding, a prefix match (e.g. a leaked `/tmp/desk-runs/abc.pid`
+    // would be mistaken for active because `abc.pid` appears as a substring
+    // inside `xabc.pid`). We assert the wire format directly.
+    const { engine, calls } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=0" }));
+    await reapStaleSandboxTrees(engine, "ctr_x", [
+      "/tmp/desk-runs/msg_a.pid",
+      "/tmp/desk-runs/msg_b.pid",
+    ]);
+    const env = calls[0]?.env ?? [];
+    expect(env).toContain("EXPECTED_PIDFILES= /tmp/desk-runs/msg_a.pid /tmp/desk-runs/msg_b.pid ");
+  });
+
+  it("invokes `sh -c <script>` against the target container", async () => {
+    const { engine, calls } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=0" }));
+    await reapStaleSandboxTrees(engine, "ctr_target", []);
+    expect(calls[0]?.container).toBe("ctr_target");
+    expect(calls[0]?.cmd[0]).toBe("sh");
+    expect(calls[0]?.cmd[1]).toBe("-c");
+    expect(calls[0]?.cmd[2]).toMatch(/EXPECTED_PIDFILES/);
+    expect(calls[0]?.cmd[2]).toMatch(/setsid/);
+  });
+
+  it("returns reaped=0 when the script exits non-zero (degrades safely)", async () => {
+    // The sweep is a safety net — a regression that breaks the script
+    // inside the container must NOT block the new fire. We treat any
+    // non-zero exit as "did nothing"; the run proceeds and the operator
+    // sees memory pressure if leaks weren't reaped.
+    const { engine } = fakeEngineForSweep(() => ({ exitCode: 2, stdout: "REAPED=99" }));
+    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
+    expect(result.reaped).toBe(0);
+  });
+
+  it("returns reaped=0 when the engine itself throws", async () => {
+    const engine: Engine = {
+      name: "docker",
+      exec: async () => {
+        throw new Error("engine unreachable");
+      },
+    } as unknown as Engine;
+    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
+    expect(result.reaped).toBe(0);
+  });
+
+  it("returns reaped=0 when stdout has no REAPED line", async () => {
+    // Defensive: a partial output (e.g. the script was killed mid-flight
+    // by an unrelated SIGTERM) should not be parsed as success-with-leak-
+    // count. Better to report zero and let pressure surface than to lie.
+    const { engine } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "" }));
+    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
+    expect(result.reaped).toBe(0);
   });
 });

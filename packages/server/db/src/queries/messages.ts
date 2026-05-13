@@ -4,6 +4,27 @@ import { MessageSchema, type Message } from "@agent-desk/shared";
 
 type MessageListView = "full" | "compact" | "timeline";
 
+function bumpIsoAbove(baseIso: string): string {
+  const ms = Date.parse(baseIso);
+  if (!Number.isFinite(ms)) return baseIso;
+  return new Date(ms + 1).toISOString();
+}
+
+function newestIso(values: Array<string | null | undefined>): string | null {
+  let newest: string | null = null;
+  let newestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!value) continue;
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) continue;
+    if (ms > newestMs) {
+      newest = value;
+      newestMs = ms;
+    }
+  }
+  return newest;
+}
+
 const FULL_MESSAGE_SELECT = `
   id,
   chat_id,
@@ -570,7 +591,7 @@ export async function insert(
     ],
   );
   // Internal messages (summaries, summary requests, agent_turn triggers)
-  // are not visible to regular users and should not flip unread or bump
+  // are not ordinary user/agent chat activity and should not flip unread or bump
   // updated_at — either change would create noise in the sidebar (unread
   // dot, reordering). Dev-mode users can see some of these but should get
   // the same treatment: no false unread signals.
@@ -578,19 +599,59 @@ export async function insert(
   // The check uses both content.type (the message payload discriminator)
   // AND kind (the message-kind discriminator). Summary output children
   // (including failed-run error output) carry kind="summary" so they're
-  // internal regardless of content.type.
+  // internal regardless of content.type. Artifact references are intentionally
+  // not treated as internal: they are visible agent messages and should move the
+  // chat to the top just like text output.
   const contentType = (data.content as { type?: string } | null)?.type;
   const kind = data.kind ?? "chat";
   const isInternal =
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
     contentType === "summary" ||
-    contentType === "artifactRef" ||
     kind === "summary";
   if (!isInternal) {
-    await db.query(
-      "UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unread = 1 WHERE id = ?",
+    const { rows: activityRows } = await db.query<{
+      current_updated_at: string | null;
+      max_updated_at: string | null;
+      max_count: number | null;
+    }>(
+      `WITH current_chat AS (
+         SELECT workspace_id, updated_at
+         FROM chats
+         WHERE id = ?
+       ), workspace_max AS (
+         SELECT MAX(updated_at) AS max_updated_at
+         FROM chats
+         WHERE workspace_id = (SELECT workspace_id FROM current_chat)
+       )
+       SELECT
+         current_chat.updated_at AS current_updated_at,
+         workspace_max.max_updated_at AS max_updated_at,
+         (
+           SELECT COUNT(*)
+           FROM chats
+           WHERE workspace_id = current_chat.workspace_id
+             AND updated_at = workspace_max.max_updated_at
+         ) AS max_count
+       FROM current_chat, workspace_max`,
       [data.chatId],
+    );
+    const activity = activityRows[0];
+    const currentUpdatedAt = activity?.current_updated_at ?? null;
+    const maxUpdatedAt = activity?.max_updated_at ?? null;
+    const messageCreatedAt = rows[0].created_at as string;
+    const currentMs = currentUpdatedAt ? Date.parse(currentUpdatedAt) : Number.NEGATIVE_INFINITY;
+    const maxMs = maxUpdatedAt ? Date.parse(maxUpdatedAt) : Number.NEGATIVE_INFINITY;
+    const messageMs = Date.parse(messageCreatedAt);
+    const isSoleNewest = (activity?.max_count ?? 0) <= 1;
+    const nextUpdatedAt =
+      isSoleNewest && Number.isFinite(currentMs) && currentMs >= maxMs && currentMs >= messageMs
+        ? currentUpdatedAt
+        : newestIso([messageCreatedAt, maxUpdatedAt ? bumpIsoAbove(maxUpdatedAt) : null]) ?? messageCreatedAt;
+
+    await db.query(
+      "UPDATE chats SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END, unread = 1 WHERE id = ?",
+      [nextUpdatedAt, nextUpdatedAt, data.chatId],
     );
   }
   return rowToMessage(rows[0]);

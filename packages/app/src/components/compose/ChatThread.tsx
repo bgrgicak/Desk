@@ -7,7 +7,7 @@ import { FailedRunBanner } from './FailedRunBanner'
 import { isMessageVisible } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
-import type { AttachmentRef, ServerMessage } from '@/store/types'
+import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
 
 // ── ChatThread ────────────────────────────────────────────────────────────────
 
@@ -26,6 +26,16 @@ export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | nul
     const m = items[i]
     if (m.content.type === 'agent_turn') {
       return m.state === 'failed' ? m : null
+    }
+  }
+  return null
+}
+
+export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]
+    if (m.content.type === 'agent_turn') {
+      return m.state === 'pending' || m.state === 'running' ? m : null
     }
   }
   return null
@@ -72,6 +82,136 @@ export function shouldShowNewAssistantBadge(
   failedAgentTurn: ServerMessage | null,
 ): boolean {
   return showNewBadge && !failedAgentTurn && message.id === lastAssistantId
+}
+
+export function progressTextFromLog(log: AgentLogEntry[] | undefined): string | null {
+  if (!log?.length) return null
+  for (let i = log.length - 1; i >= 0; i--) {
+    const entry = log[i]
+    if (entry.kind === 'event') {
+      const text = progressTextForEvent(entry.event)
+      if (text) return text
+    } else if (entry.kind === 'stderr') {
+      return 'Making mistakes'
+    } else if (entry.kind === 'unparsed') {
+      return 'Wondering'
+    }
+  }
+  return null
+}
+
+export function liveDeveloperProgressMessage(
+  activeAgentTurn: ServerMessage | null,
+  developerMode: boolean,
+): ServerMessage | null {
+  if (!developerMode || !activeAgentTurn?.progressLog?.length) return null
+
+  const log = activeAgentTurn.progressLog.filter(isLiveDeveloperProgressEntry)
+  if (log.length === 0) return null
+
+  return {
+    ...activeAgentTurn,
+    id: `${activeAgentTurn.id}:live-progress`,
+    role: 'agent',
+    content: { type: 'events', log },
+  }
+}
+
+function isLiveDeveloperProgressEntry(entry: AgentLogEntry): boolean {
+  if (entry.kind === 'stderr') return true
+  if (entry.kind !== 'event') return false
+  const type = entry.event.type
+  return type !== 'text' && type !== 'reasoning' && type !== 'step_start' && type !== 'step_finish'
+}
+
+const TOOL_PROGRESS_LABELS: Record<string, string> = {
+  apply_patch: 'Patching',
+  bash: 'Running',
+  edit: 'Editing',
+  glob: 'Searching',
+  grep: 'Checking',
+  mcp: 'Calling',
+  read: 'Reading',
+  skill: 'Learning',
+  todowrite: 'Planning',
+  webfetch: 'Browsing',
+}
+
+const NESTED_TOOL_PROGRESS_LABELS: Record<string, string> = {
+  playwright_browser_evaluate: 'Inspecting',
+  playwright_browser_navigate: 'Navigating',
+}
+
+const GENERIC_TOOL_PROGRESS_LABELS: Record<string, string> = {
+  tool_use: 'Crafting',
+  tool_execution_update: 'Taking a break',
+  tool: 'Building',
+}
+
+function progressTextForEvent(event: AgentEvent): string | null {
+  if (event.type === 'text') return null
+  if (event.type === 'step_start' || event.type === 'step_finish') return null
+  if (event.type === 'reasoning') {
+    const text = pickProgressString(event.part, 'text') ?? pickProgressString(event.part, 'content')
+    return text ? trimProgress(text) : 'Thinking'
+  }
+  if (event.type === 'tool_use') {
+    return progressTextForToolEvent(event) ?? GENERIC_TOOL_PROGRESS_LABELS.tool_use
+  }
+  if (event.type === 'tool_call' || event.type === 'tool-call') {
+    return progressTextForToolEvent(event)
+  }
+  if (event.type === 'tool_result' || event.type === 'tool-result') {
+    return progressTextForToolEvent(event)
+  }
+  if (event.type === 'tool' || event.type === 'tool_execution_update') {
+    return progressTextForToolEvent(event) ?? GENERIC_TOOL_PROGRESS_LABELS[event.type]
+  }
+  return null
+}
+
+function progressTextForToolEvent(event: AgentEvent): string | null {
+  const tool = pickToolName(event)
+  if (tool === 'mcp') {
+    const nestedTool = pickNestedToolName(event)
+    if (nestedTool) return NESTED_TOOL_PROGRESS_LABELS[nestedTool] ?? TOOL_PROGRESS_LABELS.mcp
+  }
+  if (tool && TOOL_PROGRESS_LABELS[tool]) return TOOL_PROGRESS_LABELS[tool]
+  if (event.type === 'tool' || event.type === 'tool_execution_update' || event.type === 'tool_use') {
+    return GENERIC_TOOL_PROGRESS_LABELS[event.type] ?? null
+  }
+  return null
+}
+
+function pickToolName(event: AgentEvent): string | undefined {
+  return pickProgressString(event.part, 'tool')
+    ?? pickProgressString(event.part, 'name')
+    ?? pickProgressString(event.part, 'command')
+    ?? pickProgressString(event, 'tool')
+    ?? pickProgressString(event, 'name')
+    ?? pickProgressString(event, 'command')
+}
+
+function pickNestedToolName(event: AgentEvent): string | undefined {
+  const args = event.part && typeof event.part === 'object'
+    ? (event.part as Record<string, unknown>).args
+    : undefined
+  const topLevelArgs = typeof event.args === 'object' ? event.args : undefined
+  return pickProgressString(args, 'tool')
+    ?? pickProgressString(topLevelArgs, 'tool')
+    ?? pickProgressString(event.part, 'args.tool')
+    ?? pickProgressString(event, 'args.tool')
+}
+
+function pickProgressString(obj: unknown, key: string): string | undefined {
+  if (!obj || typeof obj !== 'object') return undefined
+  const v = (obj as Record<string, unknown>)[key]
+  return typeof v === 'string' ? v : undefined
+}
+
+function trimProgress(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length > 120 ? line.slice(0, 120) + '…' : line
 }
 
 /**
@@ -194,10 +334,23 @@ export function ChatThread({
   const prevCursor = activeData?.prevCursor
   const isInitialLoading = !skipQuery && !activeData && !isError
 
-  const hasPendingTrigger = allItems.some(
-    m => m.content.type === 'agent_turn' && (m.state === 'pending' || m.state === 'running'),
+  const activeAgentTurn = useMemo(
+    () => findActiveAgentTurn(allItems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeData],
   )
+  const hasPendingTrigger = activeAgentTurn !== null
   const isTyping = hasPendingTrigger || isSending
+
+  const statusText = useMemo(() => {
+    return progressTextFromLog(activeAgentTurn?.progressLog)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAgentTurn])
+
+  const liveDeveloperMessage = useMemo(
+    () => liveDeveloperProgressMessage(activeAgentTurn, developerMode),
+    [activeAgentTurn, developerMode],
+  )
 
   // Detect the most recent failed agent turn (if any) to show an inline
   // error banner. Only show it when there is no newer pending/running turn
@@ -388,9 +541,22 @@ export function ChatThread({
               <ToolOnlyRunFallback />
             </div>
           )}
+          {liveDeveloperMessage && (
+            <div className={resolvedStatusClassName}>
+              <MessageBubble
+                message={liveDeveloperMessage}
+                workspaceId={workspaceId}
+                agentName={agentName}
+                isFirstInGroup
+                onAttachmentClick={onAttachmentClick}
+                agentHeaderClassName={agentHeaderClassName}
+                developerMode={developerMode}
+              />
+            </div>
+          )}
           {isTyping && (
             <div className={resolvedStatusClassName}>
-              <StatusIndicator text={null} isTyping={isTyping} />
+              <StatusIndicator text={statusText} isTyping={isTyping} />
             </div>
           )}
           {failedAgentTurn && (

@@ -41,6 +41,33 @@ const RETRY_STATUSES = new Set([502, 503]);
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 600;
 
+function isInternalMessageForChatActivity(msg: ServerMessage): boolean {
+  const contentType = msg.content?.type;
+  const kind = msg.kind ?? "chat";
+  return (
+    contentType === "agent_turn" ||
+    contentType === "summary_request" ||
+    contentType === "summary" ||
+    kind === "summary"
+  );
+}
+
+function bumpChatActivityInList(draft: ServerChat[], chatId: string, updatedAt: string): void {
+  const idx = draft.findIndex((c) => c.id === chatId);
+  if (idx < 0) return;
+  const current = Date.parse(draft[idx].updatedAt);
+  const requested = Date.parse(updatedAt);
+  const max = draft.reduce((newest, chat) => {
+    const ms = Date.parse(chat.updatedAt);
+    return Number.isFinite(ms) ? Math.max(newest, ms) : newest;
+  }, Number.NEGATIVE_INFINITY);
+  if (Number.isFinite(current) && current >= max && (!Number.isFinite(requested) || current >= requested)) return;
+  const next = Number.isFinite(requested) ? Math.max(requested, max + 1) : max + 1;
+  const nextUpdatedAt = Number.isFinite(next) ? new Date(next).toISOString() : updatedAt;
+  draft[idx] = { ...draft[idx], updatedAt: nextUpdatedAt };
+  draft.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
 /**
  * If an authed call returns 401 the stored token is dead. Clear it and
  * reload so the App outer-render check sees no token and renders the
@@ -697,6 +724,38 @@ export const api = createApi({
       // viewed chat). Invalidating Chat tags here races the markRead and
       // causes a stale unread=true to flash in the sidebar.
       invalidatesTags: [],
+      async onQueryStarted({ chatId }, { dispatch, queryFulfilled, getState }) {
+        try {
+          const { data: message } = await queryFulfilled;
+          if (isInternalMessageForChatActivity(message)) return;
+          const updatedAt = message.createdAt;
+
+          dispatch(
+            api.util.updateQueryData("getChats", undefined, (draft) => {
+              bumpChatActivityInList(draft, chatId, updatedAt);
+            }),
+          );
+
+          const state = getState() as Record<string, unknown>;
+          const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+          if (apiState?.queries) {
+            for (const [key, entry] of Object.entries(apiState.queries)) {
+              if (!key.startsWith("getChats(")) continue;
+              const chats = entry?.data;
+              if (!Array.isArray(chats)) continue;
+              const chat = chats.find((c: ServerChat) => c.id === chatId);
+              if (!chat) continue;
+              dispatch(
+                api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, (draft) => {
+                  bumpChatActivityInList(draft, chatId, updatedAt);
+                }),
+              );
+            }
+          }
+        } catch {
+          // The mutation error is surfaced by the caller; leave caches as-is.
+        }
+      },
     }),
     patchMessage: build.mutation<
       ServerMessage,

@@ -9,7 +9,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
-import { detectEngine, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { detectEngine, _isRemovalAlreadyInProgressForTest, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
 import { DeskError } from "@agent-desk/shared";
 
 const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
@@ -91,6 +94,38 @@ describe("exec handle stream lifecycle", () => {
 
     await expect(wait).resolves.toBe(0);
     expect(Buffer.concat(chunks).toString("utf8")).toBe("late stdout");
+  });
+});
+
+describe("container removal", () => {
+  it("recognizes Docker's duplicate removal race as idempotent", () => {
+    expect(_isRemovalAlreadyInProgressForTest(
+      "Error response from daemon: removal of container desk-sandbox-wks_x is already in progress",
+    )).toBe(true);
+  });
+
+  it("waits for an already-in-progress removal instead of failing", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-engine-fake-"));
+    const fakeDocker = path.join(dir, "docker");
+    await fs.writeFile(fakeDocker, `#!/bin/sh
+if [ "$1" = "info" ]; then exit 0; fi
+if [ "$1" = "rm" ]; then
+  printf '%s\n' 'Error response from daemon: removal of container desk-sandbox-wks_x is already in progress' >&2
+  exit 1
+fi
+if [ "$1" = "inspect" ]; then
+  printf '%s\n' 'Error: No such object: desk-sandbox-wks_x' >&2
+  exit 1
+fi
+exit 99
+`);
+    await fs.chmod(fakeDocker, 0o755);
+    process.env.PATH = `${dir}:${PRIOR_PATH ?? ""}`;
+    process.env.DESK_CONTAINER_ENGINE = "docker";
+    _resetEngineCache();
+
+    const engine = await detectEngine();
+    await expect(engine.remove("desk-sandbox-wks_x", true)).resolves.toBeUndefined();
   });
 });
 

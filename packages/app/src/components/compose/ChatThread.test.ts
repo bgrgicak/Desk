@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, findFailedAgentTurn, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { currentChatMessagesData, findActiveAgentTurn, findFailedAgentTurn, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -187,6 +187,28 @@ describe('findFailedAgentTurn', () => {
   })
 })
 
+describe('findActiveAgentTurn', () => {
+  it('returns the active agent_turn when the most recent one is running', () => {
+    const items = [
+      message({ type: 'text', text: 'Hello' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'running' }),
+    ]
+
+    expect(findActiveAgentTurn(items)?.id).toBe('2')
+  })
+
+  it('only considers the most recent agent_turn, not older stuck ones', () => {
+    const items = [
+      message({ type: 'text', text: 'Old request' }, { role: 'user', id: '1' }),
+      message({ type: 'agent_turn', userMessageId: '1' }, { role: 'system', id: '2', state: 'running' }),
+      message({ type: 'text', text: 'New request' }, { role: 'user', id: '3' }),
+      message({ type: 'agent_turn', userMessageId: '3' }, { role: 'system', id: '4', state: 'succeeded' }),
+    ]
+
+    expect(findActiveAgentTurn(items)).toBeNull()
+  })
+})
+
 describe('shouldShowNewAssistantBadge', () => {
   it('shows the regular assistant new badge when the latest visible assistant message is unread', () => {
     const assistantMessage = message({ type: 'text', text: 'Done' }, { id: 'agent-1' })
@@ -202,6 +224,110 @@ describe('shouldShowNewAssistantBadge', () => {
     )
 
     expect(shouldShowNewAssistantBadge(assistantMessage, 'agent-1', true, failedTurn)).toBe(false)
+  })
+})
+
+describe('progressTextFromLog', () => {
+  it('surfaces the latest reasoning text without changing tool-row rendering', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+      { kind: 'event', event: { type: 'reasoning', part: { text: 'Checking where the loader is rendered.' } } },
+    ])).toBe('Checking where the loader is rendered.')
+  })
+
+  it('falls back to tool progress labels when no reasoning text is present', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_use', part: { tool: 'bash' } } },
+    ])).toBe('Running')
+  })
+
+  it('surfaces generic OpenCode tool events by tool name', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool', part: { name: 'read' } } },
+    ])).toBe('Reading')
+  })
+
+  it('prefers nested MCP browser tool labels when available', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_use', part: { tool: 'mcp', args: { tool: 'playwright_browser_navigate' } } } },
+    ])).toBe('Navigating')
+  })
+
+  it('prefers top-level nested MCP browser tool labels when available', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_use', part: { tool: 'mcp' }, args: { tool: 'playwright_browser_evaluate' } } },
+    ])).toBe('Inspecting')
+  })
+
+  it('uses generic tool activity labels when no specific tool name is available', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_execution_update' } },
+    ])).toBe('Taking a break')
+  })
+
+  it('ignores runtime step events when choosing live progress text', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+      { kind: 'event', event: { type: 'step_finish' } },
+    ])).toBe('Reading')
+  })
+
+  it('falls back to Thinking through the status indicator when no mapped progress text exists', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'unknown_runtime_event' } },
+    ])).toBeNull()
+  })
+
+  it('maps stderr to its curated loader label without surfacing raw shell output', () => {
+    expect(progressTextFromLog([
+      { kind: 'stderr', line: 'sh: 1: echo: echo: I/O error' },
+    ])).toBe('Making mistakes')
+  })
+
+  it('maps unparsed runtime lines to its curated loader label without surfacing raw output', () => {
+    expect(progressTextFromLog([
+      { kind: 'unparsed', line: 'raw runtime output' },
+    ])).toBe('Wondering')
+  })
+
+  it('does not invent labels for unmapped tool names', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_call', part: { name: 'unknown_tool' } } },
+    ])).toBeNull()
+  })
+})
+
+describe('liveDeveloperProgressMessage', () => {
+  const activeTurn = message(
+    { type: 'agent_turn', userMessageId: 'user-1' },
+    {
+      role: 'system',
+      id: 'turn-1',
+      state: 'running',
+      progressLog: [
+        { kind: 'event', event: { type: 'text', part: { text: 'Draft answer' } } },
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+        { kind: 'event', event: { type: 'step_finish' } },
+        { kind: 'stderr', line: 'diagnostic line' },
+      ],
+    },
+  )
+
+  it('builds a temporary events message from the active turn in developer mode', () => {
+    const liveMessage = liveDeveloperProgressMessage(activeTurn, true)
+
+    expect(liveMessage?.role).toBe('agent')
+    expect(liveMessage?.content).toEqual({
+      type: 'events',
+      log: [
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+        { kind: 'stderr', line: 'diagnostic line' },
+      ],
+    })
+  })
+
+  it('does not surface live tool rows outside developer mode', () => {
+    expect(liveDeveloperProgressMessage(activeTurn, false)).toBeNull()
   })
 })
 

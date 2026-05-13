@@ -48,6 +48,7 @@ describe("messages queries", () => {
 
     const chat = await chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
+    expect(chat!.updatedAt).toBe(msg.createdAt);
   });
 
   it("inserts summary messages without marking chat unread", async () => {
@@ -64,6 +65,66 @@ describe("messages queries", () => {
 
     const chat = await chats.findById(pool, summaryChatId);
     expect(chat!.unread).toBe(false);
+  });
+
+  it("does not move chat updatedAt backwards when inserting a message", async () => {
+    const monotonicChatId = generateId("chat");
+    await chats.insert(pool, { id: monotonicChatId, workspaceId, agentId, title: "Monotonic" });
+    const future = "2099-01-01T00:00:00.000Z";
+    await pool.query("UPDATE chats SET updated_at = ?, unread = 0 WHERE id = ?", [future, monotonicChatId]);
+
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: monotonicChatId,
+      role: "user",
+      content: { type: "text", text: "Hello from the past" },
+    });
+
+    const chat = await chats.findById(pool, monotonicChatId);
+    expect(chat!.updatedAt).toBe(future);
+    expect(chat!.unread).toBe(true);
+  });
+
+  it("bumps a buried chat above the current newest chat when a visible message is inserted", async () => {
+    const newestChatId = generateId("chat");
+    const buriedChatId = generateId("chat");
+    await chats.insert(pool, { id: newestChatId, workspaceId, agentId, title: "Newest" });
+    await chats.insert(pool, { id: buriedChatId, workspaceId, agentId, title: "Buried" });
+    const newest = "2099-01-01T00:00:00.000Z";
+    const buried = "2026-01-01T00:00:00.000Z";
+    await pool.query("UPDATE chats SET updated_at = ? WHERE id = ?", [newest, newestChatId]);
+    await pool.query("UPDATE chats SET updated_at = ? WHERE id = ?", [buried, buriedChatId]);
+
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: buriedChatId,
+      role: "agent",
+      content: { type: "text", text: "A new visible reply" },
+    });
+
+    const listed = await chats.listWithLatestMessage(pool, workspaceId);
+    expect(listed[0]?.id).toBe(buriedChatId);
+    expect(Date.parse(listed[0]!.updatedAt)).toBeGreaterThan(Date.parse(newest));
+  });
+
+  it("breaks updatedAt ties in favor of the chat receiving a visible message", async () => {
+    const firstChatId = generateId("chat");
+    const tiedChatId = generateId("chat");
+    await chats.insert(pool, { id: firstChatId, workspaceId, agentId, title: "First tied" });
+    await chats.insert(pool, { id: tiedChatId, workspaceId, agentId, title: "Second tied" });
+    const tied = "2099-01-01T00:00:00.000Z";
+    await pool.query("UPDATE chats SET updated_at = ? WHERE id IN (?, ?)", [tied, firstChatId, tiedChatId]);
+
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: tiedChatId,
+      role: "user",
+      content: { type: "text", text: "Break the tie" },
+    });
+
+    const listed = await chats.listWithLatestMessage(pool, workspaceId);
+    expect(listed[0]?.id).toBe(tiedChatId);
+    expect(Date.parse(listed[0]!.updatedAt)).toBeGreaterThan(Date.parse(tied));
   });
 
   it("lists by chat with cursor pagination (forward)", async () => {

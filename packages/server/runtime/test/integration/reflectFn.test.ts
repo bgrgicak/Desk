@@ -5,8 +5,9 @@
  * memoryEdits — without locking us into a specific journal body the
  * model is free to vary.
  *
- * Skipped when `opencode` isn't on PATH so CI environments without the
- * CLI don't fail this test. The local `npm run ci:local` mirror has it.
+ * Skipped when `opencode` isn't on PATH, or when the local sandbox image is
+ * unavailable, so host-only test runs don't try to pull the private image.
+ * The local `npm run ci:local` mirror builds the image before this suite.
  */
 import { afterAll, beforeAll, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -16,6 +17,8 @@ import * as path from "node:path";
 import { Pool, queries, runMigrations } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { ensureWorkspaceLayout } from "@agent-desk/storage";
+import { detectEngine } from "../../src/engine.js";
+import { sandboxImage } from "../../src/docker.js";
 import { productionReflectWorkspace } from "../../src/reflectFn.js";
 
 function opencodeAvailable(): boolean {
@@ -27,7 +30,16 @@ function opencodeAvailable(): boolean {
   }
 }
 
-const SKIP = !opencodeAvailable();
+async function sandboxImageAvailable(): Promise<boolean> {
+  try {
+    const engine = await detectEngine();
+    return (await engine.imageId(sandboxImage())) !== null;
+  } catch {
+    return false;
+  }
+}
+
+const SKIP = !opencodeAvailable() || !(await sandboxImageAvailable());
 const describeIf = SKIP ? describe.skip : describe;
 
 let pool: Pool;

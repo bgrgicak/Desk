@@ -1,8 +1,83 @@
 import { describe, it, expect } from 'vitest'
-import { applyEventToCache } from './middleware'
+import { configureStore } from '@reduxjs/toolkit'
+import { applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
 import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed } from '../slices/derivedSlice'
+import { api } from '../api'
 
 describe('applyEventToCache', () => {
+  describe('message.log_appended parsing', () => {
+    it('treats OpenCode stdout JSON as a live structured event', () => {
+      expect(logEntryFromWsPayload({
+        type: 'message.log_appended',
+        payload: {
+          messageId: 'msg_turn',
+          kind: 'stdout',
+          line: JSON.stringify({ type: 'reasoning', part: { text: 'Looking at the code.' } }),
+        },
+      })).toEqual({
+        kind: 'event',
+        event: { type: 'reasoning', part: { text: 'Looking at the code.' } },
+      })
+    })
+
+    it('patches the active chat-message cache immediately for live progress', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+      await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
+        items: [{
+          id: 'msg_turn', chatId: 'cht_1', role: 'system', state: 'running',
+          content: { type: 'agent_turn', userMessageId: 'msg_user' },
+          createdAt: new Date().toISOString(),
+        }],
+      }))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.log_appended',
+        payload: {
+          messageId: 'msg_turn',
+          kind: 'stdout',
+          line: JSON.stringify({ type: 'tool_use', part: { tool: 'bash' } }),
+        },
+      }, 'cht_1', store.getState)
+
+      const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
+      expect(entry.data?.items[0].progressLog).toEqual([
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'bash' } } },
+      ])
+    })
+
+    it('merges pending live progress when the chat cache loads after the log event', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware, wsMiddleware),
+      })
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.log_appended',
+        payload: {
+          messageId: 'msg_turn_late_cache',
+          kind: 'stdout',
+          line: JSON.stringify({ type: 'tool_use', part: { tool: 'read' } }),
+        },
+      }, 'cht_1', store.getState)
+
+      await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
+        items: [{
+          id: 'msg_turn_late_cache', chatId: 'cht_1', role: 'system', state: 'running',
+          content: { type: 'agent_turn', userMessageId: 'msg_user' },
+          createdAt: new Date().toISOString(),
+        }],
+      }))
+
+      const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
+      expect(entry.data?.items[0].progressLog).toEqual([
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+      ])
+    })
+  })
+
   describe('library.changed', () => {
     it('dispatches bumpFileChangeCounter with the changed path', () => {
       const dispatched: unknown[] = []
@@ -118,7 +193,7 @@ describe('applyEventToCache', () => {
       expect(hasChatInvalidation).toBe(false)
     })
 
-    it('does NOT invalidate Chat tags for an artifactRef message', () => {
+    it('invalidates Chat tags for an artifactRef message', () => {
       const dispatched: unknown[] = []
       const dispatch = (action: unknown) => { dispatched.push(action); return action }
 
@@ -135,7 +210,7 @@ describe('applyEventToCache', () => {
         try { const s = JSON.stringify(a); return s?.includes('"Chat"') && s?.includes('"cht_1"') }
         catch { return false }
       })
-      expect(hasChatInvalidation).toBe(false)
+      expect(hasChatInvalidation).toBe(true)
     })
 
     it('does NOT invalidate Chat tags for a message with kind="summary"', () => {
@@ -235,6 +310,49 @@ describe('applyEventToCache', () => {
       } finally {
         globalThis.fetch = origFetch
       }
+    })
+
+    it('bumps the viewed chat above the cached newest chat without invalidating Chat tags', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+      const messageCreatedAt = '2026-01-01T00:05:00.000Z'
+
+      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
+        {
+          id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Viewed',
+          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          kind: 'chat', running: false, failed: false,
+        },
+        {
+          id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Other',
+          updatedAt: '2099-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          kind: 'chat', running: false, failed: false,
+        },
+      ]))
+
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => { dispatched.push(action); return store.dispatch(action as never) }
+
+      applyEventToCache(dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_vc_bump', chatId: 'cht_viewed', role: 'user',
+          content: { type: 'text', text: 'push me up' },
+          createdAt: messageCreatedAt,
+        },
+      }, 'cht_viewed', store.getState)
+
+      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
+      expect(Date.parse(entry.data?.find((chat) => chat.id === 'cht_viewed')?.updatedAt ?? '')).toBeGreaterThan(Date.parse('2099-01-01T00:00:00.000Z'))
+      expect(entry.data?.map((chat) => chat.id)).toEqual(['cht_viewed', 'cht_other'])
+
+      const hasChatInvalidation = dispatched.some((a) => {
+        try { const s = JSON.stringify(a); return s?.includes('invalidateTags') && s?.includes('"Chat"') }
+        catch { return false }
+      })
+      expect(hasChatInvalidation).toBe(false)
     })
 
     it('uses getState to patch workspace-scoped caches when unscoped cache is empty', () => {

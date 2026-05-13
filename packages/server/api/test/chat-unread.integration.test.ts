@@ -252,18 +252,20 @@ describe("chat unread status", () => {
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(false);
   });
 
-  it("inserting an artifactRef message does not set unread or bump updated_at", async () => {
+  it("inserting an artifactRef message marks unread and bumps updated_at", async () => {
     const chatId = await freshChat();
     const before = await queries.chats.findById(pool, chatId);
-    await queries.messages.insert(pool, {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const msg = await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
       role: "agent",
       content: { type: "artifactRef", path: "artifacts/test.md", name: "test.md" },
     });
     const after = await queries.chats.findById(pool, chatId);
-    expect(after!.unread).toBe(false);
-    expect(after!.updatedAt).toBe(before!.updatedAt);
+    expect(after!.unread).toBe(true);
+    expect(after!.updatedAt).not.toBe(before!.updatedAt);
+    expect(after!.updatedAt).toBe(msg.createdAt);
   });
 
   it("inserting a message with kind='summary' does not set unread regardless of content type", async () => {
@@ -284,7 +286,7 @@ describe("chat unread status", () => {
 
   it("agent text response still sets unread", async () => {
     const chatId = await freshChat();
-    await queries.messages.insert(pool, {
+    const msg = await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId,
       role: "agent",
@@ -292,6 +294,7 @@ describe("chat unread status", () => {
     });
     const chat = await queries.chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
+    expect(chat!.updatedAt).toBe(msg.createdAt);
   });
 
   // ── Chat list stays lean: no unused lastMessageContent projection ───────────

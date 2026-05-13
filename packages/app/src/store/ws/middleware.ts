@@ -4,8 +4,18 @@ import { api } from "../api";
 import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed, clearChatFailed, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
-import type { ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
+import type { AgentEvent, AgentLogEntry, ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
 import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
+
+const pendingProgressLogByMessageId = new Map<string, AgentLogEntry[]>();
+
+function mergeProgressLog(msg: ServerMessage, existing?: AgentLogEntry[]): ServerMessage {
+  const pending = pendingProgressLogByMessageId.get(msg.id) ?? [];
+  const merged = [...(existing ?? []), ...(msg.progressLog ?? []), ...pending];
+  if (merged.length === 0) return msg;
+  pendingProgressLogByMessageId.delete(msg.id);
+  return { ...msg, progressLog: merged };
+}
 
 function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
   if (msg.content.type === "summary" || msg.content.type === "summary_request" || msg.content.type === "reflection_request") {
@@ -95,6 +105,63 @@ function patchChatUnreadInCache(
   }
 }
 
+/**
+ * Non-internal message appends bump `chats.updated_at` on the server, which is
+ * what the sidebar sorts by. When the message belongs to the currently viewed
+ * chat we intentionally avoid invalidating the chat list (to prevent unread-dot
+ * flashes), so mirror that timestamp bump in any live chat-list cache.
+ */
+function patchChatActivityInCache(
+  dispatch: (a: unknown) => unknown,
+  chatId: string,
+  updatedAt: string,
+  getState?: () => unknown,
+): void {
+  const sortByUpdatedAtDesc = (draft: ServerChat[]) => {
+    draft.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  };
+  const patch = (draft: ServerChat[]) => {
+    const idx = draft.findIndex((c) => c.id === chatId);
+    if (idx < 0) return;
+    const current = Date.parse(draft[idx].updatedAt);
+    const requested = Date.parse(updatedAt);
+    const max = draft.reduce((newest, chat) => {
+      const ms = Date.parse(chat.updatedAt);
+      return Number.isFinite(ms) ? Math.max(newest, ms) : newest;
+    }, Number.NEGATIVE_INFINITY);
+    if (Number.isFinite(current) && current >= max && (!Number.isFinite(requested) || current >= requested)) return;
+    const next = Number.isFinite(requested) ? Math.max(requested, max + 1) : max + 1;
+    const nextUpdatedAt = Number.isFinite(next) ? new Date(next).toISOString() : updatedAt;
+    draft[idx] = { ...draft[idx], updatedAt: nextUpdatedAt };
+    sortByUpdatedAtDesc(draft);
+  };
+  const patchSingle = (draft: ServerChat) => {
+    if (draft.id !== chatId) return;
+    const current = Date.parse(draft.updatedAt);
+    const next = Date.parse(updatedAt);
+    if (Number.isFinite(current) && Number.isFinite(next) && current > next) return;
+    draft.updatedAt = updatedAt;
+  };
+
+  dispatch(api.util.updateQueryData("getChats", undefined, patch));
+  dispatch(api.util.updateQueryData("getChat", chatId, patchSingle));
+
+  if (!getState) return;
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+  if (!apiState?.queries) return;
+  for (const [key, entry] of Object.entries(apiState.queries)) {
+    if (!key.startsWith("getChats(")) continue;
+    const chats = entry?.data;
+    if (!Array.isArray(chats)) continue;
+    const chat = chats.find((c: ServerChat) => c.id === chatId);
+    if (!chat) continue;
+    dispatch(
+      api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patch),
+    );
+  }
+}
+
 function messageMatchesFilter(msg: ServerMessage, filter: MessagesFilter, workspaceId?: string): boolean {
   if (filter.chatId && filter.chatId !== msg.chatId) return false;
   if (filter.workspaceId && workspaceId && filter.workspaceId !== workspaceId) return false;
@@ -152,6 +219,105 @@ function patchPerChatMessageCaches(
 ): void {
   dispatch(api.util.updateQueryData("getChatMessages", { chatId, full: false }, patch));
   dispatch(api.util.updateQueryData("getChatMessages", { chatId, full: true }, patch));
+}
+
+export function logEntryFromWsPayload(payload: WsEvent & { type: "message.log_appended" }): AgentLogEntry {
+  const { kind, line } = payload.payload;
+  if (kind === "stderr") return { kind: "stderr", line };
+  if (kind === "event") return { kind: "event", event: JSON.parse(line) };
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (parsed && typeof parsed === "object" && typeof (parsed as { type?: unknown }).type === "string") {
+      return { kind: "event", event: parsed as AgentEvent };
+    }
+  } catch {
+    // Raw stdout from fake/plain drivers is still useful as a live diagnostic.
+  }
+  return { kind: "unparsed", line };
+}
+
+function patchProgressLogCaches(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+  event: WsEvent & { type: "message.log_appended" },
+): boolean {
+  let entry: AgentLogEntry;
+  try {
+    entry = logEntryFromWsPayload(event);
+  } catch {
+    entry = { kind: "unparsed", line: event.payload.line };
+  }
+
+  const messageId = event.payload.messageId;
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { endpointName?: string; data?: ListMessagesResponse; originalArgs?: { chatId?: string; full?: boolean; before?: string } }> } | undefined;
+  if (!apiState?.queries) return false;
+
+  let patched = false;
+  for (const [key, cacheEntry] of Object.entries(apiState.queries)) {
+    if (cacheEntry.endpointName && cacheEntry.endpointName !== "getChatMessages") continue;
+    const cachedMsg = cacheEntry?.data?.items?.find((m) => m.id === messageId);
+    if (!cachedMsg) continue;
+    // getChatMessages uses a custom serialized cache key (`chatId:timeline` /
+    // `chatId:full`), so the RTK query key is not JSON-parseable. Use the
+    // stored original args when present, and fall back to the message chat id +
+    // serialized key suffix. Without this, live progress stays pending until a
+    // later message.updated merges it, which makes tool calls appear only with
+    // the final assistant message.
+    const originalArgs = cacheEntry.originalArgs;
+    const chatId = originalArgs?.chatId ?? cachedMsg.chatId;
+    const full = originalArgs?.full ?? key.includes(":full");
+    const args: { chatId: string; full?: boolean; before?: string } = { chatId, full };
+    dispatch(api.util.updateQueryData("getChatMessages", args, (draft) => {
+      const msg = draft.items.find((m) => m.id === messageId);
+      if (!msg) return;
+      msg.progressLog = [...(msg.progressLog ?? []), entry];
+      patched = true;
+    }));
+  }
+  if (!patched) {
+    pendingProgressLogByMessageId.set(messageId, [
+      ...(pendingProgressLogByMessageId.get(messageId) ?? []),
+      entry,
+    ]);
+  }
+  return patched;
+}
+
+function mergePendingProgressIntoChatMessageCaches(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+): void {
+  if (pendingProgressLogByMessageId.size === 0) return;
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { endpointName?: string; data?: ListMessagesResponse; originalArgs?: { chatId?: string; full?: boolean; before?: string } }> } | undefined;
+  if (!apiState?.queries) return;
+
+  for (const [key, cacheEntry] of Object.entries(apiState.queries)) {
+    if (cacheEntry.endpointName && cacheEntry.endpointName !== "getChatMessages") continue;
+    const items = cacheEntry.data?.items;
+    if (!items?.length) continue;
+
+    const messageIdsWithPending = items
+      .map((m) => m.id)
+      .filter((id) => pendingProgressLogByMessageId.has(id));
+    if (messageIdsWithPending.length === 0) continue;
+
+    const originalArgs = cacheEntry.originalArgs;
+    const chatId = originalArgs?.chatId ?? items[0]?.chatId;
+    if (!chatId) continue;
+    const full = originalArgs?.full ?? key.includes(":full");
+    const args: { chatId: string; full?: boolean; before?: string } = { chatId, full };
+
+    dispatch(api.util.updateQueryData("getChatMessages", args, (draft) => {
+      for (const msg of draft.items) {
+        const pending = pendingProgressLogByMessageId.get(msg.id);
+        if (!pending?.length) continue;
+        msg.progressLog = [...(msg.progressLog ?? []), ...pending];
+        pendingProgressLogByMessageId.delete(msg.id);
+      }
+    }));
+  }
 }
 
 /**
@@ -340,6 +506,12 @@ export const wsMiddleware: Middleware = (storeApi) => {
         }
       }
     }
+    if (api.endpoints.getChatMessages.matchFulfilled(action)) {
+      mergePendingProgressIntoChatMessageCaches(
+        storeApi.dispatch as (a: unknown) => unknown,
+        storeApi.getState as () => unknown,
+      );
+    }
     return result;
   };
 };
@@ -427,19 +599,23 @@ export function applyEventToCache(
     }
     case "message.appended":
     case "message.updated": {
-      const msg: ServerMessage = event.payload;
+      const rawMsg: ServerMessage = event.payload;
+      const msg = mergeProgressLog(rawMsg);
       const timelineMsg = compactTimelineMessage(msg);
       dispatch(api.util.updateQueryData("getChatMessages", { chatId: msg.chatId, full: false }, (draft) => {
         const idx = draft.items.findIndex((m) => m.id === msg.id);
+        const existingProgress = idx >= 0 ? draft.items[idx]?.progressLog : undefined;
+        const nextTimelineMsg = timelineMsg ? mergeProgressLog(timelineMsg, existingProgress) : null;
         if (!timelineMsg) {
           if (idx >= 0) draft.items.splice(idx, 1);
-        } else if (idx >= 0) draft.items[idx] = timelineMsg;
-        else draft.items.push(timelineMsg);
+        } else if (idx >= 0) draft.items[idx] = nextTimelineMsg!;
+        else draft.items.push(nextTimelineMsg!);
       }));
       dispatch(api.util.updateQueryData("getChatMessages", { chatId: msg.chatId, full: true }, (draft) => {
         const idx = draft.items.findIndex((m) => m.id === msg.id);
-        if (idx >= 0) draft.items[idx] = msg;
-        else draft.items.push(msg);
+        const nextMsg = mergeProgressLog(msg, idx >= 0 ? draft.items[idx]?.progressLog : undefined);
+        if (idx >= 0) draft.items[idx] = nextMsg;
+        else draft.items.push(nextMsg);
       }));
       if (getState) {
         patchCrossMessageCaches(
@@ -464,8 +640,9 @@ export function applyEventToCache(
       }
       // Non-internal messages update chat.unread and chat.updated_at on
       // the server. Internal messages (summary, summary_request, agent_turn,
-      // artifactRef, and any message with kind="summary") leave the chat
-      // row untouched, so skip the invalidation.
+      // and any message with kind="summary") leave the chat row untouched, so
+      // skip the invalidation. Artifact refs are visible agent messages, so
+      // they should still bump chat activity.
       //
       // For the currently-viewed chat, skip the cache invalidation: the
       // user is already reading, so flipping unread=true in the cache
@@ -477,6 +654,7 @@ export function applyEventToCache(
       if (event.type === "message.appended") {
         const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
+          patchChatActivityInCache(dispatch, msg.chatId, msg.createdAt, getState);
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
             markChatReadQuietly(msg.chatId, dispatch, getState);
@@ -560,7 +738,7 @@ export function applyEventToCache(
       break;
     }
     case "message.log_appended": {
-      // TODO(slice 12): forward to log viewer when runs log UI exists.
+      if (getState) patchProgressLogCaches(dispatch, getState, event);
       break;
     }
   }

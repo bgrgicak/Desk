@@ -57,7 +57,6 @@ describe('chat browser notification rules', () => {
       message({ content: { type: 'agent_turn', userMessageId: 'msg_user' }, role: 'system' }),
       message({ content: { type: 'summary_request' }, role: 'system' }),
       message({ content: { type: 'summary', body: '# Summary' } }),
-      message({ content: { type: 'artifactRef', path: 'artifacts/a.md' } }),
       message({ kind: 'summary' }),
     ]
 
@@ -65,6 +64,12 @@ describe('chat browser notification rules', () => {
       expect(isInternalChatMessage(msg)).toBe(true)
       expect(shouldShowChatBrowserNotification(msg, 'cht_other')).toBe(false)
     }
+  })
+
+  it('treats artifact references as visible agent activity', () => {
+    const msg = message({ content: { type: 'artifactRef', path: 'artifacts/a.md' } })
+    expect(isInternalChatMessage(msg)).toBe(false)
+    expect(shouldShowChatBrowserNotification(msg, 'cht_other')).toBe(true)
   })
 
   it('builds a click-through path to the chat that triggered the notification', () => {

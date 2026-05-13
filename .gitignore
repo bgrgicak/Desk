@@ -17,3 +17,5 @@ workspaces/
 .gstack/
 .worktrees/
 desk/.chats/
+.tmp/
+desk/

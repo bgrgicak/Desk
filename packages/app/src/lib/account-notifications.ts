@@ -62,7 +62,6 @@ export function isInternalChatMessage(msg: ServerMessage): boolean {
     ct === 'agent_turn' ||
     ct === 'summary_request' ||
     ct === 'summary' ||
-    ct === 'artifactRef' ||
     mk === 'summary'
   )
 }
