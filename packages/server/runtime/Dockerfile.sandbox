@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 1.14.x panic at offset 0x222D243 that SIGTRAPs both sandbox runs on
 # session resume) silently propagates into the next image. Bump this
 # deliberately after smoke-testing a new release.
-RUN npm install -g opencode-ai@1.14.48 --omit=dev --loglevel=error \
+RUN npm install -g opencode-ai@latest --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
 # Browser/display stack for visual checks. Browser binaries live outside any
