@@ -92,14 +92,36 @@ export function progressTextFromLog(log: AgentLogEntry[] | undefined): string | 
       const text = progressTextForEvent(entry.event)
       if (text) return text
     } else if (entry.kind === 'stderr') {
-      const line = entry.line.trim()
-      if (line) return line.length > 120 ? line.slice(0, 120) + '…' : line
+      return 'Making mistakes'
     } else if (entry.kind === 'unparsed') {
-      const line = entry.line.trim()
-      if (line) return line.length > 120 ? line.slice(0, 120) + '…' : line
+      return 'Wondering'
     }
   }
   return null
+}
+
+export function liveDeveloperProgressMessage(
+  activeAgentTurn: ServerMessage | null,
+  developerMode: boolean,
+): ServerMessage | null {
+  if (!developerMode || !activeAgentTurn?.progressLog?.length) return null
+
+  const log = activeAgentTurn.progressLog.filter(isLiveDeveloperProgressEntry)
+  if (log.length === 0) return null
+
+  return {
+    ...activeAgentTurn,
+    id: `${activeAgentTurn.id}:live-progress`,
+    role: 'agent',
+    content: { type: 'events', log },
+  }
+}
+
+function isLiveDeveloperProgressEntry(entry: AgentLogEntry): boolean {
+  if (entry.kind === 'stderr') return true
+  if (entry.kind !== 'event') return false
+  const type = entry.event.type
+  return type !== 'text' && type !== 'reasoning' && type !== 'step_start' && type !== 'step_finish'
 }
 
 const TOOL_PROGRESS_LABELS: Record<string, string> = {
@@ -133,8 +155,11 @@ function progressTextForEvent(event: AgentEvent): string | null {
     const text = pickProgressString(event.part, 'text') ?? pickProgressString(event.part, 'content')
     return text ? trimProgress(text) : 'Thinking'
   }
-  if (event.type === 'tool_use' || event.type === 'tool_call' || event.type === 'tool-call') {
+  if (event.type === 'tool_use') {
     return progressTextForToolEvent(event) ?? GENERIC_TOOL_PROGRESS_LABELS.tool_use
+  }
+  if (event.type === 'tool_call' || event.type === 'tool-call') {
+    return progressTextForToolEvent(event)
   }
   if (event.type === 'tool_result' || event.type === 'tool-result') {
     return progressTextForToolEvent(event)
@@ -155,7 +180,7 @@ function progressTextForToolEvent(event: AgentEvent): string | null {
   if (event.type === 'tool' || event.type === 'tool_execution_update' || event.type === 'tool_use') {
     return GENERIC_TOOL_PROGRESS_LABELS[event.type] ?? null
   }
-  return tool ? 'Working on it' : null
+  return null
 }
 
 function pickToolName(event: AgentEvent): string | undefined {
@@ -321,6 +346,11 @@ export function ChatThread({
     return progressTextFromLog(activeAgentTurn?.progressLog)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAgentTurn])
+
+  const liveDeveloperMessage = useMemo(
+    () => liveDeveloperProgressMessage(activeAgentTurn, developerMode),
+    [activeAgentTurn, developerMode],
+  )
 
   // Detect the most recent failed agent turn (if any) to show an inline
   // error banner. Only show it when there is no newer pending/running turn
@@ -509,6 +539,19 @@ export function ChatThread({
           {showToolOnlyFallback && (
             <div className={resolvedStatusClassName}>
               <ToolOnlyRunFallback />
+            </div>
+          )}
+          {liveDeveloperMessage && (
+            <div className={resolvedStatusClassName}>
+              <MessageBubble
+                message={liveDeveloperMessage}
+                workspaceId={workspaceId}
+                agentName={agentName}
+                isFirstInGroup
+                onAttachmentClick={onAttachmentClick}
+                agentHeaderClassName={agentHeaderClassName}
+                developerMode={developerMode}
+              />
             </div>
           )}
           {isTyping && (

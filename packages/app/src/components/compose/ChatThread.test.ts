@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, findActiveAgentTurn, findFailedAgentTurn, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { currentChatMessagesData, findActiveAgentTurn, findFailedAgentTurn, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -276,6 +276,58 @@ describe('progressTextFromLog', () => {
     expect(progressTextFromLog([
       { kind: 'event', event: { type: 'unknown_runtime_event' } },
     ])).toBeNull()
+  })
+
+  it('maps stderr to its curated loader label without surfacing raw shell output', () => {
+    expect(progressTextFromLog([
+      { kind: 'stderr', line: 'sh: 1: echo: echo: I/O error' },
+    ])).toBe('Making mistakes')
+  })
+
+  it('maps unparsed runtime lines to its curated loader label without surfacing raw output', () => {
+    expect(progressTextFromLog([
+      { kind: 'unparsed', line: 'raw runtime output' },
+    ])).toBe('Wondering')
+  })
+
+  it('does not invent labels for unmapped tool names', () => {
+    expect(progressTextFromLog([
+      { kind: 'event', event: { type: 'tool_call', part: { name: 'unknown_tool' } } },
+    ])).toBeNull()
+  })
+})
+
+describe('liveDeveloperProgressMessage', () => {
+  const activeTurn = message(
+    { type: 'agent_turn', userMessageId: 'user-1' },
+    {
+      role: 'system',
+      id: 'turn-1',
+      state: 'running',
+      progressLog: [
+        { kind: 'event', event: { type: 'text', part: { text: 'Draft answer' } } },
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+        { kind: 'event', event: { type: 'step_finish' } },
+        { kind: 'stderr', line: 'diagnostic line' },
+      ],
+    },
+  )
+
+  it('builds a temporary events message from the active turn in developer mode', () => {
+    const liveMessage = liveDeveloperProgressMessage(activeTurn, true)
+
+    expect(liveMessage?.role).toBe('agent')
+    expect(liveMessage?.content).toEqual({
+      type: 'events',
+      log: [
+        { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
+        { kind: 'stderr', line: 'diagnostic line' },
+      ],
+    })
+  })
+
+  it('does not surface live tool rows outside developer mode', () => {
+    expect(liveDeveloperProgressMessage(activeTurn, false)).toBeNull()
   })
 })
 
