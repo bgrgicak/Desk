@@ -796,6 +796,27 @@ export const api = createApi({
         { type: "Message", id: "CROSS" },
       ],
     }),
+    /**
+     * Open a thread anchored at `messageId`. Server creates a new chat
+     * with the anchor message mounted, inserts the user-supplied first
+     * message, and fires the agent. Returns the thread chat plus the
+     * patched anchor (now carries `threadChatId`) so the caller can
+     * navigate to it and patch its local cache.
+     */
+    createThread: build.mutation<
+      { chat: ServerChat; message: ServerMessage; anchorMessage: ServerMessage },
+      { chatId: string; messageId: string; content: string; workspaceId?: string; agentId?: string }
+    >({
+      query: ({ chatId, messageId, content, workspaceId, agentId }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/thread`,
+        method: "POST",
+        body: { content, workspaceId, agentId },
+      }),
+      invalidatesTags: (_r, _e, { chatId }) => [
+        { type: "Chat", id: "LIST" },
+        { type: "Message", id: `CHAT_${chatId}` },
+      ],
+    }),
     runMessage: build.mutation<
       ServerMessage,
       { chatId: string; messageId: string }
@@ -1115,6 +1136,7 @@ export const {
   usePatchMessageMutation,
   useDeleteMessageMutation,
   useRunMessageMutation,
+  useCreateThreadMutation,
   useGetSummaryHistoryQuery,
   useGetMessagesQuery,
   useGetLibraryQuery,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useLocation } from 'react-router-dom'
 import {
   MoreHorizontal, Trash2, Search, FileText,
   ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
@@ -28,6 +28,7 @@ import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ChatThread } from '@/components/compose/ChatThread'
+import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { ChatInput } from '@/components/compose/ChatInput'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
@@ -49,7 +50,7 @@ import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
 import { setViewingChat } from '@/store/slices/derivedSlice'
 import { markChatReadQuietly } from '@/store/ws/middleware'
-import type { AttachmentRef, ServerFile } from '@/store/types'
+import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
 import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
@@ -120,6 +121,8 @@ interface ChatViewProps {
   /** Library items to show in the Files sidebar for the new-chat stub.
    * They are pinned via library-refs once the first message creates the chat. */
   initialStagedItems?: ContextItem[]
+  /** When set, the new-chat stub renders this message as the thread anchor. */
+  startThread?: string | null
 }
 
 // ── Icon helpers ───────────────────────────────────────────────────────────────
@@ -870,8 +873,13 @@ export function ChatView({
   highlightMessageId,
   onAttachmentClick,
   initialStagedItems,
+  startThread,
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
+  const location = useLocation()
+  const anchorMessage = startThread
+    ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
+    : null
   const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
   const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
   const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightPanelOpen` : null
@@ -1163,27 +1171,36 @@ export function ChatView({
           onAttachmentClick={onAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
-              <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
-              <p className="text-sm text-muted-foreground max-w-sm">
-                Describe what you need and I'll build it for you. A document, an app, a design — just ask.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {STARTER_CHIPS.map((chip) => (
-                  <button
-                    key={chip}
-                    onClick={() => {
-                      if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
-                      else void postMessageMutation({ chatId: chat.id, content: chip })
-                    }}
-                    className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
-                  >
-                    {chip}
-                  </button>
-                ))}
+            anchorMessage ? (
+              <div className="max-w-2xl min-w-0 mx-auto">
+                <MessageBubble
+                  message={anchorMessage}
+                  workspaceId={anchorMessage.chatId ? chat.workspaceId : undefined}
+                />
               </div>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
+                <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  Describe what you need and I'll build it for you. A document, an app, a design — just ask.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  {STARTER_CHIPS.map((chip) => (
+                    <button
+                      key={chip}
+                      onClick={() => {
+                        if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
+                        else void postMessageMutation({ chatId: chat.id, content: chip })
+                      }}
+                      className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
           }
           lastAssistantSlot={artifacts.length > 0 ? () => (
             <div className="mt-4 flex flex-col gap-2">

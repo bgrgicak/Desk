@@ -520,6 +520,7 @@ export function ChatThread({
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}
+                  currentChatId={chatId}
                   agentName={agentName}
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
                   isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}

@@ -50,6 +50,7 @@ import {
   useRunMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
+  useCreateThreadMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
@@ -203,6 +204,7 @@ function AppInner() {
   const selectedContextPath = searchParams.get('item')
   const selectedMessageId = searchParams.get('message')
   const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
+  const startThreadParam = searchParams.get('startThread') // chatId:messageId
   const shouldLoadTasksView = activeView === 'tasks'
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
@@ -296,6 +298,7 @@ function AppInner() {
   const [createChatMutation] = useCreateChatMutation()
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
+  const [createThreadMutation] = useCreateThreadMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
@@ -546,6 +549,20 @@ function AppInner() {
     }
   }, [activeWorkspaceId, workspaceServerAgents, doCreateAndPost, goTo])
 
+  const handleStartThreadFirstMessage = useCallback(async (content: string) => {
+    if (!startThreadParam) return
+    const colonIdx = startThreadParam.indexOf(':')
+    if (colonIdx === -1) return
+    const sourceChatId = startThreadParam.slice(0, colonIdx)
+    const anchorMessageId = startThreadParam.slice(colonIdx + 1)
+    try {
+      const result = await createThreadMutation({ chatId: sourceChatId, messageId: anchorMessageId, content }).unwrap()
+      goTo({ chat: result.chat.id, startThread: null })
+    } catch (err) {
+      toast.error('Failed to create thread', { description: extractApiError(err) })
+    }
+  }, [startThreadParam, createThreadMutation, goTo])
+
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
     if (selectedChatId === chatId) goTo({ chat: null })
@@ -756,7 +773,8 @@ function AppInner() {
             artifacts={isNewChat ? [] : chatArtifacts}
             onArtifactClick={(artifact) => handleArtifactClick(artifact, 'chat', activeChat?.title)}
             onDeleteChat={isNewChat ? () => goTo({ chat: null }) : handleDeleteChat}
-            onFirstMessage={isNewChat ? handleNewChatFirstMessage : undefined}
+            onFirstMessage={isNewChat ? (startThreadParam ? handleStartThreadFirstMessage : handleNewChatFirstMessage) : undefined}
+            startThread={startThreadParam}
             showNewBadge={!isNewChat && chatShowNewBadge}
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
