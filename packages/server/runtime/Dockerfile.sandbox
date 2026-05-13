@@ -33,7 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install OpenCode CLI (global). `opencode` becomes available on PATH.
-RUN npm install -g opencode-ai --omit=dev --loglevel=error \
+# Pinned: unpinned `opencode-ai` makes every rebuild dependent on whatever
+# release was latest at build time, so a regression in upstream (e.g. the
+# 1.14.x panic at offset 0x222D243 that SIGTRAPs both sandbox runs on
+# session resume) silently propagates into the next image. Bump this
+# deliberately after smoke-testing a new release.
+RUN npm install -g opencode-ai@latest --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
 # Browser/display stack for visual checks. Browser binaries live outside any

@@ -2,6 +2,8 @@ import { File, Folder } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { SANDBOX_HOME } from '@/lib/remark-sandbox-paths'
 import { buildPath } from '@/router/nav'
+import { useGetLibraryQuery } from '@/store/api'
+import type { ListLibraryResponse } from '@/store/types'
 
 interface PathChipProps {
   /** Original sandbox-absolute path, e.g. /home/agent/report.md */
@@ -12,18 +14,34 @@ interface PathChipProps {
   workspaceId?: string
 }
 
-function isDirectory(path: string): boolean {
-  return path.endsWith('/')
+function normalizeLibraryPath(path: string): string {
+  return path.replace(/^\/+|\/+$/g, '')
 }
 
-function workspaceRelativePath(sandboxPath: string): string {
+export function workspaceRelativePath(sandboxPath: string): string {
   if (sandboxPath.startsWith(SANDBOX_HOME + '/')) return sandboxPath.slice(SANDBOX_HOME.length + 1)
   if (sandboxPath.startsWith('~/')) return sandboxPath.slice(2)
   return sandboxPath
 }
 
+export function isDirectoryPath(sandboxPath: string, library?: ListLibraryResponse): boolean {
+  if (sandboxPath.endsWith('/')) return true
+
+  const rel = normalizeLibraryPath(workspaceRelativePath(sandboxPath))
+  if (!rel) return true
+
+  return Boolean(
+    library?.folders?.some((folder) => normalizeLibraryPath(folder.path) === rel) ||
+      library?.items?.some((item) => item.isDir && normalizeLibraryPath(item.path) === rel),
+  )
+}
+
 export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProps) {
-  const isDir = isDirectory(sandboxPath)
+  const { currentData: library } = useGetLibraryQuery(
+    workspaceId ? { workspaceId } : undefined,
+    { skip: !workspaceId },
+  )
+  const isDir = isDirectoryPath(sandboxPath, library)
   const Icon = isDir ? Folder : File
   const navigate = useNavigate()
 
@@ -31,7 +49,7 @@ export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProp
     if (!workspaceId) return
     const rel = workspaceRelativePath(sandboxPath)
     if (isDir) {
-      navigate(buildPath(workspaceId, 'context', { folder: rel }))
+      navigate(buildPath(workspaceId, 'context', { folder: normalizeLibraryPath(rel) }))
     } else {
       navigate(buildPath(workspaceId, 'context', { item: rel }))
     }

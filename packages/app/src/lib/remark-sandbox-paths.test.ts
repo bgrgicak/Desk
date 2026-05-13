@@ -78,6 +78,36 @@ describe('remarkSandboxPaths', () => {
     expect(links.some((l) => l.url.includes(encodeURIComponent('/home/agent/src')))).toBe(true)
   })
 
+  it('converts markdown links whose href is an /home/agent path', () => {
+    const tree = transform('Open [the report](/home/agent/report.md).')
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    expect(links).toHaveLength(1)
+    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+      '/home/agent/report.md',
+    )
+    expect(links[0].children).toEqual([
+      { type: 'text', value: `~/Desk/${WS}/report.md` },
+    ])
+  })
+
+  it('preserves trailing slashes for markdown links to directories', () => {
+    const tree = transform('Open [the folder](/home/agent/projects/).')
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    expect(links).toHaveLength(1)
+    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+      '/home/agent/projects/',
+    )
+  })
+
+  it('converts markdown links whose href is a ~/ path', () => {
+    const tree = transform('Open [notes](~/notes.md).')
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    expect(links).toHaveLength(1)
+    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+      '~/notes.md',
+    )
+  })
+
   it('does NOT convert an inlineCode node whose value has a prefix before the path', () => {
     const tree = transform('Run `cd /home/agent/src`')
     const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))

@@ -16,6 +16,17 @@ function isSandboxPath(value: string): boolean {
   return value.startsWith(SANDBOX_HOME) || value.startsWith('~/')
 }
 
+function linkUrlToSandboxPath(url: string): string | null {
+  let decoded = url
+  try {
+    decoded = decodeURI(url)
+  } catch {
+    // Keep the original URL if it is not valid URI-encoded text.
+  }
+
+  return isSandboxPath(decoded) ? decoded : null
+}
+
 export function sandboxToUserPath(sandboxPath: string, workspacePath: string): string {
   if (sandboxPath.startsWith('~/')) {
     // ~/foo  →  ~/Desk/<slug>/foo
@@ -47,6 +58,19 @@ export function remarkSandboxPaths(workspacePath: string) {
       const link = makePathLink(node.value.trim(), workspacePath)
       parent.children.splice(index, 1, link)
       return [SKIP, index + 1] as const
+    })
+
+    // Rewrite explicit markdown links whose href is a sandbox path, e.g.
+    // [report](/home/agent/report.md) or [folder](/home/agent/folder/).
+    // Without this, react-markdown preserves the absolute /home/agent href and
+    // the browser treats it as an app route, which is especially visible for
+    // directory links rendered from artifact/library references.
+    visit(tree, 'link', (node: Link) => {
+      const sandboxPath = linkUrlToSandboxPath(node.url)
+      if (!sandboxPath) return
+      node.url = `desk-path:${encodeURIComponent(sandboxPath)}`
+      node.children = [{ type: 'text', value: sandboxToUserPath(sandboxPath, workspacePath) }]
+      return SKIP
     })
 
     // Split text nodes that contain one or more sandbox paths.
