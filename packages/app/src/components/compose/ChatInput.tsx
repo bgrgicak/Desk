@@ -9,6 +9,7 @@ import {
   type ComposerPickersHandle,
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
+import { replaceTextareaRangePreservingUndo } from './textareaUndo'
 
 type GoalKey = SharedGoalKey | null
 
@@ -124,6 +125,49 @@ interface ChatInputProps {
 }
 
 const DRAFT_STORAGE_PREFIX = 'chatDraft:'
+const MAX_TEXT_HISTORY = 200
+
+export type TextSnapshot = {
+  value: string
+  selectionStart: number
+  selectionEnd: number
+}
+
+export function didNativeHistoryChangeText(before: TextSnapshot, after: TextSnapshot) {
+  return before.value !== after.value
+}
+
+export function keyboardHistoryDirection(event: Pick<React.KeyboardEvent, 'ctrlKey' | 'metaKey' | 'shiftKey' | 'key'>): -1 | 1 | null {
+  if (event.key === 'Undo') return -1
+  if (event.key === 'Redo') return 1
+  if (!event.metaKey && !event.ctrlKey) return null
+  const key = event.key.toLowerCase()
+  if (key === 'y') return 1
+  if (key === 'z') return event.shiftKey ? 1 : -1
+  return null
+}
+
+export function inputHistoryDirection(inputType: string | undefined): -1 | 1 | null {
+  if (inputType === 'historyUndo') return -1
+  if (inputType === 'historyRedo') return 1
+  return null
+}
+
+function textareaSnapshot(el: HTMLTextAreaElement): TextSnapshot {
+  return {
+    value: el.value,
+    selectionStart: el.selectionStart ?? el.value.length,
+    selectionEnd: el.selectionEnd ?? el.value.length,
+  }
+}
+
+function sameTextSnapshot(a: TextSnapshot, b: TextSnapshot) {
+  return a.value === b.value && a.selectionStart === b.selectionStart && a.selectionEnd === b.selectionEnd
+}
+
+export function shouldPinTextareaScrollToEnd(valueLength: number, selectionEnd: number | null | undefined) {
+  return (selectionEnd ?? valueLength) >= valueLength
+}
 
 export function ChatInput({
   onSend,
@@ -153,22 +197,166 @@ export function ChatInput({
   // prop from the API.
   void chatId
 
-  const [value, setValue] = useState<string>(() =>
-    draftKey ? localStorage.getItem(DRAFT_STORAGE_PREFIX + draftKey) ?? '' : ''
-  )
-
-  // Persist the draft while typing; remove the entry once empty or submitted.
-  useEffect(() => {
-    if (!draftKey) return
-    const storageKey = DRAFT_STORAGE_PREFIX + draftKey
-    if (value) localStorage.setItem(storageKey, value)
-    else localStorage.removeItem(storageKey)
-  }, [draftKey, value])
+  const readStoredDraft = useCallback((key: string | undefined) => (
+    key ? localStorage.getItem(DRAFT_STORAGE_PREFIX + key) ?? '' : ''
+  ), [])
+  const [initialValue] = useState(() => readStoredDraft(draftKey))
+  const valueRef = useRef(initialValue)
+  const textHistoryRef = useRef<TextSnapshot[]>([{
+    value: initialValue,
+    selectionStart: initialValue.length,
+    selectionEnd: initialValue.length,
+  }])
+  const textHistoryIndexRef = useRef(0)
+  const [hasText, setHasText] = useState(() => initialValue.trim().length > 0)
+  const draftKeyRef = useRef(draftKey)
   const [attachedItems, setAttachedItems] = useState<ComposerAttachment[]>([])
   const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pickersRef = useRef<ComposerPickersHandle>(null)
   const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
+
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+
+    const previousScrollTop = el.scrollTop
+    const pinScrollToEnd = shouldPinTextareaScrollToEnd(el.value.length, el.selectionEnd)
+
+    // scrollHeight is unreliable inside Radix Sheet portals and flex layouts —
+    // the browser inflates it to the container height rather than the text
+    // content height. Switching to position:fixed temporarily detaches the
+    // element from the surrounding layout context so scrollHeight reflects only
+    // the actual text content.
+    const w = el.getBoundingClientRect().width || 300
+    const saved = {
+      position:   el.style.position,
+      width:      el.style.width,
+      height:     el.style.height,
+      visibility: el.style.visibility,
+    }
+
+    el.style.position   = 'fixed'
+    el.style.width      = `${w}px`
+    el.style.height     = '0px'
+    el.style.visibility = 'hidden'
+
+    const contentH = el.scrollHeight
+
+    el.style.position   = saved.position
+    el.style.width      = saved.width
+    el.style.visibility = saved.visibility
+
+    const maxH = compact ? 120 : 200
+    const newH = Math.min(contentH, maxH)
+    el.style.height     = `${newH}px`
+    el.style.overflowY  = newH >= maxH ? 'auto' : 'hidden'
+
+    if (newH >= maxH) {
+      // The fixed/hidden measurement pass can reset the textarea's internal
+      // scroll position to the top. When the user is composing at the end of a
+      // long prompt, keep the visible viewport pinned to the active line rather
+      // than leaving them staring at the beginning of the draft.
+      el.scrollTop = pinScrollToEnd ? el.scrollHeight : previousScrollTop
+    } else {
+      el.scrollTop = 0
+    }
+  }, [compact])
+
+  const syncValue = useCallback((next: string) => {
+    valueRef.current = next
+    const nextHasText = next.trim().length > 0
+    setHasText(prev => prev === nextHasText ? prev : nextHasText)
+
+    // Persist drafts from the native input event path without making the
+    // textarea React-controlled. Re-rendering on every keystroke can still
+    // interfere with native undo/redo in some browser builds.
+    const currentDraftKey = draftKeyRef.current
+    if (currentDraftKey) {
+      const storageKey = DRAFT_STORAGE_PREFIX + currentDraftKey
+      if (next) localStorage.setItem(storageKey, next)
+      else localStorage.removeItem(storageKey)
+    }
+    resizeTextarea()
+  }, [resizeTextarea])
+
+  const replaceValue = useCallback((next: string, options?: { focus?: boolean, cursorToEnd?: boolean }) => {
+    syncValue(next)
+    const el = textareaRef.current
+    if (!el) {
+      textHistoryRef.current = [{ value: next, selectionStart: next.length, selectionEnd: next.length }]
+      textHistoryIndexRef.current = 0
+      return
+    }
+    if (el.value !== next) el.value = next
+    if (options?.focus) el.focus()
+    if (options?.cursorToEnd) {
+      const end = next.length
+      el.setSelectionRange(end, end)
+    }
+    textHistoryRef.current = [textareaSnapshot(el)]
+    textHistoryIndexRef.current = 0
+    resizeTextarea()
+  }, [resizeTextarea, syncValue])
+
+  const recordTextHistory = useCallback((el: HTMLTextAreaElement) => {
+    const nextSnapshot = textareaSnapshot(el)
+    const history = textHistoryRef.current
+    const current = history[textHistoryIndexRef.current]
+    if (current && sameTextSnapshot(current, nextSnapshot)) return
+
+    const nextHistory = history.slice(0, textHistoryIndexRef.current + 1)
+    nextHistory.push(nextSnapshot)
+    if (nextHistory.length > MAX_TEXT_HISTORY) nextHistory.shift()
+    textHistoryRef.current = nextHistory
+    textHistoryIndexRef.current = nextHistory.length - 1
+  }, [])
+
+  const alignTextHistory = useCallback((el: HTMLTextAreaElement, direction?: -1 | 1) => {
+    const nextSnapshot = textareaSnapshot(el)
+    const history = textHistoryRef.current
+    const currentIndex = textHistoryIndexRef.current
+    let match = -1
+    if (direction === -1) {
+      for (let i = currentIndex - 1; i >= 0; i -= 1) {
+        if (history[i].value === nextSnapshot.value) { match = i; break }
+      }
+    } else if (direction === 1) {
+      for (let i = currentIndex + 1; i < history.length; i += 1) {
+        if (history[i].value === nextSnapshot.value) { match = i; break }
+      }
+    } else {
+      match = history.findLastIndex(snapshot => snapshot.value === nextSnapshot.value)
+    }
+    if (match >= 0) {
+      textHistoryIndexRef.current = match
+      textHistoryRef.current[match] = nextSnapshot
+    } else {
+      recordTextHistory(el)
+    }
+  }, [recordTextHistory])
+
+  const applyTextHistory = useCallback((direction: -1 | 1) => {
+    const el = textareaRef.current
+    if (!el) return false
+    const history = textHistoryRef.current
+    const nextIndex = textHistoryIndexRef.current + direction
+    const snapshot = history[nextIndex]
+    if (!snapshot) return false
+    textHistoryIndexRef.current = nextIndex
+    el.value = snapshot.value
+    el.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd)
+    syncValue(snapshot.value)
+    return true
+  }, [syncValue])
+
+  useEffect(() => {
+    if (draftKeyRef.current === draftKey) return
+    draftKeyRef.current = draftKey
+    replaceValue(readStoredDraft(draftKey))
+    setAtMentionStart(null)
+    pickersRef.current?.closeAttach()
+  }, [draftKey, readStoredDraft, replaceValue])
 
   // Register imperative focus handle
   useEffect(() => {
@@ -200,7 +388,7 @@ export function ChatInput({
   useEffect(() => {
     if (prefillValue !== undefined && prefillValue !== '') {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setValue(prefillValue)
+      replaceValue(prefillValue)
       setTimeout(() => {
         const el = textareaRef.current
         if (!el) return
@@ -208,46 +396,11 @@ export function ChatInput({
         el.setSelectionRange(prefillValue.length, prefillValue.length)
       }, 0)
     }
-  }, [prefillValue])
+  }, [prefillValue, replaceValue])
 
-  // Auto-resize textarea.
-  // scrollHeight is unreliable inside Radix Sheet portals and flex layouts —
-  // the browser inflates it to the container height rather than the text content height.
-  // Switching to position:fixed temporarily detaches the element from the surrounding
-  // layout context so scrollHeight reflects only the actual text content.
   useLayoutEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-
-    // Snapshot current width so text wrapping stays identical after the switch
-    const w = el.getBoundingClientRect().width || 300
-
-    // Save styles we'll temporarily override
-    const saved = {
-      position:   el.style.position,
-      width:      el.style.width,
-      height:     el.style.height,
-      visibility: el.style.visibility,
-    }
-
-    // Detach from layout to get a clean scrollHeight measurement
-    el.style.position   = 'fixed'
-    el.style.width      = `${w}px`
-    el.style.height     = '0px'
-    el.style.visibility = 'hidden'   // prevent any flash (useLayoutEffect is pre-paint anyway)
-
-    const contentH = el.scrollHeight
-
-    // Restore layout position before applying the final height
-    el.style.position   = saved.position
-    el.style.width      = saved.width
-    el.style.visibility = saved.visibility
-
-    const maxH = compact ? 120 : 200
-    const newH = Math.min(contentH, maxH)
-    el.style.height     = `${newH}px`
-    el.style.overflowY  = newH >= maxH ? 'auto' : 'hidden'
-  }, [value, compact])
+    resizeTextarea()
+  }, [resizeTextarea])
 
   // Detect @ mention while typing — drives the attach picker open via
   // the ComposerPickers imperative handle.
@@ -265,7 +418,26 @@ export function ChatInput({
       setAtMentionStart(null)
       pickersRef.current?.closeAttach()
     }
-    setValue(newVal)
+    syncValue(newVal)
+
+    const historyDirection = inputHistoryDirection((e.nativeEvent as InputEvent | undefined)?.inputType)
+    if (historyDirection !== null) {
+      alignTextHistory(e.target, historyDirection)
+    } else {
+      recordTextHistory(e.target)
+    }
+  }
+
+  const handleBeforeInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    const historyDirection = inputHistoryDirection((e.nativeEvent as InputEvent | undefined)?.inputType)
+    if (historyDirection === null) return
+
+    // Edit-menu and touch-bar undo/redo often arrive as beforeinput/input
+    // history events rather than keydown. Own those too so the composer does
+    // not depend on the browser preserving a native undo stack for this
+    // uncontrolled-but-imperatively-synced textarea.
+    e.preventDefault()
+    applyTextHistory(historyDirection)
   }
 
   const insertMention = useCallback((attachment: ComposerAttachment) => {
@@ -274,14 +446,16 @@ export function ChatInput({
     setAttachedItems(prev =>
       prev.some(p => p.id === attachment.id) ? prev : [...prev, attachment]
     )
-    const cursor = el.selectionStart ?? value.length
-    const newVal = atMentionStart !== null
-      ? value.slice(0, atMentionStart) + value.slice(cursor)
-      : value
-    setValue(newVal)
+    const currentValue = el.value
+    const cursor = el.selectionStart ?? currentValue.length
+    if (atMentionStart !== null) {
+      replaceTextareaRangePreservingUndo(el, atMentionStart, cursor, '')
+    }
+    syncValue(el.value)
+    recordTextHistory(el)
     setAtMentionStart(null)
     setTimeout(() => el.focus(), 0)
-  }, [value, atMentionStart])
+  }, [atMentionStart, recordTextHistory, syncValue])
 
   const removeAttachedItem = (id: string) => {
     setAttachedItems(prev => prev.filter(p => p.id !== id))
@@ -293,7 +467,8 @@ export function ChatInput({
   }, [onAgentChange])
 
   const handleSubmit = () => {
-    const trimmed = value.trim()
+    const currentValue = textareaRef.current?.value ?? valueRef.current
+    const trimmed = currentValue.trim()
     if ((!trimmed && attachedItems.length === 0 && extraUploads.length === 0) || disabled) return
     // Library items and folders mentioned via @ or the attach picker have
     // id === workspace-relative path (see toContextItem / toFolderList).
@@ -309,16 +484,26 @@ export function ChatInput({
     }))
     const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed)
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
-    setValue('')
+    replaceValue('')
     setAttachedItems([])
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const historyDirection = keyboardHistoryDirection(e)
+    if (historyDirection !== null) {
+      // Some embedded/webview builds never update textarea native history for
+      // this composer, so relying on the browser first still leaves Cmd/Ctrl+Z
+      // inert. Own the common keyboard shortcuts and drive the mirrored text
+      // history directly; native menu/touch undo still flows through onChange.
+      e.preventDefault()
+      applyTextHistory(historyDirection)
+      return
+    }
     if (e.key === 'Escape') { setAtMentionStart(null); pickersRef.current?.closeAttach() }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
-  const canSubmit = (value.trim().length > 0 || attachedItems.length > 0 || extraUploads.length > 0) && !disabled
+  const canSubmit = (hasText || attachedItems.length > 0 || extraUploads.length > 0) && !disabled
 
   return (
     <div className="w-full">
@@ -380,8 +565,9 @@ export function ChatInput({
           <textarea
             ref={textareaRef}
             rows={1}
-            value={value}
+            defaultValue={initialValue}
             onChange={handleChange}
+            onBeforeInput={handleBeforeInput}
             onKeyDown={handleKeyDown}
             placeholder={activePlaceholder}
             disabled={disabled}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
@@ -323,6 +323,7 @@ export function ChatThread({
   )
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
   const isAtBottomRef = useRef(true)
@@ -384,6 +385,37 @@ export function ChatThread({
   }, [messages])
 
   const resolvedStatusClassName = statusClassName ?? (typeof messageClassName === 'string' ? messageClassName : undefined)
+
+  // Keep fixed footer content centered against the scrollable message viewport.
+  // Classic scrollbars reduce the scroll area's client width, while the footer
+  // sits outside that scroller; exposing the measured gutter lets callers apply
+  // the same right inset so message/input columns don't drift by scrollbar width.
+  // The scroll container reserves that gutter even while content is short, which
+  // keeps the message column and composer from jumping between pending/idle states.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const updateScrollbarWidth = () => {
+      setScrollbarWidth(Math.max(0, el.offsetWidth - el.clientWidth))
+    }
+
+    updateScrollbarWidth()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateScrollbarWidth) : null
+    observer?.observe(el)
+    window.addEventListener('resize', updateScrollbarWidth)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', updateScrollbarWidth)
+    }
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setScrollbarWidth(Math.max(0, el.offsetWidth - el.clientWidth))
+  }, [messages.length, isTyping, showToolOnlyFallback, liveDeveloperMessage, failedAgentTurn])
 
   // ── Scroll position management ───────────────────────────────────────
   // Track message count to detect when older messages were prepended.
@@ -478,9 +510,12 @@ export function ChatThread({
   }
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
+    <div
+      className="flex flex-col flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden"
+      style={{ '--chat-thread-scrollbar-width': `${scrollbarWidth}px` } as CSSProperties}
+    >
       {headerSlot}
-      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden" onScroll={handleScroll}>
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]" onScroll={handleScroll}>
         <div className={`min-w-0 max-w-full ${innerClassName}`}>
           {/* Loading-older indicator */}
           {isFetchingOlder && (

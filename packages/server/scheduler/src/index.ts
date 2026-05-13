@@ -21,3 +21,6 @@ export type {
   DailyReflectionScheduleOptions,
   EnsureDailyReflectionTasksOptions,
 } from "./reflection.js";
+
+export { detectCrashedOrphans } from "./orphanRecovery.js";
+export type { OrphanCandidate, CrashedOrphan } from "./orphanRecovery.js";

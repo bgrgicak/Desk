@@ -245,6 +245,8 @@ export interface Chat {
   artifactIds?: string[]
   messages?: ChatMessage[]
   unread?: boolean
+  /** True while an agent turn is actively running for this chat. */
+  running?: boolean
   /** True when the latest agent turn failed and can be retried. */
   failed?: boolean
   workspaceId?: string

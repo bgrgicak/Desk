@@ -73,14 +73,15 @@ export function MessageBubble({
                   key={att.path}
                   attachment={att}
                   workspaceId={workspaceId}
+                  align="right"
                   onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
                 />
               ))}
             </div>
           )}
           {message.content.type === 'text' && message.content.text && (
-            <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px] whitespace-pre-wrap">
-              {message.content.text}
+            <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px]">
+              <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
             </div>
           )}
         </div>
@@ -380,17 +381,25 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
 function AttachmentCard({
   attachment,
   workspaceId,
+  align = 'left',
   onClick,
 }: {
   attachment: AttachmentRef
   workspaceId?: string
+  align?: AttachmentAlignment
   onClick?: () => void
 }) {
   const appPreview = appAttachmentToPreview(attachment.path)
-  if (appPreview) return <AppPreview {...appPreview} variant="inline" />
+  if (appPreview) {
+    return (
+      <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
+        <AppPreview {...appPreview} variant="inline" />
+      </div>
+    )
+  }
 
   const className =
-    'inline-flex min-w-0 max-w-full items-center gap-2 self-start overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]'
+    `inline-flex min-w-0 max-w-full items-center gap-2 ${attachmentAlignmentClass(align)} overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]`
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
   // Subtext: byte count when known, falling back to the workspace path.
   // Directories don't carry a useful size, so we keep the path there.
@@ -431,6 +440,12 @@ function AttachmentCard({
       {inner}
     </button>
   )
+}
+
+type AttachmentAlignment = 'left' | 'right'
+
+export function attachmentAlignmentClass(align: AttachmentAlignment) {
+  return align === 'right' ? 'self-end ml-auto' : 'self-start mr-auto'
 }
 
 function TaskRunChip({ prompt }: { prompt: string }) {

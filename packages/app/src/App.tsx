@@ -57,7 +57,6 @@ import {
   setArtifactTransitionSource,
   setArtifactBackLabel,
   setTodaySheetOpen,
-  setAgentationVisible,
   markArtifactSaved,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
@@ -210,7 +209,6 @@ function AppInner() {
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
   const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
-  const agentationVisible = useAppSelector(s => s.ui.agentationVisible)
 
   const savedArtifactIds = new Set(savedArtifactIdList)
 
@@ -380,32 +378,6 @@ function AppInner() {
     }
     return { chatId: chat.id, messageId: msg.id }
   }, [activeWorkspaceId, createChatMutation, postMessageMutation, pinChatLibraryRefMutation])
-
-  // Agentation widget (Option+A)
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.altKey && e.key === 'a') {
-        e.preventDefault()
-        dispatch(setAgentationVisible(!agentationVisible))
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [agentationVisible, dispatch])
-  useEffect(() => {
-    const script = document.createElement('script')
-    script.src = 'https://cdn.agentation.dev/agentation.js'
-    script.defer = true
-    document.head.appendChild(script)
-    return () => { try { document.head.removeChild(script) } catch { /* ignore */ } }
-  }, [])
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const el = document.querySelector('agentation-widget') as HTMLElement | null
-      if (el) el.style.display = agentationVisible ? '' : 'none'
-    }, 1000)
-    return () => clearTimeout(t)
-  }, [agentationVisible])
 
   // ── Nav actions (URL is the source of truth) ─────────────────────────────
   const goTo = useCallback((

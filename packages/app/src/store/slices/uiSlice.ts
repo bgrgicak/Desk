@@ -13,7 +13,6 @@ export interface UiState {
   readUpdateIds: string[];
 
   todaySheetOpen: boolean;
-  agentationVisible: boolean;
   /** Agent id carried over from the artifact-creation sheet's "Skip to chat"
    * path, consumed once by ChatView when the new-chat composer mounts. */
   pendingNewChatAgentId: string | null;
@@ -29,7 +28,6 @@ const initialState: UiState = {
   readUpdateIds: [],
 
   todaySheetOpen: false,
-  agentationVisible: true,
   pendingNewChatAgentId: null,
   pendingSettingsSection: null,
 };
@@ -59,9 +57,6 @@ const slice = createSlice({
     setTodaySheetOpen(state, action: PayloadAction<boolean>) {
       state.todaySheetOpen = action.payload;
     },
-    setAgentationVisible(state, action: PayloadAction<boolean>) {
-      state.agentationVisible = action.payload;
-    },
     setPendingNewChatAgentId(state, action: PayloadAction<string | null>) {
       state.pendingNewChatAgentId = action.payload;
     },
@@ -81,7 +76,6 @@ export const {
   markUpdateRead,
 
   setTodaySheetOpen,
-  setAgentationVisible,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } = slice.actions;

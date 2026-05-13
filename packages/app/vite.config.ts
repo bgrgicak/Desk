@@ -30,12 +30,14 @@ const proxy = {
   '/api': {
     target: API_TARGET,
     changeOrigin: true,
+    xfwd: true,
     rewrite: (p: string) => p.replace(/^\/api/, ''),
   },
   '/ws': {
     target: WS_TARGET,
     ws: true,
     changeOrigin: true,
+    xfwd: true,
   },
   // Static-app routes (issue #47, PR-C). Same-origin serving so the iframe
   // session cookie is path-scoped to the app and `fetch('/api/...')` calls
@@ -43,6 +45,7 @@ const proxy = {
   '/apps': {
     target: API_TARGET,
     changeOrigin: true,
+    xfwd: true,
   },
 }
 
