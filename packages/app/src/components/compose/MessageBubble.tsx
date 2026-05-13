@@ -1,5 +1,5 @@
 import { useState, type MouseEvent } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo } from 'lucide-react'
+import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
@@ -8,7 +8,9 @@ import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
 import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
-import { buildPath } from '@/router/nav'
+import { buildPath, NEW_CHAT_ID } from '@/router/nav'
+import { Link } from 'react-router-dom'
+import { isRegularMessageVisible } from './messageVisibility'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -26,6 +28,9 @@ interface MessageBubbleProps {
    *  are stripped — only the agent's text reply surfaces. ChatView already
    *  filters out fully-tool `events` rows at the list level. */
   developerMode?: boolean
+  /** The chat currently being viewed. Used to suppress the thread button on
+   *  the anchor message when the user is already inside that thread. */
+  currentChatId?: string
 }
 
 export function MessageBubble({
@@ -38,6 +43,7 @@ export function MessageBubble({
   agentHeaderClassName,
   hideAgentHeader = false,
   developerMode = false,
+  currentChatId,
 }: MessageBubbleProps) {
   const { data: workspaces } = useGetWorkspacesQuery()
   const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
@@ -45,69 +51,122 @@ export function MessageBubble({
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
   const hasAttachments = !!message.attachments && message.attachments.length > 0
+  const showThread = isRegularMessageVisible(message) && !!workspaceId
+    && message.threadChatId !== currentChatId
 
   if (isUser) {
     if (message.kind === 'task_run' && message.content.type === 'text') {
       return <TaskRunChip prompt={message.content.text} />
     }
     return (
-      <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">
-        {hasAttachments && (
-          <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden">
-            {message.attachments!.map(att => (
-              <AttachmentCard
-                key={att.path}
-                attachment={att}
-                workspaceId={workspaceId}
-                align="right"
-                onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
-              />
-            ))}
+      <div className="group flex w-full min-w-0 max-w-full items-start gap-1.5">
+        {showThread && (
+          <div className="shrink-0 self-end">
+            <ThreadButton message={message} workspaceId={workspaceId!} />
           </div>
         )}
-        {message.content.type === 'text' && message.content.text && (
-          <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px]">
-            <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
-          </div>
-        )}
+        <div className="flex-1 min-w-0 flex flex-col items-end gap-1.5">
+          {hasAttachments && (
+            <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden">
+              {message.attachments!.map(att => (
+                <AttachmentCard
+                  key={att.path}
+                  attachment={att}
+                  workspaceId={workspaceId}
+                  align="right"
+                  onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
+                />
+              ))}
+            </div>
+          )}
+          {message.content.type === 'text' && message.content.text && (
+            <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px]">
+              <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
+            </div>
+          )}
+        </div>
       </div>
     )
   }
 
   return (
-    <div className={`min-w-0 max-w-full ${isFirstInGroup ? 'space-y-1.5' : '-mt-4'}`}>
-      {isFirstInGroup && !hideAgentHeader && (
-        <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
-          <div className="flex items-center gap-1">
-            <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-            <span className="text-xs text-muted-foreground">{modelLabel}</span>
-          </div>
-          <span className="text-xs text-muted-foreground">{getRelativeTime(timestamp)}</span>
-          {isNew && (
-            <div className="flex items-center gap-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-              <span className="text-xs text-blue-500">New</span>
+    <div className={`group min-w-0 max-w-full ${isFirstInGroup ? '' : '-mt-4'}`}>
+      <div className="flex items-start gap-1.5">
+        <div className={`flex-1 min-w-0 ${isFirstInGroup ? 'space-y-1.5' : ''}`}>
+          {isFirstInGroup && !hideAgentHeader && (
+            <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
+              <div className="flex items-center gap-1">
+                <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                <span className="text-xs text-muted-foreground">{modelLabel}</span>
+              </div>
+              <span className="text-xs text-muted-foreground">{getRelativeTime(timestamp)}</span>
+              {isNew && (
+                <div className="flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                  <span className="text-xs text-blue-500">New</span>
+                </div>
+              )}
             </div>
           )}
+          {hasAttachments && (
+            <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden">
+              {message.attachments!.map(att => (
+                <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} />
+              ))}
+            </div>
+          )}
+          <MessageContentView
+            content={message.content}
+            chatId={message.chatId}
+            messageId={message.id}
+            workspaceId={workspaceId}
+            workspacePath={workspacePath}
+            developerMode={developerMode}
+            onAttachmentClick={onAttachmentClick}
+          />
         </div>
-      )}
-      {hasAttachments && (
-        <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden">
-          {message.attachments!.map(att => (
-            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} />
-          ))}
-        </div>
-      )}
-      <MessageContentView
-        content={message.content}
-        chatId={message.chatId}
-        messageId={message.id}
-        workspaceId={workspaceId}
-        workspacePath={workspacePath}
-        developerMode={developerMode}
-        onAttachmentClick={onAttachmentClick}
-      />
+        {showThread && (
+          <div className="shrink-0 self-end">
+            <ThreadButton message={message} workspaceId={workspaceId!} />
+          </div>
+        )}
+      </div>
     </div>
+  )
+}
+
+function ThreadButton({
+  message,
+  workspaceId,
+  className,
+}: {
+  message: ServerMessage
+  workspaceId: string
+  className?: string
+}) {
+  const hasThread = !!message.threadChatId
+  const to = hasThread
+    ? buildPath(workspaceId, 'tasks', { chat: message.threadChatId! })
+    : buildPath(workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${message.chatId}:${message.id}` })
+
+  return (
+    <Link
+      to={to}
+      state={hasThread ? undefined : { anchorMessage: message }}
+      title={hasThread ? 'Open thread' : 'Reply in thread'}
+      className={[
+        'p-1 rounded transition-colors hover:bg-muted/40',
+        hasThread
+          ? 'text-muted-foreground/70 hover:text-foreground'
+          : 'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-visible:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground',
+        className ?? '',
+      ].join(' ')}
+    >
+      {hasThread
+        ? <MessagesSquare className="h-3.5 w-3.5" />
+        : <Reply className="h-3.5 w-3.5" />
+      }
+    </Link>
   )
 }
 

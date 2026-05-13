@@ -1353,6 +1353,29 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "thread" && segments.length === 5 && method === "POST") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
+      const body = await parseBody(req);
+      const result = await chatRoutes.createThread(
+        pool,
+        segments[1],
+        segments[3],
+        body,
+        emitEvent,
+        { actorUserId: userId, userId },
+      );
+      runManager.fireMessage(result.triggerId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
+      });
+      runManager.scheduleSummary(result.threadChat.id).catch(() => {});
+      sendJson(res, 201, {
+        chat: result.threadChat,
+        message: result.threadStartMessage,
+        anchorMessage: result.anchorMessage,
+      });
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const result = await chatRoutes.getSummaryHistory(storage, segments[1], segments[3]);

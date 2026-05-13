@@ -42,7 +42,8 @@ const FULL_MESSAGE_SELECT = `
   model,
   attachments,
   kind,
-  title
+  title,
+  thread_chat_id
 `;
 
 // Compact chat loads are the normal UI path. Build the compact JSON in SQL so
@@ -118,7 +119,8 @@ const FULL_MESSAGE_SELECT_M = `
   m.model,
   m.attachments,
   m.kind,
-  m.title
+  m.title,
+  m.thread_chat_id
 `;
 
 const COMPACT_MESSAGE_SELECT_M = FULL_MESSAGE_SELECT_M.replace("m.content,", `${compactContentSql("m.content")} AS content,`);
@@ -186,6 +188,7 @@ function rowToMessage(row: Record<string, unknown>): Message {
     updatedAt: row.updated_at ? row.updated_at as string : undefined,
     kind: row.kind ?? "chat",
     title: row.title ?? null,
+    threadChatId: row.thread_chat_id ?? undefined,
   });
 }
 
@@ -254,6 +257,25 @@ export interface PaginatedMessages {
  * Cursor format: `<createdAtISO>|<id>` (unchanged).
  */
 export async function listByChat(
+  db: Pool,
+  chatId: string,
+  opts?: { cursor?: string; before?: string; limit?: number; view?: MessageListView },
+): Promise<PaginatedMessages> {
+  const result = await listByChatInChat(db, chatId, opts);
+  // Mount the parent message at the top of a thread chat. Only on the
+  // chronologically-earliest page: forward pagination (`cursor`) skips
+  // the start of the transcript, and backward pagination only reaches
+  // the start when `prevCursor` is undefined.
+  if (!opts?.cursor && result.prevCursor === undefined) {
+    const anchor = await findAnchorForThreadChat(db, chatId, opts?.view ?? "full");
+    if (anchor) {
+      result.items = [anchor, ...result.items];
+    }
+  }
+  return result;
+}
+
+async function listByChatInChat(
   db: Pool,
   chatId: string,
   opts?: { cursor?: string; before?: string; limit?: number; view?: MessageListView },
@@ -476,7 +498,17 @@ export async function listAgentContextByChat(
     `,
     [chatId, chatId],
   );
-  return rows.map(rowToMessage);
+  const items = rows.map(rowToMessage);
+
+  // Mount the parent message of a thread chat as the first item. The
+  // anchor lives in the parent chat, so the SQL query never returns it.
+  // Prepend it here so the agent's context begins with the message the
+  // thread was opened from.
+  const anchor = await findAnchorForThreadChat(db, chatId);
+  if (anchor) {
+    return [anchor, ...items];
+  }
+  return items;
 }
 
 /**
@@ -659,6 +691,50 @@ export async function insert(
 
 export async function findById(db: Pool, id: string): Promise<Message | null> {
   const { rows } = await db.query("SELECT * FROM messages WHERE id = ?", [id]);
+  return rows.length ? rowToMessage(rows[0]) : null;
+}
+
+/**
+ * Returns the anchor (parent) message of the given thread chat, or null
+ * if the chat is not a thread or its anchor was deleted. The anchor lives
+ * in the parent chat; `thread_chat_id = chat.id` is the link.
+ *
+ * Pass `view` to apply the same compact content stripping used by
+ * `listByChat` — omit (or pass "full") when the caller needs raw content
+ * (e.g. agent context, scheduler prompt).
+ */
+export async function findAnchorForThreadChat(
+  db: Pool,
+  threadChatId: string,
+  view: MessageListView = "full",
+): Promise<Message | null> {
+  const sel = messageSelect(view);
+  const { rows } = await db.query(
+    `SELECT ${sel} FROM messages WHERE thread_chat_id = ? LIMIT 1`,
+    [threadChatId],
+  );
+  return rows.length ? rowToMessage(rows[0]) : null;
+}
+
+/**
+ * Atomically claims a message as the anchor of `threadChatId`. Refuses
+ * (returns null) when the message already has a thread — used to enforce
+ * the "one thread per message" invariant. Returns the updated row on
+ * success.
+ */
+export async function setThreadChatId(
+  db: Pool,
+  messageId: string,
+  threadChatId: string,
+): Promise<Message | null> {
+  const { rows } = await db.query(
+    `UPDATE messages
+     SET thread_chat_id = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND thread_chat_id IS NULL
+     RETURNING *`,
+    [threadChatId, messageId],
+  );
   return rows.length ? rowToMessage(rows[0]) : null;
 }
 

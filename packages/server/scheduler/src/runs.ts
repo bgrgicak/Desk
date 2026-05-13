@@ -356,7 +356,15 @@ export function createRunManager(opts: RunManagerOptions) {
       const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
-      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
+      // Thread chats: surface the anchor message's attachments to the
+      // agent as well. The anchor lives in the parent chat and is
+      // mounted in the thread transcript via listAgentContextByChat;
+      // its attachments are the user's "here's the context I'm asking
+      // you to act on" inputs and need to be readable by opencode.
+      const anchor = await queries.messages.findAnchorForThreadChat(pool, msg.chatId);
+      const anchorRefs = anchor?.attachments ?? [];
+      const merged = [...refs, ...anchorRefs];
+      const attachments = merged.length > 0 ? merged.map((a) => a.path) : undefined;
       return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
     }
     const fallback = JSON.stringify(msg.content);

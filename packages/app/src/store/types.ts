@@ -138,6 +138,10 @@ export interface ServerMessage {
   title?: string | null;
   /** Live runtime/progress entries appended over WS while an agent_turn runs. */
   progressLog?: AgentLogEntry[];
+  /** When set, this message is the anchor of a thread; the referenced
+   * chat holds the thread transcript. UI surfaces an "open thread"
+   * action; the absence of this field exposes a "start thread" action. */
+  threadChatId?: string;
 }
 
 export interface ServerFile {

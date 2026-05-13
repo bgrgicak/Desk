@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -368,6 +368,194 @@ export async function sendMessage(
   emit({ type: "message.appended", payload: trigger, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
 
   return { userMessage, triggerId };
+}
+
+const CreateThreadSchema = z.object({
+  content: z.string(),
+  workspaceId: z.string().optional(),
+  agentId: z.string().optional(),
+});
+
+export interface CreateThreadResult {
+  /** The new chat that holds the thread transcript. */
+  threadChat: Chat;
+  /** The user message that started the thread. */
+  threadStartMessage: Message;
+  /** Pending agent_turn id; caller fires it. */
+  triggerId: string;
+  /** Anchor message after `thread_chat_id` was set on it. Emit
+   * `message.updated` so subscribers can patch the parent chat row. */
+  anchorMessage: Message;
+}
+
+/**
+ * Creates a thread anchored at `messageId` in `chatId`. Behaviour:
+ *
+ * - The anchor message is not copied. `messages.thread_chat_id` is set
+ *   on the anchor; the referenced chat is otherwise a normal chat row.
+ * - One thread per anchor message; a duplicate request returns 409.
+ * - For project parents, the thread chat must live in the same workspace
+ *   (the optional `workspaceId` body field, when supplied, must match).
+ * - Hub parents may target any owned workspace. UI-created threads omit
+ *   `workspaceId` and inherit the parent chat's workspace.
+ * - The agent for the thread chat: explicit `agentId` wins; otherwise
+ *   the parent chat's agent is reused when it's enabled in the target
+ *   workspace; otherwise the workspace's first enabled agent. The
+ *   selected agent must be enabled in the target workspace.
+ * - Insert a normal user message into the thread chat and a pending
+ *   `agent_turn` trigger. Caller is expected to fire the trigger and
+ *   schedule a summary, mirroring the regular send-message path.
+ */
+export async function createThread(
+  pool: Pool,
+  parentChatId: string,
+  anchorMessageId: string,
+  rawData: unknown,
+  emit: (event: WsEvent) => void,
+  opts?: { actorUserId?: string; userId: string },
+): Promise<CreateThreadResult> {
+  const parsed = CreateThreadSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid thread body: ${parsed.error.message}`);
+  }
+  const data = parsed.data;
+  if (data.content.trim() === "") {
+    throw new ValidationError("Thread starting message content must not be empty");
+  }
+
+  const parentChat = await queries.chats.findById(pool, parentChatId);
+  if (!parentChat) throw new NotFoundError(`Chat not found: ${parentChatId}`);
+
+  const anchorMessage = await queries.messages.findById(pool, anchorMessageId);
+  if (!anchorMessage || anchorMessage.chatId !== parentChatId) {
+    throw new NotFoundError(`Message not found in chat: ${anchorMessageId}`);
+  }
+  if (anchorMessage.threadChatId) {
+    throw new ConflictError(
+      `Message already has a thread: ${anchorMessageId}`,
+    );
+  }
+
+  const parentWorkspace = await queries.workspaces.findById(pool, parentChat.workspaceId);
+  if (!parentWorkspace) {
+    throw new NotFoundError(`Workspace not found: ${parentChat.workspaceId}`);
+  }
+
+  // Workspace targeting policy: project parents stay in their workspace,
+  // hub parents may target any of the user's workspaces.
+  let targetWorkspaceId = data.workspaceId ?? parentChat.workspaceId;
+  if (parentWorkspace.kind === "project" && targetWorkspaceId !== parentChat.workspaceId) {
+    throw new ValidationError(
+      "Project workspace threads must live in the same workspace",
+    );
+  }
+  const targetWorkspace = await queries.workspaces.findById(pool, targetWorkspaceId);
+  if (!targetWorkspace || targetWorkspace.userId !== opts?.userId) {
+    throw new NotFoundError(`Workspace not found: ${targetWorkspaceId}`);
+  }
+  targetWorkspaceId = targetWorkspace.id;
+
+  // Pick the agent for the thread chat. Explicit > parent's agent (if
+  // enabled in target) > workspace's first enabled agent.
+  const enabledAgents = await queries.workspaceAgents.listForWorkspace(
+    pool,
+    targetWorkspaceId,
+  );
+  if (enabledAgents.length === 0) {
+    throw new ValidationError(
+      `Workspace has no enabled agents: ${targetWorkspaceId}`,
+    );
+  }
+  const enabledIds = new Set(enabledAgents.map((a) => a.agentId));
+  let agentId: string | undefined;
+  if (data.agentId) {
+    if (!enabledIds.has(data.agentId)) {
+      throw new ValidationError(
+        `Agent ${data.agentId} is not enabled in workspace ${targetWorkspaceId}`,
+      );
+    }
+    agentId = data.agentId;
+  } else if (enabledIds.has(parentChat.agentId)) {
+    agentId = parentChat.agentId;
+  } else {
+    agentId = enabledAgents[0].agentId;
+  }
+
+  // Create the thread chat. Title borrows from the parent chat so the
+  // sidebar entry is recognisable; the UI can rename later.
+  const threadChat = await queries.chats.insert(pool, {
+    id: generateId("chat"),
+    workspaceId: targetWorkspaceId,
+    agentId,
+    title: parentChat.title ? `Thread: ${parentChat.title}` : "Thread",
+  });
+
+  // Atomically claim the anchor as the parent of this thread. If a
+  // concurrent request already created a thread for the same anchor,
+  // the UPDATE fails its WHERE guard and we surface 409.
+  const claimedAnchor = await queries.messages.setThreadChatId(
+    pool,
+    anchorMessageId,
+    threadChat.id,
+  );
+  if (!claimedAnchor) {
+    // Roll back the thread chat we just created so we don't leak an
+    // orphan workspace chat. messages.chat_id has ON DELETE CASCADE so
+    // any rows we inserted (none yet) would also go.
+    await pool.query("DELETE FROM chats WHERE id = ?", [threadChat.id]);
+    throw new ConflictError(
+      `Message already has a thread: ${anchorMessageId}`,
+    );
+  }
+
+  emit({
+    type: "chat.updated",
+    payload: threadChat,
+  });
+
+  // The thread-starting message is a normal user message in the new chat.
+  const threadStartMessage = await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId: threadChat.id,
+    role: "user",
+    content: { type: "text", text: data.content },
+  });
+  emit({
+    type: "message.appended",
+    payload: threadStartMessage,
+    workspaceId: threadChat.workspaceId,
+    chatTitle: threadChat.title,
+    actorUserId: opts?.actorUserId,
+  });
+
+  const triggerId = generateId("message");
+  const trigger = await queries.messages.insert(pool, {
+    id: triggerId,
+    chatId: threadChat.id,
+    role: "system",
+    content: { type: "agent_turn", userMessageId: threadStartMessage.id },
+    state: "pending",
+    parentId: threadStartMessage.id,
+    agentId,
+  });
+  emit({
+    type: "message.appended",
+    payload: trigger,
+    workspaceId: threadChat.workspaceId,
+    chatTitle: threadChat.title,
+    actorUserId: opts?.actorUserId,
+  });
+
+  // Notify subscribers that the anchor now has a threadChatId so the
+  // parent chat's transcript can render the "open thread" affordance.
+  emit({ type: "message.updated", payload: claimedAnchor });
+
+  return {
+    threadChat,
+    threadStartMessage,
+    triggerId,
+    anchorMessage: claimedAnchor,
+  };
 }
 
 export async function attachArtifactRef(

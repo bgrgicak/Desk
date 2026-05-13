@@ -14,6 +14,10 @@ export interface NavQuery {
    * user navigates within the chat normally. */
   message?: string | null;
   artifactParams?: string | null;
+  /** Encoded as `chatId:messageId`. When present with chat=new, the first
+   * sent message creates a thread anchored at this message instead of a
+   * new standalone chat. */
+  startThread?: string | null;
 }
 
 export const NEW_CHAT_ID = "new";
@@ -30,6 +34,7 @@ export function buildPath(
   if (q.folder) sp.set("folder", q.folder);
   if (q.message) sp.set("message", q.message);
   if (q.artifactParams) sp.set("artifactParams", q.artifactParams);
+  if (q.startThread) sp.set("startThread", q.startThread);
   const s = sp.toString();
   return `/w/${wsId}/${view}${s ? "?" + s : ""}`;
 }
