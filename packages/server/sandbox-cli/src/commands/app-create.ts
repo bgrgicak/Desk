@@ -152,6 +152,10 @@ async function substituteName(appDir: string, name: string): Promise<void> {
  */
 async function assertNoUnsubstitutedMarkers(appDir: string): Promise<void> {
   const skipDirs = new Set(["node_modules", ".storage", "dist"]);
+  // verify.mjs uses __APP_NAME__ as a literal comparison value to detect
+  // whether it is running inside the uncloned scaffold template, not as a
+  // substitution placeholder.
+  const skipFiles = new Set([path.join(appDir, "scripts", "verify.mjs")]);
   async function walk(dir: string): Promise<void> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -162,6 +166,7 @@ async function assertNoUnsubstitutedMarkers(appDir: string): Promise<void> {
       }
       if (!entry.isFile()) continue;
       const filePath = path.join(dir, entry.name);
+      if (skipFiles.has(filePath)) continue;
       let contents: string;
       try {
         contents = await fs.readFile(filePath, "utf-8");
