@@ -11,18 +11,21 @@ async function openChatGPTConnection(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Customize/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
-  // Connections list is derived from /me/providers — only configured kinds
-  // appear. On first run the list is empty so we open the picker; on reload
-  // (after a key is saved) the ChatGPT row exists and we edit it directly.
-  // Wait briefly for the async fetch to settle before deciding.
+  // The Connections tab now renders two sections under the same `div.group`
+  // wrapper: configured connections (with a "More actions" menu → Edit) and
+  // available kinds (with a "Connect" button that opens the new-connection
+  // detail view directly). On first run only the Available row exists; after
+  // a key is saved the configured row appears above it. We branch on which
+  // affordance the row exposes rather than waiting for a button that may
+  // never show up.
   const chatgptRow = dialog.locator("div.group", { hasText: /^ChatGPT/ }).first();
-  try {
-    await chatgptRow.waitFor({ state: "visible", timeout: 3_000 });
-    await chatgptRow.getByRole("button", { name: "More actions" }).click();
+  await chatgptRow.waitFor({ state: "visible", timeout: 5_000 });
+  const moreActions = chatgptRow.getByRole("button", { name: "More actions" });
+  if (await moreActions.count()) {
+    await moreActions.click();
     await page.getByRole("menuitem", { name: /^Edit$/ }).click();
-  } catch {
-    await dialog.getByRole("button", { name: "Add", exact: true }).click();
-    await dialog.getByRole("button", { name: /^ChatGPT/ }).click();
+  } else {
+    await chatgptRow.getByRole("button", { name: /^Connect( another)?$/ }).click();
   }
   return dialog;
 }
