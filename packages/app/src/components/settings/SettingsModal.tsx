@@ -1019,7 +1019,7 @@ function ConnectionsList({
                   className="shrink-0"
                   onClick={() => onPickKind(kind)}
                 >
-                  {hasExistingKind ? 'Add another' : 'Add'}
+                  {hasExistingKind ? 'Connect another' : 'Connect'}
                 </Button>
               </motion.div>
             )
