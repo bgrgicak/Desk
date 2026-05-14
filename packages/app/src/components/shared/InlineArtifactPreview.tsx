@@ -54,6 +54,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
       ...base,
       ...(base.scope === 'library' ? { workspaceId } : {}),
       ...(params ? { params } : {}),
+      variant: 'inline' as const,
     }
   }, [path, name, mime, params, workspaceId])
   const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
