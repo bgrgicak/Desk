@@ -245,10 +245,10 @@ export interface Chat {
   artifactIds?: string[]
   messages?: ChatMessage[]
   unread?: boolean
-  /** True while an agent turn is actively running for this chat. */
-  running?: boolean
   /** True when the latest agent turn failed and can be retried. */
   failed?: boolean
+  /** True when the latest agent turn is pending/running. */
+  running?: boolean
   workspaceId?: string
   agentId?: string
   /** Persisted composer goal for this chat. */
@@ -264,7 +264,7 @@ export interface Chat {
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt'
-  | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+  | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
 
 export interface ConnectionMeta {
   name: string
@@ -276,7 +276,6 @@ export interface ConnectionMeta {
 export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
   'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API', icon: '🅰️' },
   'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',    icon: '🅶' },
-  'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',             icon: '📁' },
   'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
   'github':       { name: 'GitHub',       description: 'Repositories and issues',              icon: '🐙' },
   'slack':        { name: 'Slack',        description: 'Messages and channels',                icon: '💬' },

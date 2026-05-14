@@ -113,6 +113,7 @@ export async function startDeskServer(
     // Auto-setup and unlock the per-user vault on boot so e2e tests can
     // read and write provider keys without going through the vault UI flow.
     DESK_VAULT_PASSWORD: "e2e-vault-password",
+    DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {

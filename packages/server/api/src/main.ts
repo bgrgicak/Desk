@@ -225,7 +225,7 @@ async function main(): Promise<void> {
     pool,
     home: DESK_HOME,
     reflectWorkspace: productionReflectWorkspace,
-    resolveProviderKeys: (userId) => resolveProviderKeys(pool, vault, userId),
+    resolveProviderKeys: (userId, workspaceId) => resolveProviderKeys(pool, vault, userId, workspaceId),
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },

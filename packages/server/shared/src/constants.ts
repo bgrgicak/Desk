@@ -7,6 +7,8 @@ export const ID_PREFIXES = {
   sandboxSession: "sbs_",
   appSession: "aps_",
   pin: "pin_",
+  connectorConnection: "con_",
+  workspaceConnectorGrant: "wcg_",
 } as const;
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
