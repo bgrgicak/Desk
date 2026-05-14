@@ -16,6 +16,7 @@ import {
   bridgeError,
   bridgeResponse,
   handleAppBridgeRequest,
+  isAppBridgeResize,
   isAppBridgeRequest,
 } from '@/lib/app-bridge'
 import { GENERATED_APP_IFRAME_SANDBOX } from "@/lib/iframe-sandbox";
@@ -85,13 +86,18 @@ async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession
 export function AppPreview(props: AppPreviewProps) {
   const { appName } = props
   const variant: AppPreviewVariant = props.variant ?? 'detail'
+  const initialHeight = variant === 'inline' ? 240 : 640
+  const appPath = props.scope === 'library' ? props.appPath : undefined
+  const workspaceId = props.scope === 'library' ? props.workspaceId : undefined
   const chatId = props.scope === 'chat' ? props.chatId : null
   const fragment = props.fragment ?? null
   const paramsKey = props.params ? JSON.stringify(props.params) : ''
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [frameHeight, setFrameHeight] = useState(initialHeight)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const getMaxFrameHeight = () => Math.floor(window.innerHeight * (variant === 'inline' ? 0.6 : 0.85))
 
   useEffect(() => {
     let cancelled = false
@@ -108,13 +114,30 @@ export function AppPreview(props: AppPreviewProps) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName, fragment, paramsKey, reloadKey])
+  }, [props.scope, chatId, appName, appPath, workspaceId, fragment, paramsKey, reloadKey])
+
+  useEffect(() => {
+    setFrameHeight(initialHeight)
+  }, [initialHeight, reloadKey])
+
+  useEffect(() => {
+    const onResize = () => {
+      setFrameHeight((height) => Math.min(height, getMaxFrameHeight()))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [variant])
 
   useEffect(() => {
     if (!session) return
     const onMessage = (event: MessageEvent) => {
       const iframeWindow = iframeRef.current?.contentWindow
       if (!iframeWindow || event.source !== iframeWindow) return
+      if (isAppBridgeResize(event.data)) {
+        if (event.data.key !== session.bridgeKey) return
+        setFrameHeight(Math.min(Math.max(0, Math.ceil(event.data.height)), getMaxFrameHeight()))
+        return
+      }
       if (!isAppBridgeRequest(event.data)) return
       if (event.data.key !== session.bridgeKey) return
 
@@ -137,7 +160,7 @@ export function AppPreview(props: AppPreviewProps) {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [props.scope, chatId, appName, session])
+  }, [props.scope, chatId, appName, session, variant])
 
   const iframe = session ? (
     <iframe
@@ -146,14 +169,15 @@ export function AppPreview(props: AppPreviewProps) {
       title={appName}
       src={session.url}
       sandbox={GENERATED_APP_IFRAME_SANDBOX}
-      className="h-full min-h-0 w-full flex-1 border-0"
+      className="block w-full border-0"
+      style={{ height: frameHeight }}
     />
   ) : error ? (
-    <div className="h-full flex items-center justify-center px-4">
+    <div className="flex items-center justify-center px-4" style={{ height: frameHeight }}>
       <p className="text-sm text-destructive">Failed to load app: {error}</p>
     </div>
   ) : (
-    <div className="h-full flex items-center justify-center text-muted-foreground">
+    <div className="flex items-center justify-center text-muted-foreground" style={{ height: frameHeight }}>
       <Loader2 className="h-4 w-4 animate-spin mr-2" />
       <span className="text-sm">Issuing app session…</span>
     </div>
@@ -172,13 +196,13 @@ export function AppPreview(props: AppPreviewProps) {
             Reload
           </button>
         </div>
-        <div className="bg-white" style={{ height: 280 }}>{iframe}</div>
+        <div className="bg-white">{iframe}</div>
       </div>
     )
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <div className="flex flex-col bg-white">
       {iframe}
     </div>
   )
