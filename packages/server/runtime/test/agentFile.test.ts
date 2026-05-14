@@ -241,4 +241,5 @@ describe("writeWorkspaceMcpConfig", () => {
       await fs.rm(home, { recursive: true, force: true });
     }
   });
+
 });
