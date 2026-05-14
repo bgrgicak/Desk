@@ -1,6 +1,7 @@
 {
   "name": "@agent-desk/cli",
   "version": "0.1.0-alpha.0",
+  "license": "MIT",
   "description": "Host CLI for the Desk personal AI assistant. `npx @agent-desk/cli` boots the full stack on http://127.0.0.1:35138/.",
   "type": "module",
   "bin": {
@@ -24,12 +25,12 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-desk/api": "^0.1.0-alpha.0",
-    "@agent-desk/db": "^0.1.0-alpha.0",
-    "@agent-desk/runtime": "^0.1.0-alpha.0",
-    "@agent-desk/scheduler": "^0.1.0-alpha.0",
-    "@agent-desk/shared": "^0.1.0-alpha.0",
-    "@agent-desk/storage": "^0.1.0-alpha.0",
+    "@agent-desk/api": ">=0.1.0-0",
+    "@agent-desk/db": ">=0.1.0-0",
+    "@agent-desk/runtime": ">=0.1.0-0",
+    "@agent-desk/scheduler": ">=0.1.0-0",
+    "@agent-desk/shared": ">=0.1.0-0",
+    "@agent-desk/storage": ">=0.1.0-0",
     "tsx": "^4.19.2"
   }
 }

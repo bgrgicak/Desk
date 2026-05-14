@@ -13,7 +13,7 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
-    "@agent-desk/ui": "*",
+    "@agent-desk/ui": ">=0.1.0-0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.1"

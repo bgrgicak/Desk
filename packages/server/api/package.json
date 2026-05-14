@@ -1,6 +1,7 @@
 {
   "name": "@agent-desk/api",
   "version": "0.1.0-alpha.0",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,11 +33,11 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/db": "^0.1.0-alpha.0",
-    "@agent-desk/runtime": "^0.1.0-alpha.0",
-    "@agent-desk/scheduler": "^0.1.0-alpha.0",
-    "@agent-desk/shared": "^0.1.0-alpha.0",
-    "@agent-desk/storage": "^0.1.0-alpha.0",
+    "@agent-desk/db": ">=0.1.0-0",
+    "@agent-desk/runtime": ">=0.1.0-0",
+    "@agent-desk/scheduler": ">=0.1.0-0",
+    "@agent-desk/shared": ">=0.1.0-0",
+    "@agent-desk/storage": ">=0.1.0-0",
     "@noble/hashes": "^1.8.0",
     "@types/busboy": "^1.5.4",
     "busboy": "^1.6.0",
