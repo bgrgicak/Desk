@@ -281,6 +281,37 @@ describe("chats queries", () => {
     expect(succeededList.find((c) => c.id === failedChatId)?.failed).toBe(false);
   });
 
+  it("uses insertion order when agent_turn timestamps tie", async () => {
+    const retryChatId = generateId("chat");
+    await chats.insert(pool, { id: retryChatId, workspaceId: wsId, agentId, title: "Retry chat" });
+    const tiedCreatedAt = "2026-01-01T00:00:00.000Z";
+    // The older failed message has a lexically larger id than the newer
+    // running retry. If the trigger breaks timestamp ties by id, this chat
+    // incorrectly keeps showing the red failure dot instead of the loader.
+    await messages.insert(pool, {
+      id: "message_zz_old_failed",
+      chatId: retryChatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "old" },
+      kind: "chat",
+      state: "failed",
+    });
+    await messages.insert(pool, {
+      id: "message_aa_new_running",
+      chatId: retryChatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "new" },
+      kind: "chat",
+      state: "running",
+    });
+    await pool.query("UPDATE messages SET created_at = ? WHERE chat_id = ?", [tiedCreatedAt, retryChatId]);
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const retryChat = list.find((c) => c.id === retryChatId);
+    expect(retryChat?.running).toBe(true);
+    expect(retryChat?.failed).toBe(false);
+  });
+
   it("running ignores non-agent_turn messages in pending/running state", async () => {
     const taskChatId = generateId("chat");
     await chats.insert(pool, { id: taskChatId, workspaceId: wsId, agentId, title: "Task chat" });

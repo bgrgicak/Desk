@@ -31,7 +31,11 @@ export async function listModels(
   }
 
   // Pick any available workspace to reach a warm sandbox. Which one is an
-  // implementation detail — all sandboxes see the same user-scoped keys.
+  // implementation detail for execution only; model listing is still
+  // user-global until the endpoint accepts an explicit workspace context, so
+  // do not pass this workspace into provider-key resolution. Workspace grants
+  // are allow-lists for runs, and using an arbitrary workspace here would make
+  // the model picker depend on whichever workspace happened to sort first.
   const [firstWorkspace] = await queries.workspaces.list(pool);
   if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
 

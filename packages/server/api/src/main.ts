@@ -18,7 +18,7 @@ import {
   reconcileArtifactRefs,
   resolveDeskHome,
 } from "@agent-desk/storage";
-import { createRunManager, detectCrashedOrphans, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
+import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
   killClaimedRunsInContainers,
@@ -115,16 +115,10 @@ async function main(): Promise<void> {
   // opencode contends with the survivor on `~/.local/share/opencode/opencode.db`
   // and fails with "Failed to run the query 'PRAGMA journal_mode = WAL'".
   // Reap once, then requeue.
-  const orphanRunRows = (await pool.query<{
-    run_id: string;
-    workspace_id: string;
-    chat_id: string;
-    workspace_path: string;
-  }>(
-    `SELECT m.id AS run_id, c.workspace_id, c.id AS chat_id, w.path AS workspace_path
+  const orphanRunRows = (await pool.query<{ run_id: string; workspace_id: string }>(
+    `SELECT m.id AS run_id, c.workspace_id
        FROM messages m
        JOIN chats c ON c.id = m.chat_id
-       JOIN workspaces w ON w.id = c.workspace_id
       WHERE m.state IN ('running', 'pending')
         AND json_valid(m.content)
         AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request')`,
@@ -145,36 +139,6 @@ async function main(): Promise<void> {
           `${runsByWorkspace.size} workspace(s) before requeue`,
       );
     }
-  }
-
-  // Pre-screen orphans for fatal-signal crashes recorded in their log
-  // files (SIGTRAP, SIGSEGV, "core dumped", etc.). These are deterministic
-  // panics in opencode (or whatever child the runtime spawned), not
-  // interruption-by-restart — re-firing them just re-hits the same panic,
-  // which is exactly the storm that triggered this code path. Fail them
-  // directly so recoverOrphanedRuns below requeues only genuinely-
-  // interrupted runs.
-  const crashedOrphans = await detectCrashedOrphans(
-    DESK_HOME,
-    orphanRunRows.map((r) => ({
-      id: r.run_id,
-      chatId: r.chat_id,
-      workspacePath: r.workspace_path,
-    })),
-  );
-  if (crashedOrphans.length > 0) {
-    for (const c of crashedOrphans) {
-      await queries.messages.finalizeExecution(pool, c.id, "failed");
-    }
-    const breakdown = new Map<string, number>();
-    for (const c of crashedOrphans) {
-      breakdown.set(c.signature, (breakdown.get(c.signature) ?? 0) + 1);
-    }
-    const summary = Array.from(breakdown.entries()).map(([k, n]) => `${k}=${n}`).join(", ");
-    // eslint-disable-next-line no-console
-    console.log(
-      `failed ${crashedOrphans.length} orphaned run(s) showing fatal-signal crash signatures (${summary}); not requeueing`,
-    );
   }
 
   // Re-queue agent_turn / summary_request messages that were interrupted
@@ -261,7 +225,7 @@ async function main(): Promise<void> {
     pool,
     home: DESK_HOME,
     reflectWorkspace: productionReflectWorkspace,
-    resolveProviderKeys: (userId) => resolveProviderKeys(pool, vault, userId),
+    resolveProviderKeys: (userId, workspaceId) => resolveProviderKeys(pool, vault, userId, workspaceId),
     emit: (event: WsEvent) => {
       if (broadcastUserId) broadcast(broadcastUserId, event);
     },

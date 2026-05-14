@@ -2,9 +2,8 @@
  * Integration tests for removing a connection via PUT /me/providers with
  * null — the mechanism used by the UI's "Remove" action.
  *
- * Bug: the UI was sending '' (empty string) instead of null, which stored
- * the empty string rather than deleting the key, so the masked echo "****"
- * kept the connection visible.
+ * Empty strings are treated as deletion too, matching the UI's cleared-input
+ * behavior and avoiding inert connector rows with blank credentials.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -135,25 +134,20 @@ describe("PUT /me/providers — remove connection", () => {
     expect((afterDel.body as { providers: Record<string, string | null> }).providers.GEMINI_API_KEY).toBeNull();
   });
 
-  it("sending empty string does NOT remove the key (documents current server contract)", async () => {
+  it("sending empty string removes the key like null", async () => {
     // Save a key
     await request("PUT", "/me/providers", token, {
       providers: { OPENAI_API_KEY: "sk-oai-test-key-5678" },
     });
 
-    // Send empty string — server stores it in the vault (non-null path)
+    // Send empty string — same inactive/delete semantics as the UI's cleared input.
     const emptyRes = await request("PUT", "/me/providers", token, {
       providers: { OPENAI_API_KEY: "" },
     });
     expect(emptyRes.status).toBe(200);
 
-    // Key is present (stored as "") and masked echo is returned
+    // Key is inactive and should not appear as a configured connection.
     const afterEmpty = await request("GET", "/me/providers", token);
-    expect((afterEmpty.body as { providers: Record<string, string | null> }).providers.OPENAI_API_KEY).not.toBeNull();
-
-    // Clean up so other tests start fresh
-    await request("PUT", "/me/providers", token, {
-      providers: { OPENAI_API_KEY: null },
-    });
+    expect((afterEmpty.body as { providers: Record<string, string | null> }).providers.OPENAI_API_KEY).toBeNull();
   });
 });

@@ -139,7 +139,7 @@ export async function globalSetup(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(`[e2e] desk-server up at ${server.url}`);
 
-  const vitePort = 5179;
+  const vitePort = Number(process.env.DESK_E2E_VITE_PORT ?? 5179);
   const viteUrl = `http://127.0.0.1:${vitePort}`;
   const viteProc = await startVite(server.url, vitePort);
   // eslint-disable-next-line no-console

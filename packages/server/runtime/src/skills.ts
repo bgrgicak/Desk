@@ -18,7 +18,6 @@ export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
 export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
 export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
 export const DESK_PERSISTENCE_SKILL_NAME = "desk-persistence";
-
 const CLI_SKILL_FILE = {
   built: "sandbox-cli-skill.md",
   source: "../../sandbox-cli/skill.md",

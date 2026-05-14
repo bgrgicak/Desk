@@ -153,6 +153,31 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
+      "/me/connections": {
+        get: {
+          summary: "List connector connections owned by the current user",
+          parameters: [{ name: "providerId", in: "query", schema: { type: "string" } }],
+          responses: { "200": { description: "Connector connections" } },
+        },
+        post: {
+          summary: "Create a connector connection",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { providerId: { type: "string" }, displayName: { type: "string" }, externalAccountId: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } }, metadata: { type: "object", additionalProperties: true }, credentials: { type: "object", additionalProperties: true, description: "Encrypted at rest and never returned by list/get responses." }, status: { type: "string", enum: ["active", "disabled", "error", "revoked"] }, isDefault: { type: "boolean" } }, required: ["providerId", "displayName"] } } } },
+          responses: { "201": { description: "Created connector connection" }, "400": { description: "Invalid payload" } },
+        },
+      },
+      "/me/connections/{id}": {
+        patch: {
+          summary: "Update a connector connection",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { displayName: { type: "string" }, externalAccountId: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } }, metadata: { type: "object", additionalProperties: true }, credentials: { type: "object", nullable: true, additionalProperties: true, description: "Encrypted at rest and never returned by list/get responses. Null clears stored credentials." }, status: { type: "string", enum: ["active", "disabled", "error", "revoked"] }, isDefault: { type: "boolean" } } } } } },
+          responses: { "200": { description: "Updated connector connection" }, "404": { description: "Connection not found" } },
+        },
+        delete: {
+          summary: "Delete a connector connection",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "OK" }, "404": { description: "Connection not found" } },
+        },
+      },
       "/me/providers/local": {
         get: {
           summary: "List host-detected local sources",
@@ -233,6 +258,19 @@ export function generateOpenApiSpec(): OpenApiSpec {
             "400": { description: "Cannot delete the caller's last workspace" },
             "404": { description: "Workspace not found" },
           },
+        },
+      },
+      "/workspaces/{id}/connections": {
+        get: {
+          summary: "List connector grants for a workspace",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Workspace connector grants" } },
+        },
+        put: {
+          summary: "Replace connector grants for a workspace",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { grants: { type: "array", items: { type: "object", properties: { connectionId: { type: "string" }, providerId: { type: "string" }, grantedCapabilities: { type: "array", items: { type: "string" } }, isDefault: { type: "boolean" } }, required: ["connectionId", "providerId"] } } }, required: ["grants"] } } } },
+          responses: { "200": { description: "Workspace connector grants" }, "400": { description: "Invalid grant payload" }, "404": { description: "Workspace or connection not found" } },
         },
       },
       "/workspaces/{id}/agents": {

@@ -518,9 +518,17 @@ export function providerKeyEnv(
   return out;
 }
 
+/**
+ * Per-run env vars sourced from Desk's connector resolver but not exposed
+ * through Settings' generic /me/providers surface. Empty for now —
+ * connectors that need ad-hoc minted tokens can append here.
+ */
+const TOOL_CONNECTION_ENV_VARS: readonly string[] = [] as const;
+
 const MANAGED_CONNECTION_ENV_NAMES = new Set<string>([
   ...CONNECTION_ENV_VARS,
   ...MANAGED_CONNECTION_ENV_ALIASES,
+  ...TOOL_CONNECTION_ENV_VARS,
 ]);
 
 function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void {
@@ -535,7 +543,7 @@ function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
   if (!keys) return out;
   const source: Record<string, string | undefined> = keys;
-  for (const name of SANDBOX_CONNECTION_ENV_VARS) {
+  for (const name of [...SANDBOX_CONNECTION_ENV_VARS, ...TOOL_CONNECTION_ENV_VARS]) {
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
@@ -547,8 +555,14 @@ function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
  *
  * A long-lived sandbox may have inherited legacy host env at container create
  * time. When the caller supplies the current vault-backed key map, explicitly
- * clear any allowed connection env var that is absent so deleted/disabled
- * connections cannot leak back in from the warm container environment.
+ * clear any allowed persisted connection env var that is absent so deleted/
+ * disabled connections cannot leak back in from the warm container environment.
+ *
+ * Tool-only credentials are minted per run and are never written into the
+ * container's create-time environment. When they cannot be resolved, omit
+ * them rather than emitting an empty value; that lets callers and tools
+ * distinguish "no token was minted" from a deliberately blanked persisted
+ * secret.
  */
 export function providerKeyExecEnv(
   keys?: Record<string, string>,

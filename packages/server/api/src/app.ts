@@ -479,6 +479,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+
     // Online backup. The pool opens its DB with locking_mode=EXCLUSIVE,
     // which blocks other connections (including a host-side
     // `sqlite3 .backup` CLI) from opening the file. `VACUUM INTO` runs
@@ -986,7 +987,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/providers" && method === "GET") {
-      const result = accountRoutes.getProviders(vault, userId);
+      const result = await accountRoutes.getProviders(pool, vault, userId);
       sendJson(res, 200, result);
       return;
     }
@@ -1006,6 +1007,31 @@ export function createApp(opts: AppOptions): Server {
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
       sendJson(res, 200, result);
       return;
+    }
+    if (path === "/me/connections" && method === "GET") {
+      const result = await accountRoutes.listConnections(pool, vault, userId, query.get("providerId") ?? undefined);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/me/connections" && method === "POST") {
+      const body = await parseBody(req) as Parameters<typeof accountRoutes.createConnection>[3];
+      const result = await accountRoutes.createConnection(pool, vault, userId, body);
+      sendJson(res, 201, result);
+      return;
+    }
+    {
+      const m = path.match(/^\/me\/connections\/([A-Za-z0-9_-]+)$/);
+      if (m && method === "PATCH") {
+        const body = await parseBody(req) as Parameters<typeof accountRoutes.updateConnection>[4];
+        const result = await accountRoutes.updateConnection(pool, vault, userId, m[1], body);
+        sendJson(res, 200, result);
+        return;
+      }
+      if (m && method === "DELETE") {
+        const result = await accountRoutes.deleteConnection(pool, vault, userId, m[1]);
+        sendJson(res, 200, result);
+        return;
+      }
     }
     if (path === "/me/providers/local" && method === "GET") {
       const result = await localSourceRoutes.listLocalSources(pool, userId);
@@ -1119,6 +1145,19 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "workspaces" && segments.length === 2 && method === "DELETE") {
       await requireOwnedWorkspace(pool, segments[1], userId);
       const result = await workspaceRoutes.deleteWorkspace(pool, storage.home, userId, segments[1]);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "connections" && segments.length === 3 && method === "GET") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const result = await accountRoutes.listWorkspaceGrants(pool, segments[1]);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (segments[0] === "workspaces" && segments[2] === "connections" && segments.length === 3 && method === "PUT") {
+      await requireOwnedWorkspace(pool, segments[1], userId);
+      const body = await parseBody(req) as Parameters<typeof accountRoutes.replaceWorkspaceGrants>[3];
+      const result = await accountRoutes.replaceWorkspaceGrants(pool, userId, segments[1], body);
       sendJson(res, 200, result);
       return;
     }
@@ -1340,6 +1379,24 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 201, userMessage);
       return;
     }
+    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "thread" && segments.length === 5 && method === "POST") {
+      await requireOwnedMessage(pool, segments[1], segments[3], userId);
+      const body = await parseBody(req);
+      const result = await chatRoutes.createThread(pool, segments[1], segments[3], body, emitEvent, { actorUserId: userId, userId });
+
+      runManager.fireMessage(result.triggerId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
+      });
+      runManager.scheduleSummary(result.threadChat.id).catch(() => {});
+
+      sendJson(res, 201, {
+        chat: result.threadChat,
+        message: result.threadStartMessage,
+        anchorMessage: result.anchorMessage,
+      });
+      return;
+    }
     if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: "chat" | "task" | "task_run" | "summary"; title?: string | null };
@@ -1351,29 +1408,6 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedMessage(pool, segments[1], segments[3], userId);
       const result = await chatRoutes.runMessage(pool, segments[1], segments[3], runManager, emitEvent);
       sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "thread" && segments.length === 5 && method === "POST") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req);
-      const result = await chatRoutes.createThread(
-        pool,
-        segments[1],
-        segments[3],
-        body,
-        emitEvent,
-        { actorUserId: userId, userId },
-      );
-      runManager.fireMessage(result.triggerId).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
-      });
-      runManager.scheduleSummary(result.threadChat.id).catch(() => {});
-      sendJson(res, 201, {
-        chat: result.threadChat,
-        message: result.threadStartMessage,
-        anchorMessage: result.anchorMessage,
-      });
       return;
     }
     if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {

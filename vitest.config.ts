@@ -50,6 +50,7 @@ export default defineConfig({
       "**/test/e2e/**",
       "packages/app/e2e/**",
       ".worktrees/**",
+      ".claude/**",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,
