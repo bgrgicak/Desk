@@ -34,6 +34,7 @@ import {
 } from "@agent-desk/storage";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
+const APP_DIR_MIME = "application/vnd.desk.app+directory";
 const IsoUtcDateTimeSchema = z.string().datetime({ offset: true }).refine((value) => value.endsWith("Z"), {
   message: "datetime must be UTC and end with Z",
 });
@@ -934,6 +935,7 @@ export async function listAttachments(
   const root = workspaceRootPath(storage.home, slug);
   const showHidden = opts?.showHidden ?? false;
   const out: ChatFileRef[] = [];
+  const attachmentNames = new Set<string>();
 
   const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
   const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
@@ -941,15 +943,19 @@ export async function listAttachments(
     if (!showHidden && name.startsWith(".")) continue;
     const abs = path.join(attDir, name);
     const stat = await fs.stat(abs).catch(() => null);
-    if (!stat || !stat.isFile()) continue;
+    if (!stat) continue;
+    const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
+    if (!stat.isFile() && !isAppDir) continue;
+    attachmentNames.add(name);
     out.push({
       path: path.relative(root, abs).split(path.sep).join("/"),
       name,
-      mime: "application/octet-stream",
-      size: stat.size,
+      mime: isAppDir ? APP_DIR_MIME : "application/octet-stream",
+      size: isAppDir ? 0 : stat.size,
       createdAt: stat.birthtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
       kind: "attachment",
+      isDir: isAppDir || undefined,
     });
   }
 
@@ -986,6 +992,11 @@ export async function listAttachments(
       const relPath = path.relative(root, abs).split(path.sep).join("/");
       const isAppArtifactDir = isDir && name.endsWith(".app");
       if (!isAppArtifactDir && !attachedArtifactPaths.has(relPath)) continue;
+      // If a library app was pinned into the chat, it appears in attachments/
+      // with the same basename while the original chat artifact may still be
+      // present in artifacts/. Surface the pinned/library copy once; otherwise
+      // the chat sidebar shows two indistinguishable app entries after pinning.
+      if (isAppArtifactDir && attachmentNames.has(name)) continue;
       out.push({
         path: relPath,
         name,

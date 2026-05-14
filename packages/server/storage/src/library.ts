@@ -233,23 +233,18 @@ export async function listLibrary(
       isDir: isAppDir || undefined,
     });
   }
-  for (const abs of appDirs) {
-    const stat = await fs.stat(abs).catch(() => null);
-    if (!stat || !stat.isDirectory()) continue;
-    fileItems.push({
-      path: path.relative(root, abs).split(path.sep).join("/"),
-      name: path.basename(abs),
-      mime: APP_DIR_MIME,
-      // Size of a directory entry isn't meaningful — the user-facing
-      // renderer should show a count of fragments or skip the size
-      // field entirely, not the byte-size of the inode.
-      size: 0,
-      createdAt: stat.mtime.toISOString(),
-      updatedAtMs: String(stat.mtimeMs),
-      isDir: true,
-    });
-  }
-  for (const abs of appDirs) {
+  const appDirEntries = await Promise.all(
+    appDirs.map(async (abs) => ({
+      abs,
+      isSymlink: (await fs.lstat(abs).catch(() => null))?.isSymbolicLink() ?? false,
+      realPath: await fs.realpath(abs).catch(() => abs),
+    })),
+  );
+  const seenAppRealPaths = new Set<string>();
+  appDirEntries.sort((a, b) => Number(a.isSymlink) - Number(b.isSymlink));
+  for (const { abs, realPath } of appDirEntries) {
+    if (seenAppRealPaths.has(realPath)) continue;
+    seenAppRealPaths.add(realPath);
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isDirectory()) continue;
     fileItems.push({

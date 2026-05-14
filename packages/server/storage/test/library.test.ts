@@ -139,6 +139,39 @@ describe("listLibrary", () => {
     expect(itemPaths).toContain("node_modules/loose-link");
   });
 
+  it("collapses each .app directory into a single library item", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.mkdir(path.join(root, "single-entry.app", "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "single-entry.app", "dist", "index.html"), "<main>app</main>");
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
+    const appItems = items.filter((i) => i.path === "single-entry.app");
+
+    expect(appItems).toHaveLength(1);
+    expect(appItems[0]).toMatchObject({
+      name: "single-entry.app",
+      mime: "application/vnd.desk.app+directory",
+      isDir: true,
+    });
+    expect(items.map((i) => i.path)).not.toContain("single-entry.app/dist/index.html");
+    expect(folders.map((f) => f.path)).not.toContain("single-entry.app");
+  });
+
+  it("deduplicates symlinks that point at an already-listed app directory", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.mkdir(path.join(root, "dedupe-target.app", "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "dedupe-target.app", "dist", "index.html"), "<main>app</main>");
+    await fs.symlink("dedupe-target.app", path.join(root, "dedupe-alias.app"));
+
+    const { items } = await listLibrary(ctx, ctx.workspaceSlug);
+    const appItems = items.filter(
+      (i) => i.path === "dedupe-target.app" || i.path === "dedupe-alias.app",
+    );
+
+    expect(appItems).toHaveLength(1);
+    expect(appItems[0].path).toBe("dedupe-target.app");
+  });
+
   it("paginates by mtime cursor", async () => {
     for (let i = 0; i < 4; i++) {
       await uploadArtifact(ctx, {

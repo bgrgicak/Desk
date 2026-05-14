@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { queries } from "@agent-desk/db";
-import { ConflictError, NotFoundError, type WsEvent } from "@agent-desk/shared";
+import { ConflictError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -25,6 +25,12 @@ async function resolveSlug(ctx: StorageContext, workspaceId: string): Promise<st
   const ws = await queries.workspaces.findById(ctx.pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
   return ws.path;
+}
+
+function normalizePinnedLibraryPath(rawPath: string): string {
+  const normalized = rawPath.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!normalized) throw new ValidationError("Missing 'path' in body");
+  return normalized;
 }
 
 export async function list(
@@ -248,7 +254,14 @@ export async function pin(
   workspaceId: string,
   filePath: string,
 ): Promise<void> {
-  await queries.libraryPins.pin(ctx.pool, workspaceId, filePath);
+  const slug = await resolveSlug(ctx, workspaceId);
+  const normalizedPath = normalizePinnedLibraryPath(filePath);
+  // Validate the target and canonicalize path variants before writing the pin.
+  // Without this, callers can create stale duplicate pin rows such as
+  // `foo.app` and `foo.app/`, which makes the sidebar/list state drift from
+  // the actual library contents.
+  await statFile(ctx, slug, normalizedPath);
+  await queries.libraryPins.pin(ctx.pool, workspaceId, normalizedPath);
 }
 
 export async function unpin(
@@ -256,7 +269,8 @@ export async function unpin(
   workspaceId: string,
   filePath: string,
 ): Promise<void> {
-  await queries.libraryPins.unpin(ctx.pool, workspaceId, filePath);
+  const normalizedPath = normalizePinnedLibraryPath(filePath);
+  await queries.libraryPins.unpin(ctx.pool, workspaceId, normalizedPath);
 }
 
 export { readFile };

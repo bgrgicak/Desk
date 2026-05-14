@@ -7,7 +7,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type PinKind, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type Message, type PinKind, type WsEvent } from "@agent-desk/shared";
 import {
   chatArtifactsDir,
   ReplaceLibraryAppConflictError,
@@ -43,6 +43,47 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
+
+async function sandboxSessionRunsScheduledTask(pool: Pool, runId: string | undefined): Promise<boolean> {
+  if (!runId) return false;
+  const run = await queries.messages.findById(pool, runId);
+  if (run?.kind !== "task_run" || !run.parentId) return false;
+  const parent = await queries.messages.findById(pool, run.parentId);
+  return parent?.kind === "task" && (!!parent.executeAt || !!parent.cron);
+}
+
+async function findDuplicateScheduledSandboxTask(
+  pool: Pool,
+  args: { userId: string; chatId: string; title?: string; content: string; executeAt?: string; cron?: string },
+): Promise<Message | null> {
+  const existing = await queries.messages.listCrossChat(pool, {
+    userId: args.userId,
+    chatId: args.chatId,
+    kinds: ["task"],
+    scheduled: true,
+    limit: 200,
+  });
+  const sameTask = existing.items.find((message) => {
+    const sameTitle = (message.title ?? undefined) === args.title;
+    const sameContent = message.content.type === "text" && message.content.text === args.content;
+    const sameSchedule = args.cron
+      ? message.cron === args.cron
+      : (message.executeAt ?? undefined) === args.executeAt;
+    return sameTitle && sameContent && sameSchedule;
+  });
+  if (sameTask) return sameTask;
+
+  // Scheduled-task runs sometimes respond to their own cadence by scheduling the
+  // same task body again with a newly computed one-shot timestamp (for example,
+  // "tomorrow at 09:00" after today's test run). In that context the existing
+  // parent task is still the schedule owner, so treat an identical title/body as
+  // the same task even when the freshly supplied fire time differs.
+  return existing.items.find((message) => {
+    const sameTitle = (message.title ?? undefined) === args.title;
+    const sameContent = message.content.type === "text" && message.content.text === args.content;
+    return sameTitle && sameContent;
+  }) ?? null;
+}
 import * as appsRoutes from "./routes/apps.js";
 import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
@@ -507,7 +548,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/sandbox/secrets" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent } = await authenticateSandboxToken(pool, token);
       const result = vaultRoutes.sandboxList(vault, agent.userId);
       sendJson(res, 200, result);
       return;
@@ -647,7 +688,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/sandbox/messages" && method === "POST") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
+      const { session, agent } = await authenticateSandboxToken(pool, token);
       const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
       if (!body.chatId || typeof body.chatId !== "string") {
         throw new ValidationError("Missing chatId");
@@ -710,6 +751,27 @@ export function createApp(opts: AppOptions): Server {
       // Caller can still override (e.g. kind="summary") if they have a
       // reason to.
       if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
+
+      if (
+        !createdChat &&
+        await sandboxSessionRunsScheduledTask(pool, session.runId) &&
+        ((typeof sendBody.executeAt === "string" && sendBody.executeAt.trim()) || (typeof sendBody.cron === "string" && sendBody.cron.trim())) &&
+        (sendBody.kind === undefined || sendBody.kind === "task") &&
+        typeof sendBody.content === "string"
+      ) {
+        const duplicate = await findDuplicateScheduledSandboxTask(pool, {
+          userId: agent.userId,
+          chatId: targetChatId,
+          title: typeof sendBody.title === "string" && sendBody.title.trim() ? sendBody.title.trim() : undefined,
+          content: sendBody.content,
+          executeAt: typeof sendBody.executeAt === "string" ? sendBody.executeAt : undefined,
+          cron: typeof sendBody.cron === "string" ? sendBody.cron : undefined,
+        });
+        if (duplicate) {
+          sendJson(res, 200, duplicate);
+          return;
+        }
+      }
 
       const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emitEvent, { role: "agent" });
       sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);

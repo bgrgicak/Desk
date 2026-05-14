@@ -18,6 +18,7 @@ import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { createRunManager } from "@agent-desk/scheduler";
 import { generateId } from "@agent-desk/shared";
 import {
+  chatAttachmentsDir,
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
@@ -225,5 +226,35 @@ describe("GET /chats/:id/attachments — `<name>.app/` chat artifacts (PR-B)", (
     const items = res.body as AttachmentRow[];
     expect(items.find((it) => it.name === "scratch-report.md")).toBeUndefined();
     expect(items.find((it) => it.name === "attached-report.md")?.path).toBe(attachedPath);
+  });
+
+  it("prefers a pinned app attachment over a same-name chat artifact", async () => {
+    const artDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    const attDir = await chatAttachmentsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(path.join(artDir, "pinned-copy.app", "dist"), { recursive: true });
+    await fs.writeFile(path.join(artDir, "pinned-copy.app", "dist", "index.html"), "<main>artifact</main>");
+
+    const libraryApp = path.join(home, workspaceSlug, "pinned-copy.app");
+    await fs.mkdir(path.join(libraryApp, "dist"), { recursive: true });
+    await fs.writeFile(path.join(libraryApp, "dist", "index.html"), "<main>library</main>");
+    await fs.symlink(
+      path.relative(attDir, libraryApp),
+      path.join(attDir, "pinned-copy.app"),
+    );
+
+    const res = await httpJson(
+      "GET",
+      `/chats/${chatId}/attachments?includeArtifacts=true`,
+      authToken,
+    );
+
+    expect(res.status).toBe(200);
+    const matches = (res.body as AttachmentRow[]).filter((it) => it.name === "pinned-copy.app");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      path: `.chats/${chatId}/attachments/pinned-copy.app`,
+      kind: "attachment",
+      isDir: true,
+    });
   });
 });
