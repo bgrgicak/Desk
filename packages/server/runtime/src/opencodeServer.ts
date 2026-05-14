@@ -70,6 +70,32 @@ interface ServerCacheEntry {
 const cache = new Map<string, ServerCacheEntry>();
 
 /**
+ * Per-container mutex so concurrent `ensureOpencodeServer` calls can't
+ * both decide to (re)start the daemon and race-spawn into a
+ * "port already in use" failure. Resolved promises are evicted
+ * synchronously in `finally`, so the lock weight is one in-flight
+ * promise per active container.
+ */
+const startLocks = new Map<string, Promise<unknown>>();
+
+async function withContainerLock<T>(
+  containerId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = startLocks.get(containerId);
+  const next = (prev ?? Promise.resolve()).then(fn, fn);
+  startLocks.set(
+    containerId,
+    next.finally(() => {
+      if (startLocks.get(containerId) === next) {
+        startLocks.delete(containerId);
+      }
+    }),
+  );
+  return next;
+}
+
+/**
  * Returns the (possibly cached) server instance for the container,
  * starting one if needed. When the desired `env` digests differently from
  * the live instance's, the server is restarted with the new env before
@@ -80,39 +106,41 @@ export async function ensureOpencodeServer(
   engine: Engine,
   opts: StartOpencodeServerOpts,
 ): Promise<OpencodeServerInstance> {
-  const wantedDigest = digestEnv(opts.env);
-  const existing = cache.get(opts.containerId);
-  if (existing) {
-    const live = await existing.promise.catch(() => null);
-    if (live && live.envDigest === wantedDigest) {
-      // Health-check the cached daemon. The container could have been
-      // stopped/recreated outside our awareness (test teardown, a
-      // `stopSandbox` call, idle-sweep) leaving us pointing at a port
-      // that no longer answers. Cheap probe — ~ms when alive, fails
-      // fast when not.
-      if (await isInstanceAlive(live)) return live;
+  return withContainerLock(opts.containerId, async () => {
+    const wantedDigest = digestEnv(opts.env);
+    const existing = cache.get(opts.containerId);
+    if (existing) {
+      const live = await existing.promise.catch(() => null);
+      if (live && live.envDigest === wantedDigest) {
+        // Health-check the cached daemon. The container could have
+        // been stopped/recreated outside our awareness (test teardown,
+        // a `stopSandbox` call, idle-sweep) leaving us pointing at a
+        // port that no longer answers. Cheap probe — ~ms when alive,
+        // fails fast when not.
+        if (await isInstanceAlive(live)) return live;
+      }
+      // Env changed, last start failed, or cached instance is dead —
+      // fall through to the start path below.
+      if (live) await stopOpencodeServerInternal(engine, opts.containerId, live).catch(() => {});
+      cache.delete(opts.containerId);
     }
-    // Env changed, last start failed, or cached instance is dead — fall
-    // through to the start path below.
-    if (live) await stopOpencodeServerInternal(engine, opts.containerId, live).catch(() => {});
-    cache.delete(opts.containerId);
-  }
 
-  const entry: ServerCacheEntry = {
-    instance: null,
-    promise: startOpencodeServer(engine, opts, wantedDigest).then(
-      (instance) => {
-        entry.instance = instance;
-        return instance;
-      },
-      (err) => {
-        cache.delete(opts.containerId);
-        throw err;
-      },
-    ),
-  };
-  cache.set(opts.containerId, entry);
-  return entry.promise;
+    const entry: ServerCacheEntry = {
+      instance: null,
+      promise: startOpencodeServer(engine, opts, wantedDigest).then(
+        (instance) => {
+          entry.instance = instance;
+          return instance;
+        },
+        (err) => {
+          cache.delete(opts.containerId);
+          throw err;
+        },
+      ),
+    };
+    cache.set(opts.containerId, entry);
+    return entry.promise;
+  });
 }
 
 /**

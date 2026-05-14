@@ -116,7 +116,11 @@ export async function execRun(
   const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
     enablePlaywright: chatNeedsBrowser(opts.agent.goal),
   });
-  if (mcpResult?.changed) {
+  // Skip the daemon-restart side-effect under the fake driver — there's
+  // no real container behind `handle.containerId`, so engine.inspect /
+  // engine.exec would fail and emit an unhandled rejection during test
+  // teardown. The real driver still restarts on MCP-config diff below.
+  if (process.env.DESK_SANDBOX_DRIVER !== "fake" && mcpResult?.changed) {
     try {
       const engine = await detectEngine();
       await restartOpencodeServer(engine, {
