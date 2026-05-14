@@ -2,10 +2,9 @@ import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import {
   classifyResourceError,
-  killClaimedRunsInContainers,
+  killOpencodeDaemonsForOrphans,
   providerKeyEnv,
   providerKeyExecEnv,
-  reapStaleSandboxTrees,
 } from "../src/docker.js";
 import type { Engine, ExecHandle, ExecSpec, ContainerInfo } from "../src/engine.js";
 
@@ -137,265 +136,89 @@ describe("providerKeyExecEnv", () => {
   });
 });
 
-describe("killClaimedRunsInContainers", () => {
-  // Fake Engine that records exec calls per (containerId, script) so we can
-  // assert exactly which pidfiles got signalled, without standing up real
-  // containers. `inspect` is wired so we can fake "container exists" / "no
-  // container" per workspace, since the orphan killer must skip workspaces
-  // whose sandbox is already gone.
-  type Handler = (containerId: string, script: string) => number;
+
+describe("killOpencodeDaemonsForOrphans", () => {
+  // The new orphan-kill is one-per-workspace: it ensures any previous
+  // `opencode serve` daemon left over from a prior desk-server lifetime
+  // is dead before the new server tries to spawn its own (which would
+  // otherwise fail on the SQLite exclusive lock).
   function fakeEngine(opts: {
-    handler: Handler;
     knownContainers?: ReadonlySet<string>;
-  }): { engine: Engine; calls: Array<{ container: string; script: string }> } {
-    const calls: Array<{ container: string; script: string }> = [];
-    const exec = async (spec: ExecSpec): Promise<ExecHandle> => {
-      const script = spec.cmd.join(" ");
-      calls.push({ container: spec.containerId, script });
-      const code = opts.handler(spec.containerId, script);
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      stdout.end();
-      stderr.end();
-      return {
-        stdout,
-        stderr,
-        wait: async () => code,
-        cancel: async () => {},
-      };
-    };
-    const inspect = async (nameOrId: string): Promise<ContainerInfo | null> => {
-      if (opts.knownContainers && !opts.knownContainers.has(nameOrId)) return null;
-      return {
-        id: nameOrId,
-        name: nameOrId,
-        image: "desk/sandbox:test",
-        imageId: "sha256:fake",
-        user: "0:0",
-        binds: [],
-        labels: {},
-        running: true,
-      };
-    };
-    return {
-      calls,
-      engine: {
-        name: "docker",
-        exec,
-        inspect,
-      } as unknown as Engine,
-    };
-  }
-
-  it("skips workspaces whose sandbox container no longer exists", async () => {
-    // No container means there's no surviving opencode to fight; the next
-    // fire builds a fresh sandbox. The function must not exec anything in
-    // a missing container — that would either be a wasted call or, worse,
-    // hit a container with the same name freshly created in between.
-    const { engine, calls } = fakeEngine({
-      handler: () => 0,
-      knownContainers: new Set(), // no containers exist
-    });
-    const results = await killClaimedRunsInContainers(
-      new Map([["wks_gone", ["msg_a", "msg_b"]]]),
-      engine,
-    );
-    expect(calls).toHaveLength(0);
-    expect(results).toEqual([
-      { workspaceId: "wks_gone", runId: "msg_a", killed: false },
-      { workspaceId: "wks_gone", runId: "msg_b", killed: false },
-    ]);
-  });
-
-  it("signals each claimed run's pidfile in its workspace container", async () => {
-    // For each (workspace, runId) we expect the cleanup to: confirm the
-    // pidfile exists, signal the process group, then rm the pidfile. We
-    // only assert the pidfile path is mentioned and a kill landed — the
-    // exact shell script is the cleanupRunProcessTree contract under test
-    // elsewhere.
-    const { engine, calls } = fakeEngine({
-      handler: (_c, script) => {
-        if (script.includes("[ -s ")) return 0; // pidfile present
-        if (script.includes("kill -TERM")) return 42; // PG signalled
-        if (script.includes("kill -KILL")) return 42;
-        return 0;
-      },
-      knownContainers: new Set(["desk-sandbox-wks_a", "desk-sandbox-wks_b"]),
-    });
-    const results = await killClaimedRunsInContainers(
-      new Map([
-        ["wks_a", ["msg_1", "msg_2"]],
-        ["wks_b", ["msg_3"]],
-      ]),
-      engine,
-    );
-    expect(results).toEqual([
-      { workspaceId: "wks_a", runId: "msg_1", killed: true },
-      { workspaceId: "wks_a", runId: "msg_2", killed: true },
-      { workspaceId: "wks_b", runId: "msg_3", killed: true },
-    ]);
-    // Each runId's pidfile should appear in the call set; cross-workspace
-    // routing is verified by the container id on the call.
-    expect(
-      calls.some(
-        (c) => c.container === "desk-sandbox-wks_a" && c.script.includes("/tmp/desk-runs/msg_1.pid"),
-      ),
-    ).toBe(true);
-    expect(
-      calls.some(
-        (c) => c.container === "desk-sandbox-wks_a" && c.script.includes("/tmp/desk-runs/msg_2.pid"),
-      ),
-    ).toBe(true);
-    expect(
-      calls.some(
-        (c) => c.container === "desk-sandbox-wks_b" && c.script.includes("/tmp/desk-runs/msg_3.pid"),
-      ),
-    ).toBe(true);
-    // Sanity: the wks_a pidfile must not have been routed into wks_b's
-    // container — a routing bug here would cross-kill unrelated runs.
-    expect(
-      calls.some(
-        (c) => c.container === "desk-sandbox-wks_b" && c.script.includes("/tmp/desk-runs/msg_1.pid"),
-      ),
-    ).toBe(false);
-  });
-
-  it("reports killed=false when the pidfile is absent (already cleaned up)", async () => {
-    // The previous server may have crashed after the run exited cleanly but
-    // before the pidfile was rm-ed by the finally block. We treat absent
-    // pidfile as "nothing to kill" rather than an error — the requeue will
-    // still happen.
-    const { engine } = fakeEngine({
-      handler: (_c, script) => {
-        if (script.includes("[ -s ")) return 1; // no pidfile
-        return 0;
-      },
-      knownContainers: new Set(["desk-sandbox-wks_a"]),
-    });
-    const results = await killClaimedRunsInContainers(
-      new Map([["wks_a", ["msg_ghost"]]]),
-      engine,
-    );
-    expect(results).toEqual([
-      { workspaceId: "wks_a", runId: "msg_ghost", killed: false },
-    ]);
-  });
-
-  it("returns an empty array for an empty input without touching the engine", async () => {
-    const { engine, calls } = fakeEngine({ handler: () => 0 });
-    const results = await killClaimedRunsInContainers(new Map(), engine);
-    expect(results).toEqual([]);
-    expect(calls).toHaveLength(0);
-  });
-});
-
-describe("reapStaleSandboxTrees", () => {
-  // The sweep script is a shell program; we exercise its IO contract
-  // (env-var passing, stdout parsing, error tolerance) against a fake
-  // engine rather than re-implementing /proc inspection here. The actual
-  // shell logic is covered by the runtime integration suite where a real
-  // sandbox container with seeded leaked processes verifies that the
-  // script identifies and SIGKILLs them.
-  function fakeEngineForSweep(
-    handler: (containerId: string, env: Readonly<string[]>) => { exitCode: number; stdout: string },
-  ): { engine: Engine; calls: Array<{ container: string; env: string[]; cmd: string[] }> } {
-    const calls: Array<{ container: string; env: string[]; cmd: string[] }> = [];
-    const exec = async (spec: ExecSpec): Promise<ExecHandle> => {
-      const env = [...(spec.env ?? [])];
-      calls.push({ container: spec.containerId, env, cmd: spec.cmd });
-      const { exitCode, stdout } = handler(spec.containerId, env);
-      const out = new PassThrough();
-      const err = new PassThrough();
-      // Defer the stdout write so the caller's `on("data", ...)` handler
-      // (attached after `engine.exec` returns) actually catches it. The
-      // real wrapExecChild gates wait() on the child's "close" event,
-      // which fires after stdout closes — replicate that ordering here
-      // so the production parser can read stdoutChunks.
-      const drained = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          out.end(stdout);
-          err.end();
-          out.once("end", () => resolve());
-        });
-      });
-      return {
-        stdout: out,
-        stderr: err,
-        wait: async () => {
-          await drained;
-          return exitCode;
-        },
-        cancel: async () => {},
-      };
-    };
-    return {
-      calls,
-      engine: { name: "docker", exec } as unknown as Engine,
-    };
-  }
-
-  it("parses the reaped count from REAPED=<n> on stdout", async () => {
-    // The sweep echoes a single REAPED=<n> line at the end. The runtime
-    // surfaces this count in logs so an operator can see leaks getting
-    // cleaned up post-deploy — a regression in the parser would silently
-    // make the metric report zero forever.
-    const { engine } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=3\n" }));
-    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
-    expect(result.reaped).toBe(3);
-  });
-
-  it("passes the expected pidfile set as a space-framed env var", async () => {
-    // Whole-token matching in the shell requires every pidfile to be
-    // surrounded by spaces, including the first and last. Without the
-    // outer padding, a prefix match (e.g. a leaked `/tmp/desk-runs/abc.pid`
-    // would be mistaken for active because `abc.pid` appears as a substring
-    // inside `xabc.pid`). We assert the wire format directly.
-    const { engine, calls } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=0" }));
-    await reapStaleSandboxTrees(engine, "ctr_x", [
-      "/tmp/desk-runs/msg_a.pid",
-      "/tmp/desk-runs/msg_b.pid",
-    ]);
-    const env = calls[0]?.env ?? [];
-    expect(env).toContain("EXPECTED_PIDFILES= /tmp/desk-runs/msg_a.pid /tmp/desk-runs/msg_b.pid ");
-  });
-
-  it("invokes `sh -c <script>` against the target container", async () => {
-    const { engine, calls } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "REAPED=0" }));
-    await reapStaleSandboxTrees(engine, "ctr_target", []);
-    expect(calls[0]?.container).toBe("ctr_target");
-    expect(calls[0]?.cmd[0]).toBe("sh");
-    expect(calls[0]?.cmd[1]).toBe("-c");
-    expect(calls[0]?.cmd[2]).toMatch(/EXPECTED_PIDFILES/);
-    expect(calls[0]?.cmd[2]).toMatch(/setsid/);
-  });
-
-  it("returns reaped=0 when the script exits non-zero (degrades safely)", async () => {
-    // The sweep is a safety net — a regression that breaks the script
-    // inside the container must NOT block the new fire. We treat any
-    // non-zero exit as "did nothing"; the run proceeds and the operator
-    // sees memory pressure if leaks weren't reaped.
-    const { engine } = fakeEngineForSweep(() => ({ exitCode: 2, stdout: "REAPED=99" }));
-    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
-    expect(result.reaped).toBe(0);
-  });
-
-  it("returns reaped=0 when the engine itself throws", async () => {
+    onExec?: (containerId: string, cmd: string[]) => number;
+  }): { engine: Engine; execCalls: Array<{ container: string; cmd: string[] }> } {
+    const known = opts.knownContainers ?? new Set();
+    const execCalls: Array<{ container: string; cmd: string[] }> = [];
     const engine: Engine = {
       name: "docker",
-      exec: async () => {
-        throw new Error("engine unreachable");
+      inspect: async (name) =>
+        known.has(name)
+          ? ({
+              id: `id-${name}`,
+              imageId: "i",
+              user: "",
+              labels: {},
+              binds: [],
+              running: true,
+            } as ContainerInfo)
+          : null,
+      imageId: async () => null,
+      imagePull: async () => {},
+      create: async () => "",
+      start: async () => {},
+      stop: async () => {},
+      update: async () => true,
+      remove: async () => {},
+      list: async () => [],
+      exec: async (spec: ExecSpec) => {
+        execCalls.push({ container: spec.containerId, cmd: spec.cmd });
+        const code = opts.onExec?.(spec.containerId, spec.cmd) ?? 0;
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        setImmediate(() => {
+          stdout.end();
+          stderr.end();
+        });
+        return {
+          stdout,
+          stderr,
+          wait: async () => code,
+          cancel: async () => {},
+        } as ExecHandle;
       },
-    } as unknown as Engine;
-    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
-    expect(result.reaped).toBe(0);
+      execDetached: async () => {},
+      port: async () => null,
+      top: async () => [],
+      isRootless: async () => false,
+    };
+    return { engine, execCalls };
+  }
+
+  it("returns empty for empty input", async () => {
+    const { engine } = fakeEngine({});
+    const out = await killOpencodeDaemonsForOrphans([], engine);
+    expect(out).toEqual([]);
   });
 
-  it("returns reaped=0 when stdout has no REAPED line", async () => {
-    // Defensive: a partial output (e.g. the script was killed mid-flight
-    // by an unrelated SIGTERM) should not be parsed as success-with-leak-
-    // count. Better to report zero and let pressure surface than to lie.
-    const { engine } = fakeEngineForSweep(() => ({ exitCode: 0, stdout: "" }));
-    const result = await reapStaleSandboxTrees(engine, "ctr_x", []);
-    expect(result.reaped).toBe(0);
+  it("reports not-killed for a workspace whose container does not exist", async () => {
+    const { engine, execCalls } = fakeEngine({});
+    const out = await killOpencodeDaemonsForOrphans(["wks_nonexistent"], engine);
+    expect(out).toEqual([{ workspaceId: "wks_nonexistent", killed: false }]);
+    // No execs are issued against a container we don't have.
+    expect(execCalls.length).toBe(0);
+  });
+
+  it("issues a daemon-kill exec against existing containers", async () => {
+    const { engine, execCalls } = fakeEngine({
+      knownContainers: new Set(["desk-sandbox-wks_alive"]),
+    });
+    const out = await killOpencodeDaemonsForOrphans(["wks_alive"], engine);
+    expect(out).toEqual([{ workspaceId: "wks_alive", killed: true }]);
+    // The exec script kills any `opencode serve` process and cleans up
+    // the pidfile — we don't pin to the exact shell, just that both
+    // pieces appear.
+    expect(execCalls.length).toBeGreaterThanOrEqual(1);
+    const allScripts = execCalls.map((c) => c.cmd.join(" ")).join("\n");
+    expect(allScripts).toContain("opencode serve");
+    expect(allScripts).toContain("opencode-serve.pid");
   });
 });

@@ -9,7 +9,7 @@ export {
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,
-  killClaimedRunsInContainers,
+  killOpencodeDaemonsForOrphans,
   _resetGrowthStateForTest,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift, ResourceFailureKind, GrowthResult } from "./docker.js";

@@ -21,7 +21,7 @@ import {
 import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
-  killClaimedRunsInContainers,
+  killOpencodeDaemonsForOrphans,
   productionReflectWorkspace,
   pruneDriftedContainers,
   writeGoalSkillFiles,
@@ -107,14 +107,12 @@ async function main(): Promise<void> {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
   }
 
-  // Kill any opencode process trees left running in workspace sandboxes by
-  // the previous desk-server. The cleanup wrapper in `driver.ts` deliberately
-  // skips signalling when the leader is still alive (so a tsx-watch reload
-  // doesn't kill a valid run), which means the previous server's runs survive
-  // into this process — and if we requeue + re-fire them below, the new
-  // opencode contends with the survivor on `~/.local/share/opencode/opencode.db`
-  // and fails with "Failed to run the query 'PRAGMA journal_mode = WAL'".
-  // Reap once, then requeue.
+  // Kill `opencode serve` daemons that survived a previous desk-server
+  // (tsx-watch reload, hard crash). The daemon keeps `~/.local/share/
+  // opencode/opencode.db` exclusively open — a new desk-server's first
+  // `opencode serve` spawn would fail to acquire it and the chat would
+  // error out. Killing the orphan daemon lets the new server bring up a
+  // fresh one on the next request. Per workspace, one shot, best-effort.
   const orphanRunRows = (await pool.query<{ run_id: string; workspace_id: string }>(
     `SELECT m.id AS run_id, c.workspace_id
        FROM messages m
@@ -124,19 +122,13 @@ async function main(): Promise<void> {
         AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request')`,
   )).rows;
   if (orphanRunRows.length > 0) {
-    const runsByWorkspace = new Map<string, string[]>();
-    for (const r of orphanRunRows) {
-      const bucket = runsByWorkspace.get(r.workspace_id) ?? [];
-      bucket.push(r.run_id);
-      runsByWorkspace.set(r.workspace_id, bucket);
-    }
-    const killResults = await killClaimedRunsInContainers(runsByWorkspace);
+    const workspaceIds = Array.from(new Set(orphanRunRows.map((r) => r.workspace_id)));
+    const killResults = await killOpencodeDaemonsForOrphans(workspaceIds);
     const actuallyKilled = killResults.filter((r: { killed: boolean }) => r.killed).length;
     if (actuallyKilled > 0) {
       // eslint-disable-next-line no-console
       console.log(
-        `killed ${actuallyKilled} orphaned opencode run(s) across ` +
-          `${runsByWorkspace.size} workspace(s) before requeue`,
+        `killed orphaned opencode-serve daemon in ${actuallyKilled}/${workspaceIds.length} workspace(s) before requeue`,
       );
     }
   }

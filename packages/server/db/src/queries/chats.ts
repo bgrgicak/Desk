@@ -180,3 +180,40 @@ export async function setAwaitingUser(
   );
   return (rowCount ?? 0) > 0;
 }
+
+/**
+ * Returns the opencode-serve session id bound to this chat, if any.
+ * Each chat owns at most one session that turns are appended to. A null
+ * return means the chat hasn't had its first turn yet under the new
+ * runtime — the driver will create one and persist it via
+ * `setOpencodeSessionId`.
+ */
+export async function getOpencodeSessionId(
+  db: Pool,
+  id: string,
+): Promise<string | null> {
+  const { rows } = await db.query(
+    "SELECT opencode_session_id FROM chats WHERE id = ?",
+    [id],
+  );
+  if (rows.length === 0) return null;
+  const value = rows[0].opencode_session_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Writes (or clears) the opencode-serve session bound to a chat. We
+ * intentionally don't bump `updated_at` here — this is internal runtime
+ * metadata, not a user-visible event, and bumping the chat would shuffle
+ * the chat-list ordering on every turn.
+ */
+export async function setOpencodeSessionId(
+  db: Pool,
+  id: string,
+  sessionId: string | null,
+): Promise<void> {
+  await db.query(
+    "UPDATE chats SET opencode_session_id = ? WHERE id = ?",
+    [sessionId, id],
+  );
+}

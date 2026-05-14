@@ -36,9 +36,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pinned: unpinned `opencode-ai` makes every rebuild dependent on whatever
 # release was latest at build time, so a regression in upstream (e.g. the
 # 1.14.x panic at offset 0x222D243 that SIGTRAPs both sandbox runs on
-# session resume) silently propagates into the next image. Bump this
-# deliberately after smoke-testing a new release.
-RUN npm install -g opencode-ai@latest --omit=dev --loglevel=error \
+# session resume, or the SSE-broadcast regression in 1.14.42-1.14.49 where
+# `GET /event` only emitted server.connected and dropped subsequent
+# message.part.updated events — verified by per-version sweep on
+# 2026-05-14) silently propagates into the next image. Bump this
+# deliberately after smoke-testing a new release: the runtime now talks
+# to opencode via its HTTP API, so the SSE event stream MUST work or
+# every chat turn looks dead in the UI.
+RUN npm install -g opencode-ai@1.14.50 --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
 # Browser/display stack for visual checks. Browser binaries live outside any

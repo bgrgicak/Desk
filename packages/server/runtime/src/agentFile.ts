@@ -149,7 +149,7 @@ export async function writeWorkspaceMcpConfig(
   home: string,
   workspaceSlug: string,
   opts: { enablePlaywright: boolean },
-): Promise<void> {
+): Promise<{ changed: boolean }> {
   // Always emit the playwright key. If we wrote `mcp: {}` and opencode merges
   // with the global `/etc/opencode/opencode.json`, an older image still
   // shipping playwright would survive the merge and start firefox anyway.
@@ -167,5 +167,15 @@ export async function writeWorkspaceMcpConfig(
   };
   const dir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const target = path.join(dir, "opencode.json");
+  const next = JSON.stringify(config, null, 2) + "\n";
+  let prev: string | null = null;
+  try {
+    prev = await fs.readFile(target, "utf-8");
+  } catch {
+    prev = null;
+  }
+  if (prev === next) return { changed: false };
+  await fs.writeFile(target, next, "utf-8");
+  return { changed: true };
 }

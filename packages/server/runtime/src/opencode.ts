@@ -1,15 +1,16 @@
 import { type Pool } from "@agent-desk/db";
 import { networkInterfaces } from "node:os";
-import * as fsp from "node:fs/promises";
-import * as path from "node:path";
-import { workspaceRootPath } from "@agent-desk/storage";
 import { type WorkspaceKind } from "@agent-desk/shared";
 import type { SandboxHandle } from "./docker.js";
-import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
+import type { ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
-import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
+import { projectMounts, teardownMounts } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
+import { restartOpencodeServer, invalidateOpencodeServerCache } from "./opencodeServer.js";
+import { detectEngine } from "./engine.js";
+import { sandboxUser } from "./docker.js";
+import { SANDBOX_HOME } from "./mounts.js";
 
 export interface ExecRunOptions {
   runId: string;
@@ -26,20 +27,31 @@ export interface ExecRunOptions {
   workspaceKind?: WorkspaceKind;
   chatId?: string;
   agent: AgentFileInput;
-  /** Workspace-relative paths to forward to opencode as `--file` flags. */
+  /**
+   * Workspace-relative paths the user attached to this message. Folded
+   * into the opencode message as additional text parts so the model sees
+   * their content; see `driver.buildMessageParts`.
+   */
   attachments?: string[];
   /**
    * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
    * to the sandbox-reachable host gateway when omitted.
    */
   apiUrl?: string;
-  /** Provider API keys forwarded into every exec so they're always current. */
+  /** Provider API keys forwarded into the opencode-serve daemon's env. */
   providerKeys?: Record<string, string>;
   /**
-   * Non-key env entries forwarded into every exec — currently used for the
-   * Codex/ChatGPT bridge (`OPENCODE_AUTH_CONTENT`).
+   * Non-key env entries — currently used for the Codex/ChatGPT bridge
+   * (`OPENCODE_AUTH_CONTENT`).
    */
   extraEnv?: Record<string, string>;
+  /**
+   * Existing opencode-serve session for this chat. Null/undefined on the
+   * chat's first turn under the new runtime — the runtime creates a
+   * session and surfaces its id back via `ExecResult.opencodeSessionId`
+   * for the caller (the scheduler) to persist on the chat row.
+   */
+  opencodeSessionId?: string | null;
   onLog: (event: LogEvent) => void;
 }
 
@@ -94,32 +106,39 @@ export async function execRun(
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
   // single-bind workspace mount. The per-chat artifact paths and any
-  // goal fragment are part of the rendered system prompt — no separate
-  // chatContext prefix on the user prompt.
+  // goal fragment are part of the rendered system prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
   // Lazy MCP: refresh the workspace-level opencode config so playwright is
-  // only present when the chat goal actually needs a browser. Without this,
-  // every run preloads firefox + playwright-mcp (~100 MB resident, hundreds
-  // of pids over a long-lived sandbox) even for pure conversation.
-  await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
+  // only present when the chat goal actually needs a browser. If the
+  // config changed compared to the last write, restart the in-sandbox
+  // opencode-serve daemon so it picks up the new MCP set — the daemon
+  // loads its config at boot and won't re-read it on its own.
+  const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
     enablePlaywright: chatNeedsBrowser(opts.agent.goal),
   });
-
-  // Write the prompt to a file on the shared workspace mount instead of
-  // passing it via DESK_PROMPT. Large chat transcripts can exceed ARG_MAX
-  // (~1 MB on macOS) when packed into an execve environment block; a file
-  // reference dodges that limit entirely.
-  const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
-  const promptHostPath = path.join(wsRoot, `.desk-prompt-${opts.runId}`);
-  const promptSandboxPath = `${SANDBOX_HOME}/.desk-prompt-${opts.runId}`;
-  await fsp.writeFile(promptHostPath, opts.prompt, "utf8");
+  if (mcpResult?.changed) {
+    try {
+      const engine = await detectEngine();
+      await restartOpencodeServer(engine, {
+        containerId: handle.containerId,
+        cwd: SANDBOX_HOME,
+        user: await sandboxUser(engine),
+        // The driver will (re)spawn with the right env on the next exec
+        // anyway; pass an empty env here so the daemon comes up but the
+        // *full* env contract is satisfied by the next ensureOpencodeServer
+        // call, which holds the canonical provider-key set for this run.
+        env: {},
+      }).catch(() => invalidateOpencodeServerCache(handle.containerId));
+    } catch {
+      invalidateOpencodeServerCache(handle.containerId);
+    }
+  }
 
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
-      promptFile: promptSandboxPath,
       home: opts.home,
       workspaceSlug: opts.workspaceSlug,
       chatId: opts.chatId,
@@ -129,14 +148,13 @@ export async function execRun(
       apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
+      opencodeSessionId: opts.opencodeSessionId ?? null,
       onLog: opts.onLog,
     });
     return result;
   } finally {
-    // Always clean up
     await revokeToken(pool, session.id);
     await teardownMounts(handle, opts.runId);
-    await fsp.unlink(promptHostPath).catch(() => {});
   }
 }
 

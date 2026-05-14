@@ -683,6 +683,12 @@ export function createRunManager(opts: RunManagerOptions) {
           await onLog(evt);
         };
         let attempt = 0;
+        // One opencode-serve session per Desk chat. Read the chat's
+        // currently-bound session id (null on the chat's first turn) and
+        // pass it into the runtime; the runtime returns the session that
+        // actually handled the run, which may be a freshly-created one if
+        // the chat had none or the stored id was stale on the daemon.
+        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
         while (true) {
           if (opts.execRunFn) {
             result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
@@ -710,8 +716,17 @@ export function createRunManager(opts: RunManagerOptions) {
               attachments,
               providerKeys,
               extraEnv,
+              opencodeSessionId,
               onLog: onLogWithStderrCapture,
             });
+            // Persist the session id after every attempt (not just success):
+            // a resource-retry inside the loop should reuse the same session
+            // so the model's context across attempts stays consistent.
+            const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
+            if (nextSessionId && nextSessionId !== opencodeSessionId) {
+              await queries.chats.setOpencodeSessionId(pool, msg.chatId, nextSessionId);
+              opencodeSessionId = nextSessionId;
+            }
           }
           if (result.exitCode === 0) break;
           if (attempt >= MAX_RESOURCE_RETRIES) break;
