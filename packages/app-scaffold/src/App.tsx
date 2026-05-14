@@ -4,7 +4,7 @@ import ExampleFragment from '../fragments/example/Component'
 
 export default function App() {
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
+    <div className="flex flex-col bg-background text-foreground">
       <header className="flex items-center justify-between p-6 pb-4">
         <h1 className="text-xl font-semibold">Desk app</h1>
         <nav className="flex gap-2">
@@ -16,7 +16,7 @@ export default function App() {
           </Link>
         </nav>
       </header>
-      <main className="flex-1 min-h-0 overflow-auto px-6 pb-6">
+      <main className="px-6 pb-6">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/example" element={<ExampleFragment />} />

@@ -4,7 +4,7 @@ import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
-import { isMessageVisible } from './messageVisibility'
+import { firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
 import { useGetChatMessagesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
@@ -31,6 +31,22 @@ export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | nul
   return null
 }
 
+export function findFailedOrDiagnosticAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const turn = items[i]
+    if (turn.content.type !== 'agent_turn') continue
+    if (turn.state === 'failed') return turn
+    if (turn.state !== 'succeeded') return null
+
+    const later = items.slice(i + 1)
+    const producedVisibleMessage = later.some(m => isMessageVisible(m, false))
+    if (producedVisibleMessage) return null
+
+    return failureDetailForAgentTurn(items, turn) ? turn : null
+  }
+  return null
+}
+
 export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const m = items[i]
@@ -39,6 +55,96 @@ export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | nul
     }
   }
   return null
+}
+
+export function failureDetailForAgentTurn(items: ServerMessage[], failedTurn: ServerMessage | null): string | null {
+  if (!failedTurn) return null
+  const diagnostics: string[] = []
+  collectDiagnostics(failedTurn.progressLog, diagnostics)
+
+  const failedTurnIndex = items.findIndex(m => m.id === failedTurn.id)
+  if (failedTurnIndex >= 0) {
+    for (const m of items.slice(failedTurnIndex + 1)) {
+      if (m.content.type === 'agent_turn') break
+      if (m.role === 'agent') collectMessageDiagnostics(m, diagnostics)
+    }
+  }
+
+  return chooseFailureDetail(diagnostics)
+}
+
+export function isFailedRunDiagnosticMessage(message: ServerMessage, items: ServerMessage[], failedTurn: ServerMessage | null): boolean {
+  if (!failedTurn || message.role !== 'agent') return false
+  if (message.content.type !== 'text' || !isUserVisibleDiagnosticLine(message.content.text)) return false
+
+  const failedTurnIndex = items.findIndex(m => m.id === failedTurn.id)
+  const messageIndex = items.findIndex(m => m.id === message.id)
+  if (failedTurnIndex < 0 || messageIndex <= failedTurnIndex) return false
+
+  for (const m of items.slice(failedTurnIndex + 1, messageIndex)) {
+    if (m.content.type === 'agent_turn') return false
+  }
+  return true
+}
+
+function collectMessageDiagnostics(message: ServerMessage, diagnostics: string[]): void {
+  if (message.content.type === 'events') {
+    collectDiagnostics(message.content.log, diagnostics)
+    return
+  }
+  if (message.content.type === 'text' && isUserVisibleDiagnosticLine(message.content.text)) {
+    for (const line of splitDiagnosticLines(message.content.text)) {
+      if (isUserVisibleDiagnosticLine(line)) diagnostics.push(line)
+    }
+    return
+  }
+  if (message.content.type === 'toolResult') {
+    const diagnostic = firstUserVisibleDiagnosticString(message.content.result)
+    if (diagnostic) diagnostics.push(diagnostic)
+  }
+}
+
+function collectDiagnostics(log: AgentLogEntry[] | undefined, diagnostics: string[]): void {
+  if (!log?.length) return
+  const stderrFallbacks: string[] = []
+  const matchedBefore = diagnostics.length
+  for (const entry of log) {
+    let raw: string | null = null
+    if (entry.kind === 'event') {
+      raw = userVisibleDiagnosticTextForEvent(entry.event)
+    } else if (isUserVisibleDiagnosticLine(entry.line)) {
+      raw = entry.line
+    } else if (entry.kind === 'stderr' && !isStructuredToolPayloadLine(entry.line)) {
+      stderrFallbacks.push(entry.line)
+    }
+    if (!raw) continue
+    for (const line of splitDiagnosticLines(raw)) {
+      if (line) diagnostics.push(line)
+    }
+  }
+  if (diagnostics.length > matchedBefore) return
+  for (const raw of stderrFallbacks) {
+    for (const line of splitDiagnosticLines(raw)) {
+      if (line) diagnostics.push(line)
+    }
+  }
+}
+
+function splitDiagnosticLines(raw: string): string[] {
+  return raw
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+}
+
+function chooseFailureDetail(diagnostics: string[]): string | null {
+  const unique = Array.from(new Set(diagnostics))
+  const specific = unique.find(line => !/unexpected error,? check log file/i.test(line)) ?? unique[0]
+  if (!specific) return null
+  return specific.length > 220 ? `${specific.slice(0, 217)}…` : specific
 }
 
 /**
@@ -58,6 +164,7 @@ export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerM
     let sawHiddenToolOutput = false
     for (const later of items.slice(i + 1)) {
       if (isMessageVisible(later, false)) return false
+      if (messageHasUserVisibleDiagnostic(later)) return false
       if (
         later.role === 'agent' &&
         (later.content.type === 'toolCall' || later.content.type === 'toolResult' || later.content.type === 'events')
@@ -69,6 +176,12 @@ export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerM
   }
 
   return false
+}
+
+function messageHasUserVisibleDiagnostic(message: ServerMessage): boolean {
+  const diagnostics: string[] = []
+  collectMessageDiagnostics(message, diagnostics)
+  return diagnostics.length > 0
 }
 
 export function chatMessagesQueryKey(chatId: string, developerMode: boolean): string {
@@ -353,14 +466,20 @@ export function ChatThread({
     [activeAgentTurn, developerMode],
   )
 
-  // Detect the most recent failed agent turn (if any) to show an inline
-  // error banner. Only show it when there is no newer pending/running turn
-  // (which would mean a retry is already in progress).
+  // Detect the most recent failed turn, or a visually silent turn that only
+  // produced hidden diagnostics, to show an inline error banner instead of the
+  // generic tool-only completion fallback.
   const failedAgentTurn = useMemo(() => {
     if (isTyping) return null
-    return findFailedAgentTurn(allItems)
+    return findFailedOrDiagnosticAgentTurn(allItems)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeData, isTyping])
+
+  const failedAgentTurnDetail = useMemo(
+    () => failureDetailForAgentTurn(allItems, failedAgentTurn),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeData, failedAgentTurn],
+  )
 
   const showToolOnlyFallback = useMemo(
     () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
@@ -370,11 +489,14 @@ export function ChatThread({
 
   const messages: ServerMessage[] = useMemo(
     () => {
-      const visible = allItems.filter(m => isMessageVisible(m, developerMode))
+      const visible = allItems.filter(m => {
+        if (!isMessageVisible(m, developerMode)) return false
+        return developerMode || !isFailedRunDiagnosticMessage(m, allItems, failedAgentTurn)
+      })
       return filterMessage ? visible.filter(filterMessage) : visible
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeData, developerMode, filterMessage],
+    [activeData, developerMode, filterMessage, failedAgentTurn],
   )
 
   const lastAssistantId = useMemo(() => {
@@ -600,6 +722,7 @@ export function ChatThread({
               <FailedRunBanner
                 chatId={failedAgentTurn.chatId}
                 messageId={failedAgentTurn.id}
+                failureDetail={failedAgentTurnDetail}
                 isNew={showNewBadge}
               />
             </div>

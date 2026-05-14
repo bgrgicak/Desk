@@ -1,5 +1,6 @@
 export const APP_BRIDGE_REQUEST = 'desk.app.request'
 export const APP_BRIDGE_RESPONSE = 'desk.app.response'
+export const APP_BRIDGE_RESIZE = 'desk.app.resize'
 
 export type AppBridgeMethod =
   | 'storage.list'
@@ -24,6 +25,12 @@ export interface AppBridgeResponse {
   error?: string
 }
 
+export interface AppBridgeResize {
+  type: typeof APP_BRIDGE_RESIZE
+  key?: string
+  height: number
+}
+
 export interface ChatAppBridgeContext {
   scope: 'chat' | 'library'
   chatId: string
@@ -45,6 +52,12 @@ export function isAppBridgeRequest(value: unknown): value is AppBridgeRequest {
     typeof candidate.method === 'string' &&
     isKnownMethod(candidate.method)
   )
+}
+
+export function isAppBridgeResize(value: unknown): value is AppBridgeResize {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<AppBridgeResize>
+  return candidate.type === APP_BRIDGE_RESIZE && typeof candidate.height === 'number' && Number.isFinite(candidate.height)
 }
 
 export async function handleAppBridgeRequest(

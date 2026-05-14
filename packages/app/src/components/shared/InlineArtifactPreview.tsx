@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { Button, buttonVariants, cn } from '@agent-desk/ui'
 import { isMarkdownFile, type FileKind } from '@/data/file-kind'
@@ -10,6 +10,7 @@ import { GENERATED_APP_IFRAME_SANDBOX } from '@/lib/iframe-sandbox'
 import { previewBlobFor, previewKindFrom } from '@/lib/preview-blob'
 
 const MAX_INLINE_PREVIEW_BYTES = 5 * 1024 * 1024
+const INLINE_PREVIEW_MAX_HEIGHT_VH = 60
 
 interface InlineArtifactPreviewProps {
   workspaceId?: string
@@ -28,8 +29,8 @@ type PreviewState =
   | { status: 'ready'; kind: FileKind; blobUrl?: string; text?: string }
   | { status: 'fallback' }
 
-function canRenderInline(kind: FileKind): boolean {
-  return kind === 'html' || kind === 'image' || kind === 'text' || kind === 'app'
+export function canRenderInline(kind: FileKind): boolean {
+  return kind !== 'unknown'
 }
 
 export function inlineAppPreviewFor(
@@ -44,6 +45,8 @@ export function inlineAppPreviewFor(
 
 export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, openHref, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
+  const [htmlHeight, setHtmlHeight] = useState(280)
+  const htmlIframeRef = useRef<HTMLIFrameElement | null>(null)
   const appPreviewRef = useMemo(() => {
     const base = inlineAppPreviewFor(path, name, mime)
     if (!base) return null
@@ -51,6 +54,7 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
       ...base,
       ...(base.scope === 'library' ? { workspaceId } : {}),
       ...(params ? { params } : {}),
+      variant: 'inline' as const,
     }
   }, [path, name, mime, params, workspaceId])
   const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
@@ -99,6 +103,33 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
           return
         }
 
+        if (kind === 'docx') {
+          const mammoth = await import('mammoth/mammoth.browser')
+          const arrayBuffer = await blob.arrayBuffer()
+          const { value: html } = await mammoth.convertToHtml({ arrayBuffer })
+          if (cancelled) return
+          const htmlDoc = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;max-width:780px;margin:0 auto;padding:2.5rem 1.5rem;line-height:1.6;color:#111;background:#fff}img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}</style></head><body>${html}</body></html>`
+          const htmlBlob = await previewBlobFor('html', new Blob([htmlDoc], { type: 'text/html' }), name, path, 'text/html')
+          if (cancelled) return
+          createdUrl = URL.createObjectURL(htmlBlob)
+          setState({ status: 'ready', kind, blobUrl: createdUrl })
+          return
+        }
+
+        if (kind === 'pdf') {
+          const pdfBlob = blob.type ? blob : new Blob([blob], { type: effectiveMime || 'application/pdf' })
+          createdUrl = URL.createObjectURL(pdfBlob)
+          setState({ status: 'ready', kind, blobUrl: createdUrl })
+          return
+        }
+
+        if (kind === 'video' || kind === 'audio') {
+          const mediaBlob = blob.type ? blob : new Blob([blob], { type: effectiveMime || (kind === 'video' ? 'video/mp4' : 'audio/mpeg') })
+          createdUrl = URL.createObjectURL(mediaBlob)
+          setState({ status: 'ready', kind, blobUrl: createdUrl })
+          return
+        }
+
         const text = await blob.text()
         if (!cancelled) setState({ status: 'ready', kind, text })
       })
@@ -112,12 +143,30 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
     }
   }, [workspaceId, path, name, mime, shouldTryPreview, metaError, fileMeta, guessedKind, appPreviewRef])
 
+  useEffect(() => {
+    if (state.status !== 'ready' || (state.kind !== 'html' && state.kind !== 'docx')) return
+    setHtmlHeight(280)
+
+    const onMessage = (event: MessageEvent) => {
+      const iframeWindow = htmlIframeRef.current?.contentWindow
+      if (!iframeWindow || event.source !== iframeWindow) return
+      if (!event.data || typeof event.data !== 'object') return
+      if ((event.data as { type?: unknown }).type !== 'desk.preview.resize') return
+      const height = (event.data as { height?: unknown }).height
+      if (typeof height !== 'number' || !Number.isFinite(height)) return
+      setHtmlHeight(Math.max(0, Math.ceil(height)))
+    }
+
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [state])
+
   if (state.status === 'fallback') return <>{fallback}</>
 
   if (state.status === 'loading') {
     return (
       <InlinePreviewShell name={name} onOpen={onOpen} openHref={openHref} actions={actions}>
-        <div className="flex h-full items-center justify-center bg-muted/20 text-xs text-muted-foreground">
+        <div className="flex items-center justify-center bg-muted/20 py-10 text-xs text-muted-foreground">
           Loading preview...
         </div>
       </InlinePreviewShell>
@@ -128,24 +177,41 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
     <InlinePreviewShell name={name} onOpen={onOpen} openHref={openHref} actions={actions}>
       {state.kind === 'app' && appPreviewRef ? (
         <AppPreview {...appPreviewRef} />
-      ) : state.kind === 'html' && state.blobUrl ? (
+      ) : (state.kind === 'html' || state.kind === 'docx') && state.blobUrl ? (
         <iframe
+          ref={htmlIframeRef}
           title={name}
           src={state.blobUrl}
           sandbox={GENERATED_APP_IFRAME_SANDBOX}
-          className="h-full w-full border-0 bg-white"
+          className="block w-full border-0 bg-white"
+          style={{ height: htmlHeight, maxHeight: `${INLINE_PREVIEW_MAX_HEIGHT_VH}vh` }}
+        />
+      ) : state.kind === 'pdf' && state.blobUrl ? (
+        <iframe
+          title={name}
+          src={state.blobUrl}
+          className="block w-full border-0 bg-white"
+          style={{ height: `${INLINE_PREVIEW_MAX_HEIGHT_VH}vh`, maxHeight: `${INLINE_PREVIEW_MAX_HEIGHT_VH}vh` }}
         />
       ) : state.kind === 'image' && state.blobUrl ? (
-        <div className="flex h-full items-center justify-center overflow-auto bg-background">
-          <img src={state.blobUrl} alt={name} className="h-full w-full object-contain" />
+        <div className="flex items-center justify-center overflow-auto bg-background">
+          <img src={state.blobUrl} alt={name} className="h-auto w-auto max-h-[60vh] max-w-full object-contain" />
+        </div>
+      ) : state.kind === 'video' && state.blobUrl ? (
+        <div className="flex items-center justify-center overflow-auto bg-background">
+          <video src={state.blobUrl} controls className="max-h-[60vh] max-w-full" />
+        </div>
+      ) : state.kind === 'audio' && state.blobUrl ? (
+        <div className="flex items-center justify-center px-6 py-4 bg-background">
+          <audio src={state.blobUrl} controls className="w-full max-w-lg" />
         </div>
       ) : state.kind === 'text' && typeof state.text === 'string' ? (
         isMarkdownFile(name, mime) ? (
-          <div className="h-full overflow-y-auto bg-background p-4 text-sm">
+          <div className="max-h-[60vh] overflow-y-auto bg-background p-4 text-sm">
             <MarkdownContent text={state.text} />
           </div>
         ) : (
-          <pre className="h-full overflow-y-auto bg-background p-4 text-xs leading-relaxed whitespace-pre-wrap">
+          <pre className="max-h-[60vh] overflow-y-auto bg-background p-4 text-xs leading-relaxed whitespace-pre-wrap">
             {state.text}
           </pre>
         )
@@ -200,7 +266,7 @@ function InlinePreviewShell({
           ) : null}
         </div>
       </div>
-      <div className="h-[460px] max-h-[75vh] min-h-[380px] min-w-0 max-w-full overflow-hidden bg-background sm:h-[640px]">
+      <div className="min-w-0 max-w-full overflow-hidden bg-background">
         {children}
       </div>
     </div>

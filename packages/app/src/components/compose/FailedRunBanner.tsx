@@ -5,6 +5,7 @@ import { useRunMessageMutation } from '@/store/api'
 interface FailedRunBannerProps {
   chatId: string
   messageId: string
+  failureDetail?: string | null
   isNew?: boolean
 }
 
@@ -15,7 +16,7 @@ export const failedRunBannerClassName = 'flex items-start gap-3 rounded-lg borde
  * Shows a friendly, non-technical message with a "Try again" button that
  * re-fires the failed agent_turn via `POST /chats/{id}/messages/{id}/run`.
  */
-export function FailedRunBanner({ chatId, messageId, isNew = false }: FailedRunBannerProps) {
+export function FailedRunBanner({ chatId, messageId, failureDetail, isNew = false }: FailedRunBannerProps) {
   const [runMessage, { isLoading: isRetrying, isError: retryFailed }] = useRunMessageMutation()
 
   function handleRetry() {
@@ -42,7 +43,9 @@ export function FailedRunBanner({ chatId, messageId, isNew = false }: FailedRunB
           )}
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">
-          This can happen when something goes wrong on my end. You can try again or send a new message.
+          {failureDetail
+            ? `What went wrong: ${failureDetail}`
+            : 'This can happen when something goes wrong on my end. You can try again or send a new message.'}
         </p>
         {retryFailed && (
           <p className="text-xs text-destructive mt-1">

@@ -42,7 +42,7 @@ export interface AgentFileInput {
    * Summary and reflection runs are internal. They get narrow prompts instead
    * of the full chat/task/artifact instruction set.
    */
-  runMode?: "chat" | "summary" | "reflection";
+  runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
   /**
    * DESK_HOME root, threaded through so the prompt renderer can read the
    * user `.memory/memory.md` index and the workspace `.memory/workspace.md`

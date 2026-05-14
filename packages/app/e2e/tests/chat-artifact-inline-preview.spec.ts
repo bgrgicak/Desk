@@ -75,6 +75,33 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
     'utf-8',
   )
 
+  const appDirName = `growing-preview-${Date.now()}.app`
+  const appRelPath = `.chats/${chat.id}/artifacts/${appDirName}`
+  await fs.mkdir(path.join(artifactDir, appDirName, 'dist'), { recursive: true })
+  await fs.writeFile(
+    path.join(artifactDir, appDirName, 'desk.app.json'),
+    JSON.stringify({ name: appDirName.replace(/\.app$/, ''), capabilities: [] }),
+    'utf-8',
+  )
+  await fs.writeFile(
+    path.join(artifactDir, appDirName, 'dist', 'index.html'),
+    `<!doctype html>
+<html>
+  <head><title>Growing preview</title></head>
+  <body style="margin:0;font-family:sans-serif;">
+    <button id="grow">Grow</button>
+    <div id="content" style="padding:12px 0;">Short app</div>
+    <script>
+      document.getElementById('grow').addEventListener('click', () => {
+        const content = document.getElementById('content');
+        content.innerHTML = Array.from({ length: 20 }, (_, i) => '<div style="height:48px;border-top:1px solid #ddd;display:flex;align-items:center;">Row ' + (i + 1) + '</div>').join('');
+      });
+    </script>
+  </body>
+</html>`,
+    'utf-8',
+  )
+
   const zipName = `unsupported-artifact-with-a-very-long-name-that-must-stay-inside-the-mobile-chat-view-${Date.now()}.zip`
   const zipRelPath = `.chats/${chat.id}/artifacts/${zipName}`
   await fs.writeFile(path.join(artifactDir, zipName), 'not really a zip', 'utf-8')
@@ -116,6 +143,7 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   }
 
   await attachArtifactMessage({ path: htmlRelPath, name: 'Inline App', mime: 'text/html' })
+  await attachArtifactMessage({ path: appRelPath, name: appDirName, mime: 'inode/directory' })
   await attachArtifactMessage({ path: zipRelPath, name: zipName, mime: 'application/zip' })
 
   // Navigate directly to the chat — on mobile (390x844) the sidebar is
@@ -134,6 +162,19 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   await expect(counter).toBeVisible()
   await counter.click()
   await expect(page.frameLocator(`iframe[title="Inline App"]`).getByRole('button', { name: 'Count 1' })).toBeVisible()
+
+  const growingPreview = page.getByTestId('artifact-inline-preview').filter({ hasText: appDirName })
+  await expect(growingPreview).toBeVisible({ timeout: 10_000 })
+  const growingBoxBefore = await growingPreview.boundingBox()
+  expect(growingBoxBefore?.height ?? Infinity).toBeLessThan(320)
+
+  const growButton = page.frameLocator(`iframe[title="${appDirName.replace(/\.app$/, '')}"]`).getByRole('button', { name: 'Grow' })
+  await growButton.click()
+  await expect(page.frameLocator(`iframe[title="${appDirName.replace(/\.app$/, '')}"]`).getByText('Row 20')).toBeVisible({ timeout: 10_000 })
+  await page.waitForTimeout(250)
+  const growingBoxAfter = await growingPreview.boundingBox()
+  expect(growingBoxAfter?.height ?? 0).toBeGreaterThan((growingBoxBefore?.height ?? 0) + 200)
+  expect(growingBoxAfter?.height ?? Infinity).toBeLessThanOrEqual(700)
 
   const fallback = page.getByTestId('artifact-inline-fallback').filter({ hasText: zipName })
   await expect(fallback).toBeVisible()

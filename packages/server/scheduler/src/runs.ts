@@ -621,7 +621,7 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
         chatId: msg.chatId,
         goal: chatGoal,
-        runMode: outputKind === "summary" ? "summary" : "chat",
+        runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" && (msg.executeAt || msg.cron) ? "scheduled-task" : "chat"),
         workspaceKind,
       };
 

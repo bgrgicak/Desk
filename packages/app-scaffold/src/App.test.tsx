@@ -14,6 +14,7 @@ describe('Desk app scaffold', () => {
 
     expect(html).toContain('Desk app')
     expect(html).toContain('Example')
+    expect(html).not.toContain('h-screen')
   })
 
   it('renders the example fragment as a standalone component', () => {

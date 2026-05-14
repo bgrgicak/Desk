@@ -115,7 +115,7 @@ export function ArtifactPreview({ artifact, zoom = 1, content, blobUrl }: Artifa
             src={blobUrl}
             alt={artifact.name}
             style={{ transform: `scale(${zoom})` }}
-            className="h-full w-full object-contain transition-transform duration-150 ease-out select-none"
+            className="h-auto w-auto max-h-full max-w-full object-contain transition-transform duration-150 ease-out select-none"
           />
         </div>
       ) : (

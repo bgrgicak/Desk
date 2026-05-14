@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentAlignmentClass } from './MessageBubble'
+import { attachmentAlignmentClass, eventDisplayChunks } from './MessageBubble'
 
 describe('attachmentAlignmentClass', () => {
   it('right-aligns user-uploaded message attachments', () => {
@@ -8,5 +8,89 @@ describe('attachmentAlignmentClass', () => {
 
   it('keeps agent-written file attachments left-aligned', () => {
     expect(attachmentAlignmentClass('left')).toBe('self-start mr-auto')
+  })
+})
+
+describe('eventDisplayChunks', () => {
+  it('keeps raw diagnostic/error rows developer-only', () => {
+    const log = [
+      { kind: 'event' as const, event: { type: 'tool', part: { input: 'query' } } },
+      { kind: 'stderr' as const, line: '\u001b[91mError:\u001b[0m Unexpected error, check log file at /tmp/log' },
+      { kind: 'event' as const, event: { type: 'error', error: { data: { message: 'Model not found: openai/gpt-5.5.' } } } },
+    ]
+
+    expect(eventDisplayChunks(log, false)).toEqual([])
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'events', entries: [log[0]] },
+      { kind: 'stderr', lines: [log[1].line, 'Model not found: openai/gpt-5.5.'] },
+    ])
+  })
+
+  it('keeps assistant text visible while hiding adjacent diagnostics in regular mode', () => {
+    const log = [
+      { kind: 'event' as const, event: { type: 'text', part: { text: 'Visible answer' } } },
+      { kind: 'stderr' as const, line: 'Failed to run the query `PRAGMA journal_mode = WAL`' },
+    ]
+
+    expect(eventDisplayChunks(log, false)).toEqual([{ kind: 'text', text: 'Visible answer' }])
+  })
+
+  it('does not render tool payload text as an error just because it mentions errors', () => {
+    const log = [
+      {
+        kind: 'event' as const,
+        event: {
+          type: 'tool',
+          part: {
+            tool: 'skill',
+            content: '<skill_content name="desk-cli-task-schedule">failure modes and error handling</skill_content>',
+          },
+        },
+      },
+    ]
+
+    expect(eventDisplayChunks(log, true)).toEqual([{ kind: 'events', entries: log }])
+  })
+
+  it('renders post-event unparsed stdout as neutral diagnostics in developer mode', () => {
+    const log = [
+      { kind: 'event' as const, event: { type: 'tool', part: { tool: 'skill' } } },
+      { kind: 'unparsed' as const, line: '<skill_content name="desk-goal-app">reference text</skill_content>' },
+    ]
+
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'events', entries: [log[0]] },
+      { kind: 'diagnostic', lines: [log[1].line] },
+    ])
+  })
+
+  it('renders structured tool stderr payloads as neutral diagnostics in developer mode', () => {
+    const log = [
+      { kind: 'stderr' as const, line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+    ]
+
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'diagnostic', lines: [log[0].line] },
+    ])
+  })
+
+  it('renders escaped structured tool stderr payloads as neutral diagnostics in developer mode', () => {
+    const log = [
+      { kind: 'stderr' as const, line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+    ]
+
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'diagnostic', lines: [log[0].line] },
+    ])
+  })
+
+  it('renders non-error stderr as neutral diagnostics in developer mode', () => {
+    const log = [
+      { kind: 'stderr' as const, line: 'debug noise' },
+    ]
+
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'diagnostic', lines: [log[0].line] },
+    ])
   })
 })

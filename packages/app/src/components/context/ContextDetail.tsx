@@ -815,7 +815,7 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                 <img
                   src={previewBlobUrl}
                   alt={item.name}
-                  className="h-full w-full object-contain"
+                  className="h-auto w-auto max-h-full max-w-full object-contain"
                   onError={() => setMediaLoadFailed(true)}
                 />
               ) : (
