@@ -97,7 +97,9 @@ export function AppPreview(props: AppPreviewProps) {
   const [reloadKey, setReloadKey] = useState(0)
   const [frameHeight, setFrameHeight] = useState(initialHeight)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const getMaxFrameHeight = () => Math.floor(window.innerHeight * (variant === 'inline' ? 0.6 : 0.85))
+  const getMaxFrameHeight = () => variant === 'inline'
+    ? Math.min(Math.floor(window.innerHeight * 0.6), 500)
+    : Math.floor(window.innerHeight * 0.85)
 
   useEffect(() => {
     let cancelled = false
