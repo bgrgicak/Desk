@@ -9,6 +9,55 @@ import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/a
 
 const pendingProgressLogByMessageId = new Map<string, AgentLogEntry[]>();
 
+function isUserVisibleDiagnosticLine(line: string): boolean {
+  if (isStructuredToolPayloadLine(line)) return false;
+  return /\b(error|failed|failure|exception|traceback|not found|permission denied|unauthori[sz]ed|forbidden|invalid|cannot|can't)\b/i.test(line);
+}
+
+function isStructuredToolPayloadLine(line: string): boolean {
+  const trimmed = line
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\[[0-9;]*m/g, "")
+    .trimStart();
+  return /^(?:<|&lt;)(path|type|content|skill_content|system-reminder|env|available_skills)\b/i.test(trimmed)
+    || /(?:<|&lt;)\/path(?:>|&gt;)\s*(?:<|&lt;)type(?:>|\s|&gt;)/i.test(trimmed)
+    || /(?:<|&lt;)skill_content\b/i.test(trimmed);
+}
+
+function firstDiagnosticString(value: unknown): string | null {
+  if (typeof value === "string") return isUserVisibleDiagnosticLine(value) ? value : null;
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstDiagnosticString(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const preferredKeys = new Set(["message", "error", "details", "detail", "text", "reason", "data"]);
+  for (const key of preferredKeys) {
+    const found = firstDiagnosticString(record[key]);
+    if (found) return found;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (preferredKeys.has(key)) continue;
+    const found = firstDiagnosticString(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function eventHasUserVisibleDiagnostic(event: AgentEvent): boolean {
+  if (!isDiagnosticEventType(event.type)) return false;
+  return !!(firstDiagnosticString(event.part) ?? firstDiagnosticString(event) ?? isUserVisibleDiagnosticLine(event.type));
+}
+
+function isDiagnosticEventType(type: string): boolean {
+  return /\b(error|failed|failure|exception|traceback)\b/i.test(type);
+}
+
 function mergeProgressLog(msg: ServerMessage, existing?: AgentLogEntry[]): ServerMessage {
   const pending = pendingProgressLogByMessageId.get(msg.id) ?? [];
   const merged = [...(existing ?? []), ...(msg.progressLog ?? []), ...pending];
@@ -34,8 +83,14 @@ function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
             if (typeof text === "string") {
               log.push({ kind: "event", event: { type: "text", part: { text } } });
             }
+          } else if (eventHasUserVisibleDiagnostic(entry.event)) {
+            log.push(entry);
           }
         } else if (entry.kind === "unparsed" && !sawStructuredEvent) {
+          log.push(entry);
+        } else if (entry.kind === "unparsed" && isUserVisibleDiagnosticLine(entry.line)) {
+          log.push(entry);
+        } else if (entry.kind === "stderr" && isUserVisibleDiagnosticLine(entry.line)) {
           log.push(entry);
         }
       }
@@ -44,7 +99,14 @@ function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
     case "toolCall":
       return { ...msg, content: { type: "toolCall", toolName: msg.content.toolName, args: {} } };
     case "toolResult":
-      return { ...msg, content: { type: "toolResult", toolName: msg.content.toolName, result: null } };
+      return {
+        ...msg,
+        content: {
+          type: "toolResult",
+          toolName: msg.content.toolName,
+          result: firstDiagnosticString(msg.content.result) ?? null,
+        },
+      };
     default:
       return msg;
   }

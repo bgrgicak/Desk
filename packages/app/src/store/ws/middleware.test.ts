@@ -274,6 +274,89 @@ describe('applyEventToCache', () => {
       expect(hasChatInvalidation).toBe(true)
     })
 
+    it('keeps diagnostic stderr and structured errors in the live timeline cache', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+      await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, { items: [] }))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_error', chatId: 'cht_1', role: 'agent',
+          content: {
+            type: 'events',
+            log: [
+              { kind: 'event', event: { type: 'tool', part: { input: 'hidden' } } },
+              { kind: 'stderr', line: 'Model not found: openai/gpt-5.5.' },
+              { kind: 'event', event: { type: 'error', error: { name: 'UnknownError', data: { message: 'Provider failed.' } } } },
+            ],
+          },
+          createdAt: new Date().toISOString(),
+        },
+      }, 'cht_1', store.getState)
+
+      const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
+      expect(entry.data?.items[0].content).toEqual({
+        type: 'events',
+        log: [
+          { kind: 'stderr', line: 'Model not found: openai/gpt-5.5.' },
+          { kind: 'event', event: { type: 'error', error: { name: 'UnknownError', data: { message: 'Provider failed.' } } } },
+        ],
+      })
+    })
+
+    it('does not keep structured tool payloads just because their contents mention errors', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+      await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, { items: [] }))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          content: {
+            type: 'events',
+            log: [
+              { kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+            ],
+          },
+          createdAt: new Date().toISOString(),
+        },
+      }, 'cht_1', store.getState)
+
+      const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
+      expect(entry.data?.items[0].content).toEqual({ type: 'events', log: [] })
+    })
+
+    it('does not keep escaped structured tool payloads just because their contents mention errors', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+      await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, { items: [] }))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          content: {
+            type: 'events',
+            log: [
+              { kind: 'stderr', line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+            ],
+          },
+          createdAt: new Date().toISOString(),
+        },
+      }, 'cht_1', store.getState)
+
+      const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
+      expect(entry.data?.items[0].content).toEqual({ type: 'events', log: [] })
+    })
+
     it('fires markChatReadQuietly (no Chat tag invalidation) for a viewed-chat non-internal message', () => {
       const dispatched: unknown[] = []
       const dispatch = (action: unknown) => { dispatched.push(action); return action }

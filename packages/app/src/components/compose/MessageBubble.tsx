@@ -10,7 +10,7 @@ import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
-import { isRegularMessageVisible } from './messageVisibility'
+import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -478,16 +478,17 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
+export type EventDisplayChunk =
+  | { kind: 'text'; text: string }
+  | { kind: 'events'; entries: AgentLogEntry[] }
+  | { kind: 'stderr'; lines: string[] }
+  | { kind: 'diagnostic'; lines: string[] }
+
+export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean): EventDisplayChunk[] {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
-  type Chunk =
-    | { kind: 'text'; text: string }
-    | { kind: 'events'; entries: AgentLogEntry[] }
-    | { kind: 'stderr'; lines: string[] }
-
-  const chunks: Chunk[] = []
+  const chunks: EventDisplayChunk[] = []
   let sawEvent = false
 
   const appendText = (s: string) => {
@@ -499,6 +500,11 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
     const last = chunks[chunks.length - 1]
     if (last && last.kind === 'stderr') last.lines.push(line)
     else chunks.push({ kind: 'stderr', lines: [line] })
+  }
+  const appendDiagnostic = (line: string) => {
+    const last = chunks[chunks.length - 1]
+    if (last && last.kind === 'diagnostic') last.lines.push(line)
+    else chunks.push({ kind: 'diagnostic', lines: [line] })
   }
   const appendEvent = (entry: AgentLogEntry) => {
     const last = chunks[chunks.length - 1]
@@ -512,17 +518,22 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
       if (entry.event.type === 'text') {
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
-      } else if (developerMode) {
-        appendEvent(entry)
+      } else {
+        const diagnostic = userVisibleDiagnosticTextForEvent(entry.event)
+        if (diagnostic && developerMode) appendStderr(diagnostic)
+        else if (developerMode) appendEvent(entry)
       }
     } else if (entry.kind === 'stderr') {
-      if (developerMode) appendStderr(entry.line)
+      if (developerMode) {
+        if (isStructuredToolPayloadLine(entry.line) || !isUserVisibleDiagnosticLine(entry.line)) appendDiagnostic(entry.line)
+        else appendStderr(entry.line)
+      }
     } else if (entry.kind === 'unparsed') {
       if (developerMode && sawEvent) {
         // Once a structured event stream exists, raw stdout is diagnostic log
-        // material rather than assistant prose. Keep it in dev mode so malformed
-        // tool/error lines are not silently dropped.
-        appendStderr(entry.line)
+        // material rather than assistant prose. Keep it in dev mode, but don't
+        // style ordinary tool/stdout payloads as errors.
+        appendDiagnostic(entry.line)
       } else if (!sawEvent) {
         // Unparsed stdout from drivers that don't emit JSON events (fake
         // driver, plain-text tests) — treat as text-like output.
@@ -530,6 +541,12 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
       }
     }
   }
+
+  return chunks
+}
+
+function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
+  const chunks = eventDisplayChunks(log, developerMode)
 
   return (
     <div className="space-y-2">
@@ -541,6 +558,7 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
         if (c.kind === 'events') {
           return <EventGroup key={i} entries={c.entries} workspacePath={workspacePath} />
         }
+        if (c.kind === 'diagnostic') return <DiagnosticBlock key={i} lines={c.lines} />
         return <StderrBlock key={i} lines={c.lines} />
       })}
     </div>
@@ -579,6 +597,7 @@ function EventGroup({ entries, workspacePath }: { entries: AgentLogEntry[]; work
 
 function StderrBlock({ lines }: { lines: string[] }) {
   const [open, setOpen] = useState(false)
+  const preview = lines[0]?.trim()
   return (
     <div className="rounded-md border border-destructive/30 bg-destructive/5 text-xs">
       <button
@@ -587,11 +606,38 @@ function StderrBlock({ lines }: { lines: string[] }) {
         className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 transition-colors"
       >
         <AlertTriangle className="h-3 w-3" />
-        <span className="font-medium">{lines.length} diagnostic/error line{lines.length === 1 ? '' : 's'}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {preview || `${lines.length} diagnostic/error line${lines.length === 1 ? '' : 's'}`}
+        </span>
         <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
         <pre className="px-2.5 pb-2 pt-0 text-[11px] leading-snug whitespace-pre-wrap break-words font-mono">
+          {lines.join('\n')}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function DiagnosticBlock({ lines }: { lines: string[] }) {
+  const [open, setOpen] = useState(false)
+  const preview = lines[0]?.trim()
+  return (
+    <div className="rounded-md border border-border bg-muted/20 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-muted-foreground hover:bg-muted/40 transition-colors"
+      >
+        <Wrench className="h-3 w-3" />
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {preview || `${lines.length} diagnostic line${lines.length === 1 ? '' : 's'}`}
+        </span>
+        <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <pre className="px-2.5 pb-2 pt-0 text-[11px] leading-snug whitespace-pre-wrap break-words font-mono text-muted-foreground">
           {lines.join('\n')}
         </pre>
       )}
