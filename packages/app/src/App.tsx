@@ -390,6 +390,7 @@ function AppInner() {
       folder?: string | null
       message?: string | null
       artifactParams?: string | null
+      startThread?: string | null
     } = {},
   ) => {
     const ws = opts.wsId ?? activeWorkspaceId

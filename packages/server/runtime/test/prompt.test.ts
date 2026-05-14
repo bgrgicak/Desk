@@ -578,4 +578,5 @@ describe("Desk reference skills", () => {
     expect(body).toContain("Storage contract");
     expect(body).toContain("getStorageClient()");
   });
+
 });

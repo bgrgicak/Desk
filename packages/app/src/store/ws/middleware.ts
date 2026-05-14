@@ -224,6 +224,39 @@ function patchChatActivityInCache(
   }
 }
 
+function patchChatFailedInCache(
+  dispatch: (a: unknown) => unknown,
+  chatId: string,
+  failed: boolean,
+  getState?: () => unknown,
+): void {
+  const patchList = (draft: ServerChat[]) => {
+    const chat = draft.find((c) => c.id === chatId);
+    if (chat) chat.failed = failed;
+  };
+  const patchSingle = (draft: ServerChat) => {
+    if (draft.id === chatId) draft.failed = failed;
+  };
+
+  dispatch(api.util.updateQueryData("getChats", undefined, patchList));
+  dispatch(api.util.updateQueryData("getChat", chatId, patchSingle));
+
+  if (!getState) return;
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+  if (!apiState?.queries) return;
+  for (const [key, entry] of Object.entries(apiState.queries)) {
+    if (!key.startsWith("getChats(")) continue;
+    const chats = entry?.data;
+    if (!Array.isArray(chats)) continue;
+    const chat = chats.find((c: ServerChat) => c.id === chatId);
+    if (!chat) continue;
+    dispatch(
+      api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patchList),
+    );
+  }
+}
+
 function messageMatchesFilter(msg: ServerMessage, filter: MessagesFilter, workspaceId?: string): boolean {
   if (filter.chatId && filter.chatId !== msg.chatId) return false;
   if (filter.workspaceId && workspaceId && filter.workspaceId !== workspaceId) return false;
@@ -693,11 +726,14 @@ export function applyEventToCache(
       if (msg.content?.type === "agent_turn") {
         if (msg.state === "pending" || msg.state === "running") {
           dispatch(markChatRunning(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
         } else if (msg.state === "failed") {
           dispatch(markChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, true, getState);
         } else {
           dispatch(markChatIdle(msg.chatId));
           dispatch(clearChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
         }
       }
       // Non-internal messages update chat.unread and chat.updated_at on
@@ -716,6 +752,8 @@ export function applyEventToCache(
       if (event.type === "message.appended") {
         const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
+          dispatch(clearChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
           patchChatActivityInCache(dispatch, msg.chatId, msg.createdAt, getState);
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
@@ -750,6 +788,10 @@ export function applyEventToCache(
     }
     case "message.streaming": {
       const { chatId, messageId, delta } = event.payload;
+      // Streaming output is live proof the agent is working. Prefer the
+      // sidebar spinner over any stale failed flag from an earlier turn.
+      dispatch(markChatRunning(chatId));
+      patchChatFailedInCache(dispatch, chatId, false, getState);
       patchPerChatMessageCaches(dispatch, chatId, (draft) => {
         const m = draft.items.find((x) => x.id === messageId);
         if (m && m.content.type === "text") {

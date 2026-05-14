@@ -71,6 +71,42 @@ export interface ServerWorkspace {
   createdAt: string;
 }
 
+export type ConnectorStatus = "active" | "disabled" | "error" | "revoked";
+
+export interface ConnectorConnection {
+  id: string;
+  providerId: string;
+  ownerUserId?: string;
+  externalAccountId?: string;
+  displayName: string;
+  scopes: string[];
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  status: ConnectorStatus;
+  isDefault: boolean;
+  /**
+   * True when the per-user vault has a credential entry for this connection.
+   * False if the vault is locked or the entry is missing — in which case the
+   * UI should prompt the user to unlock or re-authenticate even though
+   * status === 'active'.
+   */
+  hasCredentials: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceConnectorGrant {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  providerId: string;
+  grantedCapabilities: string[];
+  grantedByUserId: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ServerChat {
   id: string;
   workspaceId: string;

@@ -8,7 +8,7 @@ import { managedConnectionDefinitions, type ManagedConnectionDefinition } from '
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt' | 'codex'
-  | 'google-drive' | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+  | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
 
 export interface ConnectionMeta {
   name: string
@@ -28,7 +28,6 @@ const MANAGED_CONNECTION_CATALOG = Object.fromEntries(
 export const CONNECTION_CATALOG = {
   ...MANAGED_CONNECTION_CATALOG,
   'codex':        { name: 'Codex',        description: 'OpenAI models via your ChatGPT subscription (Codex on this machine)', icon: '🌀' },
-  'google-drive': { name: 'Google Drive', description: 'Docs, Sheets and Slides',              icon: '📁' },
   'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
   'slack':        { name: 'Slack',        description: 'Messages and channels',                icon: '💬' },
   'figma':        { name: 'Figma',        description: 'Design files and prototypes',          icon: '🎨' },
@@ -62,6 +61,34 @@ export function providerKeyEntries(): [ConnectionKind, string][] {
     .map(definition => [definition.kind as ConnectionKind, definition.envKey] as [ConnectionKind, string])
 }
 
+// Maps product connectors to the generic multi-account connector backend.
+// These are not API-key providers; they create rows in connector_connections
+// and can later be upgraded from manual credential entry to OAuth without
+// changing provider IDs or workspace grants.
+/**
+ * Maps product connectors to the generic multi-account connector backend.
+ * Empty for now — connectors that should appear in Settings → Connections
+ * with persistent multi-account state register their kind → providerId
+ * here. Single-key API connectors (Claude, ChatGPT, …) do not belong here;
+ * they use the legacy /me/providers env-key surface.
+ */
+export const CONNECTOR_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>> = {}
+
+export function allowsMultipleConnections(kind: ConnectionKind): boolean {
+  return CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined
+}
+
+export const DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND: Partial<Record<ConnectionKind, string[]>> = {}
+
+export const DEFAULT_SCOPES_BY_CONNECTOR_KIND: Partial<Record<ConnectionKind, string[]>> = {}
+
+export function connectionKindForProvider(providerId: string): ConnectionKind | null {
+  for (const [kind, provider] of Object.entries(CONNECTOR_PROVIDER_BY_KIND) as [ConnectionKind, string][]) {
+    if (provider === providerId) return kind
+  }
+  return null
+}
+
 /**
  * Connection kinds that are host-detected rather than API-key-backed.
  * The server reports their detection state via /me/providers/local; the
@@ -79,4 +106,5 @@ export interface Connection {
   kind: ConnectionKind
   name: string
   enabled: boolean
+  externalAccountId?: string
 }

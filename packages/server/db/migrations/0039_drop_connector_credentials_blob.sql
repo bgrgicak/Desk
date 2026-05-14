@@ -1,0 +1,12 @@
+-- Drops connector_connections.credentials_encrypted in favor of vault-only
+-- credential storage. Every active connection now has its credentials in
+-- the per-user KDBX vault under the title `connector:<user>:<provider>:<conn>`.
+-- The connection row is pure metadata (display name, account, scopes,
+-- capabilities, status, isDefault) — single source of truth, no two-step
+-- write that can leave half-baked rows.
+--
+-- Existing rows survive but lose any inline credentials. Users re-OAuth or
+-- re-paste tokens through the UI; the previous storage shape (inline blob,
+-- secret_ref pointer, and standalone `<ENV>` vault entries) accumulated
+-- enough orphan data that automatic backfill couldn't be made reliable.
+ALTER TABLE connector_connections DROP COLUMN credentials_encrypted;

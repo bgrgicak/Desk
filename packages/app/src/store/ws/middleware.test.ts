@@ -438,6 +438,90 @@ describe('applyEventToCache', () => {
       expect(hasChatInvalidation).toBe(false)
     })
 
+    it('clears the cached failed flag when a new user message is appended', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+
+      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
+        {
+          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          kind: 'chat', running: false, failed: true,
+        },
+      ]))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_retry', chatId: 'cht_failed', role: 'user',
+          content: { type: 'text', text: 'try again' },
+          createdAt: '2026-01-01T00:01:00.000Z',
+        },
+      }, 'cht_failed', store.getState)
+
+      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
+      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
+    })
+
+    it('clears the cached failed flag when a fresh agent turn starts', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+
+      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
+        {
+          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          kind: 'chat', running: false, failed: true,
+        },
+      ]))
+
+      applyEventToCache(store.dispatch, {
+        type: 'message.appended',
+        payload: {
+          id: 'msg_turn', chatId: 'cht_failed', role: 'system', state: 'running',
+          content: { type: 'agent_turn', userMessageId: 'msg_retry' },
+          createdAt: '2026-01-01T00:01:00.000Z',
+        },
+      }, 'cht_failed', store.getState)
+
+      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
+      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
+    })
+
+    it('shows the chat as running and clears cached failure when output streams', async () => {
+      const store = configureStore({
+        reducer: { [api.reducerPath]: api.reducer },
+        middleware: (getDefault) => getDefault().concat(api.middleware),
+      })
+
+      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
+        {
+          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          kind: 'chat', running: false, failed: true,
+        },
+      ]))
+
+      const dispatched: unknown[] = []
+      const dispatch = (action: unknown) => {
+        dispatched.push(action)
+        return store.dispatch(action as never)
+      }
+
+      applyEventToCache(dispatch, {
+        type: 'message.streaming',
+        payload: { chatId: 'cht_failed', messageId: 'msg_agent', delta: 'hello' },
+      }, null, store.getState)
+
+      expect(dispatched).toContainEqual(markChatRunning('cht_failed'))
+      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
+      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
+    })
+
     it('uses getState to patch workspace-scoped caches when unscoped cache is empty', () => {
       const dispatched: unknown[] = []
       const dispatch = (action: unknown) => { dispatched.push(action); return action }

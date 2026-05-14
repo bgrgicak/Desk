@@ -40,11 +40,11 @@ export interface RunManagerOptions {
   pool: Pool;
   emit?: (event: WsEvent) => void;
   /**
-   * Resolves the active provider API keys for a given user. Injected by the
-   * API layer (which owns the vault) so the scheduler doesn't need to import
-   * VaultStore directly. Returns an empty object when the vault is locked.
+   * Resolves the active provider API keys for a given user/workspace. Injected
+   * by the API layer (which owns the vault) so the scheduler doesn't need to
+   * import VaultStore directly. Returns an empty object when unavailable.
    */
-  resolveProviderKeys?: (userId: string) => Promise<Record<string, string>>;
+  resolveProviderKeys?: (userId: string, workspaceId?: string) => Promise<Record<string, string>>;
   /**
    * Test-injectable replacement for the runtime's opencode spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
@@ -356,15 +356,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const inner = userMsg?.content as { type?: string; text?: string } | undefined;
       const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
       const refs = userMsg?.attachments ?? [];
-      // Thread chats: surface the anchor message's attachments to the
-      // agent as well. The anchor lives in the parent chat and is
-      // mounted in the thread transcript via listAgentContextByChat;
-      // its attachments are the user's "here's the context I'm asking
-      // you to act on" inputs and need to be readable by opencode.
-      const anchor = await queries.messages.findAnchorForThreadChat(pool, msg.chatId);
-      const anchorRefs = anchor?.attachments ?? [];
-      const merged = [...refs, ...anchorRefs];
-      const attachments = merged.length > 0 ? merged.map((a) => a.path) : undefined;
+      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
       return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
     }
     const fallback = JSON.stringify(msg.content);
@@ -417,7 +409,7 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = msg.agentId ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
-    const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+    const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
     const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
@@ -608,7 +600,7 @@ export function createRunManager(opts: RunManagerOptions) {
       logFile = path.join(logDir, `${runId}.log`);
       logStream = fs.createWriteStream(logFile, { flags: "a" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
-      const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+      const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,
@@ -1179,7 +1171,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       try {
         const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await resolveProviderKeys(userId) : {};
+        const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
         const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
         const models = await listModels(workspaceId, workspaceSlug, {
           providerKeys,

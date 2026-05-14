@@ -2,92 +2,106 @@
 
 AI should work for everyone — not just developers who know how to run servers, write config files, or debug why a context window ran out.
 
-Desk is a personal AI platform built around three convictions:
+Desk is a personal AI platform that runs entirely on your machine. Your conversations, files, and agent memory stay local. You pick the AI provider. You own the data.
 
-**Your data belongs to you.** Conversations, files, and the context agents build over time live on your machine, in your home directory, under your control. No vendor lock-in, no data siloed in someone else's cloud.
+![Desk workspace](docs/screenshots/workspace.png)
 
-**No single provider should hold you hostage.** Desk is designed to run across any AI provider. When one is down, over-priced, or simply not the best fit anymore, you switch — your workflows, history, and agents stay exactly where they were.
+## What you get
 
-**You shouldn't need to be an AI enthusiast to get a great experience.** Context windows, token limits, agent orchestration, prompt engineering — these are implementation details, not things anyone should have to think about. Desk handles the complexity so you can focus on what you're actually trying to do.
+**Workspaces** — separate contexts for different projects or roles. Switch between them from the tab bar at the top. Each workspace has its own chats, tasks, and library.
 
-## What we're building
+**Chat with threads** — every message can branch into a focused thread. The original conversation keeps going; the thread explores the tangent. Both live in the same chat.
 
-Desk is a place where you define goals and let AI help you reach them — not a chat interface you interact with manually, and not another app builder that requires you to wire things together yourself.
+![Active chat with thread](docs/screenshots/chat-active.png)
 
-You describe what you want: a workflow that processes your emails each morning, a research assistant that knows your projects, a recurring task that keeps something in sync. Desk turns that into something that runs, remembers context, and gets better over time — without you writing a line of configuration.
+**Tasks board** — agents create and track tasks as they work. You see what's queued, what's running, what's scheduled, and what finished — without having to ask.
 
-The long-term vision is an agentic operating system: a personal environment where AI agents work alongside you, with your data, using tools you've authorized, toward goals you've set. Think less "AI assistant you talk to" and more "intelligent layer on top of your digital life."
+![Tasks board](docs/screenshots/tasks.png)
 
-## How it's different
+**Library** — a file browser for everything the agent has built or been given access to. Documents, apps, images — searchable and pinnable to any workspace.
 
-Desk is not a Claude or ChatGPT wrapper. It's not a productivity tool with an AI button. It's not a no-code app builder.
+![Library](docs/screenshots/library.png)
 
-Those tools serve different needs. What's missing is something that meets people where they are — gives them the power of AI without demanding technical fluency — while giving them ownership and resilience that cloud-only products can't offer.
+**Artifacts** — when you ask for a document, app, or design, the result appears in the artifact panel alongside the chat. Live-preview React apps run right there in the browser.
 
----
+**Memory** — agents reflect on past conversations and build up context over time. You don't have to re-explain who you are or what you're working on every session.
 
-- **`packages/server/`** — API, DB, storage, tools, runtime, scheduler, sandbox CLI, setup scripts.
-- **`packages/app/`** — React/Vite UI (proxies `/api/*` to the server).
-- **`packages/agent-desk-cli/`** — host CLI (`desk` binary).
+**Secrets vault** — API keys and credentials are stored encrypted on disk, scoped per workspace. Agents can use them without you pasting tokens into prompts.
 
-The full stack runs on the host — no VM, no systemd. `desk-server` serves
-the API on `:35138`; the Vite dev server runs on `:5173` and proxies
-`/api/*` to it. Sandbox containers spawn against the host Docker daemon
-(rootful and rootless are auto-detected). State lives under `~/Desk/`.
+**Connections** — bring in local sources like Codex, or authenticate with GitHub PAT for agent sandbox access.
+
+**Scheduled tasks** — set something to run on a cron schedule; Desk keeps it going in the background.
 
 ## Quick start
+
+### As an end user (alpha CLI)
+
+```bash
+npx @agent-desk/cli@alpha
+```
+
+Opens Desk at `http://127.0.0.1:35138/`. Requires Node.js 23 and Docker.
+
+### From source (contributors / dev)
 
 ```bash
 git clone git@github.com:bgrgicak/Desk.git
 cd Desk
 npm install
-docker build -f packages/server/runtime/Dockerfile.sandbox \
-  -t desk/sandbox:v1 packages/server
+docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
 npm run dev
 ```
 
-`npm run dev` boots `desk-server` (tsx watch) and Vite together; one
-`Ctrl+C` stops both. Open <http://localhost:5173/>.
+Open <http://localhost:5173/>. Sign in with username `desk` and the password from `DESK_SEED_PASSWORD` (default: `change-me-before-first-boot`).
+
+`npm run dev` boots `desk-server` (tsx watch) and Vite together; one `Ctrl+C` stops both.
 
 ## Prerequisites
 
 | Tool | macOS | Linux |
-| --- | --- | --- |
-| Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
+|---|---|---|
+| Node.js 23 + npm | [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | same |
 | Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
-| `python3` | preinstalled | preinstalled |
 
-API keys are configured per-user via Settings after the first sign-in.
-`dev.sh` generates `DESK_SECRET_KEY` into `.env` on first run.
+AI provider API keys are configured per-user in Settings after first sign-in.
 
 ## Common commands
 
 Run from the repo root.
 
 | Command | What it does |
-| --- | --- |
-| `npm run dev` | Boot `desk-server` + Vite. |
-| `npm run dev:app` | Vite only — useful when `desk-server` runs elsewhere. |
-| `npm run build` | Build all workspace packages (Nx). |
-| `npm run typecheck` | Run tsc on all workspaces. |
-| `npm run test:host` | Vitest unit + integration tests. |
-| `npm run test:e2e` | Playwright against a spawned `desk-server` + Vite preview. |
+|---|---|
+| `npm run dev` | Boot `desk-server` + Vite |
+| `npm run dev:app` | Vite only — useful when `desk-server` runs elsewhere |
+| `npm run build` | Build all workspace packages |
+| `npm run typecheck` | Run tsc across all workspaces |
+| `npm run test:host` | Vitest unit + integration tests |
+| `npm run test:e2e` | Playwright e2e against a spawned server + Vite preview |
+| `npm run ci:local` | Full local CI mirror (requires Node 23 + Docker) |
 
-See [packages/server/README.md](packages/server/README.md) for the full
-package layout, manual API/Postman flow, and deeper dev notes; see
-[packages/server/docs/dev-environment.md](packages/server/docs/dev-environment.md)
-for the host-only setup specifics (Docker socket detection, sandbox
-UID, etc.).
+## Package layout
+
+| Package | Purpose |
+|---|---|
+| `packages/app` | React/Vite UI |
+| `packages/ui` | Shared component library |
+| `packages/agent-desk-cli` | `npx @agent-desk/cli` host binary |
+| `packages/server/api` | HTTP API server |
+| `packages/server/db` | Schema, migrations, query helpers (SQLite) |
+| `packages/server/runtime` | Docker sandbox runner |
+| `packages/server/scheduler` | Cron + event-driven job scheduler |
+| `packages/server/storage` | Local filesystem abstraction |
+| `packages/server/shared` | Types and utilities shared across server packages |
+
+State lives under `~/Desk/`. The full stack runs on the host — no VM, no systemd.
 
 ## Troubleshooting
 
-- **`desk-server` exits immediately** — inspect logs and check `~/Desk/`
-  for stale state. Migrations run idempotently on every boot, but a
-  half-applied earlier run can wedge them.
-- **`docker` commands fail with permission denied (Linux)** — log out
-  and back in once after `sudo usermod -aG docker $USER`, or wrap with
-  `sg docker -c "..."`.
-- **Sandbox bind-mount writes fail under rootless docker** — the
-  runtime detects rootless mode and runs the container as UID 0. If it
-  doesn't, pin via `DESK_SANDBOX_USER=0:0`.
+- **`desk-server` exits immediately** — check `~/Desk/` for stale state. Migrations are idempotent but a half-applied run can wedge them.
+- **`docker` fails with permission denied (Linux)** — log out and back in after `sudo usermod -aG docker $USER`, or wrap with `sg docker -c "..."`.
+- **Sandbox bind-mount writes fail under rootless Docker** — the runtime auto-detects rootless and runs the container as UID 0. If it doesn't, set `DESK_SANDBOX_USER=0:0`.
 - **`vite: command not found`** — run `npm install` at the repo root.
+
+## License
+
+MIT

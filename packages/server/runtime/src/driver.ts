@@ -99,6 +99,9 @@ function createFakeDriver(): SandboxDriver {
 
       const lines = [
         "Starting fake sandbox run...",
+        ...(process.env.DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS === "1"
+          ? [`Provider keys: ${Object.keys(opts.providerKeys ?? {}).sort().join(",") || "none"}`]
+          : []),
         `Processing prompt: ${opts.prompt.slice(0, 50)}...`,
         "Fake response generated.",
         "Run complete.",
