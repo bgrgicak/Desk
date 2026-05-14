@@ -60,7 +60,7 @@ export interface RenderPromptInput {
   chatId?: string;
   goal?: GoalKey | null;
   includeGoalAutodetect?: boolean;
-  runMode?: "chat" | "summary" | "reflection";
+  runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
   /**
    * DESK_HOME root used to read the user / workspace memory index files.
    * When unset, memory injection is skipped (lets unit tests render the

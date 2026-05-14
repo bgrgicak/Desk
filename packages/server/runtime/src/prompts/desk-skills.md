@@ -29,6 +29,46 @@ records for an existing `.app/`, load `desk-app-storage` before touching
 contract; if the request names a collection such as `habits`, prefer the
 matching fragment skill over the first skill file returned by search.
 
+When the user appears to be using an existing Desk app in natural language
+(for example, "add a note", "show my note", "edit this habit", or "open the
+budget"), treat it primarily as an app-use request, not direct storage CRUD.
+Default to an app/fragment response, not an inline text response. If a fragment
+can satisfy the requested action completely, surface the smallest matching
+fragment as the primary response. Plain-text summaries are allowed only as a
+brief supplement after the fragment is surfaced, or when no suitable fragment
+exists. This rule takes priority over "reply inline by default" and "show the
+smallest useful scope"; for app-use requests, the smallest useful scope is
+usually the relevant fragment, not extracted record text. Do not replace the app
+UI with plain-text CRUD unless the user explicitly asks the agent to directly
+create, edit, delete, import, export, migrate, or repair records, asks for raw
+data, or automation is the explicit goal.
+
+When the request is about a specific record or filtered result (for example,
+"show me the 122 note"), prefer the fragment that can target that record via
+params. Attach that fragment with concrete `--param key=value` values when it
+exists; do not claim the record was opened if the fragment can only show the
+first item or cannot focus the requested record. If no targeted fragment exists,
+say so briefly and then fall back to plain text only if the user asked for the
+data itself.
+
+For existing apps with fragments, prefer:
+- create requests: the create/new fragment
+- read/view requests: the relevant detail/view fragment
+- list/search requests: the list/search fragment
+- edit requests: the editor fragment
+
+When the request names a specific record or filter (for example, "show me the
+122 note"), first look for a fragment whose `params_schema` can receive that
+identifier or query and attach it with concrete `--param` values. Treat a
+record-specific fragment as satisfying the action only when its params can focus
+the requested record/filter; a generic fragment with empty params that merely
+opens the first record is not a complete match. If the best fragment cannot
+focus the target, do not claim that it was opened for that record; either attach
+the closest list/search fragment with an explicit query when it supports one, or
+briefly report that no suitable targeted fragment exists before falling back to a
+plain-text answer. If `attach-artifact` fails, report the failure instead of
+silently replacing the fragment response with direct storage output.
+
 Before answering whether the Library has a reusable app, fragment, note, doc,
 tool, calculator, converter, or dashboard — or before handling a request that a
 reusable item could satisfy — run `desk-agent find library` and read the result.
