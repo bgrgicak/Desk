@@ -142,6 +142,14 @@ export async function updateMeta(
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
+    // Atomically forget the opencode-serve session whenever the chat's
+    // agent changes. The session was bound to the old agent's
+    // providerID/modelID at creation time; opencode-serve ignores per-
+    // sendMessage overrides for those fields, so reusing the session
+    // would silently keep using the old model. Doing this in the same
+    // UPDATE removes the race where a concurrent run could read the
+    // new agent_id but still see the old session_id.
+    sets.push(`opencode_session_id = NULL`);
   }
   if (data.unread !== undefined) {
     sets.push(`unread = ?`);

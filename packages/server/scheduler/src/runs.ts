@@ -75,13 +75,24 @@ interface SummaryModelTokenLimits {
 export function resolveOpenAiBillingSource(
   model: string,
   providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
 ): { runtimeModel: string; providerKeys: Record<string, string> } {
   if (!model.startsWith("codex/")) return { runtimeModel: model, providerKeys };
+  // Codex auth (OPENCODE_AUTH_CONTENT in extraEnv) is the OAuth path we
+  // want for codex/* models. If it's actually present, strip
+  // OPENAI_API_KEY so opencode picks the OAuth path instead of the
+  // cloud key. If the user disabled the codex local source, the OAuth
+  // blob is gone — keep OPENAI_API_KEY so the openai provider has
+  // *some* way to authenticate. Without this fallback, a chat whose
+  // agent.model still says `codex/X` after the user disabled codex
+  // strands the run with no auth at all.
+  const oauthAvailable =
+    typeof extraEnv?.OPENCODE_AUTH_CONTENT === "string" &&
+    extraEnv.OPENCODE_AUTH_CONTENT.length > 0;
+  const runtimeModel = `openai/${model.slice("codex/".length)}`;
+  if (!oauthAvailable) return { runtimeModel, providerKeys };
   const { OPENAI_API_KEY: _openAiApiKey, ...withoutOpenAiApiKey } = providerKeys;
-  return {
-    runtimeModel: `openai/${model.slice("codex/".length)}`,
-    providerKeys: withoutOpenAiApiKey,
-  };
+  return { runtimeModel, providerKeys: withoutOpenAiApiKey };
 }
 
 export interface FireMessageOptions {
@@ -708,7 +719,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // of OPENAI_API_KEY. Strip the cloud key from providerKeys for the
         // runtime call so OpenCode picks the OAuth path; the display id on
         // the child message stays as codex/* so the UI shows the right source.
-        const billing = resolveOpenAiBillingSource(agentFileInput.model, providerKeys);
+        const billing = resolveOpenAiBillingSource(agentFileInput.model, providerKeys, extraEnv);
         const runtimeAgentInput: AgentFileInput =
           billing.runtimeModel === agentFileInput.model
             ? agentFileInput

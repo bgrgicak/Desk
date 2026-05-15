@@ -524,6 +524,53 @@ describe("chats queries", () => {
     expect(cleared).toEqual([]);
   });
 
+  it("updateMeta: atomically clears opencode_session_id when agentId changes", async () => {
+    // Make a fresh user/agents/workspace/chat so we don't bleed state into
+    // the shared chatId/agentId fixtures above.
+    const userIdLocal = generateId("user");
+    await users.insert(pool, { id: userIdLocal, username: "swap-agent", passwordHash: "h", email: "swap@example.com" });
+    const wsLocal = generateId("workspace");
+    await workspaces.insert(pool, { id: wsLocal, userId: userIdLocal, name: "swap", path: `swap-${wsLocal.slice(-6)}` });
+    const aOld = generateId("agent");
+    const aNew = generateId("agent");
+    await agents.insert(pool, { id: aOld, userId: userIdLocal, name: "old", model: "openai/gpt-5.4" });
+    await agents.insert(pool, { id: aNew, userId: userIdLocal, name: "new", model: "anthropic/claude-3.5-sonnet" });
+    for (const ag of [aOld, aNew]) {
+      await pool.query(
+        `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+        [wsLocal, ag],
+      );
+    }
+    const cId = generateId("chat");
+    await chats.insert(pool, { id: cId, workspaceId: wsLocal, agentId: aOld, title: "swap me" });
+    await chats.setOpencodeSessionId(pool, cId, "ses_bound_to_old");
+
+    const updated = await chats.updateMeta(pool, cId, { agentId: aNew });
+    expect(updated?.agentId).toBe(aNew);
+    // The session-id clear is part of the same UPDATE — read it back
+    // to confirm it landed atomically with the agent swap.
+    expect(await chats.getOpencodeSessionId(pool, cId)).toBeNull();
+  });
+
+  it("updateMeta: leaves opencode_session_id alone when only unrelated fields change", async () => {
+    const userIdLocal = generateId("user");
+    await users.insert(pool, { id: userIdLocal, username: "title-only", passwordHash: "h", email: "title@example.com" });
+    const wsLocal = generateId("workspace");
+    await workspaces.insert(pool, { id: wsLocal, userId: userIdLocal, name: "titlews", path: `titlews-${wsLocal.slice(-6)}` });
+    const ag = generateId("agent");
+    await agents.insert(pool, { id: ag, userId: userIdLocal, name: "ag" });
+    await pool.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      [wsLocal, ag],
+    );
+    const cId = generateId("chat");
+    await chats.insert(pool, { id: cId, workspaceId: wsLocal, agentId: ag, title: "before" });
+    await chats.setOpencodeSessionId(pool, cId, "ses_keepme");
+
+    await chats.updateMeta(pool, cId, { title: "after" });
+    expect(await chats.getOpencodeSessionId(pool, cId)).toBe("ses_keepme");
+  });
+
   it("cascades delete when workspace is deleted", async () => {
     const userId2 = generateId("user");
     await users.insert(pool, { id: userId2, username: "cascadeuser", passwordHash: "h", email: "cascade@example.com" });
