@@ -53,13 +53,15 @@ fi
 # rather than creating a "Desk" subdirectory inside the project files.
 export DESK_HOME="${HOME:-/home/agent}"
 
+# Xvfb is needed only when playwright-mcp is enabled (site/app-goal
+# chats). It costs ~68 MB resident at idle, which is a lot for the
+# majority of chats that never touch a browser. Don't auto-start it
+# here — the host runtime calls `ensureContainerXvfb` from
+# `opencodeServer.ts` when the workspace MCP config flips
+# playwright on, and that helper does an idempotent same-script start.
+# `$DISPLAY` is still exported so any process that DOES need it
+# inherits the right value once Xvfb is running.
 export DISPLAY="${DISPLAY:-:99}"
-Xvfb "$DISPLAY" -screen 0 "${XVFB_SCREEN:-1920x1080x24}" -nolisten tcp >/tmp/desk-xvfb.log 2>&1 &
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  [ -S "/tmp/.X11-unix/X${DISPLAY#:}" ] && break
-  sleep 0.1
-done
-
 touch /tmp/desk-entrypoint-ready
 
 exec "$@"

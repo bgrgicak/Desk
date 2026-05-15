@@ -21,6 +21,7 @@ import {
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,
+  softReapIdleDaemons,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   listModels,
@@ -683,6 +684,12 @@ export function createRunManager(opts: RunManagerOptions) {
           await onLog(evt);
         };
         let attempt = 0;
+        // One opencode-serve session per Desk chat. Read the chat's
+        // currently-bound session id (null on the chat's first turn) and
+        // pass it into the runtime; the runtime returns the session that
+        // actually handled the run, which may be a freshly-created one if
+        // the chat had none or the stored id was stale on the daemon.
+        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
         while (true) {
           if (opts.execRunFn) {
             result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
@@ -710,8 +717,17 @@ export function createRunManager(opts: RunManagerOptions) {
               attachments,
               providerKeys,
               extraEnv,
+              opencodeSessionId,
               onLog: onLogWithStderrCapture,
             });
+            // Persist the session id after every attempt (not just success):
+            // a resource-retry inside the loop should reuse the same session
+            // so the model's context across attempts stays consistent.
+            const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
+            if (nextSessionId && nextSessionId !== opencodeSessionId) {
+              await queries.chats.setOpencodeSessionId(pool, msg.chatId, nextSessionId);
+              opencodeSessionId = nextSessionId;
+            }
           }
           if (result.exitCode === 0) break;
           if (attempt >= MAX_RESOURCE_RETRIES) break;
@@ -984,6 +1000,38 @@ export function createRunManager(opts: RunManagerOptions) {
     const timer = setInterval(() => {
       void sweepIdleSandboxes().catch((err) => {
         console.warn("idle sandbox sweep failed:", err);
+      });
+    }, intervalMs);
+    timer.unref();
+    return timer;
+  }
+
+  /**
+   * Soft-tier idle sweep: kill the opencode-serve daemon inside
+   * sandbox containers whose workspace has been quiet for
+   * `softIdleMs` (default 10 min), but keep the container running.
+   * Saves ~400 MB of warm-daemon RSS per sandbox; the next message
+   * pays only the ~2-5 s daemon respawn cost, not a full container
+   * cold-start.
+   *
+   * Distinct from `sweepIdleSandboxes`: that one nukes the container
+   * after a longer quiet window (default 30 min) and is the
+   * scale-back-to-baseline mechanism.
+   */
+  async function sweepIdleDaemons(
+    softIdleMs: number = parseInt(
+      process.env.DESK_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
+      10,
+    ),
+  ): Promise<string[]> {
+    const active = await getActiveWorkspaceIds(softIdleMs);
+    return softReapIdleDaemons(active, softIdleMs);
+  }
+
+  function startSoftIdleDaemonSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      void sweepIdleDaemons().catch((err) => {
+        console.warn("soft daemon sweep failed:", err);
       });
     }, intervalMs);
     timer.unref();
@@ -1379,6 +1427,8 @@ export function createRunManager(opts: RunManagerOptions) {
     startPolling,
     sweepIdleSandboxes,
     startIdleSweeper,
+    sweepIdleDaemons,
+    startSoftIdleDaemonSweeper,
     getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
