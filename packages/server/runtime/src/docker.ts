@@ -152,6 +152,14 @@ export function classifyResourceError(
   // a non-OOM signal kill that hits this path will at worst grow the
   // sandbox once before the user-visible failure surfaces.
   if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
+  // opencode-serve daemon mid-run failure: HTTP calls to a dead daemon
+  // surface as `fetch failed` / `ECONNREFUSED` in stderr, not as a
+  // child-process exit code. The driver probes the container's cgroup
+  // `memory.events.oom_kill` after a daemon-gone error and emits a
+  // marker line when the kernel actually OOM-killed it. That's the
+  // signal the auto-scaler needs to grow memory before retry instead
+  // of failing the user with no recovery.
+  if (s.includes("opencode-serve was oom-killed")) return "memory";
   return null;
 }
 

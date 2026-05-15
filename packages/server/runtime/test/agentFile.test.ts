@@ -19,6 +19,15 @@ describe("renderAgentFile", () => {
     expect(result).toContain("description: Jarvis");
     expect(result).toContain("model: opencode/big-pickle");
     expect(result).toContain("mode: primary");
+    // Pre-authorize every tool — otherwise opencode stalls on
+    // `permission.asked` events for `bash`, `external_directory`, etc.
+    // Object form (per-tool) rather than the bare-string shorthand:
+    // opencode 1.14.50 mis-parses `permission: allow` as a per-character
+    // array.
+    expect(result).toContain("permission:");
+    expect(result).toContain("bash: allow");
+    expect(result).toContain("external_directory: allow");
+    expect(result).toContain("doom_loop: allow");
 
     // Identity framing
     expect(result).toContain("You are Jarvis, call me Desk.");

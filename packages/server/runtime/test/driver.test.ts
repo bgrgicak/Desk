@@ -43,6 +43,17 @@ describe("parseModelSpec", () => {
       modelID: "big-pickle",
     });
   });
+
+  it("rewrites the Desk-only `codex/...` relabel back to `openai/...`", () => {
+    // Desk's settings UI relabels OpenAI models as `codex/...` when the
+    // user authed via the ChatGPT/Codex bridge (no `OPENAI_API_KEY`).
+    // The `opencode-serve` daemon only knows the `openai` provider, so
+    // dispatching `codex/gpt-5.5` 500s with ProviderModelNotFoundError.
+    expect(parseModelSpec("codex/gpt-5.5")).toEqual({
+      providerID: "openai",
+      modelID: "gpt-5.5",
+    });
+  });
 });
 
 describe("buildMessageParts", () => {

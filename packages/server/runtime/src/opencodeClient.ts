@@ -98,6 +98,22 @@ export class OpencodeClient {
     return true;
   }
 
+  /**
+   * Lists messages for a session. opencode-serve commits message
+   * parts (including tool calls, step boundaries, reasoning) to this
+   * endpoint as they complete — the `sendMessage` response only
+   * contains the parts known at HTTP-resolve time, which is before
+   * tool calls finish. Callers that need the full assistant turn
+   * (e.g. to synthesize non-text events the SSE stream doesn't carry)
+   * fetch this after `sendMessage` returns.
+   */
+  async listSessionMessages(sessionId: string): Promise<unknown[]> {
+    const r = await this.fetchRaw(`/session/${encodeURIComponent(sessionId)}/message`, { method: "GET" });
+    if (!r.ok) throw await this.toError(r, "GET /session/:id/message");
+    const body = await r.json();
+    return Array.isArray(body) ? body : [];
+  }
+
   // -------- Message dispatch -------------------------------------------
 
   /**

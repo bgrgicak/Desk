@@ -73,6 +73,35 @@ export function renderAgentFile(input: AgentFileInput): string {
     `description: ${input.agentName}`,
     `model: ${input.model}`,
     "mode: primary",
+    // Pre-authorize every tool. Desk runs opencode inside a per-workspace
+    // sandbox that already isolates the agent — there's no UI surface
+    // for a "do you allow this tool?" prompt mid-turn, so any tool that
+    // defaults to `ask` (bash, external_directory, doom_loop, …)
+    // silently stalls the chat. Trunk's `opencode run --format json`
+    // path passed `--dangerously-skip-permissions`; under the HTTP API
+    // this object-form agent-level field is the equivalent. The bare
+    // string form (`permission: allow`) is also schema-valid but
+    // opencode 1.14.50's parser treats it as a per-character array
+    // and rejects every char as not-PermissionActionConfig; the
+    // explicit per-tool object form is unambiguous and accepted.
+    "permission:",
+    "  read: allow",
+    "  edit: allow",
+    "  glob: allow",
+    "  grep: allow",
+    "  list: allow",
+    "  bash: allow",
+    "  task: allow",
+    "  external_directory: allow",
+    "  todowrite: allow",
+    "  question: allow",
+    "  webfetch: allow",
+    "  websearch: allow",
+    "  repo_clone: allow",
+    "  repo_overview: allow",
+    "  lsp: allow",
+    "  doom_loop: allow",
+    "  skill: allow",
     "---",
   ].join("\n");
 

@@ -94,14 +94,16 @@ async function withContainerLock<T>(
 ): Promise<T> {
   const prev = startLocks.get(containerId);
   const next = (prev ?? Promise.resolve()).then(fn, fn);
-  startLocks.set(
-    containerId,
-    next.finally(() => {
-      if (startLocks.get(containerId) === next) {
-        startLocks.delete(containerId);
-      }
-    }),
-  );
+  // The caller awaits `next` directly, which handles its rejection. We
+  // also store a tail promise so the next caller chains after this one
+  // finishes. That tail rejection has its own handler so a failed
+  // `fn` (e.g. `startOpencodeServer` timing out on waitForReady) doesn't
+  // surface as an unhandledRejection and kill the process.
+  const tail = next.finally(() => {
+    if (startLocks.get(containerId) === tail) startLocks.delete(containerId);
+  });
+  tail.catch(() => {});
+  startLocks.set(containerId, tail);
   return next;
 }
 
@@ -321,6 +323,24 @@ async function startOpencodeServer(
   // Wait until the daemon responds.
   await waitForReady(url, password, DEFAULT_READY_TIMEOUT_MS);
 
+  // opencode-serve reads `OPENCODE_AUTH_CONTENT` from its env but does
+  // not auto-consume it as registered provider auth — providers are only
+  // discoverable to the daemon after explicit `PUT /auth/:providerID`.
+  // The Codex/ChatGPT bridge stuffs a blob like
+  // `{"openai":{"type":"oauth", ...}}` into that env var, so we forward
+  // each entry into the daemon's auth store here. Without this, the
+  // first `POST /session/.../message` referencing that provider's model
+  // fails with `ProviderModelNotFoundError`.
+  if (opts.env.OPENCODE_AUTH_CONTENT) {
+    await registerAuthBlobs(url, password, opts.env.OPENCODE_AUTH_CONTENT).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `opencode-serve: failed to register OPENCODE_AUTH_CONTENT for ${opts.containerId}:`,
+        (err as Error)?.message ?? err,
+      );
+    });
+  }
+
   return {
     containerId: opts.containerId,
     url,
@@ -328,6 +348,50 @@ async function startOpencodeServer(
     startedAt: Date.now(),
     envDigest,
   };
+}
+
+/**
+ * Forward `OPENCODE_AUTH_CONTENT` entries into the freshly-started
+ * daemon's auth store via `PUT /auth/:providerID`. The blob shape is
+ * `{<providerID>: <auth-record>}` where each auth-record has a `type`
+ * field of `oauth`, `api`, or `wellknown`. Anything else is skipped
+ * defensively — opencode would reject it anyway.
+ */
+async function registerAuthBlobs(
+  url: string,
+  password: string,
+  rawBlob: string,
+): Promise<void> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBlob);
+  } catch (err) {
+    throw new Error(`OPENCODE_AUTH_CONTENT is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("OPENCODE_AUTH_CONTENT does not decode to an object");
+  }
+  const credentials = Buffer.from(`opencode:${password}`).toString("base64");
+  for (const [providerID, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as { type?: unknown };
+    if (e.type !== "oauth" && e.type !== "api" && e.type !== "wellknown") continue;
+    const r = await fetch(`${url}/auth/${encodeURIComponent(providerID)}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(entry),
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      // eslint-disable-next-line no-console
+      console.warn(
+        `opencode-serve: PUT /auth/${providerID} returned ${r.status}: ${body.slice(0, 200)}`,
+      );
+    }
+  }
 }
 
 async function isInstanceAlive(instance: OpencodeServerInstance): Promise<boolean> {
@@ -412,7 +476,12 @@ export async function killAnyOpencodeServeInContainer(
   engine: Engine,
   containerId: string,
 ): Promise<void> {
-  // Pidfile path mirrors what `startOpencodeServer` writes.
+  // Pidfile path mirrors what `startOpencodeServer` writes. We SIGTERM
+  // first, wait briefly for graceful exit, then SIGKILL any leftover so
+  // the next spawn doesn't race for in-container port 9105 with a
+  // dying old process. Without the wait, the new daemon's bind() can
+  // race the old daemon's still-held socket and silently fail to start,
+  // surfacing later as "did not become ready within 15s: fetch failed".
   const h = await engine.exec({
     containerId,
     cmd: [
@@ -423,8 +492,15 @@ export async function killAnyOpencodeServeInContainer(
         // Belt-and-braces: kill anything that looks like opencode serve
         // even if the pidfile is stale or missing. Match on argv so we
         // never hit `opencode run` invocations.
-        "pkill -TERM -f 'opencode serve' 2>/dev/null || true",
         "pkill -TERM -f '\\.opencode serve' 2>/dev/null || true",
+        "pkill -TERM -f 'opencode serve' 2>/dev/null || true",
+        // Wait up to ~2 s for graceful exit before falling back to SIGKILL.
+        "for _ in 1 2 3 4 5 6 7 8 9 10; do",
+        "  pgrep -f '\\.opencode serve' >/dev/null 2>&1 || pgrep -f 'opencode serve' >/dev/null 2>&1 || break",
+        "  sleep 0.2",
+        "done",
+        "pkill -KILL -f '\\.opencode serve' 2>/dev/null || true",
+        "pkill -KILL -f 'opencode serve' 2>/dev/null || true",
         "rm -f /tmp/opencode-serve.pid 2>/dev/null || true",
         "exit 0",
       ].join("\n"),
@@ -449,3 +525,6 @@ function digestEnv(env: Record<string, string>): string {
 }
 
 export const _digestEnvForTest = digestEnv;
+
+/** Test-only re-export. */
+export const _registerAuthBlobsForTest = registerAuthBlobs;
