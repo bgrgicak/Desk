@@ -448,6 +448,82 @@ describe("chats queries", () => {
     expect(cleared).toEqual([]);
   });
 
+  it("clearOpencodeSessionsForUser: nulls every session across the user's chats and reports them", async () => {
+    const userA = generateId("user");
+    const userB = generateId("user");
+    await users.insert(pool, { id: userA, username: "userA-clear", passwordHash: "h", email: "a@example.com" });
+    await users.insert(pool, { id: userB, username: "userB-clear", passwordHash: "h", email: "b@example.com" });
+    const aA = generateId("agent");
+    const aB = generateId("agent");
+    await agents.insert(pool, { id: aA, userId: userA, name: "agentA" });
+    await agents.insert(pool, { id: aB, userId: userB, name: "agentB" });
+    const wsA1 = generateId("workspace");
+    const wsA2 = generateId("workspace");
+    const wsB = generateId("workspace");
+    await workspaces.insert(pool, { id: wsA1, userId: userA, name: "wsA1", path: `wsa1-${wsA1.slice(-6)}` });
+    await workspaces.insert(pool, { id: wsA2, userId: userA, name: "wsA2", path: `wsa2-${wsA2.slice(-6)}` });
+    await workspaces.insert(pool, { id: wsB, userId: userB, name: "wsB", path: `wsb-${wsB.slice(-6)}` });
+    for (const [ws, ag] of [[wsA1, aA], [wsA2, aA], [wsB, aB]] as const) {
+      await pool.query(
+        `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+        [ws, ag],
+      );
+    }
+    const c1 = generateId("chat");
+    const c2 = generateId("chat");
+    const c3 = generateId("chat");
+    const c4 = generateId("chat");
+    await chats.insert(pool, { id: c1, workspaceId: wsA1, agentId: aA, title: "userA c1" });
+    await chats.insert(pool, { id: c2, workspaceId: wsA2, agentId: aA, title: "userA c2" });
+    await chats.insert(pool, { id: c3, workspaceId: wsA1, agentId: aA, title: "userA c3 no session" });
+    await chats.insert(pool, { id: c4, workspaceId: wsB, agentId: aB, title: "userB c4" });
+    await chats.setOpencodeSessionId(pool, c1, "ses_a1");
+    await chats.setOpencodeSessionId(pool, c2, "ses_a2");
+    await chats.setOpencodeSessionId(pool, c4, "ses_b1");
+
+    const cleared = await chats.clearOpencodeSessionsForUser(pool, userA);
+    expect(cleared.map((r) => r.chatId).sort()).toEqual([c1, c2].sort());
+    expect(await chats.getOpencodeSessionId(pool, c1)).toBeNull();
+    expect(await chats.getOpencodeSessionId(pool, c2)).toBeNull();
+    // Other user's session is untouched.
+    expect(await chats.getOpencodeSessionId(pool, c4)).toBe("ses_b1");
+  });
+
+  it("clearOpencodeSessionsForUser: workspaceId scopes the clear to one workspace", async () => {
+    const userId2 = generateId("user");
+    await users.insert(pool, { id: userId2, username: "user-ws-scope", passwordHash: "h", email: "ws@example.com" });
+    const aId = generateId("agent");
+    await agents.insert(pool, { id: aId, userId: userId2, name: "wsScopeAgent" });
+    const wsKeep = generateId("workspace");
+    const wsClear = generateId("workspace");
+    await workspaces.insert(pool, { id: wsKeep, userId: userId2, name: "keep", path: `keep-${wsKeep.slice(-6)}` });
+    await workspaces.insert(pool, { id: wsClear, userId: userId2, name: "clear", path: `clear-${wsClear.slice(-6)}` });
+    for (const ws of [wsKeep, wsClear]) {
+      await pool.query(
+        `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+        [ws, aId],
+      );
+    }
+    const cKeep = generateId("chat");
+    const cClear = generateId("chat");
+    await chats.insert(pool, { id: cKeep, workspaceId: wsKeep, agentId: aId, title: "keep" });
+    await chats.insert(pool, { id: cClear, workspaceId: wsClear, agentId: aId, title: "clear" });
+    await chats.setOpencodeSessionId(pool, cKeep, "ses_keep");
+    await chats.setOpencodeSessionId(pool, cClear, "ses_clear");
+
+    const cleared = await chats.clearOpencodeSessionsForUser(pool, userId2, wsClear);
+    expect(cleared.map((r) => r.chatId)).toEqual([cClear]);
+    expect(await chats.getOpencodeSessionId(pool, cKeep)).toBe("ses_keep");
+    expect(await chats.getOpencodeSessionId(pool, cClear)).toBeNull();
+  });
+
+  it("clearOpencodeSessionsForUser: returns empty array when nothing to clear", async () => {
+    const u = generateId("user");
+    await users.insert(pool, { id: u, username: "noop-user-clear", passwordHash: "h", email: "noopu@example.com" });
+    const cleared = await chats.clearOpencodeSessionsForUser(pool, u);
+    expect(cleared).toEqual([]);
+  });
+
   it("cascades delete when workspace is deleted", async () => {
     const userId2 = generateId("user");
     await users.insert(pool, { id: userId2, username: "cascadeuser", passwordHash: "h", email: "cascade@example.com" });

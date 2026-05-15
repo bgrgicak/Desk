@@ -21,9 +21,12 @@ import {
 import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import {
   auditSandboxMounts,
+  buildDaemonEnv,
   killOpencodeDaemonsForOrphans,
   productionReflectWorkspace,
   pruneDriftedContainers,
+  refreshSandboxConnections,
+  resolveLocalSourceEnv,
   writeGoalSkillFiles,
 } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
@@ -286,6 +289,30 @@ async function main(): Promise<void> {
     runManager,
     vault,
     broadcastUserId,
+    refreshSandboxConnections: async (userId, workspaceId) => {
+      const result = await refreshSandboxConnections({
+        pool,
+        userId,
+        workspaceId,
+        // Compose the same env the scheduler uses at run-fire time, so
+        // the digest the daemon is restarted with matches what the next
+        // message would compute and we don't trip a redundant restart.
+        buildSandboxEnv: async (uid, wsId) => {
+          const providerKeys = await resolveProviderKeys(pool, vault, uid, wsId);
+          const extraEnv = await resolveLocalSourceEnv(pool, uid);
+          return buildDaemonEnv({ providerKeys, extraEnv });
+        },
+      });
+      if (result.failed.length > 0 || result.restarted.length > 0 || result.skippedActive.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `connection refresh user=${userId} ws=${workspaceId ?? "*"}: ` +
+          `restarted=${result.restarted.length} skippedActive=${result.skippedActive.length} ` +
+          `skippedNoContainer=${result.skippedNoContainer.length} failed=${result.failed.length} ` +
+          `clearedSessions=${result.clearedSessions.length}`,
+        );
+      }
+    },
   });
 
   await new Promise<void>((resolve) => {

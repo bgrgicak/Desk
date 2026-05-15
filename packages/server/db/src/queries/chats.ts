@@ -249,3 +249,50 @@ export async function clearOpencodeSessionsForAgent(
   }
   return cleared;
 }
+
+/**
+ * Clear opencode-serve session ids for every chat owned by the user
+ * (optionally scoped to a single workspace). Used when a user-level
+ * connector or local source changes — the affected chats' sessions may
+ * still be bound to the old auth/provider, so we forget the ids and let
+ * the next turn create a fresh session against whatever is configured now.
+ *
+ * Returns the chat ids whose session was cleared.
+ */
+export async function clearOpencodeSessionsForUser(
+  db: Pool,
+  userId: string,
+  workspaceId?: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const baseSelect = `SELECT c.id, c.opencode_session_id
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+      WHERE w.user_id = ?
+        AND c.opencode_session_id IS NOT NULL`;
+  const params: unknown[] = [userId];
+  let sql = baseSelect;
+  if (workspaceId) {
+    sql += " AND c.workspace_id = ?";
+    params.push(workspaceId);
+  }
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(sql, params);
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    const updateSql = workspaceId
+      ? `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ? AND c.workspace_id = ?)`
+      : `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ?)`;
+    const updateParams = workspaceId ? [userId, workspaceId] : [userId];
+    await db.query(updateSql, updateParams);
+  }
+  return cleared;
+}

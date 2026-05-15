@@ -234,6 +234,20 @@ export function _resetActiveRunsForTest(): void {
   activeRuns.clear();
 }
 
+/**
+ * Returns true if any run is currently in flight on the given container.
+ * Used by the connection-refresh path to skip workspaces with an active
+ * run — restarting the daemon mid-turn would kill the in-flight model
+ * call. Those workspaces still pick up the new env on the next message
+ * via the env-digest restart in `ensureOpencodeServer`.
+ */
+export function hasActiveRunForContainer(containerId: string): boolean {
+  for (const entry of activeRuns.values()) {
+    if (entry.containerId === containerId) return true;
+  }
+  return false;
+}
+
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
