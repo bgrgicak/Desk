@@ -9,6 +9,7 @@ export {
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,
+  softReapIdleDaemons,
   killOpencodeDaemonsForOrphans,
   _resetGrowthStateForTest,
 } from "./docker.js";

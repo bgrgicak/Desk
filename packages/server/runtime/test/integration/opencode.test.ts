@@ -115,15 +115,14 @@ describeIf("opencode-serve end-to-end", () => {
 
     const engine = await detectEngine();
     const processes = await engine.top(handle.containerId);
-    // The npm-installed opencode-ai is a Node wrapper script that
-    // spawns the real `.opencode` binary as a child, so a single
-    // daemon shows up as two `ps` rows. Count just the wrapper
-    // entries — they're the per-daemon-instance markers.
-    const wrappers = processes.filter((p) => /^node .*opencode serve/.test(p.cmd));
+    // We spawn the bundled `.opencode` binary directly (no Node
+    // wrapper script), so a healthy daemon is exactly one ps row
+    // matching `*.opencode serve`. Two rows means a duplicate spawn
+    // slipped past the per-container mutex.
+    const daemons = processes.filter((p) => /\.opencode serve/.test(p.cmd));
     expect(
-      wrappers.length,
-      `expected exactly one opencode-serve daemon, got ${wrappers.length}: ${processes
-        .filter((p) => /opencode serve/.test(p.cmd))
+      daemons.length,
+      `expected exactly one opencode-serve daemon, got ${daemons.length}: ${daemons
         .map((p) => p.cmd)
         .join(" | ")}`,
     ).toBe(1);

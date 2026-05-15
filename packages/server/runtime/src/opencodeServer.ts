@@ -24,6 +24,16 @@ import type { Engine } from "./engine.js";
 /** Container-internal port the daemon binds to. Published to host at an auto-assigned port via `-p`. */
 export const OPENCODE_SERVE_CONTAINER_PORT = 9105;
 
+/**
+ * In-container absolute path to the bundled opencode binary. The
+ * `opencode` shim on PATH is a Node wrapper that just spawns this
+ * Bun bundle and waits for it — running both wastes ~30-50 MB of Node
+ * runtime per sandbox. Spawning the bundle directly drops that
+ * overhead without changing the daemon's behavior.
+ */
+export const OPENCODE_BIN_IN_CONTAINER =
+  "/usr/local/lib/node_modules/opencode-ai/bin/.opencode";
+
 const READY_POLL_INTERVAL_MS = 100;
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 
@@ -180,6 +190,39 @@ export function _resetOpencodeServerCacheForTest(): void {
   cache.clear();
 }
 
+/**
+ * Idempotently start an Xvfb display inside the container.
+ *
+ * Called by the host runtime when a workspace's MCP config enables
+ * playwright (i.e. browser-goal chats). Chat-goal workspaces skip this
+ * entirely so the ~68 MB Xvfb framebuffer doesn't sit warm for
+ * sandboxes that never open a browser.
+ *
+ * Safe to call repeatedly: the shell script's `pgrep` check makes the
+ * second call a no-op.
+ */
+export async function ensureContainerXvfb(
+  engine: Engine,
+  containerId: string,
+): Promise<void> {
+  const cmd = [
+    "sh", "-c",
+    [
+      "set -e",
+      "if pgrep -x Xvfb >/dev/null 2>&1; then exit 0; fi",
+      "DISPLAY=\"${DISPLAY:-:99}\"",
+      "Xvfb \"$DISPLAY\" -screen 0 \"${XVFB_SCREEN:-1920x1080x24}\" -nolisten tcp >/tmp/desk-xvfb.log 2>&1 &",
+      // Wait briefly for the X socket to appear so playwright/firefox
+      // children don't race the display startup.
+      "for _ in 1 2 3 4 5 6 7 8 9 10; do",
+      "  [ -S \"/tmp/.X11-unix/X${DISPLAY#:}\" ] && exit 0",
+      "  sleep 0.1",
+      "done",
+    ].join("\n"),
+  ];
+  await engine.execDetached({ containerId, cmd });
+}
+
 export async function stopOpencodeServer(
   engine: Engine,
   containerId: string,
@@ -237,7 +280,12 @@ async function startOpencodeServer(
       // layer: the host side is bound to 127.0.0.1, so nothing outside
       // the host machine can reach this port. Inside the container,
       // OPENCODE_SERVER_PASSWORD gates every request.
-      `nohup opencode serve --hostname 0.0.0.0 --port ${OPENCODE_SERVE_CONTAINER_PORT} \
+      //
+      // We spawn the Bun bundle directly (`.opencode`) instead of the
+      // `opencode` shim — the shim is a Node wrapper that forks the
+      // bundle and waits for it. Skipping it saves the Node-runtime
+      // RSS that would otherwise sit idle for the daemon's lifetime.
+      `nohup ${OPENCODE_BIN_IN_CONTAINER} serve --hostname 0.0.0.0 --port ${OPENCODE_SERVE_CONTAINER_PORT} \
         >/tmp/opencode-serve.log 2>&1 &`,
       "echo $! > /tmp/opencode-serve.pid",
     ].join("\n"),
@@ -354,9 +402,13 @@ async function stopOpencodeServerInternal(
 /**
  * Best-effort kill of every `opencode serve` process inside the
  * container. Uses pid-file when available (faster, more targeted),
- * falls back to `top()` matching on the command line. Idempotent.
+ * falls back to `pkill` matching on the command line. Idempotent.
+ *
+ * Matches both the bundled `.opencode serve` (current path) and the
+ * legacy `opencode serve` wrapper (older sandbox images), so this
+ * keeps working across upgrades.
  */
-async function killAnyOpencodeServeInContainer(
+export async function killAnyOpencodeServeInContainer(
   engine: Engine,
   containerId: string,
 ): Promise<void> {
@@ -372,6 +424,7 @@ async function killAnyOpencodeServeInContainer(
         // even if the pidfile is stale or missing. Match on argv so we
         // never hit `opencode run` invocations.
         "pkill -TERM -f 'opencode serve' 2>/dev/null || true",
+        "pkill -TERM -f '\\.opencode serve' 2>/dev/null || true",
         "rm -f /tmp/opencode-serve.pid 2>/dev/null || true",
         "exit 0",
       ].join("\n"),

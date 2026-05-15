@@ -253,6 +253,17 @@ async function main(): Promise<void> {
     parseInt(process.env.DESK_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
   );
 
+  // Soft-tier daemon sweeper: kills the in-container opencode-serve
+  // daemon for workspaces quiet for `DESK_SANDBOX_SOFT_IDLE_MS` (default
+  // 10 min) but leaves the container running. Saves ~400 MB of warm-
+  // daemon RSS per sandbox; the next message pays only the ~2-5 s
+  // daemon respawn cost. Runs on the same 60s cadence as the hard
+  // sweeper — they coexist (hard reap takes precedence; once the
+  // container is gone, the soft tier finds nothing to do).
+  const softIdleSweepTimer = runManager.startSoftIdleDaemonSweeper(
+    parseInt(process.env.DESK_SANDBOX_SOFT_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
+  );
+
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local
   // cron. Set DESK_DAILY_REFLECTION=off to skip seeding in dev / tests.
@@ -301,6 +312,7 @@ async function main(): Promise<void> {
     console.log(`received ${signal}, shutting down`);
     clearInterval(pollTimer);
     clearInterval(idleSweepTimer);
+    clearInterval(softIdleSweepTimer);
     clearInterval(retentionTimer);
     clearConnections();
     server.close();

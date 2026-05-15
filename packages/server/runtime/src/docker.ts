@@ -717,6 +717,67 @@ export async function reapIdleSandboxes(
   return removed;
 }
 
+/**
+ * Soft idle tier: kill the `opencode serve` daemon inside sandbox
+ * containers whose workspace has been quiet for `minAgeMs`, but leave
+ * the container itself running. Saves ~400 MB of warm-daemon RSS per
+ * sandbox without paying the full container cold-start on the next
+ * message — the next `ensureOpencodeServer` re-spawns the daemon in
+ * ~2-5 s against a still-warm container.
+ *
+ * Same `recentlyActiveWorkspaceIds` shape as `reapIdleSandboxes` so
+ * the scheduler can reuse the existing active-workspace query.
+ * Default 10 min — quiet enough to avoid killing daemons between
+ * back-to-back chats but tight enough that long-idle workspaces
+ * release the daemon's memory promptly.
+ *
+ * Returns the names of containers whose daemon was killed.
+ */
+export async function softReapIdleDaemons(
+  recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  minAgeMs: number = 10 * 60 * 1000,
+): Promise<string[]> {
+  const killed: string[] = [];
+  let engine: Engine;
+  try {
+    engine = await detectEngine();
+  } catch {
+    return killed;
+  }
+  let containers: Array<{ id: string; name: string }>;
+  try {
+    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
+  } catch {
+    return killed;
+  }
+  const { killAnyOpencodeServeInContainer, invalidateOpencodeServerCache } = await import(
+    "./opencodeServer.js"
+  );
+  const now = Date.now();
+  for (const c of containers) {
+    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
+    const workspaceId = c.name.slice("desk-sandbox-".length);
+    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
+    if (growthInFlight.has(c.name)) continue;
+    // Don't touch a brand-new container whose first message hasn't
+    // bumped any DB row yet — same race window as the hard reap.
+    try {
+      const info = await engine.inspect(c.name);
+      if (!info) continue;
+      if (info.createdAt) {
+        const age = now - new Date(info.createdAt).getTime();
+        if (Number.isFinite(age) && age < minAgeMs) continue;
+      }
+      await killAnyOpencodeServeInContainer(engine, info.id);
+      invalidateOpencodeServerCache(info.id);
+      killed.push(c.name);
+    } catch (err) {
+      console.warn(`soft-reap failed for ${c.name}:`, (err as Error).message);
+    }
+  }
+  return killed;
+}
+
 /** Stops a sandbox container. Idempotent. */
 export async function stopSandbox(handle: SandboxHandle): Promise<void> {
   try {

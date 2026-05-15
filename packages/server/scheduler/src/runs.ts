@@ -21,6 +21,7 @@ import {
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,
+  softReapIdleDaemons,
   cancelRun as runtimeCancelRun,
   estimateMessagesTokens,
   listModels,
@@ -1004,6 +1005,38 @@ export function createRunManager(opts: RunManagerOptions) {
     timer.unref();
     return timer;
   }
+
+  /**
+   * Soft-tier idle sweep: kill the opencode-serve daemon inside
+   * sandbox containers whose workspace has been quiet for
+   * `softIdleMs` (default 10 min), but keep the container running.
+   * Saves ~400 MB of warm-daemon RSS per sandbox; the next message
+   * pays only the ~2-5 s daemon respawn cost, not a full container
+   * cold-start.
+   *
+   * Distinct from `sweepIdleSandboxes`: that one nukes the container
+   * after a longer quiet window (default 30 min) and is the
+   * scale-back-to-baseline mechanism.
+   */
+  async function sweepIdleDaemons(
+    softIdleMs: number = parseInt(
+      process.env.DESK_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
+      10,
+    ),
+  ): Promise<string[]> {
+    const active = await getActiveWorkspaceIds(softIdleMs);
+    return softReapIdleDaemons(active, softIdleMs);
+  }
+
+  function startSoftIdleDaemonSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      void sweepIdleDaemons().catch((err) => {
+        console.warn("soft daemon sweep failed:", err);
+      });
+    }, intervalMs);
+    timer.unref();
+    return timer;
+  }
   // Note: an earlier draft of this file shipped a stale-run watchdog that
   // cancelled any `state='running'` row whose `started_at` was older than
   // 30 minutes. That was the wrong shape of fix — a single task should be
@@ -1394,6 +1427,8 @@ export function createRunManager(opts: RunManagerOptions) {
     startPolling,
     sweepIdleSandboxes,
     startIdleSweeper,
+    sweepIdleDaemons,
+    startSoftIdleDaemonSweeper,
     getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,

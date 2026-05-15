@@ -7,7 +7,7 @@ import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
 import { projectMounts, teardownMounts } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
-import { restartOpencodeServer, invalidateOpencodeServerCache } from "./opencodeServer.js";
+import { restartOpencodeServer, invalidateOpencodeServerCache, ensureContainerXvfb } from "./opencodeServer.js";
 import { detectEngine } from "./engine.js";
 import { sandboxUser } from "./docker.js";
 import { SANDBOX_HOME } from "./mounts.js";
@@ -116,6 +116,22 @@ export async function execRun(
   const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
     enablePlaywright: chatNeedsBrowser(opts.agent.goal),
   });
+  // Browser-goal chats need Xvfb; chat-goal chats don't, and Xvfb is
+  // expensive (~68 MB resident). We start it lazily here whenever
+  // playwright is being enabled — idempotent, so a no-op when it's
+  // already up. Order matters: Xvfb must exist *before* the daemon
+  // spawns its playwright MCP child, otherwise firefox launches and
+  // fails to connect to the display.
+  if (process.env.DESK_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
+    try {
+      const engine = await detectEngine();
+      await ensureContainerXvfb(engine, handle.containerId).catch(() => {});
+    } catch {
+      // best-effort; playwright will fail loudly if it ends up needing
+      // a display that never came up.
+    }
+  }
+
   // Skip the daemon-restart side-effect under the fake driver — there's
   // no real container behind `handle.containerId`, so engine.inspect /
   // engine.exec would fail and emit an unhandled rejection during test

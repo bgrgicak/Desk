@@ -243,15 +243,21 @@ function createRealDriver(): SandboxDriver {
 
       const user = await sandboxUser(engine);
 
-      // Provider keys + extras + per-run sandbox auth all live in the
-      // daemon's env. A change in any of these (e.g. a refreshed
+      // Provider keys + managed-connection env live in the daemon's
+      // process env. A change in any of these (e.g. a refreshed
       // OPENCODE_API_KEY) restarts the daemon — `ensureOpencodeServer`
       // diffs the env digest and rebuilds on mismatch.
+      //
+      // Per-run vars (DESK_SANDBOX_TOKEN, DESK_API_URL) are deliberately
+      // NOT in the daemon's env: with one daemon per workspace shared
+      // across chats, these change every turn and would trigger a
+      // daemon restart per run — which double-spawns under concurrent
+      // load and crashes with "port 9105 in use". Tools that need them
+      // get them from the workspace-scoped sandbox auth (a follow-up
+      // when in-sandbox CLI flows require per-run identity).
       const daemonEnv: Record<string, string> = {
         ...(opts.providerKeys ?? {}),
         ...(opts.extraEnv ?? {}),
-        ...(opts.sandboxToken ? { DESK_SANDBOX_TOKEN: opts.sandboxToken } : {}),
-        ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
         ...buildManagedConnectionEnv(opts.providerKeys, opts.extraEnv),
       };
 
