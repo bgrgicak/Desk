@@ -114,44 +114,81 @@ async function withContainerLock<T>(
  * being returned — this is how provider-key rotation reaches a warm
  * daemon.
  */
+/**
+ * Hard ceiling for the entire ensure-or-start flow. waitForReady
+ * already bounds the daemon HTTP probe (15s). This outer ceiling
+ * guards every other step — `engine.exec` to kill stragglers, the
+ * `existing.promise` await of a prior in-flight call, the
+ * `isInstanceAlive` health-check probe — any of which could in
+ * principle hang on a wedged Docker socket and block the per-
+ * container lock forever, freezing every chat in the workspace until
+ * the desk-server is restarted. 30s is generous: a healthy spawn
+ * completes in ~1-2s, the worst-case clean spawn (port stragglers +
+ * waitForReady backoff) is ~17s.
+ */
+const ENSURE_OPENCODE_SERVER_TIMEOUT_MS = 30_000;
+
 export async function ensureOpencodeServer(
   engine: Engine,
   opts: StartOpencodeServerOpts,
 ): Promise<OpencodeServerInstance> {
   return withContainerLock(opts.containerId, async () => {
-    const wantedDigest = digestEnv(opts.env);
-    const existing = cache.get(opts.containerId);
-    if (existing) {
-      const live = await existing.promise.catch(() => null);
-      if (live && live.envDigest === wantedDigest) {
-        // Health-check the cached daemon. The container could have
-        // been stopped/recreated outside our awareness (test teardown,
-        // a `stopSandbox` call, idle-sweep) leaving us pointing at a
-        // port that no longer answers. Cheap probe — ~ms when alive,
-        // fails fast when not.
-        if (await isInstanceAlive(live)) return live;
+    const body = (async () => {
+      const wantedDigest = digestEnv(opts.env);
+      const existing = cache.get(opts.containerId);
+      if (existing) {
+        const live = await existing.promise.catch(() => null);
+        if (live && live.envDigest === wantedDigest) {
+          // Health-check the cached daemon. The container could have
+          // been stopped/recreated outside our awareness (test teardown,
+          // a `stopSandbox` call, idle-sweep) leaving us pointing at a
+          // port that no longer answers. Cheap probe — ~ms when alive,
+          // fails fast when not.
+          if (await isInstanceAlive(live)) return live;
+        }
+        // Env changed, last start failed, or cached instance is dead —
+        // fall through to the start path below.
+        if (live) await stopOpencodeServerInternal(engine, opts.containerId, live).catch(() => {});
+        cache.delete(opts.containerId);
       }
-      // Env changed, last start failed, or cached instance is dead —
-      // fall through to the start path below.
-      if (live) await stopOpencodeServerInternal(engine, opts.containerId, live).catch(() => {});
-      cache.delete(opts.containerId);
-    }
 
-    const entry: ServerCacheEntry = {
-      instance: null,
-      promise: startOpencodeServer(engine, opts, wantedDigest).then(
-        (instance) => {
-          entry.instance = instance;
-          return instance;
-        },
-        (err) => {
-          cache.delete(opts.containerId);
-          throw err;
-        },
-      ),
-    };
-    cache.set(opts.containerId, entry);
-    return entry.promise;
+      const entry: ServerCacheEntry = {
+        instance: null,
+        promise: startOpencodeServer(engine, opts, wantedDigest).then(
+          (instance) => {
+            entry.instance = instance;
+            return instance;
+          },
+          (err) => {
+            cache.delete(opts.containerId);
+            throw err;
+          },
+        ),
+      };
+      cache.set(opts.containerId, entry);
+      return entry.promise;
+    })();
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, rej) => {
+      timer = setTimeout(
+        () => rej(new Error(`opencode-serve: ensure timed out after ${ENSURE_OPENCODE_SERVER_TIMEOUT_MS}ms (container ${opts.containerId})`)),
+        ENSURE_OPENCODE_SERVER_TIMEOUT_MS,
+      );
+    });
+
+    try {
+      return await Promise.race([body, timeout]);
+    } catch (err) {
+      // Drop the cache entry on timeout so the next caller doesn't
+      // re-await the same wedged promise. The lock holder (this
+      // function) returns/rejects, so its `withContainerLock` tail
+      // resolves and the next caller can enter.
+      cache.delete(opts.containerId);
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   });
 }
 

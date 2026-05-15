@@ -72,6 +72,18 @@ interface SummaryModelTokenLimits {
   outputLimit?: number;
 }
 
+export function resolveOpenAiBillingSource(
+  model: string,
+  providerKeys: Record<string, string>,
+): { runtimeModel: string; providerKeys: Record<string, string> } {
+  if (!model.startsWith("codex/")) return { runtimeModel: model, providerKeys };
+  const { OPENAI_API_KEY: _openAiApiKey, ...withoutOpenAiApiKey } = providerKeys;
+  return {
+    runtimeModel: `openai/${model.slice("codex/".length)}`,
+    providerKeys: withoutOpenAiApiKey,
+  };
+}
+
 export interface FireMessageOptions {
   /** Manual task fires create a run now without consuming the task's schedule. */
   manual?: boolean;
@@ -690,9 +702,20 @@ export function createRunManager(opts: RunManagerOptions) {
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
         let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
+        // A `codex/<name>` model id is Desk-only — it tells the run path to
+        // route through OpenCode's `openai/<name>` model using the Codex
+        // subscription auth blob (OPENCODE_AUTH_CONTENT in extraEnv) instead
+        // of OPENAI_API_KEY. Strip the cloud key from providerKeys for the
+        // runtime call so OpenCode picks the OAuth path; the display id on
+        // the child message stays as codex/* so the UI shows the right source.
+        const billing = resolveOpenAiBillingSource(agentFileInput.model, providerKeys);
+        const runtimeAgentInput: AgentFileInput =
+          billing.runtimeModel === agentFileInput.model
+            ? agentFileInput
+            : { ...agentFileInput, model: billing.runtimeModel };
         while (true) {
           if (opts.execRunFn) {
-            result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput, attachments });
+            result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput: runtimeAgentInput, attachments });
           } else {
             const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
               ? { containerId: "fake-sandbox", workspaceId }
@@ -700,7 +723,7 @@ export function createRunManager(opts: RunManagerOptions) {
                   workspaceId,
                   workspaceSlug,
                   home,
-                  providerKeys,
+                  billing.providerKeys,
                   mountPlan,
                   extraEnv,
                   workspaceKind,
@@ -713,9 +736,9 @@ export function createRunManager(opts: RunManagerOptions) {
               workspaceSlug,
               workspaceKind,
               chatId: msg.chatId,
-              agent: agentFileInput,
+              agent: runtimeAgentInput,
               attachments,
-              providerKeys,
+              providerKeys: billing.providerKeys,
               extraEnv,
               opencodeSessionId,
               onLog: onLogWithStderrCapture,

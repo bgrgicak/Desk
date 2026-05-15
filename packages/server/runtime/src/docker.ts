@@ -604,6 +604,23 @@ export function providerKeyExecEnv(
 }
 
 /**
+ * Names of every persisted connection env var the user can manage in
+ * Settings, plus the managed-connection aliases that mirror them. Daemon
+ * env builders prepend these as empty strings so a `docker exec -e KEY=`
+ * launching opencode-serve overrides anything the container inherited at
+ * create time. Without this, a key the user disabled in Settings stays
+ * visible to the warm daemon via the container's birth env and opencode
+ * exposes models for the "disabled" provider.
+ */
+export function connectionEnvNames(): string[] {
+  const names = new Set<string>(CONNECTION_ENV_VARS);
+  for (const definition of managedConnectionDefinitions()) {
+    for (const alias of definition.envAliases ?? []) names.add(alias);
+  }
+  return [...names];
+}
+
+/**
  * Reports running sandbox containers whose bind sources don't begin with the
  * supplied DESK_HOME tree. Returned for boot-time logging so a regression in
  * the home-resolution path (which once silently dropped uploads into a

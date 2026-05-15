@@ -407,6 +407,47 @@ describe("chats queries", () => {
     expect(chat!.awaitingUser).toBe(true);
   });
 
+  it("clearOpencodeSessionsForAgent: nulls every chat using the agent and reports them", async () => {
+    const userIdLocal = generateId("user");
+    await users.insert(pool, { id: userIdLocal, username: "clearagentowner", passwordHash: "h", email: "clear@example.com" });
+    const aId = generateId("agent");
+    await agents.insert(pool, { id: aId, userId: userIdLocal, name: "ClearAgent", model: "anthropic/x" });
+    const wsLocal = generateId("workspace");
+    await workspaces.insert(pool, { id: wsLocal, userId: userIdLocal, name: "ClearWS", path: `clearws-${wsLocal.slice(-6)}` });
+    await pool.query(
+      `INSERT INTO workspace_agents (workspace_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      [wsLocal, aId],
+    );
+
+    const c1 = generateId("chat");
+    const c2 = generateId("chat");
+    const c3 = generateId("chat");
+    await chats.insert(pool, { id: c1, workspaceId: wsLocal, agentId: aId, title: "c1" });
+    await chats.insert(pool, { id: c2, workspaceId: wsLocal, agentId: aId, title: "c2" });
+    await chats.insert(pool, { id: c3, workspaceId: wsLocal, agentId: aId, title: "c3" });
+    await chats.setOpencodeSessionId(pool, c1, "ses_first");
+    await chats.setOpencodeSessionId(pool, c2, "ses_second");
+    // c3 left null on purpose — the helper must skip it.
+
+    const cleared = await chats.clearOpencodeSessionsForAgent(pool, aId);
+    expect(cleared.map((r) => r.chatId).sort()).toEqual([c1, c2].sort());
+    expect(cleared.find((r) => r.chatId === c1)?.previousSessionId).toBe("ses_first");
+    expect(cleared.find((r) => r.chatId === c2)?.previousSessionId).toBe("ses_second");
+
+    expect(await chats.getOpencodeSessionId(pool, c1)).toBeNull();
+    expect(await chats.getOpencodeSessionId(pool, c2)).toBeNull();
+    expect(await chats.getOpencodeSessionId(pool, c3)).toBeNull();
+  });
+
+  it("clearOpencodeSessionsForAgent: returns empty array when nothing to clear", async () => {
+    const userIdLocal = generateId("user");
+    await users.insert(pool, { id: userIdLocal, username: "noopclear", passwordHash: "h", email: "noop@example.com" });
+    const aId = generateId("agent");
+    await agents.insert(pool, { id: aId, userId: userIdLocal, name: "NoopAgent" });
+    const cleared = await chats.clearOpencodeSessionsForAgent(pool, aId);
+    expect(cleared).toEqual([]);
+  });
+
   it("cascades delete when workspace is deleted", async () => {
     const userId2 = generateId("user");
     await users.insert(pool, { id: userId2, username: "cascadeuser", passwordHash: "h", email: "cascade@example.com" });

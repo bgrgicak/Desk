@@ -217,3 +217,35 @@ export async function setOpencodeSessionId(
     [sessionId, id],
   );
 }
+
+/**
+ * Clear the opencode-serve session id from every chat using a given agent.
+ * Used when the agent's model changes — the existing daemon session is
+ * bound to the prior model and won't honor the new one on subsequent
+ * turns. Forgetting the id makes the next turn create a fresh session
+ * with the current agent.model bound from the start.
+ *
+ * Returns the chat ids whose session was cleared so callers can
+ * best-effort delete them on the daemon side too.
+ */
+export async function clearOpencodeSessionsForAgent(
+  db: Pool,
+  agentId: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(
+    "SELECT id, opencode_session_id FROM chats WHERE agent_id = ? AND opencode_session_id IS NOT NULL",
+    [agentId],
+  );
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    await db.query(
+      "UPDATE chats SET opencode_session_id = NULL WHERE agent_id = ?",
+      [agentId],
+    );
+  }
+  return cleared;
+}

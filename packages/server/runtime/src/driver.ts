@@ -29,6 +29,7 @@
 
 import { SANDBOX_HOME } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
+import { connectionEnvNames } from "./docker.js";
 import { OpencodeClient, OpencodeServerError, isServerGoneError } from "./opencodeClient.js";
 import { translateOpencodeSseEvent } from "./opencodeEvents.js";
 import {
@@ -240,14 +241,17 @@ function createRealDriver(): SandboxDriver {
       const { detectEngine } = await import("./engine.js");
       const engine = await detectEngine();
 
-      const handle = await createOrReuse(
-        workspaceId,
-        opts.workspaceSlug,
-        opts.home,
-        opts.providerKeys,
-        undefined,
-        opts.extraEnv,
-      );
+      const acquireHandle = () =>
+        createOrReuse(
+          workspaceId,
+          opts.workspaceSlug,
+          opts.home,
+          opts.providerKeys,
+          undefined,
+          opts.extraEnv,
+        );
+
+      let handle = await acquireHandle();
 
       const user = await sandboxUser(engine);
 
@@ -264,14 +268,20 @@ function createRealDriver(): SandboxDriver {
       // env-digest stays the same across runs (no spurious daemon
       // restarts under concurrent load) while per-run token rotation is
       // preserved.
-      const daemonEnv: Record<string, string> = {
-        ...(opts.providerKeys ?? {}),
-        ...(opts.extraEnv ?? {}),
-        ...buildManagedConnectionEnv(opts.providerKeys, opts.extraEnv),
-        DESK_SANDBOX_TOKEN_PATH: SANDBOX_TOKEN_PATH,
-        ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
-      };
+      const daemonEnv = buildDaemonEnv({
+        providerKeys: opts.providerKeys,
+        extraEnv: opts.extraEnv,
+        apiUrl: opts.apiUrl,
+      });
 
+      // The container can disappear between createOrReuse and
+      // ensureOpencodeServer — the scheduler also calls createOrReuse
+      // upstream with a different mountPlan, so a drift recheck here
+      // can race with a reaper or another fire that just removed the
+      // container. When we hit "not found" / "is not running", drop
+      // the stale cache entry, re-acquire the container, and try once
+      // more before giving up. A single retry covers the race window
+      // without masking persistent failures (those still bail).
       let server: OpencodeServerInstance;
       try {
         server = await ensureOpencodeServer(engine, {
@@ -281,13 +291,35 @@ function createRealDriver(): SandboxDriver {
           env: daemonEnv,
         });
       } catch (err) {
-        await opts.onLog({
-          runId: opts.runId,
-          seq: 0,
-          kind: "stderr",
-          payload: `opencode-serve failed to start: ${(err as Error).message ?? String(err)}`,
-        });
-        return { exitCode: 1 };
+        const msg = (err as Error).message ?? String(err);
+        if (isContainerGoneError(msg)) {
+          invalidateOpencodeServerCache(handle.containerId);
+          handle = await acquireHandle();
+          try {
+            server = await ensureOpencodeServer(engine, {
+              containerId: handle.containerId,
+              cwd: SANDBOX_HOME,
+              user,
+              env: daemonEnv,
+            });
+          } catch (retryErr) {
+            await opts.onLog({
+              runId: opts.runId,
+              seq: 0,
+              kind: "stderr",
+              payload: `opencode-serve failed to start (after container re-acquire): ${(retryErr as Error).message ?? String(retryErr)}`,
+            });
+            return { exitCode: 1 };
+          }
+        } else {
+          await opts.onLog({
+            runId: opts.runId,
+            seq: 0,
+            kind: "stderr",
+            payload: `opencode-serve failed to start: ${msg}`,
+          });
+          return { exitCode: 1 };
+        }
       }
 
       const client = new OpencodeClient(server.url, server.password);
@@ -370,6 +402,66 @@ function createRealDriver(): SandboxDriver {
         attachments: opts.attachments,
       });
 
+      // opencode-serve 1.14.50 only broadcasts text/reasoning deltas
+      // over SSE. Tool calls, step-start, step-finish parts are
+      // written to its SQLite during the turn and only readable via
+      // `GET /session/:id/message`. To make tool cards appear as they
+      // happen rather than only after sendMessage returns, we poll
+      // listSessionMessages every ~500ms during the turn and emit any
+      // non-text part not yet seen. The same `partState` set is
+      // reused by the post-turn backstop loop so nothing double-emits.
+      const partState: PartEmissionState = new Map();
+      // Snapshot the existing assistant-message IDs so the polling
+      // loop can ignore prior turns that share this session. Cap the
+      // call at 3s — when the daemon is unresponsive (just spawned,
+      // mid-restart), an unbounded await here parks the entire run
+      // before sendMessage ever fires. An empty baseline only causes
+      // the polling loop to briefly re-emit prior parts, which is
+      // harmless (the next part-state-key check filters them).
+      const baselineMessageIds = new Set<string>();
+      try {
+        const messages = await Promise.race([
+          client.listSessionMessages(sessionId),
+          new Promise<unknown[]>((_, rej) =>
+            setTimeout(() => rej(new Error("baseline-timeout")), 3000),
+          ),
+        ]);
+        for (const m of messages) {
+          const info = (m as { info?: { id?: unknown; role?: unknown } }).info;
+          const id = info && (info as { id?: unknown }).id;
+          if (typeof id === "string") baselineMessageIds.add(id);
+        }
+      } catch {
+        // best-effort — empty baseline means we may briefly emit a
+        // prior turn's tool parts on the first poll, which is
+        // harmless (they're already in the chat log).
+      }
+
+      let pollingDone = false;
+      const pollInterval = 500;
+      const pollTask = (async () => {
+        while (!pollingDone) {
+          await new Promise((r) => setTimeout(r, pollInterval));
+          if (pollingDone) break;
+          try {
+            const messages = await client.listSessionMessages(sessionId);
+            for (const m of messages) {
+              if (!m || typeof m !== "object") continue;
+              const info = (m as { info?: { id?: unknown; role?: unknown } }).info;
+              const id = info && typeof info === "object" ? (info as { id?: unknown }).id : undefined;
+              const role = info && typeof info === "object" ? (info as { role?: unknown }).role : undefined;
+              if (typeof id !== "string" || baselineMessageIds.has(id)) continue;
+              if (role !== "assistant") continue;
+              for (const line of synthesizeNonTextEvents(m, sessionId, partState)) {
+                emitLog("event", line);
+              }
+            }
+          } catch {
+            // Transient daemon hiccup; next tick will retry.
+          }
+        }
+      })();
+
       try {
         const response = (await client.sendMessage(sessionId, {
           providerID,
@@ -377,16 +469,10 @@ function createRealDriver(): SandboxDriver {
           parts,
           ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
         })) as { info?: { id?: string } };
-        // The SSE stream in opencode-serve 1.14.50+ only emits text
-        // delta events — tool calls, step boundaries, and reasoning
-        // parts are NOT broadcast incrementally. Worse, the
-        // `sendMessage` HTTP response resolves *before* tool parts
-        // are committed to the assistant message, so its `parts`
-        // array misses them too. The full part list (including tool
-        // calls + their outputs) becomes available via `GET
-        // /session/:id/message` once the turn is done. Read from
-        // there and synthesize non-text events so the UI's tool-card
-        // / step-marker renderers have something to draw.
+        // After sendMessage settles, do one final synchronous pass to
+        // capture parts the daemon committed in the last poll
+        // interval. `partState` keeps it from re-emitting anything
+        // the live loop already surfaced.
         const finalAssistantInfo = response.info as { id?: string; parentID?: string } | undefined;
         const finalAssistantId = finalAssistantInfo?.id;
         const userMessageId = finalAssistantInfo?.parentID;
@@ -408,7 +494,7 @@ function createRealDriver(): SandboxDriver {
               userMessageId,
               finalAssistantId,
             )) {
-              for (const line of synthesizeNonTextEvents(msg, sessionId)) {
+              for (const line of synthesizeNonTextEvents(msg, sessionId, partState)) {
                 emitLog("event", line);
               }
             }
@@ -464,6 +550,11 @@ function createRealDriver(): SandboxDriver {
         await Promise.all(pendingLogs);
         return { exitCode: 1, opencodeSessionId: sessionId };
       } finally {
+        // Stop the live-poll loop in every exit path (success, error,
+        // abort) so it doesn't keep running and emit phantom events
+        // for the next turn.
+        pollingDone = true;
+        await pollTask;
         activeRuns.delete(opts.runId);
         unsubscribe();
       }
@@ -496,26 +587,126 @@ function createRealDriver(): SandboxDriver {
  * `{type, part, sessionID}` with the part.type hyphens normalized to
  * underscores so consumers see `step_start` / `step_finish` etc.
  */
+/**
+ * Per-part state tracked across polling iterations so we can emit
+ * meaningful updates without double-rendering. Replaces the older
+ * Set-of-ids dedup so we can emit reasoning-text deltas (the daemon
+ * doesn't broadcast them over SSE) and tool state transitions while
+ * still collapsing static parts to a single emission.
+ */
+export type PartEmissionState = Map<
+  string,
+  { reasoningTextEmitted?: number; toolStatus?: string; emitted?: boolean }
+>;
+
 export function* synthesizeNonTextEvents(
   messageOrEnvelope: unknown,
   sessionID: string,
+  state?: PartEmissionState,
 ): Iterable<string> {
   if (!messageOrEnvelope || typeof messageOrEnvelope !== "object") return;
   // Accept either the raw assistant-message envelope `{info, parts}`
   // or just the inner message shape with a top-level `parts`.
-  const env = messageOrEnvelope as { parts?: unknown };
+  const env = messageOrEnvelope as { parts?: unknown; info?: unknown };
   if (!Array.isArray(env.parts)) return;
+  // Pull the providerID/modelID/agent/mode the daemon actually used for
+  // this assistant message. Surfacing it on every synthesized event
+  // makes "what model produced this step?" answerable from the chat
+  // log alone — invaluable when a session was bound to one model and
+  // an upstream switch didn't propagate.
+  const meta = extractAssistantInfoMeta(env.info);
   for (const partRaw of env.parts) {
     if (!partRaw || typeof partRaw !== "object") continue;
-    const part = partRaw as { type?: unknown };
+    const part = partRaw as { type?: unknown; id?: unknown; text?: unknown; state?: unknown };
     if (typeof part.type !== "string") continue;
     // Text parts already streamed via SSE deltas; re-emitting them
     // would duplicate the message body when `deriveTextFromLog`
     // concatenates `text` events.
     if (part.type === "text") continue;
+
+    const partId = typeof part.id === "string" ? part.id : "";
+    const prior = state && partId ? state.get(partId) ?? {} : {};
+
+    // Reasoning: opencode-serve doesn't reliably broadcast reasoning
+    // deltas over SSE for multi-step turns, so the polling loop is
+    // the only path that sees reasoning growing. Mimic the SSE
+    // delta shape — emit just the suffix added since the last
+    // observation — so the UI streams reasoning text the same way
+    // it streams the final answer.
+    if (part.type === "reasoning") {
+      const fullText = typeof part.text === "string" ? part.text : "";
+      const previouslyEmitted = prior.reasoningTextEmitted ?? 0;
+      if (fullText.length <= previouslyEmitted) {
+        // Same text we already emitted (or shorter — daemon shouldn't
+        // ever shorten). Nothing to do.
+        if (state && partId) state.set(partId, prior);
+        continue;
+      }
+      const delta = fullText.slice(previouslyEmitted);
+      const deltaPart: Record<string, unknown> = {
+        type: "reasoning",
+        text: delta,
+        id: partId,
+      };
+      const messageID = (part as { messageID?: unknown }).messageID;
+      if (typeof messageID === "string") deltaPart.messageID = messageID;
+      const event: Record<string, unknown> = { type: "reasoning", part: deltaPart, sessionID };
+      if (meta) event.model = meta;
+      if (state && partId) state.set(partId, { ...prior, reasoningTextEmitted: fullText.length });
+      yield JSON.stringify(event);
+      continue;
+    }
+
+    // Tool parts mutate as the call moves through pending → running
+    // → completed/error. Emit on every status transition so the UI
+    // sees the tool card update; collapse repeated observations of
+    // the same status.
+    if (part.type === "tool") {
+      const status = (part.state as { status?: unknown } | undefined)?.status;
+      const statusStr = typeof status === "string" ? status : "";
+      if (state && partId && prior.toolStatus === statusStr) continue;
+      const event: Record<string, unknown> = { type: "tool", part, sessionID };
+      if (meta) event.model = meta;
+      if (state && partId) state.set(partId, { ...prior, toolStatus: statusStr });
+      yield JSON.stringify(event);
+      continue;
+    }
+
+    // Static parts (step-start, step-finish, …) — emit exactly once.
+    if (state && partId) {
+      if (prior.emitted) continue;
+      state.set(partId, { ...prior, emitted: true });
+    }
     const runFormatType = part.type.replace(/-/g, "_");
-    yield JSON.stringify({ type: runFormatType, part, sessionID });
+    const event: Record<string, unknown> = { type: runFormatType, part, sessionID };
+    if (meta) event.model = meta;
+    yield JSON.stringify(event);
   }
+}
+
+/**
+ * Extract the `{providerID, modelID, agent?, mode?}` debug summary from an
+ * assistant-message `info` envelope returned by opencode-serve's
+ * `GET /session/:id/message`. Returns null when the envelope is missing
+ * the fields — better to omit the model annotation than to write
+ * misleading partial data.
+ */
+function extractAssistantInfoMeta(info: unknown): {
+  providerID: string;
+  modelID: string;
+  agent?: string;
+  mode?: string;
+} | null {
+  if (!info || typeof info !== "object") return null;
+  const i = info as { providerID?: unknown; modelID?: unknown; agent?: unknown; mode?: unknown };
+  if (typeof i.providerID !== "string" || typeof i.modelID !== "string") return null;
+  const out: { providerID: string; modelID: string; agent?: string; mode?: string } = {
+    providerID: i.providerID,
+    modelID: i.modelID,
+  };
+  if (typeof i.agent === "string") out.agent = i.agent;
+  if (typeof i.mode === "string") out.mode = i.mode;
+  return out;
 }
 
 /**
@@ -632,6 +823,24 @@ async function resolveSessionId(
 const SANDBOX_TOKEN_PATH = "/tmp/desk-sandbox-token";
 
 /**
+ * Match the `ensureOpencodeServer` failures that mean "this attempt
+ * needs a fresh container, not a debug session" —
+ *
+ * - Container vanished between createOrReuse and the spawn (reaper,
+ *   drift-recreate, scheduler's parallel createOrReuse race).
+ * - The ensure flow timed out (Docker socket wedged, daemon spawn
+ *   stuck somewhere we can't bound). The upstream cache is already
+ *   evicted; re-acquiring the container and retrying gives the next
+ *   spawn a clean shot.
+ */
+export function isContainerGoneError(message: string): boolean {
+  return (
+    /container .* (not found|is not running)/i.test(message) ||
+    /ensure timed out after/i.test(message)
+  );
+}
+
+/**
  * Read the container's cgroup `memory.events.oom_kill` counter. A
  * non-zero value means the kernel SIGKILL'd at least one process for
  * over-memory. We use this after a daemon-gone error to distinguish
@@ -694,36 +903,56 @@ async function writeSandboxTokenFile(
 }
 
 /**
- * Build managed-connection env entries (today: GitHub askpass token) that
- * used to be set up by an in-container shell prefix before each
- * `opencode run` invocation. With a long-lived daemon, those vars become
- * part of the daemon's env. The shape is unchanged from
- * `managedConnectionDefinitions().sandboxSetup` callers — we just pre-
- * format them as env entries instead of shell snippets.
+ * Mirror managed-connection aliases from their canonical envKey so the
+ * daemon sees both names with the same value. Matches the per-exec
+ * `providerKeyExecEnv` semantics: e.g. if Settings stores `GITHUB_TOKEN`,
+ * `GH_TOKEN` is emitted alongside with the same value so opencode's git
+ * tool calls authenticate regardless of which name they check.
  */
-function buildManagedConnectionEnv(
+function buildManagedConnectionAliases(
   providerKeys?: Record<string, string>,
-  extraEnv?: Record<string, string>,
 ): Record<string, string> {
-  const source: Record<string, string | undefined> = {
-    ...(providerKeys ?? {}),
-    ...(extraEnv ?? {}),
-  };
   const env: Record<string, string> = {};
-  // The previous `buildSandboxAuthSetup` walked
-  // `managedConnectionDefinitions()` looking for `sandboxSetup` entries.
-  // The only entry today (`github-askpass`) needs `GITHUB_TOKEN`/`GH_TOKEN`
-  // visible to opencode so its tool calls can authenticate with git. Both
-  // already flow through `providerKeyExecEnv` today; surface them here so
-  // a future managed connection that introduces a new auth-style env
-  // gets picked up the same way.
+  if (!providerKeys) return env;
   for (const definition of managedConnectionDefinitions()) {
-    if (!definition.sandboxSetup) continue;
-    const names = [definition.envKey, ...(definition.envAliases ?? [])];
-    for (const name of names) {
-      const v = source[name];
-      if (v && v.length > 0) env[name] = v;
+    const value = providerKeys[definition.envKey];
+    if (!value || value.length === 0) continue;
+    for (const alias of definition.envAliases ?? []) {
+      env[alias] = value;
     }
   }
   return env;
+}
+
+/**
+ * Assembles the opencode-serve daemon env. Disabled provider/connection
+ * vars are emitted as empty strings, not omitted: the daemon is launched
+ * via `docker exec` into a warm container whose create-time env still
+ * holds whatever provider keys were active when it was first started.
+ * An explicit `-e KEY=` from `docker exec` overrides that inherited
+ * value for the daemon's process, so toggling a provider off in Settings
+ * really hides it from opencode instead of leaking through the container
+ * birth env. The blanks also feed into the env digest, so a toggle
+ * invalidates the cached daemon and forces a fresh start.
+ *
+ * Exported for direct unit testing — the integration path is exercised
+ * indirectly through `execRun`, but the disabled-key override semantics
+ * are easier to pin with a focused test on this helper.
+ */
+export function buildDaemonEnv(opts: {
+  providerKeys?: Record<string, string>;
+  extraEnv?: Record<string, string>;
+  apiUrl?: string;
+}): Record<string, string> {
+  const blanks: Record<string, string> = {};
+  for (const name of connectionEnvNames()) blanks[name] = "";
+
+  return {
+    ...blanks,
+    ...(opts.providerKeys ?? {}),
+    ...(opts.extraEnv ?? {}),
+    ...buildManagedConnectionAliases(opts.providerKeys),
+    DESK_SANDBOX_TOKEN_PATH: SANDBOX_TOKEN_PATH,
+    ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
+  };
 }
