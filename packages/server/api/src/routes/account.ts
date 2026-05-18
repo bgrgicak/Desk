@@ -406,6 +406,50 @@ export async function setProviders(
   return getProviders(pool, vault, userId);
 }
 
+/**
+ * Returns the audit log entries for provider-key reads, writes and
+ * deletes for the calling user, newest first. Logging is performed by
+ * `logKeyAccess` from `setProviders` (user-initiated) and
+ * `fireMessage` (sandbox-initiated). This is the read surface so the
+ * SPA can show a "your AI keys were read at …" panel.
+ *
+ * Bound to `GET /me/key-access-log`, optional `?limit=` (1–500,
+ * default 100). Returns ISO timestamps so the client doesn't need to
+ * know the DB column shape.
+ */
+export async function getKeyAccessLog(
+  pool: Pool,
+  userId: string,
+  rawLimit?: string,
+): Promise<{
+  entries: Array<{
+    id: string;
+    action: "read" | "write" | "delete";
+    providers: string[];
+    reason: string | null;
+    createdAt: string;
+  }>;
+}> {
+  let limit = 100;
+  if (rawLimit !== undefined) {
+    const parsed = Number.parseInt(rawLimit, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 500) {
+      throw new ValidationError("limit must be an integer between 1 and 500");
+    }
+    limit = parsed;
+  }
+  const rows = await queries.providerKeyAccessLog.getKeyAccessLog(pool, userId, limit);
+  return {
+    entries: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      providers: r.providers,
+      reason: r.reason,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
+}
+
 export async function getProvidersMeta(
   pool: Pool,
   userId: string,

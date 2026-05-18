@@ -269,6 +269,88 @@
         }
       }
     },
+    "/me/key-access-log": {
+      "get": {
+        "summary": "List provider-key audit log entries for the current user",
+        "description": "Returns the audit log for every read, write and delete touching the user's provider keys (AI provider API keys and connector tokens like GITHUB_TOKEN). Entries are recorded by the server, never carry the key value itself, and are scoped to the calling user. Useful as the data source for a 'recent key access' panel in account settings.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Number of entries to return, newest first. 1–500, default 100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit log entries newest-first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "read",
+                              "write",
+                              "delete"
+                            ]
+                          },
+                          "providers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "action",
+                          "providers",
+                          "reason",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "entries"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit"
+          }
+        }
+      }
+    },
     "/me/connections": {
       "get": {
         "summary": "List connector connections owned by the current user",

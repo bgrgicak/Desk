@@ -1282,6 +1282,11 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/me/key-access-log" && method === "GET") {
+      const result = await accountRoutes.getKeyAccessLog(pool, userId, query.get("limit") ?? undefined);
+      sendJson(res, 200, result);
+      return;
+    }
     if (path === "/me/providers/meta" && method === "PUT") {
       const body = await parseBody(req) as { meta: Record<string, { name?: string; enabled?: boolean } | null> };
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
