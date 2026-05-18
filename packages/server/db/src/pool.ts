@@ -28,6 +28,34 @@ interface QueryResult<T> {
   rowCount: number;
 }
 
+/**
+ * Threshold (ms) above which a query is logged as slow. Re-read per
+ * call so tests can override mid-run via process.env. Zero or NaN
+ * disables logging entirely; the default is 50ms which surfaces the
+ * tail of queries worth a closer look without flooding normal traffic.
+ *
+ * Logged shape: a single line with the elapsed time, row count and
+ * the (sanitized) SQL — the SQL is the prepared statement text, with
+ * normalised whitespace, never the bind values, so user content never
+ * leaks into the log. PII redaction is the job of the values; the SQL
+ * itself is fixed text.
+ */
+function slowQueryThresholdMs(): number {
+  const raw = process.env.DESK_SLOW_QUERY_MS;
+  if (raw === undefined) return 50;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function logSlowQuery(elapsedMs: number, sql: string, rowCount: number): void {
+  // Single-line, normalised whitespace so tail-friendly logs stay
+  // grep-able. Truncated at 240 chars to avoid blowing up the log line
+  // for unusually long generated SQL (search index rebuilds, etc.).
+  const compact = sql.replace(/\s+/g, " ").trim().slice(0, 240);
+  // eslint-disable-next-line no-console
+  console.warn(`slow query: ${elapsedMs}ms rows=${rowCount} sql=${compact}`);
+}
+
 function execQuery<T>(
   db: DatabaseSync,
   sql: string,
@@ -37,12 +65,21 @@ function execQuery<T>(
   const stmt = db.prepare(sql);
   const isReturning = /\bRETURNING\b/i.test(sql);
   const isSelect = /^\s*(WITH\b[\s\S]*?\bSELECT\b|SELECT\b)/i.test(sql);
+  const threshold = slowQueryThresholdMs();
+  const start = threshold > 0 ? performance.now() : 0;
+  let result: QueryResult<T>;
   if (isSelect || isReturning) {
     const rows = stmt.all(...bound) as T[];
-    return { rows, rowCount: rows.length };
+    result = { rows, rowCount: rows.length };
+  } else {
+    const info = stmt.run(...bound);
+    result = { rows: [] as T[], rowCount: Number(info.changes) };
   }
-  const info = stmt.run(...bound);
-  return { rows: [] as T[], rowCount: Number(info.changes) };
+  if (threshold > 0) {
+    const elapsed = Math.round(performance.now() - start);
+    if (elapsed >= threshold) logSlowQuery(elapsed, sql, result.rowCount);
+  }
+  return result;
 }
 
 /**
