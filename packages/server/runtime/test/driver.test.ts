@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildMessageParts, parseModelSpec, toSandboxPath } from "../src/driver.js";
+import {
+  buildMessageParts,
+  parseModelSpec,
+  synthesizeNonTextEvents,
+  toSandboxPath,
+} from "../src/driver.js";
 import { SANDBOX_HOME } from "../src/mounts.js";
 
 describe("toSandboxPath", () => {
@@ -53,6 +58,74 @@ describe("parseModelSpec", () => {
       providerID: "openai",
       modelID: "gpt-5.5",
     });
+  });
+});
+
+describe("synthesizeNonTextEvents", () => {
+  // Locks in the contract that broke in PR #111: opencode-serve 1.14.50
+  // doesn't broadcast tool/step/reasoning parts over SSE — they only
+  // become visible via `GET /session/:id/message` once the turn ends.
+  // The runtime fetches that list and synthesizes non-text events so
+  // the UI's tool-card / step-marker renderers have something to draw.
+  const SES = "ses_test";
+  const TURN = {
+    parts: [
+      { type: "step-start", id: "prt_s1", messageID: "msg_a" },
+      {
+        type: "reasoning",
+        id: "prt_r1",
+        text: "thinking...",
+        messageID: "msg_a",
+      },
+      {
+        type: "tool",
+        id: "prt_t1",
+        tool: "bash",
+        state: { status: "completed", title: "pwd" },
+        messageID: "msg_a",
+      },
+      { type: "text", id: "prt_x1", text: "the result is X", messageID: "msg_a" },
+      { type: "step-finish", id: "prt_e1", reason: "stop", messageID: "msg_a" },
+    ],
+  };
+
+  it("emits an event for every non-text part with run-format type names (hyphens -> underscores)", () => {
+    const lines = [...synthesizeNonTextEvents(TURN, SES)];
+    const events = lines.map((l) => JSON.parse(l));
+    expect(events.map((e) => e.type)).toEqual([
+      "step_start",
+      "reasoning",
+      "tool",
+      // text part dropped — SSE already streamed it as deltas
+      "step_finish",
+    ]);
+    // Each event carries the daemon-side `part` payload so downstream
+    // renderers (ToolCallChip etc.) can read `part.tool` / `part.state`.
+    const toolEvent = events.find((e) => e.type === "tool");
+    expect(toolEvent.sessionID).toBe(SES);
+    expect(toolEvent.part).toEqual({
+      type: "tool",
+      id: "prt_t1",
+      tool: "bash",
+      state: { status: "completed", title: "pwd" },
+      messageID: "msg_a",
+    });
+  });
+
+  it("returns nothing when the envelope has no parts (defensive guard)", () => {
+    expect([...synthesizeNonTextEvents({}, SES)]).toEqual([]);
+    expect([...synthesizeNonTextEvents({ parts: [] }, SES)]).toEqual([]);
+    expect([...synthesizeNonTextEvents(null, SES)]).toEqual([]);
+  });
+
+  it("skips parts whose `type` field is missing or non-string", () => {
+    const malformed = { parts: [{ id: "x" }, { type: 7 }, { type: "step-start" }] };
+    const events = [...synthesizeNonTextEvents(malformed, SES)].map((l) =>
+      JSON.parse(l),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({ type: "step_start" }),
+    ]);
   });
 });
 
