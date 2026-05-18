@@ -89,6 +89,7 @@ export function getClientIp(req: IncomingMessage): string {
 // ── Default buckets used by auth + vault routes ──────────────────────
 
 defineRateLimit("auth.login", { windowMs: 60_000, max: 10 });        // 10/min/IP
+defineRateLimit("auth.signup", { windowMs: 60_000, max: 5 });        // 5/min/IP — abuse cap when DESK_ENABLE_SIGNUP is on
 defineRateLimit("vault.unlock.ip", { windowMs: 60_000, max: 10 });   // 10/min/IP
 defineRateLimit("vault.unlock.user", { windowMs: 300_000, max: 20 }); // 20/5min/user
 defineRateLimit("me.password", { windowMs: 300_000, max: 10 });      // 10/5min/user

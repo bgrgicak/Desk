@@ -28,8 +28,8 @@ export async function recordClientTimezone(
  * — we use exact comparison for "/" since a prefix match on "/" would match
  * every URL).
  */
-const PUBLIC_EXACT = new Set(["/"]);
-const PUBLIC_PREFIXES = ["/auth/login", "/auth/auto-login", "/openapi.json"];
+const PUBLIC_EXACT = new Set(["/", "/auth/signup-status"]);
+const PUBLIC_PREFIXES = ["/auth/login", "/auth/auto-login", "/auth/signup", "/openapi.json"];
 
 // Routes under /internal/* use their own loopback + shared-secret auth
 // (see auth/internal.ts). The user-session middleware skips them so the

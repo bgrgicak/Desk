@@ -1,9 +1,10 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@agent-desk/db";
+import { hashPassword, type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { UnauthorizedError } from "@agent-desk/shared";
+import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@agent-desk/shared";
 import { issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
+import { createHub } from "./workspaces.js";
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -50,6 +51,104 @@ export async function handleAutoLogin(
   if (!userId) throw new UnauthorizedError("No user is available for auto-login");
 
   const token = await issueSession(pool, userId);
+  return { token };
+}
+
+/**
+ * Signup is intentionally gated by the DESK_ENABLE_SIGNUP env var. Desk
+ * is single-user-per-host by default and exposing a public registration
+ * endpoint on a misconfigured deployment would let anyone create
+ * accounts. Operators who want multi-user mode opt in explicitly with
+ * `DESK_ENABLE_SIGNUP=1`.
+ *
+ * When enabled, this creates the user row, bootstraps a hub workspace,
+ * sets up the per-user vault when DESK_VAULT_PASSWORD is set, and
+ * returns a session token. Hub creation + vault setup mirror what
+ * main.ts does for users that existed at boot — a new signup gets the
+ * same shape immediately so the SPA doesn't land on "No workspaces"
+ * right after the redirect.
+ */
+export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.DESK_ENABLE_SIGNUP === "1";
+}
+
+const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,32}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SEED_PASSWORD = "change-me-before-first-boot";
+const PASSWORD_MIN_LENGTH = 12;
+
+export interface SignupContext {
+  pool: Pool;
+  home: string;
+  vault?: VaultStore;
+  env?: NodeJS.ProcessEnv;
+}
+
+export async function handleSignup(
+  ctx: SignupContext,
+  body: { username?: unknown; email?: unknown; password?: unknown },
+): Promise<{ token: string }> {
+  const env = ctx.env ?? process.env;
+  if (!isSignupEnabled(env)) {
+    throw new ValidationError("Signup is disabled on this server");
+  }
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!USERNAME_PATTERN.test(username)) {
+    throw new ValidationError(
+      "Username must be 3–32 characters of letters, digits, underscore, or dash",
+    );
+  }
+  if (!EMAIL_PATTERN.test(email)) {
+    throw new ValidationError("Email must be a valid address");
+  }
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    throw new ValidationError(
+      `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
+    );
+  }
+  if (password === SEED_PASSWORD) {
+    throw new ValidationError("Password must differ from the default seed password");
+  }
+
+  const existingByUsername = await queries.users.findByUsername(ctx.pool, username);
+  if (existingByUsername) throw new ConflictError("Username is already taken");
+  const existingByEmail = await queries.users.findByEmail(ctx.pool, email);
+  if (existingByEmail) throw new ConflictError("Email is already in use");
+
+  const id = generateId("user");
+  const passwordHash = await hashPassword(password);
+  await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
+
+  // Mirror the post-boot bootstrap that existing users get in main.ts —
+  // a new signup needs a hub workspace immediately, otherwise the SPA
+  // lands on "No workspaces" right after the redirect. Best-effort: a
+  // hub-creation failure should not undo the account.
+  try {
+    await createHub(ctx.pool, ctx.home, id, username);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`signup: hub-creation failed for ${username}: ${(err as Error).message}`);
+  }
+
+  // If the server is in auto-unlock mode (DESK_VAULT_PASSWORD set), the
+  // boot loop already set up vaults for the users that existed at boot.
+  // A user who signs up after boot needs the same treatment so the AI
+  // provider key flow (PUT /me/providers) works without a manual vault
+  // setup step. Also best-effort.
+  const vaultPassword = env.DESK_VAULT_PASSWORD;
+  if (ctx.vault && vaultPassword) {
+    try {
+      await ctx.vault.setup(id, vaultPassword);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`signup: vault auto-setup failed for ${username}: ${(err as Error).message}`);
+    }
+  }
+
+  const token = await issueSession(ctx.pool, id);
   return { token };
 }
 

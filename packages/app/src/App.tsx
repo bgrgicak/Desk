@@ -23,6 +23,7 @@ import {
 } from '@agent-desk/ui'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
+import { SignupScreen } from '@/components/auth/SignupScreen'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
@@ -114,14 +115,27 @@ const NEW_CHAT_STUB: Chat = {
   unread: false,
 }
 
+function UnauthenticatedRoot() {
+  const [view, setView] = useState<'login' | 'signup'>('login')
+  return view === 'signup' ? (
+    <SignupScreen
+      onSignIn={() => setView('login')}
+      onComplete={() => window.location.reload()}
+    />
+  ) : (
+    <LoginScreen onSignUp={() => setView('signup')} />
+  )
+}
+
 export default function App() {
-  // No token → render the LoginScreen at the App root so AppInner's data
-  // hooks don't fire 401-storms during the logged-out state.
+  // No token → render the unauthenticated root at the App root so
+  // AppInner's data hooks don't fire 401-storms during the logged-out
+  // state.
   if (!getSessionToken()) {
     return (
       <TooltipProvider>
         <Toaster position="bottom-right" />
-        <LoginScreen />
+        <UnauthenticatedRoot />
       </TooltipProvider>
     )
   }

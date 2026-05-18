@@ -1,9 +1,32 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Button, Input } from '@agent-desk/ui'
 import { setSessionToken } from '@/auth/session'
 
-export function LoginScreen() {
+interface LoginScreenProps {
+  onSignUp?: () => void
+}
+
+export function LoginScreen({ onSignUp }: LoginScreenProps = {}) {
+  const [signupEnabled, setSignupEnabled] = useState(false)
+
+  // Probe the server's signup gate once so the SPA can render either
+  // the live "Sign up" link or the "coming soon" placeholder. Falls
+  // back to disabled silently — if the probe fails the user can still
+  // log in and the worst case is a missing link, not a broken screen.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/signup-status')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((body: { enabled: boolean }) => {
+        if (!cancelled) setSignupEnabled(body.enabled === true)
+      })
+      .catch(() => {
+        if (!cancelled) setSignupEnabled(false)
+      })
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <div className="relative flex min-h-screen items-center justify-center">
       {/* Full-screen background */}
@@ -18,7 +41,7 @@ export function LoginScreen() {
         transition={{ duration: 0.22, ease: 'easeOut' }}
         className="relative z-10 w-full max-w-sm mx-4"
       >
-        <LoginCard />
+        <LoginCard signupEnabled={signupEnabled} onSignUp={onSignUp} />
       </motion.div>
     </div>
   )
@@ -26,7 +49,7 @@ export function LoginScreen() {
 
 // ── Login card ────────────────────────────────────────────────────────────────
 
-function LoginCard() {
+function LoginCard({ signupEnabled, onSignUp }: { signupEnabled: boolean; onSignUp?: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -118,13 +141,28 @@ function LoginCard() {
         </Button>
       </form>
 
-      {/* Sign up — disabled until multi-user signup ships server-side */}
-      <p className="text-center text-sm text-muted-foreground" data-testid="signup-coming-soon">
-        Don&apos;t have an account?{' '}
-        <span className="text-muted-foreground/70 font-medium" title="Account signup coming soon">
-          Sign up — coming soon
-        </span>
-      </p>
+      {/* Sign-up link — live when DESK_ENABLE_SIGNUP=1 on the server,
+          a "coming soon" placeholder otherwise so single-user installs
+          don't get a confusing dead link. */}
+      {signupEnabled && onSignUp ? (
+        <p className="text-center text-sm text-muted-foreground" data-testid="signup-link">
+          Don&apos;t have an account?{' '}
+          <button
+            type="button"
+            onClick={onSignUp}
+            className="text-foreground font-medium hover:underline underline-offset-4 transition-colors"
+          >
+            Sign up
+          </button>
+        </p>
+      ) : (
+        <p className="text-center text-sm text-muted-foreground" data-testid="signup-coming-soon">
+          Don&apos;t have an account?{' '}
+          <span className="text-muted-foreground/70 font-medium" title="Account signup is disabled — set DESK_ENABLE_SIGNUP=1 on the server to enable">
+            Sign up — coming soon
+          </span>
+        </p>
+      )}
     </div>
   )
 }

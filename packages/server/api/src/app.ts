@@ -1276,6 +1276,27 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/auth/signup" && method === "POST") {
+      // Same per-IP cap shape as /auth/login but tighter — signup is
+      // gated by DESK_ENABLE_SIGNUP and only opted-in for multi-user
+      // installs. If anyone hits this in bulk on a public host, that
+      // is a red flag regardless of the gate.
+      if (denyOverLimit(res, "auth.signup", getClientIp(req))) return;
+      const body = await parseBody(req) as { username?: unknown; email?: unknown; password?: unknown };
+      const result = await authRoutes.handleSignup(
+        { pool, home: storage.home, vault },
+        body,
+      );
+      sendJson(res, 200, result);
+      return;
+    }
+    if (path === "/auth/signup-status" && method === "GET") {
+      // Unauthenticated probe. Lets the SPA decide whether to surface
+      // the "Sign up" link on the login screen without needing a
+      // separate /config endpoint.
+      sendJson(res, 200, { enabled: authRoutes.isSignupEnabled() });
+      return;
+    }
     if (path === "/auth/logout" && method === "POST") {
       const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
       sendJson(res, 200, result);

@@ -81,6 +81,57 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: {
             "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
             "401": { description: "Invalid credentials" },
+            "429": { description: "Too many attempts; see Retry-After header" },
+          },
+        },
+      },
+      "/auth/signup": {
+        post: {
+          summary: "Register a new user",
+          description: "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if DESK_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    username: { type: "string", description: "3–32 chars: letters, digits, underscore, dash" },
+                    email: { type: "string", format: "email" },
+                    password: { type: "string", description: "≥ 12 chars; must not equal the documented seed password" },
+                  },
+                  required: ["username", "email", "password"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
+            "400": { description: "Signup disabled or input invalid" },
+            "409": { description: "Username or email already taken" },
+            "429": { description: "Too many attempts; see Retry-After header" },
+          },
+        },
+      },
+      "/auth/signup-status": {
+        get: {
+          summary: "Is signup enabled on this server",
+          description: "Lets the SPA decide whether to render the Sign-up link on the login screen without a separate config endpoint. Unauthenticated.",
+          security: [],
+          responses: {
+            "200": {
+              description: "Signup gate state",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { enabled: { type: "boolean" } },
+                    required: ["enabled"],
+                  },
+                },
+              },
+            },
           },
         },
       },
