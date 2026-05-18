@@ -9,7 +9,12 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
   if (rows[0].c > 0) return;
 
   const username = process.env.DESK_SEED_USERNAME ?? "desk";
-  const password = process.env.DESK_SEED_PASSWORD ?? "change-me-before-first-boot";
+  const SEED_PASSWORD = "change-me-before-first-boot";
+  const password = process.env.DESK_SEED_PASSWORD ?? SEED_PASSWORD;
+  // Flag only the install that's still on the documented public seed
+  // password. Operators who explicitly set DESK_SEED_PASSWORD chose
+  // their own secret and don't need a "must change" prompt.
+  const mustChangePassword = password === SEED_PASSWORD ? 1 : 0;
 
   const userId = generateId("user");
   const agentId = generateId("agent");
@@ -21,9 +26,9 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
 
   transact(pool, (client) => {
     client.querySync(
-      `INSERT INTO users (id, username, password_hash, email)
-       VALUES (?, ?, ?, ?)`,
-      [userId, username, passwordHash, `${username}@desk.local`],
+      `INSERT INTO users (id, username, password_hash, email, must_change_password)
+       VALUES (?, ?, ?, ?, ?)`,
+      [userId, username, passwordHash, `${username}@desk.local`, mustChangePassword],
     );
 
     client.querySync(

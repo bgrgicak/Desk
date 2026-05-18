@@ -14,6 +14,10 @@ export const UserSchema = z.object({
    * the default zone for ambiguous user-supplied times. */
   timezone: z.string().optional(),
   createdAt: z.string(),
+  /** True when the user signed in with the documented public seed
+   * password and hasn't changed it yet. SPA uses it to prompt for a
+   * password change after first login. Cleared by POST /me/password. */
+  mustChangePassword: z.boolean().optional(),
 });
 export type User = z.infer<typeof UserSchema>;
 
