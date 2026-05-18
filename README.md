@@ -69,6 +69,7 @@ Run from the repo root.
 | --- | --- |
 | `npm run dev` | Boot `desk-server` + Vite. |
 | `npm run dev:app` | Vite only — useful when `desk-server` runs elsewhere. |
+| `npm run dev:desktop` | Build server + app, then launch the Electron desktop app (`cd packages/desktop && npm run dev`). Requires the server packages to be built first (`npm run build:server`). |
 | `npm run build` | Build all workspace packages (Nx). |
 | `npm run typecheck` | Run tsc on all workspaces. |
 | `npm run test:host` | Vitest unit + integration tests. |

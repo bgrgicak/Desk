@@ -12,6 +12,7 @@
     "preinstall": "node -e \"const want='23';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
     "dev": "packages/server/setup/scripts/dev.sh",
     "dev:app": "npm -w @agent-desk/app run dev",
+    "dev:desktop": "cd packages/desktop && npm run dev",
     "build": "npm run build:packages",
     "build:server": "npm -w @agent-desk/shared run build && npm -w @agent-desk/db run build && npm -w @agent-desk/storage run build && npm -w @agent-desk/runtime run build && npm -w @agent-desk/scheduler run build && npm -w @agent-desk/api run build && npm -w @agent-desk/sandbox-cli run build",
     "build:packages": "npm run build:server && npm -w @agent-desk/ui run build && npm -w @agent-desk/app-scaffold run build && npm -w @agent-desk/app run build",
