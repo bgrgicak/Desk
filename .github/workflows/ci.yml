@@ -61,7 +61,26 @@ jobs:
         # desk-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
         # arg doesn't need tuning per-runner.
-        run: docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        #
+        # Inject commit metadata via OCI labels so `docker inspect
+        # desk/sandbox:v1` on the runtime host can identify which commit
+        # produced the image. The Dockerfile sets the static labels
+        # (title, description, source, license); these three are the
+        # commit-specific ones CI knows.
+        run: |
+          docker build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.version=${{ github.ref_name }}" \
+            -t desk/sandbox:v1 .
+
+      - name: Smoke-test desk/sandbox:v1
+        # The image build can succeed while the entrypoint is broken
+        # (missing binary, bad PATH, busted /opt/desk-template/). Run
+        # the desk-agent binary that the sandbox is supposed to ship
+        # — if exit is non-zero the image isn't usable.
+        run: docker run --rm desk/sandbox:v1 desk-agent --help > /dev/null
 
       - name: Export desk/sandbox:v1 image
         run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"

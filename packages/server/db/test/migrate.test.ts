@@ -76,4 +76,28 @@ describe("migrations", () => {
     const { runMigrations } = await import("../src/migrate.js");
     await expect(runMigrations(pool)).resolves.toBeUndefined();
   });
+
+  it("schema is byte-identical after re-running migrations", async () => {
+    // Capture the post-first-run schema (CREATE TABLE / INDEX / TRIGGER /
+    // VIEW statements as SQLite stores them in sqlite_master). Then run
+    // the migration set again and compare. Any drift is a real bug —
+    // migrations are forward-only and re-running on a populated DB
+    // must be a no-op. The simpler idempotency test above only checks
+    // for the absence of an error, which doesn't catch silent
+    // re-application of an ALTER.
+    const { runMigrations } = await import("../src/migrate.js");
+    const captureSchema = async (): Promise<string[]> => {
+      const { rows } = await pool.query<{ type: string; name: string; sql: string | null }>(
+        `SELECT type, name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name`,
+      );
+      return rows.map((r) => `${r.type}:${r.name}\n${r.sql ?? ""}`);
+    };
+    const before = await captureSchema();
+    await runMigrations(pool);
+    await runMigrations(pool);
+    const after = await captureSchema();
+    expect(after).toEqual(before);
+  });
 });
