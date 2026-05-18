@@ -272,6 +272,43 @@ execRunFn: async (messageId, _a, _p, onLog) => {
     expect(content.body).toBe("# Chat Summary — Final\n\n## What we built\n\nA clean summary.");
   });
 
+  it("summary output reconstructs streamed text deltas from the final text part", async () => {
+    const mgr = createRunManager({
+      pool,
+execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { id: "prt_plan", text: "I will inspect the chat first." } }) });
+        onLog({ runId: messageId, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "tool_use", part: { tool: "bash" } }) });
+        for (const [i, text] of [
+          "# Chat Summary — Streaming\n\n",
+          "## Active threads\n\n",
+          "### Summary bug\nThe summary body must not be truncated.\n\n",
+          "## Open threads / next steps\n\n",
+          "_None._",
+        ].entries()) {
+          onLog({ runId: messageId, seq: i + 2, kind: "stdout", payload: JSON.stringify({ type: "text", part: { id: "prt_final", text } }) });
+        }
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "summary_request" });
+    const result = await mgr.fireMessage(messageId);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as { type: string; body?: string };
+    expect(content.body).toBe([
+      "# Chat Summary — Streaming",
+      "",
+      "## Active threads",
+      "",
+      "### Summary bug",
+      "The summary body must not be truncated.",
+      "",
+      "## Open threads / next steps",
+      "",
+      "_None._",
+    ].join("\n"));
+  });
+
   it("is idempotent — second fire on same message is a no-op", async () => {
     const mgr = createRunManager({
       pool,

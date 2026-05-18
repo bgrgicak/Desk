@@ -7,6 +7,7 @@ import {
   generateId,
   AgentEventSchema,
   GOAL_KEYS,
+  type AgentEvent,
   type AgentLogEntry,
   type GoalKey,
   type Message,
@@ -185,10 +186,13 @@ export function createRunManager(opts: RunManagerOptions) {
   function deriveTextFromLog(entries: AgentLogEntry[]): string {
     const parts: string[] = [];
     let sawEvent = false;
+    const hiddenReasoningTextIds = reasoningPartIds(entries);
     for (const e of entries) {
       if (e.kind === "event") {
         sawEvent = true;
         if (e.event.type === "text") {
+          const id = eventPartId(e.event);
+          if (id && hiddenReasoningTextIds.has(id)) continue;
           const t = e.event.part?.text;
           if (typeof t === "string") parts.push(t);
         }
@@ -205,27 +209,64 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /**
    * Summaries should be a clean final markdown body. If the model used tools, keep
-   * the last text event instead of concatenating planning chatter with the
-   * final answer.
+   * the final text part instead of concatenating planning chatter with the final
+   * answer. Current opencode streams that final part as many text deltas, so
+   * reconstruct chunks that share a part/message id.
    */
   function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
     let sawEvent = false;
-    let lastText = "";
-    for (const e of entries) {
+    let currentPartKey: string | null = null;
+    let currentPartText = "";
+    const hiddenReasoningTextIds = reasoningPartIds(entries);
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
       if (e.kind !== "event") continue;
       sawEvent = true;
       if (e.event.type === "text") {
+        const id = eventPartId(e.event);
+        if (id && hiddenReasoningTextIds.has(id)) continue;
         const t = e.event.part?.text;
-        if (typeof t === "string" && t.trim()) lastText = t;
+        if (typeof t !== "string" || !t.trim()) continue;
+        const messageId = typeof e.event.part?.messageID === "string" ? e.event.part.messageID : undefined;
+        // Deltas from the same assistant text part carry the same part id. Older
+        // run-format fixtures sometimes omit ids, so make those individual parts
+        // to preserve the old "last text event wins" behavior after tool use.
+        const partKey = id ?? messageId ?? `event:${i}`;
+        if (partKey !== currentPartKey) {
+          currentPartKey = partKey;
+          currentPartText = t;
+        } else if (t.startsWith(currentPartText)) {
+          // A consolidated `message.part.updated` snapshot for a part may arrive
+          // after deltas. Replace accumulated chunks with the full snapshot rather
+          // than duplicating the response.
+          currentPartText = t;
+        } else {
+          currentPartText += t;
+        }
       }
     }
-    if (lastText) return lastText.trim();
+    if (currentPartText) return currentPartText.trim();
     if (sawEvent) return "";
     return entries
       .filter((e) => e.kind === "unparsed")
       .map((e) => (e as { line: string }).line)
       .join("\n")
       .trim();
+  }
+
+  function reasoningPartIds(entries: AgentLogEntry[]): Set<string> {
+    const ids = new Set<string>();
+    for (const e of entries) {
+      if (e.kind !== "event" || e.event.type !== "reasoning") continue;
+      const id = eventPartId(e.event);
+      if (id) ids.add(id);
+    }
+    return ids;
+  }
+
+  function eventPartId(event: AgentEvent): string | undefined {
+    const id = event.part?.id;
+    return typeof id === "string" ? id : undefined;
   }
 
   const CHAT_SUMMARY_PROMPT = [
