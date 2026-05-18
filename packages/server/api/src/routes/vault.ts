@@ -29,6 +29,7 @@ export async function setup(
   body: { password?: unknown },
 ): Promise<{ ok: true }> {
   const password = requirePassword(body);
+  enforceVaultPasswordPolicy(password);
   const status = await vault.status(userId);
   if (status.exists) {
     throw new ConflictError("Vault already exists");
@@ -126,6 +127,31 @@ function requirePassword(body: { password?: unknown }): string {
     throw new ValidationError("Missing password");
   }
   return body.password;
+}
+
+// Policy for *new* vault passwords only (POST /vault/setup). We can't
+// enforce it on /vault/unlock without locking out users who created a
+// vault before the policy existed — the bar is "make weak passwords hard
+// to set," not "retroactively reject existing vaults."
+//
+// Min length 12 follows the NIST 800-63B guidance to favour length over
+// composition rules. The DESK_SEED_PASSWORD ("change-me-before-first-boot")
+// is rejected explicitly so a first-boot operator can't accidentally pin
+// their vault to a known-public default.
+const VAULT_PASSWORD_MIN_LENGTH = 12;
+const SEED_PASSWORD = "change-me-before-first-boot";
+
+export function enforceVaultPasswordPolicy(password: string): void {
+  if (password.length < VAULT_PASSWORD_MIN_LENGTH) {
+    throw new ValidationError(
+      `Vault password must be at least ${VAULT_PASSWORD_MIN_LENGTH} characters`,
+    );
+  }
+  if (password === SEED_PASSWORD) {
+    throw new ValidationError(
+      "Vault password must differ from the default seed password",
+    );
+  }
 }
 
 function parseSecret(body: unknown): SecretEntry {
