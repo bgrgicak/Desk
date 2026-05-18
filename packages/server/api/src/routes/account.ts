@@ -201,6 +201,18 @@ export async function setProviders(
         throw err;
       }
     }
+
+    // Clear any stale `enabled: false` flag left over from a prior toggle-
+    // off in Settings. Without this, a user who had disabled the provider
+    // and then re-entered a key would have the key saved as an "active"
+    // connection but `resolveProviderKeys.isDisabled()` would still filter
+    // it out — opencode never sees the credential and reports the provider
+    // as unconfigured. Entering a fresh value into Settings implies the
+    // user wants the key live; explicit disable still goes through the
+    // separate `setProvidersMeta` toggle.
+    await queries.userSettings.mergeProviderMeta(pool, userId, {
+      [name]: { enabled: undefined },
+    });
   }
 
   const written = Object.entries(data.providers).filter(([, v]) => v !== null && v !== "").map(([k]) => k);

@@ -142,6 +142,14 @@ export async function updateMeta(
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
+    // Atomically forget the opencode-serve session whenever the chat's
+    // agent changes. The session was bound to the old agent's
+    // providerID/modelID at creation time; opencode-serve ignores per-
+    // sendMessage overrides for those fields, so reusing the session
+    // would silently keep using the old model. Doing this in the same
+    // UPDATE removes the race where a concurrent run could read the
+    // new agent_id but still see the old session_id.
+    sets.push(`opencode_session_id = NULL`);
   }
   if (data.unread !== undefined) {
     sets.push(`unread = ?`);
@@ -216,4 +224,83 @@ export async function setOpencodeSessionId(
     "UPDATE chats SET opencode_session_id = ? WHERE id = ?",
     [sessionId, id],
   );
+}
+
+/**
+ * Clear the opencode-serve session id from every chat using a given agent.
+ * Used when the agent's model changes — the existing daemon session is
+ * bound to the prior model and won't honor the new one on subsequent
+ * turns. Forgetting the id makes the next turn create a fresh session
+ * with the current agent.model bound from the start.
+ *
+ * Returns the chat ids whose session was cleared so callers can
+ * best-effort delete them on the daemon side too.
+ */
+export async function clearOpencodeSessionsForAgent(
+  db: Pool,
+  agentId: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(
+    "SELECT id, opencode_session_id FROM chats WHERE agent_id = ? AND opencode_session_id IS NOT NULL",
+    [agentId],
+  );
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    await db.query(
+      "UPDATE chats SET opencode_session_id = NULL WHERE agent_id = ?",
+      [agentId],
+    );
+  }
+  return cleared;
+}
+
+/**
+ * Clear opencode-serve session ids for every chat owned by the user
+ * (optionally scoped to a single workspace). Used when a user-level
+ * connector or local source changes — the affected chats' sessions may
+ * still be bound to the old auth/provider, so we forget the ids and let
+ * the next turn create a fresh session against whatever is configured now.
+ *
+ * Returns the chat ids whose session was cleared.
+ */
+export async function clearOpencodeSessionsForUser(
+  db: Pool,
+  userId: string,
+  workspaceId?: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const baseSelect = `SELECT c.id, c.opencode_session_id
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+      WHERE w.user_id = ?
+        AND c.opencode_session_id IS NOT NULL`;
+  const params: unknown[] = [userId];
+  let sql = baseSelect;
+  if (workspaceId) {
+    sql += " AND c.workspace_id = ?";
+    params.push(workspaceId);
+  }
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(sql, params);
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    const updateSql = workspaceId
+      ? `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ? AND c.workspace_id = ?)`
+      : `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ?)`;
+    const updateParams = workspaceId ? [userId, workspaceId] : [userId];
+    await db.query(updateSql, updateParams);
+  }
+  return cleared;
 }

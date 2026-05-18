@@ -76,6 +76,35 @@ test("storing a ChatGPT key persists and echoes back masked", async ({
   await expect.poll(() => inputAfterReload.inputValue(), { timeout: 5_000 }).toContain("...");
 });
 
+test("adding an API-key connection saves the key from the footer action", async ({
+  loggedInPage,
+  serverUrl,
+  token,
+}) => {
+  await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible({ timeout: 10_000 });
+
+  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  const dialog = loggedInPage.getByRole("dialog");
+  await dialog.getByRole("button", { name: /^Connections$/i }).click();
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await dialog.getByRole("button", { name: /Claude/ }).click();
+
+  const input = dialog.getByTestId("provider-key-ANTHROPIC_API_KEY");
+  await expect(input).toBeVisible();
+
+  const longKey = "sk-ant-test-1234567890abcdef".padEnd(44, "x");
+  await input.fill(longKey);
+  await dialog.getByRole("button", { name: /^Add connection$/ }).click();
+
+  await expect.poll(async () => {
+    const res = await fetch(`${serverUrl}/me/providers`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = (await res.json()) as { providers: Record<string, string | null> };
+    return body.providers.ANTHROPIC_API_KEY ?? null;
+  }, { timeout: 5_000 }).not.toBeNull();
+});
+
 test("GitHub connection explains token creation and sandbox use", async ({
   loggedInPage,
 }) => {

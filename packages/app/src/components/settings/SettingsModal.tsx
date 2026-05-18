@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   Settings2, Bot, Plug, Sliders,
   Trash2, Plus, ChevronDown, X, Search,
-  Pencil, MessageSquare, Copy, MoreHorizontal, ExternalLink,
+  Pencil, MessageSquare, Copy, MoreHorizontal,
 } from 'lucide-react'
 import {
   Dialog,
@@ -355,7 +355,7 @@ function TokenConnectionForm({
   dirty: boolean
   busy: boolean
   onChange: (value: string) => void
-  onSave: () => void
+  onSave: () => void | Promise<void>
 }) {
   return (
     <>
@@ -377,6 +377,7 @@ function TokenConnectionForm({
           />
           {envKey && (
             <Button
+              type="button"
               size="sm"
               className="w-full sm:w-auto"
               disabled={!dirty || busy}
@@ -1114,10 +1115,10 @@ function ConnectionDetail({
   busySaveMeta: boolean
   busyGenericConnector: boolean
   busyLocalSource: boolean
-  onSave: (c: Connection) => void
+  onSave: (c: Connection) => Promise<boolean>
   onCancel: () => void
   onDelete: (id: string) => void
-  onSaveProviderKey: (envKey: string, value: string) => void
+  onSaveProviderKey: (envKey: string, value: string) => Promise<boolean>
   onSaveGenericConnector: (input: { id?: string; kind: ConnectionKind; displayName: string; externalAccountId?: string; credentials?: Record<string, unknown> }) => void
   onToggleLocalSource: (kind: string, enabled: boolean) => void
 }) {
@@ -1155,7 +1156,7 @@ function ConnectionDetail({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistedName])
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (connectorProviderId) {
       let credentials: Record<string, unknown> | undefined
       {
@@ -1183,18 +1184,25 @@ function ConnectionDetail({
       })
       return
     }
-    onSave({
+    if (providerEnvKey && apiKeyDirty) {
+      const savedKey = await onSaveProviderKey(providerEnvKey, apiKey.trim())
+      if (!savedKey) return
+      setApiKeyDirty(false)
+    }
+
+    const savedMeta = await onSave({
       id: existing?.id ?? `conn-${kind}-${Date.now()}`,
       kind,
       name: name.trim() || catalogMeta.name,
       enabled: existing?.enabled ?? true,
     })
+    if (!savedMeta) return
   }
 
-  const handleSaveKey = () => {
+  const handleSaveKey = async () => {
     if (!providerEnvKey || !apiKeyDirty) return
-    onSaveProviderKey(providerEnvKey, apiKey.trim())
-    setApiKeyDirty(false)
+    const saved = await onSaveProviderKey(providerEnvKey, apiKey.trim())
+    if (saved) setApiKeyDirty(false)
   }
 
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -1359,16 +1367,17 @@ function ConnectionDetail({
           )}
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:justify-end">
-          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta || busySaveKey}>Cancel</Button>
           <Button
+            type="button"
             size="sm"
             className="flex-1 sm:flex-none"
             onClick={handleSave}
-            disabled={busySaveMeta || busyGenericConnector || Boolean(connectorProviderId && focus.mode === 'new' && !apiKey.trim())}
+            disabled={busySaveMeta || busySaveKey || busyGenericConnector || Boolean(connectorProviderId && focus.mode === 'new' && !apiKey.trim())}
           >
             {focus.mode === 'new'
-              ? ((busySaveMeta || busyGenericConnector) ? 'Adding…' : 'Add connection')
-              : ((busySaveMeta || busyGenericConnector) ? 'Saving…' : 'Save')}
+              ? ((busySaveMeta || busySaveKey || busyGenericConnector) ? 'Adding…' : 'Add connection')
+              : ((busySaveMeta || busySaveKey || busyGenericConnector) ? 'Saving…' : 'Save')}
           </Button>
         </div>
       </div>
@@ -1680,10 +1689,10 @@ export function SettingsModal({
         await putLocalSource({ kind: conn.kind, enabled: true }).unwrap()
       } catch (err) {
         toast.error(`Could not enable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
-        return
+        return false
       }
       setConnectionsFocus(null)
-      return
+      return true
     }
     // Persist the display name to /me/providers/meta if this is a
     // functional (API-key-backed) connection kind.
@@ -1697,10 +1706,11 @@ export function SettingsModal({
         await putProvidersMeta({ [envKey]: { name: metaName } }).unwrap()
       } catch (err) {
         toast.error('Could not save connection name', { description: describeApiError(err) })
-        return
+        return false
       }
     }
     setConnectionsFocus(null)
+    return true
   }
 
   const handleDeleteConnection = async (id: string) => {
@@ -1785,8 +1795,10 @@ export function SettingsModal({
   const handleSaveProviderKey = async (envKey: string, value: string) => {
     try {
       await putProviderKeys({ [envKey]: value }).unwrap()
+      return true
     } catch (err) {
       toast.error('Could not save provider key', { description: describeApiError(err) })
+      return false
     }
   }
 

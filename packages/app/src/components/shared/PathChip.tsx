@@ -24,6 +24,12 @@ export function workspaceRelativePath(sandboxPath: string): string {
   return sandboxPath
 }
 
+export function displayBasename(displayPath: string): string {
+  const trimmed = displayPath.replace(/\/+$/, '')
+  const basename = trimmed.split('/').pop()
+  return basename || displayPath
+}
+
 export function isDirectoryPath(sandboxPath: string, library?: ListLibraryResponse): boolean {
   if (sandboxPath.endsWith('/')) return true
 
@@ -63,7 +69,7 @@ export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProp
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono bg-muted hover:bg-muted/80 text-foreground border border-border/50 transition-colors cursor-pointer align-baseline"
     >
       <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-      <span>{displayPath.split('/').pop() ?? displayPath}</span>
+      <span>{displayBasename(displayPath)}</span>
     </button>
   )
 }
