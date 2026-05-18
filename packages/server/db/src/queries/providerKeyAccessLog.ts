@@ -28,6 +28,27 @@ export async function logKeyAccess(
   );
 }
 
+/**
+ * Drops audit log rows older than `olderThanDays`. Returns the number
+ * of rows deleted. Called by the daily retention reaper in main.ts;
+ * provider_key_access_log has no upper bound otherwise and a long-
+ * running install accumulates a row per sandbox env injection.
+ *
+ * Default retention (90 days) is documented in SECURITY.md. Operators
+ * who want longer history bump DESK_KEY_ACCESS_LOG_RETENTION_DAYS.
+ */
+export async function pruneKeyAccessLog(
+  db: Pool,
+  olderThanDays: number,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+  const { rowCount } = await db.query(
+    `DELETE FROM provider_key_access_log WHERE created_at < ?`,
+    [cutoff],
+  );
+  return rowCount;
+}
+
 export async function getKeyAccessLog(
   db: Pool,
   userId: string,

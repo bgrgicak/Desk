@@ -90,4 +90,33 @@ describe("providerKeyAccessLog queries", () => {
     const log = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
     expect(log).toHaveLength(0);
   });
+
+  it("pruneKeyAccessLog removes only rows older than the cutoff", async () => {
+    const userId = await makeUser("pkal-user8");
+    // Two fresh rows + one row deliberately back-dated past the cutoff.
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh1");
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh2");
+    const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
+    await pool.query(
+      `INSERT INTO provider_key_access_log (user_id, action, providers, reason, created_at)
+       VALUES (?, 'read', ?, 'sandbox_run:stale', ?)`,
+      [userId, JSON.stringify(["OPENAI_API_KEY"]), oldDate],
+    );
+    const before = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
+    expect(before).toHaveLength(3);
+
+    const removed = await providerKeyAccessLog.pruneKeyAccessLog(pool, 90);
+    expect(removed).toBe(1);
+
+    const after = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
+    expect(after).toHaveLength(2);
+    expect(after.every((e) => e.reason !== "sandbox_run:stale")).toBe(true);
+  });
+
+  it("pruneKeyAccessLog returns 0 when nothing is past the cutoff", async () => {
+    const userId = await makeUser("pkal-user9");
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh");
+    const removed = await providerKeyAccessLog.pruneKeyAccessLog(pool, 90);
+    expect(removed).toBe(0);
+  });
 });

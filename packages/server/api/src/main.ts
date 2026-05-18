@@ -48,12 +48,67 @@ const DESK_DB_PATH =
   process.env.DESK_DB_PATH
   ?? path.join(DESK_HOME, ".database", "desk.sqlite3");
 
+const PRE_MIGRATION_BACKUP_KEEP = parseInt(
+  process.env.DESK_PRE_MIGRATION_BACKUP_KEEP ?? "10",
+  10,
+);
+
+/**
+ * Snapshot the SQLite DB to ${DESK_HOME}/backups/pre-migration-<ts>.db
+ * before migrations run. Uses the same VACUUM INTO path as the
+ * /internal/backup endpoint — works while the pool holds an exclusive
+ * lock, produces a checkpointed copy. Old snapshots beyond
+ * PRE_MIGRATION_BACKUP_KEEP are deleted, oldest first.
+ *
+ * Skipped silently when the DB is empty (first boot) since VACUUM INTO
+ * needs at least one page to operate on. Errors are logged and the boot
+ * continues — losing the safety net is preferable to refusing to start.
+ */
+async function snapshotBeforeMigrations(
+  pool: ReturnType<typeof createPool>,
+  deskHome: string,
+  dbPath: string,
+): Promise<void> {
+  try {
+    const stat = await fs.stat(dbPath).catch(() => null);
+    if (!stat || stat.size === 0) return; // first boot
+
+    const backupDir = path.join(deskHome, "backups");
+    await fs.mkdir(backupDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const target = path.join(backupDir, `pre-migration-${ts}.db`);
+    pool.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    // eslint-disable-next-line no-console
+    console.log(`pre-migration backup: ${target}`);
+
+    // Retention: keep only the most-recent N pre-migration-*.db files.
+    const entries = (await fs.readdir(backupDir))
+      .filter((name) => name.startsWith("pre-migration-") && name.endsWith(".db"))
+      .sort(); // ISO timestamps sort lexicographically
+    const stale = entries.slice(0, Math.max(0, entries.length - PRE_MIGRATION_BACKUP_KEEP));
+    for (const name of stale) {
+      await fs.rm(path.join(backupDir, name), { force: true });
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`pre-migration backup failed (continuing boot):`, (err as Error).message);
+  }
+}
+
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the
   // tree exists before opening the file (a fresh ~/Desk doesn't have
   // .database yet).
   await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
   const pool = createPool({ path: DESK_DB_PATH });
+
+  // Snapshot the DB before migrations run. Forward-only migrations
+  // can leave the schema wedged if a partial run errors halfway; the
+  // snapshot is the safety net documented in BACKUP.md. Skip on a
+  // truly-empty file (first boot) to avoid surfacing a "VACUUM INTO
+  // requires content" error during install. Retention is bounded by
+  // DESK_PRE_MIGRATION_BACKUP_KEEP (default 10).
+  await snapshotBeforeMigrations(pool, DESK_HOME, DESK_DB_PATH);
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
@@ -181,6 +236,40 @@ async function main(): Promise<void> {
   await runRetention();
   const retentionTimer = setInterval(() => { void runRetention(); }, LOG_RETENTION_INTERVAL_MS);
   retentionTimer.unref();
+
+  // Provider-key audit log retention. The table records every read /
+  // write / delete touching a user's provider keys (see SECURITY.md)
+  // and grows unbounded otherwise. 90-day default rolling window;
+  // operators can tune via DESK_KEY_ACCESS_LOG_RETENTION_DAYS.
+  const KEY_LOG_RETENTION_DAYS = parseInt(
+    process.env.DESK_KEY_ACCESS_LOG_RETENTION_DAYS ?? "90",
+    10,
+  );
+  const KEY_LOG_REAPER_INTERVAL_MS = parseInt(
+    process.env.DESK_KEY_ACCESS_LOG_REAPER_INTERVAL_MS ?? "86400000", // daily
+    10,
+  );
+  const runKeyAccessLogReaper = async (): Promise<void> => {
+    try {
+      const removed = await queries.providerKeyAccessLog.pruneKeyAccessLog(
+        pool,
+        KEY_LOG_RETENTION_DAYS,
+      );
+      if (removed > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`key-access-log reaper: pruned ${removed} entries older than ${KEY_LOG_RETENTION_DAYS} days`);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`key-access-log reaper failed:`, (err as Error).message);
+    }
+  };
+  await runKeyAccessLogReaper();
+  const keyAccessLogReaperTimer = setInterval(
+    () => { void runKeyAccessLogReaper(); },
+    KEY_LOG_REAPER_INTERVAL_MS,
+  );
+  keyAccessLogReaperTimer.unref();
 
   // Broadcast targets the single v1 user.
   const { rows } = await pool.query<{ id: string }>(
@@ -377,6 +466,7 @@ async function main(): Promise<void> {
     clearInterval(idleSweepTimer);
     clearInterval(softIdleSweepTimer);
     clearInterval(retentionTimer);
+    clearInterval(keyAccessLogReaperTimer);
     clearConnections();
 
     // Force-exit watchdog. We'd rather lose a few hung requests than
