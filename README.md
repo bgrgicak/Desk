@@ -37,6 +37,10 @@ Desk is a personal AI platform for people who use AI every day to do real work �
 
 Desk is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Desk lives, your data lives.
 
+## Download
+
+Pre-built macOS desktop app releases are available on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest) (Apple Silicon · arm64). New builds are published weekly.
+
 ---
 
 ## For developers
