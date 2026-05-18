@@ -145,6 +145,46 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
+ * Default security headers applied to every response before route dispatch.
+ * Use setHeader (not writeHead) so the values are merged with whatever
+ * status-specific headers the handler emits later.
+ *
+ * - X-Content-Type-Options: nosniff blocks MIME-sniffing on JSON/text payloads.
+ * - Referrer-Policy: strict-origin-when-cross-origin keeps full URLs out
+ *   of cross-origin Referer headers (vault/route IDs leak via the path).
+ * - Permissions-Policy: deny powerful features by default. The SPA only
+ *   needs clipboard-write; keep the rest off so a future app iframe can't
+ *   probe the host's capabilities through the bridge.
+ * - X-Frame-Options: DENY for everything except /apps/* (which deliberately
+ *   serves iframed user apps). Same-origin embedding is still OK because
+ *   the value is DENY only when no explicit setting is applied later.
+ *
+ * Content-Security-Policy is intentionally not set here yet — the SPA's
+ * inline assets and the /apps/* iframe origin each need their own policy
+ * and require a focused follow-up.
+ */
+function setSecurityHeaders(req: IncomingMessage, res: ServerResponse, path: string): void {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "geolocation=(), microphone=(), camera=(), usb=(), payment=(), magnetometer=(), gyroscope=(), accelerometer=()",
+  );
+  // /apps/* is the deliberate iframe surface — leave it embeddable.
+  if (!path.startsWith("/apps/")) {
+    res.setHeader("X-Frame-Options", "DENY");
+  }
+  // HSTS only over HTTPS (Node has no native TLS here, so detect via
+  // forwarded proto). Avoids broken caching when a reverse proxy is
+  // present on plain HTTP.
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  if (proto === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+}
+
+/**
  * The /apps/* dispatcher's `issue` endpoint runs after requireAuth has
  * already let the path through (no global Bearer check on /apps/*). This
  * helper re-applies the Bearer check locally so the issue endpoint
@@ -396,6 +436,8 @@ export function createApp(opts: AppOptions): Server {
       const url = new URL(req.url ?? "/", "http://localhost");
       const rawPath = url.pathname;
       const method = req.method ?? "GET";
+
+      setSecurityHeaders(req, res, rawPath);
 
       if (method === "GET" && rawPath === "/health") {
         sendJson(res, 200, { ok: true });
