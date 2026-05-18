@@ -22,9 +22,11 @@
     "test": "vitest run --passWithNoTests",
     "test:host": "vitest run --passWithNoTests",
     "test:e2e": "npm -w @agent-desk/app run test:e2e",
+    "knip": "knip --no-progress",
     "prepare": "cp scripts/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
   },
   "devDependencies": {
+    "knip": "^5.66.6",
     "nx": "22.6.5"
   },
   "engines": {

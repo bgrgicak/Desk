@@ -104,6 +104,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Dead-code scan (knip, advisory)
+        # Knip surfaces unused files, exports, dependencies and binaries
+        # across the monorepo. Run with --no-exit-code so the job is
+        # advisory while the long-tail of intentional re-exports gets
+        # configured away; flip to blocking once Unused-files + Unused-
+        # dependencies are at zero. Config lives in /knip.json at the
+        # repo root.
+        run: npx knip --no-progress --no-exit-code
+
   vitest:
     name: Vitest (unit suite)
     runs-on: ubuntu-24.04
