@@ -22,6 +22,7 @@ import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/schedu
 import {
   auditSandboxMounts,
   buildDaemonEnv,
+  detectEngine,
   killOpencodeDaemonsForOrphans,
   productionReflectWorkspace,
   pruneDriftedContainers,
@@ -331,6 +332,23 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(`desk-server listening on :${PORT}`);
+
+  // Probe the container engine once at startup and log the choice so
+  // operators don't have to re-read DESK_CONTAINER_ENGINE / docker info
+  // to know which path is live. Best-effort: a host without an engine
+  // can still serve the API; sandbox-launching routes will surface the
+  // failure with the right error code at request time.
+  try {
+    const engine = await detectEngine();
+    const override = process.env.DESK_CONTAINER_ENGINE
+      ? ` (pinned via DESK_CONTAINER_ENGINE)`
+      : ` (autodetected)`;
+    // eslint-disable-next-line no-console
+    console.log(`sandbox driver: ${engine.name}${override}`);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`sandbox driver: unavailable — ${(err as Error).message}`);
+  }
 
   void auditSandboxMounts(DESK_HOME).then(async (drift) => {
     for (const d of drift) {
