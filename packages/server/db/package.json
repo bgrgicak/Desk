@@ -33,8 +33,7 @@
   },
   "dependencies": {
     "@agent-desk/shared": ">=0.1.0-0",
-    "hash-wasm": "^4.11.0",
-    "zod": "^3.23.0"
+    "hash-wasm": "^4.11.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

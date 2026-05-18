@@ -1,0 +1,91 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignore": [
+    "packages/desktop/**",
+    "packages/app/public/sw.js"
+  ],
+  "ignoreDependencies": [
+    "@agent-desk/desktop"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.sh",
+        "vitest.config.ts"
+      ]
+    },
+    "packages/agent-desk-cli": {
+      "entry": [
+        "src/desk.mjs",
+        "test/desk.test.mjs"
+      ]
+    },
+    "packages/app": {
+      "entry": [
+        "src/main.tsx",
+        "vite.config.ts",
+        "playwright.config.ts",
+        "e2e/**/*.spec.ts",
+        "e2e/fixtures/**/*.ts",
+        "src/**/*.test.{ts,tsx}",
+        "src/types/**/*.d.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "e2e/**/*.ts"
+      ]
+    },
+    "packages/app-scaffold": {
+      "entry": [
+        "src/main.tsx",
+        "vite.config.ts",
+        "scripts/**/*.mjs",
+        "fragments/**/main.tsx",
+        "src/**/*.test.{ts,tsx}"
+      ]
+    },
+    "packages/server/api": {
+      "entry": [
+        "src/scripts/*.ts",
+        "test/**/*.test.ts"
+      ]
+    },
+    "packages/server/db": {
+      "entry": [
+        "src/bin/*.ts",
+        "test/**/*.test.ts",
+        "vitest.config.ts"
+      ]
+    },
+    "packages/server/runtime": {
+      "entry": [
+        "bench/*.ts",
+        "test/**/*.test.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "packages/server/sandbox-cli": {
+      "entry": [
+        "build.mjs",
+        "test/**/*.test.ts"
+      ]
+    },
+    "packages/server/scheduler": {
+      "entry": [
+        "test/**/*.test.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "packages/server/storage": {
+      "entry": [
+        "test/**/*.test.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "packages/server/shared": {
+      "entry": [
+        "test/**/*.test.ts"
+      ]
+    }
+  }
+}
