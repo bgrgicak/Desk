@@ -163,6 +163,44 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * inline assets and the /apps/* iframe origin each need their own policy
  * and require a focused follow-up.
  */
+/**
+ * Allowlist of HTTP origins permitted to open a WebSocket against /ws.
+ * Resolved once at module load — the env var change requires a restart,
+ * which matches every other server-side config.
+ *
+ * Browsers always include the Origin header on WS upgrade requests, so
+ * an allowlist here mitigates Cross-Site WebSocket Hijacking (CSWSH):
+ * an attacker page can't open a /ws connection on behalf of a user
+ * who happens to have a session token in localStorage. Non-browser
+ * clients (curl, the Postman runner, integration tests) may omit
+ * Origin entirely — those continue to work because CSWSH only applies
+ * to script-initiated upgrades from a browser tab.
+ */
+function getAllowedWsOrigins(): Set<string> {
+  const fromEnv = (process.env.DESK_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const port = process.env.PORT ?? "35138";
+  const defaults = [
+    `http://localhost:5173`,
+    `http://127.0.0.1:5173`,
+    `http://localhost:${port}`,
+    `http://127.0.0.1:${port}`,
+  ];
+  return new Set([...defaults, ...fromEnv]);
+}
+
+const ALLOWED_WS_ORIGINS = getAllowedWsOrigins();
+
+export function isWsOriginAllowed(origin: string | undefined, allowed: Set<string> = ALLOWED_WS_ORIGINS): boolean {
+  // Missing Origin means the client isn't a browser-script upgrade — let
+  // it through so CLI tools, integration tests and the Electron renderer
+  // (when it eventually starts emitting one) keep working.
+  if (!origin) return true;
+  return allowed.has(origin);
+}
+
 function setSecurityHeaders(req: IncomingMessage, res: ServerResponse, path: string): void {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -538,6 +576,16 @@ export function createApp(opts: AppOptions): Server {
     void (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+
+    // Origin allowlist (CSWSH mitigation). Reject before authenticating
+    // so a malicious page can't probe whether a token is valid.
+    const origin = req.headers.origin;
+    const originHeader = Array.isArray(origin) ? origin[0] : origin;
+    if (!isWsOriginAllowed(originHeader)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
