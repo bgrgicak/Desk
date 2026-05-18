@@ -9,7 +9,17 @@ const HEALTH_URL = `http://127.0.0.1:${PORT}/health`;
 
 function resolveServerEntry(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, "server", "api", "dist", "main.js");
+    // Staged by scripts/stage-server.mjs as a node_modules tree so the
+    // bundled server can resolve @agent-desk/* + transitive npm deps.
+    return path.join(
+      process.resourcesPath,
+      "server",
+      "node_modules",
+      "@agent-desk",
+      "api",
+      "dist",
+      "main.js"
+    );
   }
   // Dev: monorepo relative to packages/desktop/
   return path.resolve(import.meta.dirname, "..", "..", "server", "api", "dist", "main.js");

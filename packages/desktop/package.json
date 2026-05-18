@@ -12,8 +12,9 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
+    "stage-server": "node scripts/stage-server.mjs",
     "dev": "npm run build && (unset ELECTRON_RUN_AS_NODE; ./node_modules/.bin/electron .)",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build && npm run stage-server && electron-builder",
     "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/patch-electron-name.mjs",
     "typecheck": "tsc --noEmit"
   },

@@ -11,43 +11,18 @@ files:
   - "!dist/**/*.map"
 
 extraResources:
-  - from: ../server/api/dist
-    to: server/api/dist
+  # Staged by scripts/stage-server.mjs — contains every server workspace
+  # package + its transitive npm deps in a node_modules layout so the
+  # spawned desk-server can resolve @agent-desk/* and busboy/croner/etc.
+  - from: build-server
+    to: server
     filter:
       - "**/*"
-      - "!**/*.map"
-  - from: ../server/db/dist
-    to: server/db/dist
-    filter:
-      - "**/*"
-      - "!**/*.map"
-  - from: ../server/shared/dist
-    to: server/shared/dist
-    filter:
-      - "**/*"
-      - "!**/*.map"
-  - from: ../server/storage/dist
-    to: server/storage/dist
-    filter:
-      - "**/*"
-      - "!**/*.map"
-  - from: ../server/runtime/dist
-    to: server/runtime/dist
-    filter:
-      - "**/*"
-      - "!**/*.map"
-  - from: ../server/scheduler/dist
-    to: server/scheduler/dist
-    filter:
-      - "**/*"
-      - "!**/*.map"
+      - "!package-lock.json"
   - from: ../app/dist
     to: app/dist
 
 asar: true
-asarUnpack:
-  - "**/*.node"
-  - "**/better-sqlite3/**"
 
 afterPack: scripts/after-pack.mjs
 
