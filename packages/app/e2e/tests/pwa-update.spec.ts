@@ -130,14 +130,25 @@ test.describe.serial("PWA update flow", () => {
     await page.getByRole("button", { name: "Reload" }).click();
 
     await expect.poll(
-      async () =>
-        page.evaluate(async () => {
-          const reg = await navigator.serviceWorker.getRegistration();
-          return {
-            waiting: reg?.waiting?.scriptURL ?? null,
-            caches: await caches.keys(),
-          };
-        }),
+      async () => {
+        try {
+          return await page.evaluate(async () => {
+            const reg = await navigator.serviceWorker.getRegistration();
+            return {
+              waiting: reg?.waiting?.scriptURL ?? null,
+              caches: await caches.keys(),
+            };
+          });
+        } catch (err) {
+          // Clicking Reload intentionally triggers a page reload via
+          // controllerchange. If Playwright evaluates during that navigation,
+          // retry the poll instead of failing the whole spec.
+          if (String((err as Error)?.message ?? err).includes("Execution context was destroyed")) {
+            return { waiting: "navigation-in-progress", caches: [] };
+          }
+          throw err;
+        }
+      },
       { timeout: 8000, message: "waiting for new SW to activate and old cache to be dropped" },
     ).toEqual({
       waiting: null,

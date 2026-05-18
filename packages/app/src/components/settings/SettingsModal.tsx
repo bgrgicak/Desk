@@ -816,7 +816,7 @@ function AgentDetail({
               container={modelPickerPortalContainer ?? undefined}
               className="p-0 w-[var(--radix-popover-trigger-width)] overflow-hidden"
               align="start"
-              onEscapeKeyDown={(e) => {
+              onEscapeKeyDown={() => {
                 // cmdk swallows Escape via preventDefault, which would
                 // stop Radix's auto-dismiss of this Popover. We force-
                 // close here instead so the outer Dialog stays open.
