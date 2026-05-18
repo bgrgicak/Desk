@@ -12,10 +12,6 @@ const STATUS_CONFIG: Record<Task['status'], { label: string; bg: string; text: s
   scheduled: { label: 'Scheduled', bg: 'bg-amber-100',    text: 'text-amber-700',    dot: 'bg-amber-500'    },
 }
 
-export const STATUS_LABELS: Record<Task['status'], string> = {
-  todo: 'To do', active: 'Active', complete: 'Complete', scheduled: 'Scheduled',
-}
-
 export function StatusBadge({ status, small }: { status: Task['status']; small?: boolean }) {
   const { label, bg, text, dot } = STATUS_CONFIG[status]
   return (
