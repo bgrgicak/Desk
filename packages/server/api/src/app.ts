@@ -397,6 +397,11 @@ export function createApp(opts: AppOptions): Server {
       const rawPath = url.pathname;
       const method = req.method ?? "GET";
 
+      if (method === "GET" && rawPath === "/health") {
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
       // SPA static-serve: GETs that aren't API/WS/internal/sandbox routes
       // get the SPA. No auth — these are the unauthenticated assets the
       // browser fetches before login (index.html, JS bundles, fonts).

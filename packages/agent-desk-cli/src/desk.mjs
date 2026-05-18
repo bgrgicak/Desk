@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -225,6 +225,165 @@ async function cmdVersion() {
   process.stdout.write(`${pkg.version}\n`);
 }
 
+// ---------------------------------------------------------------------------
+// desk service — install / uninstall / start / stop / status
+// ---------------------------------------------------------------------------
+
+const LAUNCHD_LABEL = "com.agentdesk.desk";
+const LAUNCHD_PLIST_PATH = path.join(
+  os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`,
+);
+const SYSTEMD_UNIT_DIR = path.join(os.homedir(), ".config", "systemd", "user");
+const SYSTEMD_UNIT_NAME = "desk.service";
+const SYSTEMD_UNIT_PATH = path.join(SYSTEMD_UNIT_DIR, SYSTEMD_UNIT_NAME);
+const WIN_TASK_NAME = "AgentDeskServer";
+
+function launchdPlist(nodeBin, deskBin, home) {
+  const deskHome = path.join(home, "Desk");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${nodeBin}</string>
+        <string>${deskBin}</string>
+        <string>start</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>DESK_HOME</key><string>${home}</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>${path.join(deskHome, "logs", "desk.log")}</string>
+    <key>StandardErrorPath</key><string>${path.join(deskHome, "logs", "desk.error.log")}</string>
+    <key>ThrottleInterval</key><integer>10</integer>
+</dict>
+</plist>
+`;
+}
+
+function systemdUnit(nodeBin, deskBin, home) {
+  return `[Unit]
+Description=Desk personal AI assistant server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodeBin} ${deskBin} start
+Restart=on-failure
+RestartSec=10
+Environment=DESK_HOME=${home}
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+async function installService() {
+  const home = await ensureDeskHome();
+  const nodeBin = process.execPath;
+  const deskBin = path.resolve(__dirname, "desk.mjs");
+  await fsp.mkdir(path.join(home, "Desk", "logs"), { recursive: true });
+
+  if (process.platform === "darwin") {
+    await fsp.mkdir(path.dirname(LAUNCHD_PLIST_PATH), { recursive: true });
+    await fsp.writeFile(LAUNCHD_PLIST_PATH, launchdPlist(nodeBin, deskBin, home));
+    log(`Wrote ${LAUNCHD_PLIST_PATH}`);
+    const { status } = spawnSync("launchctl", ["load", "-w", LAUNCHD_PLIST_PATH], { stdio: "inherit" });
+    if (status !== 0) { process.stderr.write("launchctl load failed\n"); process.exit(1); }
+    log("Service installed and started.");
+  } else if (process.platform === "linux") {
+    await fsp.mkdir(SYSTEMD_UNIT_DIR, { recursive: true });
+    await fsp.writeFile(SYSTEMD_UNIT_PATH, systemdUnit(nodeBin, deskBin, home));
+    log(`Wrote ${SYSTEMD_UNIT_PATH}`);
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+    spawnSync("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT_NAME], { stdio: "inherit" });
+    log("Service installed and started.");
+  } else if (process.platform === "win32") {
+    const cmd = `schtasks /Create /F /TN "${WIN_TASK_NAME}" /TR "${nodeBin} ${deskBin} start" /SC ONLOGON /RL LIMITED`;
+    const { status } = spawnSync("cmd", ["/C", cmd], { stdio: "inherit" });
+    if (status !== 0) process.exit(1);
+    log(`Task Scheduler task "${WIN_TASK_NAME}" created.`);
+  } else {
+    process.stderr.write(`desk service install: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+async function uninstallService() {
+  if (process.platform === "darwin") {
+    if (fs.existsSync(LAUNCHD_PLIST_PATH)) {
+      spawnSync("launchctl", ["unload", "-w", LAUNCHD_PLIST_PATH], { stdio: "inherit" });
+      await fsp.rm(LAUNCHD_PLIST_PATH);
+      log("Service removed.");
+    } else {
+      log("Service is not installed.");
+    }
+  } else if (process.platform === "linux") {
+    if (fs.existsSync(SYSTEMD_UNIT_PATH)) {
+      spawnSync("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT_NAME], { stdio: "inherit" });
+      await fsp.rm(SYSTEMD_UNIT_PATH);
+      spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+      log("Service removed.");
+    } else {
+      log("Service is not installed.");
+    }
+  } else if (process.platform === "win32") {
+    spawnSync("schtasks", ["/Delete", "/F", "/TN", WIN_TASK_NAME], { stdio: "inherit" });
+    log("Task removed.");
+  } else {
+    process.stderr.write(`desk service uninstall: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+function serviceControl(action) {
+  if (process.platform === "darwin") {
+    const cmds = {
+      start: ["launchctl", ["load", "-w", LAUNCHD_PLIST_PATH]],
+      stop: ["launchctl", ["unload", LAUNCHD_PLIST_PATH]],
+      status: ["launchctl", ["list", LAUNCHD_LABEL]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else if (process.platform === "linux") {
+    const cmds = {
+      start: ["systemctl", ["--user", "start", SYSTEMD_UNIT_NAME]],
+      stop: ["systemctl", ["--user", "stop", SYSTEMD_UNIT_NAME]],
+      status: ["systemctl", ["--user", "status", SYSTEMD_UNIT_NAME]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else if (process.platform === "win32") {
+    const cmds = {
+      start: ["schtasks", ["/Run", "/TN", WIN_TASK_NAME]],
+      stop: ["schtasks", ["/End", "/TN", WIN_TASK_NAME]],
+      status: ["schtasks", ["/Query", "/TN", WIN_TASK_NAME]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else {
+    process.stderr.write(`desk service: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+async function cmdService(action) {
+  if (!action) {
+    process.stderr.write("Usage: desk service install|uninstall|start|stop|status\n");
+    process.exit(2);
+  }
+  if (action === "install") return installService();
+  if (action === "uninstall") return uninstallService();
+  if (action === "start" || action === "stop" || action === "status") return serviceControl(action);
+  process.stderr.write(`Unknown service action: ${action}\nUsage: desk service install|uninstall|start|stop|status\n`);
+  process.exit(2);
+}
+
 function ensureNodeVersion() {
   const major = parseInt(process.versions.node.split(".")[0], 10);
   if (major === 23) return;
@@ -244,6 +403,7 @@ async function main() {
   switch (sub) {
     case "start": return cmdStart();
     case "init": return cmdInit();
+    case "service": return cmdService(process.argv[3]);
     case "version":
     case "--version":
     case "-v":
@@ -252,10 +412,12 @@ async function main() {
     case "--help":
     case "-h":
       process.stdout.write(
-        "Usage: desk [start|init|version]\n" +
-        "  start    boot desk-server (and Vite in monorepo dev) (default)\n" +
-        "  init     create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
-        "  version  print version\n",
+        "Usage: desk [start|init|service|version]\n" +
+        "  start                          boot desk-server (and Vite in monorepo dev) (default)\n" +
+        "  init                           create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
+        "  service install|uninstall      register/unregister Desk as a system service\n" +
+        "  service start|stop|status      control the installed system service\n" +
+        "  version                        print version\n",
       );
       return;
     default:

@@ -461,6 +461,23 @@ async function startOpencodeServer(
     });
   }
 
+  // Register the opencode free-tier provider so the default big-pickle
+  // model is available even when no OPENCODE_API_KEY is configured. An
+  // empty API key is accepted by opencode.ai's Zen service for free-tier
+  // access. If the user has set OPENCODE_API_KEY via Settings, that value
+  // is already in opts.env and opencode-serve auto-registers it from env;
+  // this call is a no-op in that case (last PUT wins, empty key < real key
+  // is fine because we only run this when the key is absent).
+  if (!opts.env.OPENCODE_API_KEY) {
+    await registerAuthBlobs(url, password, JSON.stringify({ opencode: { type: "api", key: "" } })).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `opencode-serve: failed to register opencode free-tier for ${opts.containerId}:`,
+        (err as Error)?.message ?? err,
+      );
+    });
+  }
+
   return {
     containerId: opts.containerId,
     url,

@@ -7,6 +7,7 @@ import App from './App.tsx'
 import { store } from './store/store'
 import { ensureSession } from './auth/session'
 import { wsConnect } from './store/ws/middleware'
+import { setupServiceWorker } from './lib/service-worker'
 
 async function boot(): Promise<void> {
   const token = await ensureSession()
@@ -26,17 +27,10 @@ async function boot(): Promise<void> {
     </StrictMode>,
   )
 
-  // Register the service worker only in built bundles — in `vite dev` the
-  // SW would intercept module URLs and break HMR. Wrap in try/catch
-  // because Safari throws on `serviceWorker.register` for insecure origins
-  // even when the property exists.
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-    try {
-      await navigator.serviceWorker.register('/sw.js')
-    } catch {
-      /* registration failed (insecure origin, blocked, etc.) — app works without it */
-    }
-  }
+  // Production-only — registers /sw.js, hooks up update detection, and
+  // surfaces a Reload toast when a new build is waiting. Dev keeps SW off
+  // so HMR module URLs aren't intercepted.
+  setupServiceWorker()
 }
 
 void boot()

@@ -248,6 +248,39 @@ jobs:
           path: packages/app/test-results/
           retention-days: 7
 
+  build-desktop-macos:
+    name: Build desktop app (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build:packages
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: packages/desktop
+
+      - name: Build desktop TypeScript
+        run: npm run build
+        working-directory: packages/desktop
+
+      - name: Package desktop app (macOS, directory only)
+        run: ./node_modules/.bin/electron-builder --mac --dir
+        working-directory: packages/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
   test:
     name: Test (host suite)
     runs-on: ubuntu-24.04
@@ -259,6 +292,7 @@ jobs:
       - vitest
       - vitest-integration
       - playwright
+      - build-desktop-macos
     if: ${{ always() }}
 
     steps:
@@ -270,6 +304,7 @@ jobs:
           VITEST_RESULT: ${{ needs.vitest.result }}
           VITEST_INTEGRATION_RESULT: ${{ needs.vitest-integration.result }}
           PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+          BUILD_DESKTOP_MACOS_RESULT: ${{ needs.build-desktop-macos.result }}
         run: |
           if [ "$PREPARE_SERVER_DIST_RESULT" != "success" ]; then
             echo "Prepare server build outputs did not pass: $PREPARE_SERVER_DIST_RESULT"
@@ -293,6 +328,10 @@ jobs:
           fi
           if [ "$PLAYWRIGHT_RESULT" != "success" ]; then
             echo "Playwright did not pass: $PLAYWRIGHT_RESULT"
+            exit 1
+          fi
+          if [ "$BUILD_DESKTOP_MACOS_RESULT" != "success" ]; then
+            echo "Build desktop macOS did not pass: $BUILD_DESKTOP_MACOS_RESULT"
             exit 1
           fi
           echo "All required CI jobs passed."

@@ -1,0 +1,28 @@
+{
+  "name": "@agent-desk/desktop",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "Desk desktop application (Electron)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "npm run build && (unset ELECTRON_RUN_AS_NODE; ./node_modules/.bin/electron .)",
+    "dist": "npm run build && electron-builder",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/patch-electron-name.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/node": "^22.0.0",
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

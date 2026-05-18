@@ -51,7 +51,7 @@ printf '[ci:local] Installing dependencies\n'
 npm ci
 
 printf '[ci:local] Running first parallel phase\n'
-npm run typecheck &
+(npm run typecheck && npm --prefix packages/desktop install --ignore-scripts && npm --prefix packages/desktop run typecheck) &
 typecheck_pid=$!
 pids="$pids $typecheck_pid"
 
