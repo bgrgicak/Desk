@@ -28,6 +28,7 @@ export const MESSAGE_LOG_KINDS = ["stdout", "stderr", "event"] as const;
 export const PROVIDER_KEY_VARS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
+  "OPENCODE_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
   "MISTRAL_API_KEY",

@@ -37,6 +37,10 @@ Desk is a personal AI platform for people who use AI every day to do real work �
 
 Desk is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Desk lives, your data lives.
 
+## Download
+
+Pre-built macOS desktop app releases are available on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest) (Apple Silicon · arm64). New builds are published weekly.
+
 ---
 
 ## For developers
@@ -69,6 +73,7 @@ Run from the repo root.
 | --- | --- |
 | `npm run dev` | Boot `desk-server` + Vite. |
 | `npm run dev:app` | Vite only — useful when `desk-server` runs elsewhere. |
+| `npm run dev:desktop` | Build server + app, then launch the Electron desktop app (`cd packages/desktop && npm run dev`). Requires the server packages to be built first (`npm run build:server`). |
 | `npm run build` | Build all workspace packages (Nx). |
 | `npm run typecheck` | Run tsc on all workspaces. |
 | `npm run test:host` | Vitest unit + integration tests. |
