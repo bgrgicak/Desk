@@ -2150,6 +2150,8 @@ export function createApp(opts: AppOptions): Server {
             currentStream.on("error", reject);
           });
           sendJson(res, 409, {
+            code: "VERSION_CONFLICT",
+            message: "Library file changed since your If-Match etag — current content returned alongside",
             conflict: true,
             content: Buffer.concat(chunks).toString("utf8"),
             etag: currentFile.updatedAtMs,
