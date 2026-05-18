@@ -35,6 +35,29 @@ describe('eventDisplayChunks', () => {
     expect(eventDisplayChunks(log, false)).toEqual([{ kind: 'text', text: 'Visible answer' }])
   })
 
+  it('keeps reasoning hidden from regular users and grouped with tool events for developers', () => {
+    const log = [
+      { kind: 'event' as const, event: { type: 'reasoning', part: { text: 'Private chain of thought.' } } },
+    ]
+
+    expect(eventDisplayChunks(log, false)).toEqual([])
+    expect(eventDisplayChunks(log, true)).toEqual([{ kind: 'events', entries: log }])
+  })
+
+  it('hides text deltas that duplicate a reasoning part', () => {
+    const log = [
+      { kind: 'event' as const, event: { type: 'text', part: { id: 'prt_reason', text: 'Private chain' } } },
+      { kind: 'event' as const, event: { type: 'reasoning', part: { id: 'prt_reason', text: 'Private chain' } } },
+      { kind: 'event' as const, event: { type: 'text', part: { id: 'prt_answer', text: 'Visible answer' } } },
+    ]
+
+    expect(eventDisplayChunks(log, false)).toEqual([{ kind: 'text', text: 'Visible answer' }])
+    expect(eventDisplayChunks(log, true)).toEqual([
+      { kind: 'events', entries: [log[1]] },
+      { kind: 'text', text: 'Visible answer' },
+    ])
+  })
+
   it('does not render tool payload text as an error just because it mentions errors', () => {
     const log = [
       {

@@ -20,6 +20,7 @@
 import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Engine } from "./engine.js";
+import { SANDBOX_HOME } from "./mounts.js";
 
 /** Container-internal port the daemon binds to. Published to host at an auto-assigned port via `-p`. */
 export const OPENCODE_SERVE_CONTAINER_PORT = 9105;
@@ -51,6 +52,14 @@ export interface OpencodeServerInstance {
    * digest to the desired env and restarts the server if they diverge.
    */
   envDigest: string;
+  /**
+   * Names of env vars that had a non-empty value at spawn time. Used only
+   * for diagnostic logging when the daemon is respawned with a new env —
+   * we log the *symmetric difference* of populated keys so the operator
+   * can see e.g. "GITHUB_TOKEN went from empty to set" without ever
+   * logging the secret value itself.
+   */
+  populatedEnvKeys: string[];
 }
 
 export interface StartOpencodeServerOpts {
@@ -133,11 +142,25 @@ export async function ensureOpencodeServer(
   opts: StartOpencodeServerOpts,
 ): Promise<OpencodeServerInstance> {
   return withContainerLock(opts.containerId, async () => {
+    // Signal that the 30s outer ceiling aborts. Plumbed through every
+    // await in `body` so a timed-out attempt actually *stops* — without
+    // this, the body keeps running (kill loops, port polls, waitForReady
+    // backoff) and races the next caller's fresh attempt on the same
+    // container's in-container port. See PR #112 follow-up.
+    const abortCtrl = new AbortController();
+    // Cache entry this attempt installs. Captured here so the outer
+    // catch/error handlers can delete *our* entry rather than blindly
+    // deleting by containerId — otherwise a leaked late body that
+    // rejects after a successor has populated cache would evict the
+    // successor's healthy entry.
+    let installedEntry: ServerCacheEntry | null = null;
+
     const body = (async () => {
       const wantedDigest = digestEnv(opts.env);
       const existing = cache.get(opts.containerId);
       if (existing) {
         const live = await existing.promise.catch(() => null);
+        abortCtrl.signal.throwIfAborted();
         if (live && live.envDigest === wantedDigest) {
           // Health-check the cached daemon. The container could have
           // been stopped/recreated outside our awareness (test teardown,
@@ -148,43 +171,72 @@ export async function ensureOpencodeServer(
         }
         // Env changed, last start failed, or cached instance is dead —
         // fall through to the start path below.
-        if (live) await stopOpencodeServerInternal(engine, opts.containerId, live).catch(() => {});
-        cache.delete(opts.containerId);
+        if (live && live.envDigest !== wantedDigest) {
+          // Log the *names* of env vars whose populated/empty state
+          // flipped — never values, since these include API keys.
+          // Helps diagnose "I added GitHub but the sandbox can't see
+          // it" by showing exactly which key just appeared/disappeared
+          // in the new env vs. the daemon's old env.
+          const nextKeys = populatedKeys(opts.env);
+          const added = nextKeys.filter((k) => !live.populatedEnvKeys.includes(k));
+          const removed = live.populatedEnvKeys.filter((k) => !nextKeys.includes(k));
+          // eslint-disable-next-line no-console
+          console.log(
+            `opencode-serve: env changed for container ${opts.containerId}, respawning daemon ` +
+              `(added: ${added.join(",") || "-"}; removed: ${removed.join(",") || "-"})`,
+          );
+        }
+        if (live) await stopOpencodeServerInternal(engine, opts.containerId, live, abortCtrl.signal).catch(() => {});
+        if (cache.get(opts.containerId) === existing) cache.delete(opts.containerId);
       }
 
+      abortCtrl.signal.throwIfAborted();
       const entry: ServerCacheEntry = {
         instance: null,
-        promise: startOpencodeServer(engine, opts, wantedDigest).then(
+        promise: startOpencodeServer(engine, opts, wantedDigest, abortCtrl.signal).then(
           (instance) => {
             entry.instance = instance;
             return instance;
           },
           (err) => {
-            cache.delete(opts.containerId);
+            // Identity check: only evict if our entry is still the one
+            // in cache. A late body that aborts after a successor has
+            // installed a fresh entry must not delete the successor.
+            if (cache.get(opts.containerId) === entry) cache.delete(opts.containerId);
             throw err;
           },
         ),
       };
+      installedEntry = entry;
       cache.set(opts.containerId, entry);
       return entry.promise;
     })();
+    // Body may keep running after the race below resolves (e.g. when the
+    // 30s timeout fires and we abort). Attach a tail handler so its
+    // eventual rejection doesn't surface as an unhandledRejection.
+    body.catch(() => {});
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, rej) => {
-      timer = setTimeout(
-        () => rej(new Error(`opencode-serve: ensure timed out after ${ENSURE_OPENCODE_SERVER_TIMEOUT_MS}ms (container ${opts.containerId})`)),
-        ENSURE_OPENCODE_SERVER_TIMEOUT_MS,
-      );
+      timer = setTimeout(() => {
+        // Abort *before* rejecting so the body sees the signal and
+        // unwinds promptly (vs. continuing to hold the in-container
+        // port for the duration of waitForReady's backoff).
+        abortCtrl.abort(new Error(`opencode-serve: ensure timed out after ${ENSURE_OPENCODE_SERVER_TIMEOUT_MS}ms (container ${opts.containerId})`));
+        rej(new Error(`opencode-serve: ensure timed out after ${ENSURE_OPENCODE_SERVER_TIMEOUT_MS}ms (container ${opts.containerId})`));
+      }, ENSURE_OPENCODE_SERVER_TIMEOUT_MS);
     });
 
     try {
       return await Promise.race([body, timeout]);
     } catch (err) {
-      // Drop the cache entry on timeout so the next caller doesn't
-      // re-await the same wedged promise. The lock holder (this
-      // function) returns/rejects, so its `withContainerLock` tail
-      // resolves and the next caller can enter.
-      cache.delete(opts.containerId);
+      // Make sure the body stops on any rejection path (not just
+      // timeout) so a propagated error doesn't leave a zombie spawn
+      // mid-flight.
+      abortCtrl.abort();
+      if (installedEntry && cache.get(opts.containerId) === installedEntry) {
+        cache.delete(opts.containerId);
+      }
       throw err;
     } finally {
       if (timer) clearTimeout(timer);
@@ -281,18 +333,47 @@ async function startOpencodeServer(
   engine: Engine,
   opts: StartOpencodeServerOpts,
   envDigest: string,
+  signal?: AbortSignal,
 ): Promise<OpencodeServerInstance> {
+  signal?.throwIfAborted();
   // The container must be running and have a `-p 127.0.0.1::9105`
   // mapping. We don't validate the latter here — `engine.port()` will
   // return null if not, and we surface a clear error then.
   const info = await engine.inspect(opts.containerId);
   if (!info) throw new Error(`opencode-serve: container ${opts.containerId} not found`);
   if (!info.running) throw new Error(`opencode-serve: container ${opts.containerId} is not running`);
+  signal?.throwIfAborted();
 
   // Before starting a new daemon, kill any stragglers in the container
   // bound to the same in-container port. This handles desk-server crashes
   // where the prior daemon is still listening but our cache is empty.
-  await killAnyOpencodeServeInContainer(engine, opts.containerId).catch(() => {});
+  await killAnyOpencodeServeInContainer(engine, opts.containerId, signal).catch((err) => {
+    // Propagate aborts so we don't keep spawning into a torn-down attempt;
+    // every other failure is best-effort by design.
+    if (isAbortError(err)) throw err;
+  });
+  signal?.throwIfAborted();
+
+  // Wipe the daemon's persistent auth store. opencode-serve stores every
+  // `PUT /auth/<provider>` registration in `~/.local/share/opencode/auth.json`,
+  // and that file SURVIVES daemon restarts. Without this wipe, an OAuth blob
+  // we registered during a previous spawn (e.g. when Codex was enabled) keeps
+  // authenticating the openai provider after the user disables Codex — even
+  // a perfectly-clean restart with `OPENCODE_AUTH_CONTENT=""` in the env
+  // doesn't help, because opencode reads its persistent store before it ever
+  // looks at the env. Wiping the file (and then letting `registerAuthBlobs`
+  // re-PUT only what the CURRENT env contains) keeps the daemon's auth
+  // surface in lockstep with Settings, regardless of how many providers
+  // accumulate over time.
+  await wipeDaemonAuthStore(engine, opts.containerId, signal).catch((err: unknown) => {
+    if (isAbortError(err)) throw err;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `opencode-serve: failed to wipe persistent auth store for ${opts.containerId}:`,
+      (err as Error)?.message ?? err,
+    );
+  });
+  signal?.throwIfAborted();
 
   const password = crypto.randomBytes(32).toString("hex");
 
@@ -342,12 +423,13 @@ async function startOpencodeServer(
     env,
     cwd: opts.cwd,
   });
+  signal?.throwIfAborted();
 
   // Look up the host-side port. The mapping is wired up at container
   // create time, so `engine.port` should answer immediately. We do a few
   // retries to cover container startup race in case the runtime hasn't
   // refreshed `NetworkSettings.Ports` yet.
-  const binding = await pollPortBinding(engine, opts.containerId);
+  const binding = await pollPortBinding(engine, opts.containerId, signal);
   if (!binding) {
     await killAnyOpencodeServeInContainer(engine, opts.containerId).catch(() => {});
     throw new Error(
@@ -358,7 +440,7 @@ async function startOpencodeServer(
   const url = `http://${binding.hostIp}:${binding.hostPort}`;
 
   // Wait until the daemon responds.
-  await waitForReady(url, password, DEFAULT_READY_TIMEOUT_MS);
+  await waitForReady(url, password, DEFAULT_READY_TIMEOUT_MS, signal);
 
   // opencode-serve reads `OPENCODE_AUTH_CONTENT` from its env but does
   // not auto-consume it as registered provider auth — providers are only
@@ -369,7 +451,8 @@ async function startOpencodeServer(
   // first `POST /session/.../message` referencing that provider's model
   // fails with `ProviderModelNotFoundError`.
   if (opts.env.OPENCODE_AUTH_CONTENT) {
-    await registerAuthBlobs(url, password, opts.env.OPENCODE_AUTH_CONTENT).catch((err) => {
+    await registerAuthBlobs(url, password, opts.env.OPENCODE_AUTH_CONTENT, signal).catch((err) => {
+      if (isAbortError(err)) throw err;
       // eslint-disable-next-line no-console
       console.warn(
         `opencode-serve: failed to register OPENCODE_AUTH_CONTENT for ${opts.containerId}:`,
@@ -401,6 +484,7 @@ async function startOpencodeServer(
     password,
     startedAt: Date.now(),
     envDigest,
+    populatedEnvKeys: populatedKeys(opts.env),
   };
 }
 
@@ -415,6 +499,7 @@ async function registerAuthBlobs(
   url: string,
   password: string,
   rawBlob: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   let parsed: unknown;
   try {
@@ -427,6 +512,7 @@ async function registerAuthBlobs(
   }
   const credentials = Buffer.from(`opencode:${password}`).toString("base64");
   for (const [providerID, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    signal?.throwIfAborted();
     if (!entry || typeof entry !== "object") continue;
     const e = entry as { type?: unknown };
     if (e.type !== "oauth" && e.type !== "api" && e.type !== "wellknown") continue;
@@ -437,6 +523,7 @@ async function registerAuthBlobs(
         "content-type": "application/json",
       },
       body: JSON.stringify(entry),
+      signal,
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
@@ -467,12 +554,14 @@ async function isInstanceAlive(instance: OpencodeServerInstance): Promise<boolea
 async function pollPortBinding(
   engine: Engine,
   containerId: string,
+  signal?: AbortSignal,
 ): Promise<{ hostIp: string; hostPort: number } | null> {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     const b = await engine.port(containerId, OPENCODE_SERVE_CONTAINER_PORT, "tcp");
     if (b) return b;
-    await delay(50);
+    await delay(50, undefined, { signal });
   }
   return null;
 }
@@ -481,14 +570,17 @@ async function waitForReady(
   url: string,
   password: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastErr: unknown;
   const credentials = Buffer.from(`opencode:${password}`).toString("base64");
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
       const r = await fetch(`${url}/app`, {
         headers: { Authorization: `Basic ${credentials}` },
+        signal,
       });
       if (r.ok || r.status === 401) {
         // 200 means we're up. 401 means we're up but credentials were
@@ -498,9 +590,13 @@ async function waitForReady(
       }
       lastErr = new Error(`status ${r.status}`);
     } catch (err) {
+      // Abort = the outer ensure timed out. Bail immediately rather
+      // than chewing through ~15s of poll backoff while the host has
+      // already given up.
+      if (isAbortError(err)) throw err;
       lastErr = err;
     }
-    await delay(READY_POLL_INTERVAL_MS);
+    await delay(READY_POLL_INTERVAL_MS, undefined, { signal });
   }
   throw new Error(
     `opencode-serve at ${url} did not become ready within ${timeoutMs}ms: ${
@@ -513,8 +609,9 @@ async function stopOpencodeServerInternal(
   engine: Engine,
   containerId: string,
   _instance: OpencodeServerInstance,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await killAnyOpencodeServeInContainer(engine, containerId);
+  await killAnyOpencodeServeInContainer(engine, containerId, signal);
 }
 
 /**
@@ -526,9 +623,71 @@ async function stopOpencodeServerInternal(
  * legacy `opencode serve` wrapper (older sandbox images), so this
  * keeps working across upgrades.
  */
+/**
+ * Removes the daemon's persistent auth file before a fresh spawn so
+ * provider auth state in the daemon matches the env Desk is starting
+ * it with — nothing more.
+ *
+ * opencode-serve stores every `PUT /auth/<provider>` registration in
+ * `<sandbox-home>/.local/share/opencode/auth.json` and reloads it on
+ * startup, so an OAuth blob we registered for one provider during a
+ * previous spawn keeps authenticating that provider after the user
+ * disables the underlying connection. The standalone fix would be
+ * "DELETE /auth/<provider> for every provider we touched" — but that
+ * doesn't scale: opencode-serve already exposes ~5 providers per
+ * spawn (openai, github-models, github-copilot, opencode, anthropic,
+ * …) and the ecosystem is only growing. Wiping the single auth file
+ * is one filesystem op regardless of provider count, and
+ * `registerAuthBlobs` re-PUTs exactly what the current env asks for
+ * on the way back up.
+ *
+ * Two ownership details that bit the first version of this helper:
+ *
+ *  - The auth file is owned by whichever user the daemon last ran as.
+ *    Under rootless Docker (or any sandbox where the daemon ran as
+ *    root), it ends up `root:root` and a same-user exec gets
+ *    `Permission denied`. We exec as `0:0` here so the wipe succeeds
+ *    regardless of what user owns the file.
+ *
+ *  - We use a hard-coded `SANDBOX_HOME` path rather than `$HOME`
+ *    because root's `$HOME` inside the container is `/root`, but
+ *    opencode-serve always writes auth into `<workspace-home>/.local/
+ *    share/opencode` (the daemon's cwd-derived home, not the exec'ing
+ *    user's home).
+ *
+ * Best-effort: a missing file or a transient docker hiccup must not
+ * block a daemon spawn. Aborts propagate so the outer ensure-timeout
+ * unwinds cleanly.
+ */
+async function wipeDaemonAuthStore(
+  engine: Engine,
+  containerId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const authPath = `${SANDBOX_HOME}/.local/share/opencode/auth.json`;
+  const h = await engine.exec({
+    containerId,
+    // Run as root so we can delete the file regardless of the user
+    // the daemon ran as last spawn. The sandbox already trusts root
+    // execs from the host side (createOrReuse boots the container
+    // with `user: SANDBOX_CONTAINER_USER` = root).
+    user: "0:0",
+    cmd: [
+      "sh", "-c",
+      // `rm -f` is silent on a missing file. `--` guards against a
+      // path that would otherwise look like an option (defense in
+      // depth — the path here is a Desk-controlled constant).
+      `rm -f -- '${authPath}'`,
+    ],
+  });
+  await waitWithSignal(h, signal);
+}
+
 export async function killAnyOpencodeServeInContainer(
   engine: Engine,
   containerId: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Pidfile path mirrors what `startOpencodeServer` writes. We SIGTERM
   // first, wait briefly for graceful exit, then SIGKILL any leftover so
@@ -536,6 +695,7 @@ export async function killAnyOpencodeServeInContainer(
   // dying old process. Without the wait, the new daemon's bind() can
   // race the old daemon's still-held socket and silently fail to start,
   // surfacing later as "did not become ready within 15s: fetch failed".
+  signal?.throwIfAborted();
   const h = await engine.exec({
     containerId,
     cmd: [
@@ -560,7 +720,50 @@ export async function killAnyOpencodeServeInContainer(
       ].join("\n"),
     ],
   });
-  await h.wait();
+  await waitWithSignal(h, signal);
+}
+
+/**
+ * Awaits an exec handle but bails — and SIGTERMs the wrapper subprocess
+ * via `h.cancel()` — the moment `signal` aborts. Without this, an
+ * `ensure timed out` would still sit for the full ~2s graceful-kill
+ * wait inside the container, holding the per-container lock.
+ */
+async function waitWithSignal(
+  h: { wait: () => Promise<number>; cancel: () => Promise<void> },
+  signal: AbortSignal | undefined,
+): Promise<number> {
+  if (!signal) return h.wait();
+  if (signal.aborted) {
+    h.cancel().catch(() => {});
+    throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      onAbort = () => {
+        h.cancel().catch(() => {});
+        reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      h.wait().then(resolve, reject);
+    });
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * True for both DOMException-style aborts (fetch, node:timers/promises)
+ * and Error-style ones we throw ourselves via `AbortController.abort(reason)`.
+ * `signal.throwIfAborted()` may throw the controller's reason verbatim
+ * (an arbitrary Error) so a name-only check would miss those.
+ */
+function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  if ((err as { name?: string }).name === "AbortError") return true;
+  const msg = (err as { message?: string }).message ?? "";
+  return /\bensure timed out after\b/.test(msg);
 }
 
 function shSingle(s: string): string {
@@ -578,7 +781,23 @@ function digestEnv(env: Record<string, string>): string {
   return crypto.createHash("sha256").update(sorted).digest("hex");
 }
 
+/**
+ * Names of env vars whose value is non-empty. Used only for diagnostic
+ * logging on respawn — never logs values. `buildDaemonEnv` emits known
+ * connection vars as empty strings even when unset (so the daemon's
+ * inherited env doesn't leak a key Settings says is off), and we want
+ * those blanks to read as "not populated" in the log.
+ */
+function populatedKeys(env: Record<string, string>): string[] {
+  return Object.keys(env)
+    .filter((k) => typeof env[k] === "string" && env[k].length > 0)
+    .sort();
+}
+
 export const _digestEnvForTest = digestEnv;
 
 /** Test-only re-export. */
 export const _registerAuthBlobsForTest = registerAuthBlobs;
+
+/** Test-only re-export. */
+export const _waitForReadyForTest = waitForReady;

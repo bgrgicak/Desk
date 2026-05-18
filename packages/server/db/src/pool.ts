@@ -101,8 +101,8 @@ export class Pool {
     this.db.exec("PRAGMA busy_timeout=5000");
     this.db.exec("PRAGMA temp_store=MEMORY");
 
-    // The DB holds password hashes, encrypted provider-key blobs, and
-    // session token hashes — anything that ends up readable to other
+    // The DB holds password hashes, non-secret app metadata, and session
+    // token hashes — anything that ends up readable to other
     // local users is a credential-disclosure incident. Force 0600 on the
     // file we just opened (and any pre-existing file we attached to);
     // skip for in-memory / non-real paths.

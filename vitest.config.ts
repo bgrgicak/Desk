@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Load .env from repo root so DESK_SECRET_KEY / DATABASE_URL are available
+// Load .env from repo root so local test configuration is available
 const envPath = path.resolve(import.meta.dirname, ".env");
 if (fs.existsSync(envPath)) {
   for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {

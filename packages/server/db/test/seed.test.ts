@@ -1,14 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { type Pool } from "../src/pool.js";
 import { setupTestDb, teardownTestDb } from "./helpers/db.js";
 import { seedIfEmpty } from "../src/seed.js";
-import { resetSecretKeyCache } from "../src/encryption.js";
 
 let pool: Pool;
-let keyDir: string;
 
 beforeAll(async () => {
   pool = await setupTestDb();
@@ -19,16 +14,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-seed-"));
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
-  resetSecretKeyCache();
   await pool.query("DELETE FROM user_settings");
-});
-
-afterEach(() => {
-  delete process.env.DESK_SECRET_KEY_PATH;
-  resetSecretKeyCache();
-  fs.rmSync(keyDir, { recursive: true, force: true });
 });
 
 describe("seedIfEmpty", () => {

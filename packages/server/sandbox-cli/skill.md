@@ -350,13 +350,14 @@ notes or library files. The plaintext is one of the few things the
 user genuinely doesn't want to see again.
 
 If a credential the user expects you to use isn't there, tell them
-the title you tried and ask them to add it via Settings → Secrets.
+the title you tried and ask them to add it through a supported
+connection flow or secrets API.
 
 ### Failure modes worth knowing
 
-- `VAULT_LOCKED` — the user's secrets vault is locked. Tell them to
-  open Desk → Settings → Secrets and click "Unlock". Don't retry on
-  your own; the unlock is interactive.
+- `VAULT_LOCKED` — the user's secrets vault is locked. Ask them to
+  unlock the vault before trying again. Don't retry on your own; the
+  unlock is interactive.
 - `NOT_FOUND` — no entry with that title exists. The user has to
   create it; agents can't write to the vault.
 - `NO_TOKEN` / `NO_ENDPOINT` — runtime didn't inject env. Surface

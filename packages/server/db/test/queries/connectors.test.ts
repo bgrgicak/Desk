@@ -1,24 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as connectors from "../../src/queries/connectors.js";
 import * as users from "../../src/queries/users.js";
 import * as workspaces from "../../src/queries/workspaces.js";
-import { resetSecretKeyCache } from "../../src/encryption.js";
 import type { Pool } from "../../src/pool.js";
 
 let pool: Pool;
 let userId: string;
 let workspaceId: string;
-let keyDir: string;
 
 beforeAll(async () => {
-  keyDir = await fs.mkdtemp(path.join(os.tmpdir(), "connectors-key-"));
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
-  resetSecretKeyCache();
   pool = await setupTestDb();
   userId = generateId("user");
   await users.insert(pool, {
@@ -34,8 +26,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestDb(pool);
-  if (keyDir) await fs.rm(keyDir, { recursive: true, force: true });
-  delete process.env.DESK_SECRET_KEY_PATH;
 });
 
 describe("connector queries", () => {

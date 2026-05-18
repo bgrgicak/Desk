@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveAssistantTextMessage, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -68,6 +68,20 @@ describe('isMessageVisible', () => {
       expect(isMessageVisible(msg, true)).toBe(true)
       expect(isDeveloperOnlyMessageVisible(msg)).toBe(true)
     }
+  })
+
+  it('treats text deltas with the same part id as reasoning as developer-only', () => {
+    const reasoningOnly = message({
+      type: 'events',
+      log: [
+        { kind: 'event', event: { type: 'text', part: { id: 'prt_reason', text: 'Private chain of thought.' } } },
+        { kind: 'event', event: { type: 'reasoning', part: { id: 'prt_reason', text: 'Private chain of thought.' } } },
+      ],
+    })
+
+    expect(isMessageVisible(reasoningOnly, false)).toBe(false)
+    expect(isMessageVisible(reasoningOnly, true)).toBe(true)
+    expect(isDeveloperOnlyMessageVisible(reasoningOnly)).toBe(true)
   })
 
   it('keeps structured skill/read payloads with error words developer-only', () => {
@@ -458,11 +472,11 @@ describe('shouldShowNewAssistantBadge', () => {
 })
 
 describe('progressTextFromLog', () => {
-  it('surfaces the latest reasoning text without changing tool-row rendering', () => {
+  it('treats reasoning as internal progress instead of user-visible status text', () => {
     expect(progressTextFromLog([
       { kind: 'event', event: { type: 'tool_use', part: { tool: 'read' } } },
       { kind: 'event', event: { type: 'reasoning', part: { text: 'Checking where the loader is rendered.' } } },
-    ])).toBe('Checking where the loader is rendered.')
+    ])).toBe('Reading')
   })
 
   it('falls back to tool progress labels when no reasoning text is present', () => {
@@ -558,6 +572,24 @@ describe('liveDeveloperProgressMessage', () => {
 
   it('does not surface live tool rows outside developer mode', () => {
     expect(liveDeveloperProgressMessage(activeTurn, false)).toBeNull()
+  })
+})
+
+describe('liveAssistantTextMessage', () => {
+  it('does not render in-flight text deltas as chat text before reasoning classification catches up', () => {
+    const activeTurn = message(
+      { type: 'agent_turn', userMessageId: 'user-1' },
+      {
+        role: 'system',
+        id: 'turn-1',
+        state: 'running',
+        progressLog: [
+          { kind: 'event', event: { type: 'text', part: { id: 'prt_later_reasoning', text: 'Private chain before tool update.' } } },
+        ],
+      },
+    )
+
+    expect(liveAssistantTextMessage(activeTurn)).toBeNull()
   })
 })
 

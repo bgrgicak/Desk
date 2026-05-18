@@ -323,27 +323,60 @@ export function createApp(opts: AppOptions): Server {
   }
 
   /**
-   * Best-effort hot-refresh after a connector / local-source mutation.
-   * Awaited (so the route response reflects the post-refresh state) but
-   * never re-throws — a flaky engine must not turn a successful settings
-   * mutation into a 500. Followed by a `connection.changed` broadcast so
-   * any open client UIs refetch.
+   * Hot-refresh after a connector / local-source mutation. Split into a
+   * fast synchronous phase (awaited) and a slow background phase
+   * (fire-and-forget):
+   *
+   *   - **Synchronous**: clear persisted opencode-serve session ids for
+   *     the affected chats. This is a single DB UPDATE — completes in
+   *     well under a millisecond — and is the only piece that *has* to
+   *     finish before the route returns. Without it, a chat message
+   *     fired right after the settings mutation could pick a session
+   *     bound to the prior auth/model.
+   *
+   *   - **Background**: restart any warm opencode-serve daemons with
+   *     fresh env, and broadcast `connection.changed` so open UIs
+   *     refetch. The daemon restart can take 1–5+ seconds in the worst
+   *     case (graceful kill + waitForReady), and blocking the route on
+   *     it made Settings toggles feel broken: the UI waited on the
+   *     mutation before re-rendering, so the toggle visibly stayed in
+   *     its old position until the docker churn finished.
+   *
+   *     Skipping the await is safe: `ensureOpencodeServer` does its
+   *     own env-digest check on every call, so the next chat turn
+   *     respawns the daemon with the new env regardless. The proactive
+   *     restart here is a perf nice-to-have (avoids cold-spawn latency
+   *     on that first message), not a correctness lever.
+   *
+   *   Failures in either phase are swallowed and logged — a flaky engine
+   *   must not turn a successful settings mutation into a 500.
    */
   async function refreshConnections(
     userId: string,
     payload: WsEvent & { type: "connection.changed" },
     workspaceId?: string,
   ): Promise<void> {
+    try {
+      await queries.chats.clearOpencodeSessionsForUser(pool, userId, workspaceId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `clearOpencodeSessionsForUser failed (userId=${userId} workspaceId=${workspaceId ?? "*"}):`,
+        (err as Error).message ?? err,
+      );
+    }
+    // Fire-and-forget. refreshSandboxConnections also calls
+    // clearOpencodeSessionsForUser internally; on the second pass it
+    // finds nothing to clear and short-circuits. Cheap to do twice;
+    // unsafe to skip on either path.
     if (opts.refreshSandboxConnections) {
-      try {
-        await opts.refreshSandboxConnections(userId, workspaceId);
-      } catch (err) {
+      void opts.refreshSandboxConnections(userId, workspaceId).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn(
           `refreshSandboxConnections failed (userId=${userId} workspaceId=${workspaceId ?? "*"}):`,
           (err as Error).message ?? err,
         );
-      }
+      });
     }
     emitEvent(payload);
   }
@@ -818,6 +851,42 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Sandbox task cancellation — lets an agent cancel follow-up checks it
+    // previously scheduled without needing a browser user-session token.
+    if (path === "/sandbox/messages/cancel" && method === "POST") {
+      const tokenHeader = req.headers["x-desk-sandbox-token"];
+      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+      const { agent } = await authenticateSandboxToken(pool, token);
+      const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown };
+      if (typeof body.chatId !== "string" || !body.chatId) {
+        throw new ValidationError("Missing chatId");
+      }
+      if (typeof body.messageId !== "string" || !body.messageId) {
+        throw new ValidationError("Missing messageId");
+      }
+
+      await requireOwnedChat(pool, body.chatId, agent.userId);
+      const current = await queries.messages.findById(pool, body.messageId);
+      if (!current || current.chatId !== body.chatId) {
+        throw new NotFoundError(`Message not found in chat: ${body.messageId}`);
+      }
+      if (current.kind !== "task") {
+        throw new ValidationError("Only task messages can be cancelled via the sandbox task API");
+      }
+
+      const updated = await chatRoutes.patchMessage(
+        pool,
+        storage,
+        body.chatId,
+        body.messageId,
+        { state: "cancelled" },
+        emitEvent,
+        runManager,
+      );
+      sendJson(res, 200, updated);
+      return;
+    }
+
     // Seed messages — bulk-inserts text messages without triggering agent
     // turns. Used by the agent to populate a chat for scrollback testing.
     if (path === "/sandbox/seed-messages" && method === "POST") {
@@ -1095,6 +1164,21 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/me/providers" && method === "PUT") {
       const body = await parseBody(req) as { providers: Record<string, string | null> };
       const result = await accountRoutes.setProviders(pool, vault, userId, body);
+      // Hot-refresh the sandbox: PUT /me/providers is the path the
+      // Settings UI uses for Claude / ChatGPT / GitHub credential
+      // changes, and without this an existing daemon keeps its old env
+      // (including no env at all for first-time GitHub adds) until
+      // something else triggers a respawn. Same one-shot guarantees as
+      // POST /me/connections.
+      const providerIds = Object.keys(body?.providers ?? {});
+      await refreshConnections(userId, {
+        type: "connection.changed",
+        payload: {
+          kind: "connector",
+          providerId: providerIds.length === 1 ? providerIds[0] : "*",
+          op: "updated",
+        },
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -1106,6 +1190,20 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/me/providers/meta" && method === "PUT") {
       const body = await parseBody(req) as { meta: Record<string, { name?: string; enabled?: boolean } | null> };
       const result = await accountRoutes.setProvidersMeta(pool, userId, body);
+      // The `enabled` toggle in Settings flips a provider on/off — this
+      // changes what resolveProviderKeys returns, so the daemon needs
+      // a respawn with the new env. Name-only changes still fire the
+      // refresh; that's harmless (the digest will match and the
+      // ensure-cache short-circuits) and keeps the route simple.
+      const providerIds = Object.keys(body?.meta ?? {});
+      await refreshConnections(userId, {
+        type: "connection.changed",
+        payload: {
+          kind: "connector",
+          providerId: providerIds.length === 1 ? providerIds[0] : "*",
+          op: "updated",
+        },
+      });
       sendJson(res, 200, result);
       return;
     }
@@ -1401,8 +1499,25 @@ export function createApp(opts: AppOptions): Server {
     if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
       await requireOwnedAgent(pool, segments[1], userId);
       const body = await parseBody(req) as { name?: string; model?: string };
-      const result = await agentRoutes.patchAgent(pool, segments[1], body);
-      sendJson(res, 200, result);
+      const { agent, modelChanged } = await agentRoutes.patchAgent(pool, segments[1], body);
+      if (modelChanged && opts.refreshSandboxConnections) {
+        // opencode-serve caches each agent file's `model:` field at
+        // startup and ignores rewrites. Clearing chat sessions (done
+        // inside patchAgent) is necessary but not sufficient — a new
+        // session in the same daemon still inherits the cached agent
+        // config. Restart the daemons so they re-read the agent files.
+        // Fire-and-forget: the HTTP response shouldn't block on a
+        // Docker round-trip, and a transient engine hiccup must not
+        // turn a successful agent update into a 500.
+        void opts.refreshSandboxConnections(userId).catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `refreshSandboxConnections after agent ${segments[1]} model change failed:`,
+            (err as Error)?.message ?? err,
+          );
+        });
+      }
+      sendJson(res, 200, agent);
       return;
     }
     if (segments[0] === "agents" && segments.length === 2 && method === "DELETE") {

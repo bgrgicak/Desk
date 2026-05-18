@@ -5,8 +5,8 @@
  * sandbox via env vars; no API key is required.
  *
  * Cloud sources (Anthropic, OpenAI, Gemini, …) live on the other path:
- * the user pastes an API key, we encrypt it in the DB, and the existing
- * `provider_keys` machinery forwards it as a named env var.
+ * the user pastes an API key, Desk stores it in the per-user KDBX vault,
+ * and the connection machinery forwards it as a named env var.
  */
 
 /** Kind discriminator. Add a new entry here when you register a new local source. */

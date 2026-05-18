@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ListLibraryResponse } from '@/store/types'
-import { displayBasename, isDirectoryPath, workspaceRelativePath } from './PathChip'
+import { displayBasename, isDirectoryPath, pathChipHref, workspaceRelativePath } from './PathChip'
 
 const library: ListLibraryResponse = {
   items: [
@@ -63,5 +63,19 @@ describe('displayBasename', () => {
 
   it('falls back to the full path when there is no basename to extract', () => {
     expect(displayBasename('/')).toBe('/')
+  })
+})
+
+describe('pathChipHref', () => {
+  it('builds real library links for files', () => {
+    expect(pathChipHref('wks_123', '/home/agent/report.md', false)).toBe('/w/wks_123/context?item=report.md')
+  })
+
+  it('builds real library links for folders', () => {
+    expect(pathChipHref('wks_123', '/home/agent/Projects/Alpha', true)).toBe('/w/wks_123/context?folder=Projects%2FAlpha')
+  })
+
+  it('returns undefined without a workspace', () => {
+    expect(pathChipHref(undefined, '/home/agent/report.md', false)).toBeUndefined()
   })
 })

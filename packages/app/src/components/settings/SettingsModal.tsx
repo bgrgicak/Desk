@@ -772,6 +772,7 @@ function AgentDetail({
   const [name, setName] = useState(existing?.name ?? '')
   const [model, setModel] = useState(initialModel)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerPortalContainer, setModelPickerPortalContainer] = useState<HTMLElement | null>(null)
 
   const canSave = name.trim().length > 0 && model.trim().length > 0
   const handleSave = () => {
@@ -787,7 +788,7 @@ function AgentDetail({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+    <div ref={setModelPickerPortalContainer} className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
       <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
         <Field label="Name">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
@@ -811,10 +812,20 @@ function AgentDetail({
                 <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
+            <PopoverContent
+              container={modelPickerPortalContainer ?? undefined}
+              className="p-0 w-[var(--radix-popover-trigger-width)] overflow-hidden"
+              align="start"
+              onEscapeKeyDown={() => {
+                // cmdk swallows Escape via preventDefault, which would
+                // stop Radix's auto-dismiss of this Popover. We force-
+                // close here instead so the outer Dialog stays open.
+                setModelPickerOpen(false)
+              }}
+            >
               <Command>
                 <CommandInput placeholder="Search models…" />
-                <CommandList>
+                <CommandList className="overscroll-contain">
                   <CommandEmpty>No models found.</CommandEmpty>
                   {[...modelIndex.entries()].map(([prov, models]) => (
                     <CommandGroup key={prov} heading={providerLabel(prov)}>

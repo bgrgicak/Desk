@@ -1,25 +1,34 @@
 /**
- * Hot-refresh of provider keys / local-source env for already-running
- * sandbox daemons.
+ * Hot-refresh of provider keys / local-source env / agent files for
+ * already-running sandbox daemons.
  *
  * When a user adds, edits, or removes a connector connection (GitHub
- * token, OPENAI_API_KEY, …) — or toggles a local source like Codex
- * — three layers of "stickiness" stand between the change and the
- * agent inside the sandbox:
+ * token, OPENAI_API_KEY, …), toggles a local source like Codex, OR
+ * changes the model on an agent (Settings → Agents → Edit), several
+ * layers of "stickiness" stand between the change and the agent inside
+ * the sandbox:
  *
  *   1. The container's birth env (handled at exec time elsewhere).
  *   2. The opencode-serve daemon's process env. The daemon reads
  *      provider keys at spawn time; a new key only reaches the daemon
  *      when it's restarted with fresh env.
- *   3. The opencode-serve session bound to the chat. opencode-serve
+ *   3. The daemon's in-memory cache of every agent file's `model:`
+ *      field. opencode-serve reads `/agents/<id>.md` once at startup
+ *      and never re-reads it — so rewriting the file mid-life leaves
+ *      the daemon's resolved config (and every subsequent session bound
+ *      to that agent) pinned to the OLD model. The daemon also ignores
+ *      per-message `providerID`/`modelID` overrides when a session has
+ *      an `agent` bound to it.
+ *   4. The opencode-serve session bound to the chat. opencode-serve
  *      binds providerID / modelID / auth at session creation and
  *      ignores per-message overrides for those fields, so a chat
  *      whose session was created with the OAuth blob keeps using it
  *      even after we strip OPENCODE_AUTH_CONTENT from the env.
  *
- * This module pierces (2) and (3): we restart the daemon with freshly
- * resolved env, and we null out persisted opencode session ids so the
- * next turn creates a session bound to whatever is configured now.
+ * This module pierces (2), (3), and (4): we restart the daemon with
+ * freshly resolved env (which also re-reads every agent file), and we
+ * null out persisted opencode session ids so the next turn creates a
+ * session bound to whatever is configured now.
  *
  * Workspaces with an in-flight run skip the daemon restart (it would
  * kill the in-flight model call). The existing env-digest check in
@@ -152,6 +161,11 @@ export async function refreshSandboxConnections(
           // (rather than re-using the cached daemon and its stale env).
           invalidateOpencodeServerCache(info.id);
           result.skippedActive.push(workspaceId);
+          // eslint-disable-next-line no-console
+          console.log(
+            `connection refresh: workspace ${workspaceId} has an active run — ` +
+              `dropped daemon cache, next turn will respawn with fresh env`,
+          );
           return;
         }
 
@@ -171,6 +185,14 @@ export async function refreshSandboxConnections(
       }
     }),
   );
+
+  if (result.clearedSessions.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `connection refresh: cleared ${result.clearedSessions.length} opencode session(s) for user ${opts.userId}` +
+        (opts.workspaceId ? ` (workspace ${opts.workspaceId})` : ""),
+    );
+  }
 
   return result;
 }

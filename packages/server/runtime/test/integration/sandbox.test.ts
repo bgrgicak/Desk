@@ -24,6 +24,7 @@ import {
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
+import { ensureContainerXvfb } from "../../src/opencodeServer.js";
 import { rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
@@ -216,6 +217,19 @@ describeIf("sandbox integration", () => {
   });
 
   it("lets the agent install Debian packages", async () => {
+    // `apt-get update` + install drives RAM well past the 512 MB baseline
+    // sandbox cap (apt's pkgcache plus dpkg's working set alone load
+    // ~150 MB, on top of whatever the reused container is already
+    // holding from prior tests in this file). In production the
+    // scheduler's `growSandboxForResourceError` doubles the cap on the
+    // first OOM and re-fires the run; this test runs `execInSandbox`
+    // directly so we pre-grow once to mimic the same headroom (1 GB
+    // matches the first growth step). Without this the test OOM'd as
+    // exit 137 on a warm machine.
+    const engine = await detectEngine();
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    await engine.update(handle.containerId, { memoryBytes: 1024 * 1024 * 1024 });
+
     const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
       argv: [
         "sh",
@@ -362,6 +376,12 @@ describeIf("sandbox integration", () => {
   it("ships browser automation tooling and a working display", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
+    // Xvfb is intentionally NOT pre-warmed in createOrReuse — the ~68 MB
+    // framebuffer would sit idle for every chat-goal sandbox. The host
+    // calls `ensureContainerXvfb` only when a browser-goal chat actually
+    // needs the display ([opencode.ts:167]). Mirror that here so the
+    // smoke test exercises the same path a real browser chat would.
+    await ensureContainerXvfb(engine, handle.containerId);
 
     const htmlPath = "/tmp/desk-playwright-smoke.html";
     const screenshotPath = "/tmp/desk-playwright-smoke.png";

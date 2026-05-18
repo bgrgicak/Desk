@@ -90,6 +90,10 @@ const pickerBtnClass =
   'flex min-w-0 max-w-full items-center gap-1 rounded-md bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors px-2 h-6 text-xs font-medium shrink-0 [&>span]:truncate'
 const dropdownClass = 'rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col'
 
+export function isComposerDropdownDismissKey(event: Pick<KeyboardEvent, 'key'>): boolean {
+  return event.key === 'Escape'
+}
+
 export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickersProps>(function ComposerPickers(
   {
     workspaceId,
@@ -207,6 +211,18 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!isComposerDropdownDismissKey(e)) return
+      setAttachOpen(false)
+      setAgentOpen(false)
+      setGoalOpen(false)
+    }
+
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
   }, [])
 
   const allAttachments: ComposerAttachment[] = [

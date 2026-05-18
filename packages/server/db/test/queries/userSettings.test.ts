@@ -5,7 +5,6 @@ import * as userSettings from "../../src/queries/userSettings.js";
 import * as users from "../../src/queries/users.js";
 import { hashPassword } from "../../src/passwords.js";
 import type { Pool } from "../../src/pool.js";
-import * as crypto from "node:crypto";
 
 let pool: Pool;
 
@@ -52,14 +51,12 @@ describe("user_settings queries", () => {
     expect(updated.GEMINI_API_KEY?.enabled).toBe(true);
   });
 
-  it("getProviderMeta returns empty object when ciphertext is undecryptable", async () => {
+  it("getProviderMeta returns empty object when JSON is invalid", async () => {
     const id = await makeUser("bad-cipher-user");
-    // Write a plausible-looking but undecryptable blob (wrong key).
-    const garbage = crypto.randomBytes(12 + 16 + 16); // IV + data + GCM tag
     await pool.query(
-      `INSERT INTO user_settings (user_id, provider_meta_encrypted, updated_at)
+      `INSERT INTO user_settings (user_id, provider_meta_json, updated_at)
        VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
-      [id, garbage],
+      [id, "not json"],
     );
     expect(await userSettings.getProviderMeta(pool, id)).toEqual({});
   });

@@ -20,6 +20,26 @@ export const LOCAL_SOURCES: Record<LocalSourceKind, LocalSource> = {
 /** Stable list of registered kinds, useful for iteration in API/UI code. */
 export const LOCAL_SOURCE_KINDS: readonly LocalSourceKind[] = Object.keys(LOCAL_SOURCES) as LocalSourceKind[];
 
+/**
+ * Names of env vars that local sources inject into the sandbox.
+ *
+ * Daemon env builders prepend these as empty strings (alongside the
+ * cloud `CONNECTION_ENV_VARS`) so a `docker exec -e KEY=` launching
+ * `opencode serve` overrides anything the container inherited at
+ * create time. Without this, a local source the user disabled in
+ * Settings stays visible to the warm daemon through the container's
+ * birth env — e.g. Codex's `OPENCODE_AUTH_CONTENT` blob keeps flowing
+ * into the daemon even after the user toggles Codex off, and the
+ * daemon keeps using the stale OAuth path.
+ *
+ * Hand-maintained for the prototype: each entry must match the keys a
+ * `LocalSource.loadEnv()` implementation can emit. When you add a new
+ * local source, append its env vars here too.
+ */
+export const LOCAL_SOURCE_ENV_NAMES: readonly string[] = [
+  "OPENCODE_AUTH_CONTENT",
+];
+
 /** Run every registered detector. Order is `LOCAL_SOURCE_KINDS`. */
 export function listLocalSourceStatuses(): LocalSourceStatus[] {
   return LOCAL_SOURCE_KINDS.map((k) => LOCAL_SOURCES[k].detect());

@@ -106,7 +106,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/me/providers": {
         get: {
           summary: "Get AI provider keys (masked)",
-          description: "Returns every known provider key name with its value masked to first 6 + last 4 chars, or null when unset. Keys are encrypted at rest in the DB.",
+          description: "Returns every known provider key name with its value masked to first 6 + last 4 chars, or null when unset. Keys are stored in the user's vault, not in SQLite.",
           responses: {
             "200": {
               description: "Masked provider keys",

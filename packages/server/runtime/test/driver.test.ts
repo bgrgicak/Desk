@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildDaemonEnv,
   buildMessageParts,
+  describeDaemonError,
   isContainerGoneError,
   parseModelSpec,
   synthesizeNonTextEvents,
@@ -85,6 +86,73 @@ describe("buildDaemonEnv", () => {
     expect(env.GITHUB_TOKEN).toBe("");
     // Managed-connection aliases (e.g. GH_TOKEN mirrors GITHUB_TOKEN)
     expect(env.GH_TOKEN).toBe("");
+  });
+
+  it("blanks local-source env vars (e.g. Codex's OPENCODE_AUTH_CONTENT) when the source is off", () => {
+    // The companion to the disabled-cloud-provider regression above.
+    // Local sources land their auth via `extraEnv`, not `providerKeys`.
+    // When the user disables Codex in Settings, `resolveLocalSourceEnv`
+    // returns an empty map — but the sandbox container was created
+    // back when Codex was enabled, so the birth env still carries
+    // `OPENCODE_AUTH_CONTENT`. Without an explicit blank in the daemon
+    // env override, opencode-serve inherits the OAuth blob from the
+    // container birth and keeps authenticating openai via the Codex
+    // path forever after.
+    const env = buildDaemonEnv({ providerKeys: {}, extraEnv: {} });
+    expect(env.OPENCODE_AUTH_CONTENT).toBe("");
+  });
+
+  it("real OPENCODE_AUTH_CONTENT in extraEnv overrides the blank when Codex is on", () => {
+    const env = buildDaemonEnv({
+      providerKeys: {},
+      extraEnv: { OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" },
+    });
+    expect(env.OPENCODE_AUTH_CONTENT).toContain("oauth");
+  });
+
+  it("flips the env digest when Codex is toggled off, forcing a daemon restart", () => {
+    // Same shape as the cloud-provider digest test below — toggling a
+    // local source on/off must flip the env digest so
+    // `ensureOpencodeServer` knows to respawn the daemon with the new
+    // env. Without this, opencode-serve keeps its in-memory OAuth-
+    // backed openai provider alive across the toggle and the chat
+    // silently runs against a "disabled" source.
+    const before = _digestEnvForTest(
+      buildDaemonEnv({
+        providerKeys: {},
+        extraEnv: { OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" },
+      }),
+    );
+    const after = _digestEnvForTest(buildDaemonEnv({ providerKeys: {}, extraEnv: {} }));
+    expect(before).not.toBe(after);
+  });
+
+  it("flips the env digest when an agent file's model changes, forcing a daemon restart", () => {
+    // opencode-serve caches each agent's `model:` at startup. So a
+    // rewrite of the agent file mid-life — e.g. the no-auth fallback
+    // changing `codex/gpt-5.5-fast` to `opencode/big-pickle` — is
+    // invisible to the running daemon. Folding the agent-files model
+    // digest into the daemon env makes the env-digest compare in
+    // `ensureOpencodeServer` notice the rewrite and respawn the
+    // daemon so it re-reads the file.
+    const before = _digestEnvForTest(
+      buildDaemonEnv({ providerKeys: {}, agentFilesDigest: "abc" }),
+    );
+    const after = _digestEnvForTest(
+      buildDaemonEnv({ providerKeys: {}, agentFilesDigest: "xyz" }),
+    );
+    expect(before).not.toBe(after);
+  });
+
+  it("treats an absent vs empty agentFilesDigest as the same env (no spurious restart on workspace bootstrap)", () => {
+    // Workspaces created before this digest existed (or with an
+    // empty agents dir) must not churn the daemon every turn just
+    // because no digest is being passed.
+    const absent = _digestEnvForTest(buildDaemonEnv({ providerKeys: {} }));
+    const explicitEmpty = _digestEnvForTest(
+      buildDaemonEnv({ providerKeys: {}, agentFilesDigest: "" }),
+    );
+    expect(absent).toBe(explicitEmpty);
   });
 
   it("real keys override the blanks so enabled providers still flow through", () => {
@@ -333,6 +401,62 @@ describe("isContainerGoneError", () => {
     expect(isContainerGoneError("ECONNREFUSED")).toBe(false);
     expect(isContainerGoneError("docker daemon not responding")).toBe(false);
     expect(isContainerGoneError("")).toBe(false);
+  });
+});
+
+describe("describeDaemonError", () => {
+  // Locks in the contract: opencode-serve resolves `POST /session/:id/
+  // message` with an `info.error` payload when the upstream model
+  // call fails (zen rate limit, deprecated model, provider 401),
+  // never throwing. The driver routes that payload through this
+  // helper so the run is recorded as failed *with the actual reason*
+  // instead of silently "succeeding" with no text. Without this, the
+  // UI's diagnostic banner only sees the Desk-side fallback notice
+  // and the user has no clue why the chat is empty.
+
+  it("returns null for missing or empty error envelopes", () => {
+    expect(describeDaemonError(undefined)).toBeNull();
+    expect(describeDaemonError(null)).toBeNull();
+    expect(describeDaemonError("")).toBeNull();
+  });
+
+  it("prefers the nested `data.message` over the generic top-level name (the user-facing description lives there)", () => {
+    // Real-world shape: APIError with the upstream message buried in
+    // `data.message`. opencode-serve's top-level `name` / `message`
+    // tend to be class names and stack-frame fragments.
+    const result = describeDaemonError({
+      name: "APIError",
+      data: {
+        message: "Model big-pickle not supported for format anthropic",
+        statusCode: 401,
+        responseBody: "{...}",
+      },
+    });
+    expect(result).toBe(
+      "APIError: Model big-pickle not supported for format anthropic (HTTP 401)",
+    );
+  });
+
+  it("falls back to top-level `message` when `data` is missing", () => {
+    const result = describeDaemonError({ name: "ProviderModelNotFoundError", message: "no such model" });
+    expect(result).toBe("ProviderModelNotFoundError: no such model");
+  });
+
+  it("uses the bare name when only `name` is set", () => {
+    expect(describeDaemonError({ name: "InternalError" })).toBe("InternalError");
+  });
+
+  it("threads bare strings through unchanged for ad-hoc errors", () => {
+    expect(describeDaemonError("upstream timeout")).toBe("upstream timeout");
+  });
+
+  it("serializes opaque error objects so the chat log still gets *something*", () => {
+    // Defensive: even if opencode-serve changes its error shape, the
+    // user shouldn't see a "[object Object]" placeholder — the JSON
+    // body is at least diagnosable.
+    const result = describeDaemonError({ foo: "bar", baz: 42 });
+    expect(result).toContain("foo");
+    expect(result).toContain("bar");
   });
 });
 
