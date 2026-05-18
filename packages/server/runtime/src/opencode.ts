@@ -124,8 +124,11 @@ export async function execRun(
     workspaceId: opts.workspaceId,
   });
 
-  // Track the run + write a manifest for operator debugging.
-  const mounts = await projectMounts(handle, {
+  // Pre-create the workspace + attachments mount points on the host.
+  // projectMounts() does the fs.mkdir as a side effect; the returned
+  // MountSet is intentionally unused here — bind-mount wiring lives
+  // inside the engine and reads its own copy.
+  await projectMounts(handle, {
     home: opts.home,
     workspaceId: opts.workspaceId,
     workspaceSlug: opts.workspaceSlug,

@@ -419,7 +419,12 @@ function parseMultipartFileStream(req: IncomingMessage): Promise<{
   });
 }
 
-type RouteHandler = (req: IncomingMessage, res: ServerResponse, params: RouteParams) => Promise<void>;
+// Reserved for the upcoming route-table refactor (Phase 4) — the
+// dispatcher will move from a chain of `if`s into a Map<string,
+// RouteHandler>. Keeping the type definition out keeps the intended
+// shape visible; renamed with leading underscore so the no-unused
+// rule lets it through.
+type _RouteHandler = (req: IncomingMessage, res: ServerResponse, params: RouteParams) => Promise<void>;
 
 interface RouteParams {
   path: string;
@@ -637,8 +642,12 @@ export function createApp(opts: AppOptions): Server {
     }
   });
 
-  // WebSocket upgrade handler
-  server.on("upgrade", (req, socket, head) => {
+  // WebSocket upgrade handler. The `head` buffer holds any data that
+  // arrived after the upgrade headers but before the handshake; for a
+  // bare-bones WS implementation we don't need it (no protocol
+  // extensions, no extensions buffer to forward), so name it _head to
+  // satisfy no-unused-args while keeping the signature documented.
+  server.on("upgrade", (req, socket, _head) => {
     void (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== "/ws") {
@@ -777,7 +786,7 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/sandbox/secrets" && method === "GET") {
       const tokenHeader = req.headers["x-desk-sandbox-token"];
       const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
+      const { agent } = await authenticateSandboxToken(pool, token);
       const result = vaultRoutes.sandboxList(vault, agent.userId);
       sendJson(res, 200, result);
       return;

@@ -12,7 +12,6 @@ import {
   chatAttachmentsDir,
   listSummaryHistory,
   deleteMaterializedSummary,
-  materializeSummary,
   deleteChatApp,
   deleteLibraryApp,
   pinLibraryFileToChat,

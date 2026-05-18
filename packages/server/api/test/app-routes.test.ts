@@ -34,7 +34,7 @@ function appOpts(): AppOptions {
   };
 }
 
-let servers: http.Server[] = [];
+const servers: http.Server[] = [];
 
 function startServer(): Promise<http.Server> {
   return new Promise((resolve) => {

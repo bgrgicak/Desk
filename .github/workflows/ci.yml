@@ -104,6 +104,14 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint (eslint)
+        # Flat config at the repo root covers every workspace except
+        # packages/app/ (keeps its own React-specific config). Failing
+        # rules are unused-vars, eqeqeq, prefer-const and no-empty.
+        # no-console + no-explicit-any are warn-only while the
+        # structured logger conversion lands as a follow-up.
+        run: npm run lint
+
       - name: Dead-code scan (knip, advisory)
         # Knip surfaces unused files, exports, dependencies and binaries
         # across the monorepo. Run with --no-exit-code so the job is
