@@ -16,7 +16,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, resetSecretKeyCache, queries } from "@agent-desk/db";
+import { Pool, runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import {
@@ -41,6 +41,10 @@ let userId: string;
 let token: string;
 let workspaceId: string;
 let agentId: string;
+// Captures every userId passed to refreshSandboxConnections so tests can
+// assert the agent-model-change path actually triggers the same daemon-
+// restart pipeline used by connection mutations.
+const refreshCalls: Array<{ userId: string; workspaceId: string | undefined }> = [];
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-"));
@@ -55,9 +59,6 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-home-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-  resetSecretKeyCache();
-
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
   vault = new VaultStore(path.join(home, "vaults"));
@@ -82,6 +83,7 @@ beforeAll(async () => {
     // unavailable" branch — that's exactly the path we want covered:
     // sessions still clear, the route still succeeds.
     refreshSandboxConnections: async (uid, wsId) => {
+      refreshCalls.push({ userId: uid, workspaceId: wsId });
       await refreshSandboxConnections({
         pool,
         userId: uid,
@@ -291,5 +293,167 @@ describe("connection-mutation refresh wiring", () => {
         op: "created",
       });
     }
+  });
+});
+
+/**
+ * Regression suite for the "I added a GitHub PAT but the sandbox can't
+ * see it" bug. The Settings UI saves GitHub tokens through legacy PUT
+ * /me/providers (not POST /me/connections), and the resolver previously
+ * skipped GITHUB_TOKEN entirely — and the legacy route didn't trigger a
+ * connection refresh. End result: the token landed in the DB/vault but
+ * never reached opencode-serve.
+ *
+ * These tests cover both halves of the fix:
+ *   - PUT /me/providers writes the token in a shape resolveProviderKeys
+ *     actually finds, and emits both the canonical env var and the
+ *     managed-alias env var when wrapped by buildDaemonEnv.
+ *   - PUT /me/providers (and /me/providers/meta) triggers the same
+ *     refresh wiring as POST /me/connections (session clear + WS
+ *     broadcast).
+ */
+describe("legacy /me/providers — sandbox env propagation", () => {
+  it("makes GITHUB_TOKEN visible to resolveProviderKeys after PUT /me/providers", async () => {
+    const put = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_legacy_resolves" },
+    });
+    expect(put.status).toBe(200);
+
+    const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(resolved.GITHUB_TOKEN).toBe("ghp_legacy_resolves");
+  });
+
+  it("buildDaemonEnv mirrors GITHUB_TOKEN to the GH_TOKEN alias the GitHub CLI reads", async () => {
+    await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_alias_value" },
+    });
+
+    const providerKeys = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    const env = buildDaemonEnv({ providerKeys });
+    expect(env.GITHUB_TOKEN).toBe("ghp_alias_value");
+    expect(env.GH_TOKEN).toBe("ghp_alias_value");
+  });
+
+  it("clears sessions and broadcasts when PUT /me/providers saves a key", async () => {
+    const chatId = await makeChatWithSession("ses_put_providers");
+    const ws = new CapturingWs();
+    addConnection(userId, ws);
+
+    const put = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_triggers_refresh" },
+    });
+    expect(put.status).toBe(200);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    const events: WsEvent[] = ws.sent.map((s) => JSON.parse(s));
+    const connectionChanged = events.find((e) => e.type === "connection.changed");
+    expect(connectionChanged).toBeDefined();
+  });
+
+  it("clears sessions when PUT /me/providers/meta toggles a provider", async () => {
+    // Seed a key so the toggle has something meaningful to flip.
+    await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-toggle" },
+    });
+    const chatId = await makeChatWithSession("ses_put_meta");
+
+    const meta = await request("PUT", "/me/providers/meta", token, {
+      meta: { ANTHROPIC_API_KEY: { enabled: false } },
+    });
+    expect(meta.status).toBe(200);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+
+    // Disabled providers must not appear in the resolved env — otherwise
+    // the Settings toggle is purely cosmetic and the daemon still sees
+    // the key.
+    const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(resolved.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+});
+
+/**
+ * Regression suite for the "I changed my agent's model in Settings but
+ * the sandbox keeps using the old model" bug. opencode-serve reads each
+ * agent file's `model:` field into an in-memory cache at daemon startup
+ * and ignores subsequent rewrites — and it also ignores per-message
+ * `providerID` / `modelID` overrides whenever an `agent` is bound to
+ * the session. So changing `agent.model` in Desk only propagates after
+ * the daemon restarts. PATCH /agents/:id therefore must run the same
+ * daemon-refresh pipeline used by connection mutations.
+ */
+describe("PATCH /agents/:id — daemon refresh on model change", () => {
+  it("clears sessions for chats using the agent when its model changes", async () => {
+    const chatId = await makeChatWithSession("ses_agent_model_change");
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBe("ses_agent_model_change");
+
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const previousModel = before.body.model;
+    const newModel = previousModel === "opencode/big-pickle"
+      ? "opencode/qwen3.6-plus-free"
+      : "opencode/big-pickle";
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: newModel });
+    expect(patched.status).toBe(200);
+    expect(patched.body.model).toBe(newModel);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+  });
+
+  it("triggers refreshSandboxConnections so daemons re-read the updated agent file", async () => {
+    // The opencode-serve daemon caches each agent's `model:` at startup
+    // and never re-reads the file. Without a daemon restart, a new
+    // session created in the same daemon still inherits the cached
+    // (stale) agent config. So clearing chat sessions is necessary but
+    // NOT sufficient — this test pins the daemon-restart side of the fix.
+    refreshCalls.length = 0;
+
+    // Force a real model flip even if the previous test left the agent
+    // at the "new" value already.
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const flipped = before.body.model === "opencode/big-pickle"
+      ? "opencode/qwen3.6-plus-free"
+      : "opencode/big-pickle";
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: flipped });
+    expect(patched.status).toBe(200);
+
+    // Allow the fire-and-forget refresh to complete. The handler awaits
+    // patchAgent but kicks refreshSandboxConnections asynchronously so a
+    // Docker hiccup can't stall the HTTP response — that means the test
+    // needs a microtask boundary before asserting.
+    await new Promise((r) => setImmediate(r));
+
+    expect(refreshCalls.length).toBeGreaterThanOrEqual(1);
+    expect(refreshCalls.at(-1)).toEqual({ userId, workspaceId: undefined });
+  });
+
+  it("does NOT trigger a daemon refresh when only the name changes", async () => {
+    refreshCalls.length = 0;
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { name: "Renamed Agent" });
+    expect(patched.status).toBe(200);
+    expect(patched.body.name).toBe("Renamed Agent");
+
+    await new Promise((r) => setImmediate(r));
+
+    // Renaming doesn't affect the daemon's agent cache (model: field is
+    // unchanged), so we must not pay the daemon-restart cost or churn
+    // the user's chat sessions.
+    expect(refreshCalls.length).toBe(0);
+  });
+
+  it("does NOT trigger a daemon refresh when the model is unchanged", async () => {
+    refreshCalls.length = 0;
+
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const sameModel = before.body.model;
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: sameModel });
+    expect(patched.status).toBe(200);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(refreshCalls.length).toBe(0);
   });
 });

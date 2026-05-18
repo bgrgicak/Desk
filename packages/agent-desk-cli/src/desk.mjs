@@ -5,7 +5,7 @@
  * Subcommands:
  *   desk start  (default) — ensure ~/Desk/, run migrations, start
  *                            desk-server (and Vite, in monorepo dev only).
- *   desk init             — bootstrap (~/Desk/, secret key) without starting.
+ *   desk init             — bootstrap (~/Desk/, vault password) without starting.
  *   desk version          — print package.json version.
  *
  * Two run modes — auto-detected at boot:
@@ -97,43 +97,30 @@ async function ensureDeskHome() {
 }
 
 /**
- * Where the secret key lives.
- *   - Monorepo dev: repo-root .env (existing behaviour, dev.sh shares it).
- *   - Published install: ~/Desk/.secret-key (file mode 0600).
+ * Where the auto-unlock vault password lives.
+ *   - Monorepo dev: repo-root .env (dev.sh shares it).
+ *   - Published install: ~/Desk/.env.
  *
- * Returns the in-memory key. Generates one on first call.
+ * Returns the password. Generates one on first call.
  */
-async function ensureSecretKey({ monorepoRoot, deskHome }) {
-  if (monorepoRoot) {
-    const envFile = path.join(monorepoRoot, ".env");
-    let existing = "";
-    if (fs.existsSync(envFile)) {
-      existing = await fsp.readFile(envFile, "utf-8");
-      const m = existing.match(/^DESK_SECRET_KEY=(.+)$/m);
-      if (m) return m[1].trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
-    }
-    const { randomBytes } = await import("node:crypto");
-    const key = randomBytes(32).toString("base64");
-    log(`Generating DESK_SECRET_KEY → ${envFile}`);
-    let body = existing;
-    if (body.length > 0 && !body.endsWith("\n")) body += "\n";
-    body += `DESK_SECRET_KEY=${key}\n`;
-    await fsp.writeFile(envFile, body);
-    return key;
-  }
-
-  const keyFile = path.join(deskHome, "Desk", ".secret-key");
-  if (fs.existsSync(keyFile)) {
-    const raw = await fsp.readFile(keyFile, "utf-8");
-    const trimmed = raw.trim();
-    if (trimmed.length > 0) return trimmed;
+async function ensureVaultPassword({ monorepoRoot, deskHome }) {
+  const envFile = monorepoRoot ? path.join(monorepoRoot, ".env") : path.join(deskHome, "Desk", ".env");
+  let existing = "";
+  if (fs.existsSync(envFile)) {
+    existing = await fsp.readFile(envFile, "utf-8");
+    const m = existing.match(/^DESK_VAULT_PASSWORD=(.+)$/m);
+    if (m) return m[1].trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
   }
   const { randomBytes } = await import("node:crypto");
-  const key = randomBytes(32).toString("base64");
-  log(`Generating DESK_SECRET_KEY → ${keyFile}`);
-  await fsp.mkdir(path.dirname(keyFile), { recursive: true });
-  await fsp.writeFile(keyFile, key + "\n", { mode: 0o600 });
-  return key;
+  const password = randomBytes(32).toString("base64");
+  log(`Generating DESK_VAULT_PASSWORD → ${envFile}`);
+  await fsp.mkdir(path.dirname(envFile), { recursive: true });
+  let body = existing;
+  if (body.length > 0 && !body.endsWith("\n")) body += "\n";
+  body += `DESK_VAULT_PASSWORD=${password}\n`;
+  await fsp.writeFile(envFile, body, { mode: 0o600 });
+  await fsp.chmod(envFile, 0o600);
+  return password;
 }
 
 function spawnInherit(cmd, args, { env, cwd }) {
@@ -159,7 +146,7 @@ function attachStopHandlers(...children) {
 async function cmdInit() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureDeskHome();
-  await ensureSecretKey({ monorepoRoot, deskHome: home });
+  await ensureVaultPassword({ monorepoRoot, deskHome: home });
   log(`Desk home: ${path.join(home, "Desk")}`);
   log("Init complete. Run `desk start` to launch the server.");
 }
@@ -167,17 +154,17 @@ async function cmdInit() {
 async function cmdStart() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureDeskHome();
-  const secret = await ensureSecretKey({ monorepoRoot, deskHome: home });
+  const vaultPassword = await ensureVaultPassword({ monorepoRoot, deskHome: home });
 
   if (monorepoRoot) {
-    return cmdStartDev({ monorepoRoot, home, secret });
+    return cmdStartDev({ monorepoRoot, home, vaultPassword });
   }
-  return cmdStartPublished({ home, secret });
+  return cmdStartPublished({ home, vaultPassword });
 }
 
-async function cmdStartDev({ monorepoRoot, home, secret }) {
+async function cmdStartDev({ monorepoRoot, home, vaultPassword }) {
   const env = {
-    DESK_SECRET_KEY: secret,
+    DESK_VAULT_PASSWORD: vaultPassword,
     DESK_HOME: home,
     PORT: String(PORT),
     DESK_APP_PORT: String(APP_PORT),
@@ -201,7 +188,7 @@ async function cmdStartDev({ monorepoRoot, home, secret }) {
   attachStopHandlers(server, vite);
 }
 
-async function cmdStartPublished({ home, secret }) {
+async function cmdStartPublished({ home, vaultPassword }) {
   const apiEntry = resolvePublishedApiEntry();
   if (!apiEntry) {
     process.stderr.write(
@@ -218,7 +205,7 @@ async function cmdStartPublished({ home, secret }) {
   }
 
   const env = {
-    DESK_SECRET_KEY: secret,
+    DESK_VAULT_PASSWORD: vaultPassword,
     DESK_HOME: home,
     PORT: String(PORT),
     DESK_API_URL: `http://127.0.0.1:${PORT}`,
@@ -427,7 +414,7 @@ async function main() {
       process.stdout.write(
         "Usage: desk [start|init|service|version]\n" +
         "  start                          boot desk-server (default)\n" +
-        "  init                           create ~/Desk + DESK_SECRET_KEY without starting\n" +
+        "  init                           create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
         "  service install|uninstall      register/unregister Desk as a system service\n" +
         "  service start|stop|status      control the installed system service\n" +
         "  version                        print version\n",

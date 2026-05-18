@@ -35,6 +35,7 @@ import { broadcast, clearConnections } from "./ws/registry.js";
 import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
+import { ensureVaultPasswordEnv } from "./envFile.js";
 import type { WsEvent } from "@agent-desk/shared";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
@@ -188,14 +189,17 @@ async function main(): Promise<void> {
 
   const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
 
-  // If DESK_VAULT_PASSWORD is explicitly set in the environment, use it as
-  // the vault master password so the vault is automatically unlocked on
-  // every boot — no UI prompt needed. Users who prefer an explicit vault
-  // master password leave DESK_VAULT_PASSWORD unset and unlock via the
-  // browser UI. Note: this is intentionally a separate env var from
-  // DESK_SECRET_KEY (the AES-256 key for SQLite at-rest encryption).
-  if (process.env.DESK_VAULT_PASSWORD) {
-    const vaultPassword = process.env.DESK_VAULT_PASSWORD;
+  // Ensure DESK_VAULT_PASSWORD exists, then use it as the vault master
+  // password so the vault is automatically unlocked on every boot — no UI
+  // prompt needed.
+  {
+    const vaultPassword = await ensureVaultPasswordEnv({
+      deskHome: DESK_HOME,
+      log: (message) => {
+        // eslint-disable-next-line no-console
+        console.log(message);
+      },
+    });
     const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
     for (const user of allUsers) {
       const { exists } = await vault.status(user.id);
@@ -203,7 +207,7 @@ async function main(): Promise<void> {
         if (!exists) {
           await vault.setup(user.id, vaultPassword);
           // eslint-disable-next-line no-console
-          console.log(`vault: auto-setup for user ${user.id} via DESK_SECRET_KEY`);
+          console.log(`vault: auto-setup for user ${user.id} via DESK_VAULT_PASSWORD`);
         } else {
           await vault.unlock(user.id, vaultPassword);
         }
@@ -213,7 +217,7 @@ async function main(): Promise<void> {
       }
     }
     // eslint-disable-next-line no-console
-    console.log("vault: auto-unlocked via DESK_SECRET_KEY");
+    console.log("vault: auto-unlocked via DESK_VAULT_PASSWORD");
   }
 
   const runManager = createRunManager({
@@ -303,14 +307,20 @@ async function main(): Promise<void> {
           return buildDaemonEnv({ providerKeys, extraEnv });
         },
       });
-      if (result.failed.length > 0 || result.restarted.length > 0 || result.skippedActive.length > 0) {
+      // Always log the summary — the silent path (no warm container,
+      // nothing cleared) is exactly where bugs hide. We want to see one
+      // log line per connection mutation so the operator can correlate
+      // "I saved the GitHub key" with the refresh outcome.
+      // eslint-disable-next-line no-console
+      console.log(
+        `connection refresh user=${userId} ws=${workspaceId ?? "*"}: ` +
+        `restarted=${result.restarted.length} skippedActive=${result.skippedActive.length} ` +
+        `skippedNoContainer=${result.skippedNoContainer.length} failed=${result.failed.length} ` +
+        `clearedSessions=${result.clearedSessions.length}`,
+      );
+      for (const f of result.failed) {
         // eslint-disable-next-line no-console
-        console.log(
-          `connection refresh user=${userId} ws=${workspaceId ?? "*"}: ` +
-          `restarted=${result.restarted.length} skippedActive=${result.skippedActive.length} ` +
-          `skippedNoContainer=${result.skippedNoContainer.length} failed=${result.failed.length} ` +
-          `clearedSessions=${result.clearedSessions.length}`,
-        );
+        console.warn(`connection refresh: workspace ${f.workspaceId} failed: ${f.error}`);
       }
     },
   });

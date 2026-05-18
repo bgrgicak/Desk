@@ -4,7 +4,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, resetSecretKeyCache } from "@agent-desk/db";
+import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import { createApp } from "../src/app.js";
@@ -35,9 +35,6 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connectors-api-home-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-  resetSecretKeyCache();
-
   const storage = { pool, home };
   const runManager = createRunManager({
     pool,
@@ -128,9 +125,10 @@ describe("connector connection routes", () => {
     expect(listed.body.connections[0]).not.toHaveProperty("credentialsEncrypted");
     expect(listed.body.connections[0].hasCredentials).toBe(true);
 
-    // Database has no credentials_encrypted column at all.
+    // Database has no encrypted credential/metadata columns at all.
     const cols = await pool.query<{ name: string }>("PRAGMA table_info(connector_connections)");
     expect(cols.rows.map((r) => r.name)).not.toContain("credentials_encrypted");
+    expect(cols.rows.map((r) => r.name)).not.toContain("metadata_encrypted");
 
     // Vault has the entry under the canonical title.
     const stored = vault.get(userId, credentialTitle(userId, "slack", slack.body.connection.id));

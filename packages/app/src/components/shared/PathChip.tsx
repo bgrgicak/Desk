@@ -1,5 +1,5 @@
 import { File, Folder } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { SANDBOX_HOME } from '@/lib/remark-sandbox-paths'
 import { buildPath } from '@/router/nav'
 import { useGetLibraryQuery } from '@/store/api'
@@ -42,6 +42,14 @@ export function isDirectoryPath(sandboxPath: string, library?: ListLibraryRespon
   )
 }
 
+export function pathChipHref(workspaceId: string | undefined, sandboxPath: string, isDir: boolean): string | undefined {
+  if (!workspaceId) return undefined
+  const rel = workspaceRelativePath(sandboxPath)
+  return isDir
+    ? buildPath(workspaceId, 'context', { folder: normalizeLibraryPath(rel) })
+    : buildPath(workspaceId, 'context', { item: rel })
+}
+
 export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProps) {
   const { currentData: library } = useGetLibraryQuery(
     workspaceId ? { workspaceId } : undefined,
@@ -49,27 +57,33 @@ export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProp
   )
   const isDir = isDirectoryPath(sandboxPath, library)
   const Icon = isDir ? Folder : File
-  const navigate = useNavigate()
+  const href = pathChipHref(workspaceId, sandboxPath, isDir)
+  const className = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono bg-muted hover:bg-muted/80 text-foreground border border-border/50 transition-colors cursor-pointer align-baseline no-underline"
+  const contents = (
+    <>
+      <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+      <span>{displayBasename(displayPath)}</span>
+    </>
+  )
 
-  function handleClick() {
-    if (!workspaceId) return
-    const rel = workspaceRelativePath(sandboxPath)
-    if (isDir) {
-      navigate(buildPath(workspaceId, 'context', { folder: normalizeLibraryPath(rel) }))
-    } else {
-      navigate(buildPath(workspaceId, 'context', { item: rel }))
-    }
+  if (!href) {
+    return (
+      <span
+        title={displayPath}
+        className={className}
+      >
+        {contents}
+      </span>
+    )
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
+    <Link
+      to={href}
       title={workspaceId ? `Open in library: ${displayPath}` : displayPath}
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono bg-muted hover:bg-muted/80 text-foreground border border-border/50 transition-colors cursor-pointer align-baseline"
+      className={className}
     >
-      <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-      <span>{displayBasename(displayPath)}</span>
-    </button>
+      {contents}
+    </Link>
   )
 }

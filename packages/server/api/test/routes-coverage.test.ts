@@ -46,9 +46,6 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));
   await ensureLayout(home);
 
-  // Encryption key for user_settings.provider_keys_encrypted
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-
   const storage = { pool, home };
   const runManager = createRunManager({
     pool,

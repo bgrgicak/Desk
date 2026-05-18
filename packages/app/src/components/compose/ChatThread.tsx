@@ -241,28 +241,21 @@ export function liveDeveloperProgressMessage(
 export function liveAssistantTextMessage(
   activeAgentTurn: ServerMessage | null,
 ): ServerMessage | null {
-  if (!activeAgentTurn?.progressLog?.length) return null
-  const textEvents = activeAgentTurn.progressLog.filter(
-    (e) => e.kind === 'event' && e.event.type === 'text',
-  )
-  if (textEvents.length === 0) return null
-  return {
-    ...activeAgentTurn,
-    id: `${activeAgentTurn.id}:live-text`,
-    role: 'agent',
-    // EventsView with developerMode=false renders text chunks as a
-    // regular markdown paragraph (folded across consecutive text
-    // events) and ignores everything else — exactly what we want for
-    // the in-progress assistant bubble.
-    content: { type: 'events', log: textEvents },
-  }
+  // Do not render in-flight text deltas as a regular assistant bubble.
+  // opencode can briefly stream reasoning content as a `text` delta before a
+  // later part update classifies the same part as `reasoning`; rendering here
+  // makes private reasoning flash in the normal chat until the tool/reasoning
+  // event catches up. Finalized messages are still rendered from persisted text
+  // after the full log can be filtered safely.
+  void activeAgentTurn
+  return null
 }
 
 function isLiveDeveloperProgressEntry(entry: AgentLogEntry): boolean {
   if (entry.kind === 'stderr') return true
   if (entry.kind !== 'event') return false
   const type = entry.event.type
-  return type !== 'text' && type !== 'reasoning' && type !== 'step_start' && type !== 'step_finish'
+  return type !== 'text' && type !== 'step_start' && type !== 'step_finish'
 }
 
 const TOOL_PROGRESS_LABELS: Record<string, string> = {
@@ -292,10 +285,7 @@ const GENERIC_TOOL_PROGRESS_LABELS: Record<string, string> = {
 function progressTextForEvent(event: AgentEvent): string | null {
   if (event.type === 'text') return null
   if (event.type === 'step_start' || event.type === 'step_finish') return null
-  if (event.type === 'reasoning') {
-    const text = pickProgressString(event.part, 'text') ?? pickProgressString(event.part, 'content')
-    return text ? trimProgress(text) : 'Thinking'
-  }
+  if (event.type === 'reasoning') return null
   if (event.type === 'tool_use') {
     return progressTextForToolEvent(event) ?? GENERIC_TOOL_PROGRESS_LABELS.tool_use
   }
@@ -348,11 +338,6 @@ function pickProgressString(obj: unknown, key: string): string | undefined {
   if (!obj || typeof obj !== 'object') return undefined
   const v = (obj as Record<string, unknown>)[key]
   return typeof v === 'string' ? v : undefined
-}
-
-function trimProgress(text: string): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > 120 ? line.slice(0, 120) + '…' : line
 }
 
 /**

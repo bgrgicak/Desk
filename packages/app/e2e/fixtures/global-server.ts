@@ -80,6 +80,9 @@ async function startVite(
     ...process.env,
     DESK_API_URL: apiUrl,
     DESK_APP_PORT: String(port),
+    // Most e2e specs seed sessions explicitly, and the login/sign-out specs
+    // need the LoginScreen to remain reachable after clearing the token.
+    VITE_DESK_AUTO_LOGIN: "off",
   } as NodeJS.ProcessEnv;
 
   await new Promise<void>((resolve, reject) => {

@@ -1,14 +1,11 @@
 import { type Pool } from "../pool.js";
-import { encryptJson, decryptJson } from "../encryption.js";
 
 // ── Provider metadata (display names, enabled/disabled) ──────────────────────
 
 export type ProviderMetaEntry = {
   name?: string;
   /**
-   * For host-managed connections (e.g. Codex), tracks whether the user has
-   * opted in. Manual API-key connections don't use this — their presence in
-   * `provider_keys_encrypted` is the on/off signal.
+   * Tracks whether the user has opted in and any custom display name.
    */
   enabled?: boolean;
 };
@@ -23,21 +20,17 @@ export async function getProviderMeta(
   userId: string,
 ): Promise<ProviderMetaMap> {
   const { rows } = await db.query(
-    "SELECT provider_meta_encrypted FROM user_settings WHERE user_id = ?",
+    "SELECT provider_meta_json FROM user_settings WHERE user_id = ?",
     [userId],
   );
   if (rows.length === 0) return {};
-  const ciphertext = rows[0].provider_meta_encrypted as Buffer | null;
-  if (!ciphertext || ciphertext.length === 0) return {};
+  const raw = rows[0].provider_meta_json as string | null;
+  if (!raw) return {};
   try {
-    return decryptJson<ProviderMetaMap>(ciphertext);
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as ProviderMetaMap;
   } catch {
-    // Decryption failed — likely a key rotation or corrupted data.
-    // Provider metadata is non-critical; treat it as absent so the
-    // caller gets a clean slate rather than a crash.
-    console.warn(
-      `[userSettings] provider_meta_encrypted for user ${userId} could not be decrypted; resetting to empty`,
-    );
     return {};
   }
 }
@@ -64,12 +57,12 @@ export async function mergeProviderMeta(
       current[key] = next;
     }
   }
-  const payload = encryptJson(current);
+  const payload = JSON.stringify(current);
   await db.query(
-    `INSERT INTO user_settings (user_id, provider_meta_encrypted, updated_at)
+    `INSERT INTO user_settings (user_id, provider_meta_json, updated_at)
      VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      ON CONFLICT (user_id) DO UPDATE
-       SET provider_meta_encrypted = EXCLUDED.provider_meta_encrypted,
+       SET provider_meta_json = EXCLUDED.provider_meta_json,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
     [userId, payload],
   );
