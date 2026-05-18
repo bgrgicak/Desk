@@ -197,29 +197,45 @@ function denyOverLimit(res: ServerResponse, bucket: string, key: string): boolea
  * clients (curl, the Postman runner, integration tests) may omit
  * Origin entirely — those continue to work because CSWSH only applies
  * to script-initiated upgrades from a browser tab.
+ *
+ * The default policy is "any localhost/127.0.0.1 port + the env-configured
+ * production origins." Loopback can never be reached from a third-party
+ * attacker page that's hosted on the public internet — the browser
+ * resolves 127.0.0.1 inside the victim's box — so this is the right
+ * shape for a self-hosted single-machine product where the SPA, Vite
+ * dev server, Vite preview (Playwright e2e), and the Electron renderer
+ * all live on loopback but on different, sometimes random, ports.
+ *
+ * Operators putting Desk behind a reverse proxy on the public internet
+ * set DESK_ALLOWED_ORIGINS to a comma-separated list of the real
+ * origins; the env list is treated as exact additional matches on top
+ * of the loopback rule.
  */
-function getAllowedWsOrigins(): Set<string> {
-  const fromEnv = (process.env.DESK_ALLOWED_ORIGINS ?? "")
+export function getAllowedWsOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const fromEnv = (env.DESK_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const port = process.env.PORT ?? "35138";
-  const defaults = [
-    `http://localhost:5173`,
-    `http://127.0.0.1:5173`,
-    `http://localhost:${port}`,
-    `http://127.0.0.1:${port}`,
-  ];
-  return new Set([...defaults, ...fromEnv]);
+  return new Set(fromEnv);
 }
 
 const ALLOWED_WS_ORIGINS = getAllowedWsOrigins();
 
-export function isWsOriginAllowed(origin: string | undefined, allowed: Set<string> = ALLOWED_WS_ORIGINS): boolean {
+const LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+
+export function isWsOriginAllowed(
+  origin: string | undefined,
+  allowed: Set<string> = ALLOWED_WS_ORIGINS,
+): boolean {
   // Missing Origin means the client isn't a browser-script upgrade — let
   // it through so CLI tools, integration tests and the Electron renderer
   // (when it eventually starts emitting one) keep working.
   if (!origin) return true;
+  // Loopback origins are always allowed. CSWSH attacks must originate
+  // from an attacker-controlled page in the victim's browser; that page
+  // cannot legitimately serve from 127.0.0.1 / localhost on the
+  // victim's machine.
+  if (LOOPBACK_ORIGIN_PATTERN.test(origin)) return true;
   return allowed.has(origin);
 }
 

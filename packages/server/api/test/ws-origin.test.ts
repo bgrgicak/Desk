@@ -99,14 +99,10 @@ afterAll(async () => {
 });
 
 describe("isWsOriginAllowed unit", () => {
-  const allowed = new Set([
-    "http://localhost:5173",
-    "http://127.0.0.1:35138",
-  ]);
+  const allowed = new Set<string>(["https://desk.example.com"]);
 
-  it("returns true for an exactly-matched origin", () => {
-    expect(isWsOriginAllowed("http://localhost:5173", allowed)).toBe(true);
-    expect(isWsOriginAllowed("http://127.0.0.1:35138", allowed)).toBe(true);
+  it("returns true for an exactly-matched env-configured origin", () => {
+    expect(isWsOriginAllowed("https://desk.example.com", allowed)).toBe(true);
   });
 
   it("returns true for a missing origin (non-browser client)", () => {
@@ -114,15 +110,23 @@ describe("isWsOriginAllowed unit", () => {
     expect(isWsOriginAllowed("", allowed)).toBe(true);
   });
 
-  it("returns false for an unknown origin", () => {
+  it("returns true for any loopback origin regardless of port", () => {
+    expect(isWsOriginAllowed("http://localhost:5173", allowed)).toBe(true);
+    expect(isWsOriginAllowed("http://127.0.0.1:5179", allowed)).toBe(true);
+    expect(isWsOriginAllowed("http://localhost:35138", allowed)).toBe(true);
+    expect(isWsOriginAllowed("https://localhost", allowed)).toBe(true);
+    expect(isWsOriginAllowed("http://[::1]:8000", allowed)).toBe(true);
+  });
+
+  it("returns false for an unknown non-loopback origin", () => {
     expect(isWsOriginAllowed("https://evil.example.com", allowed)).toBe(false);
-    expect(isWsOriginAllowed("http://localhost:5174", allowed)).toBe(false);
+    expect(isWsOriginAllowed("http://desk.example.com", allowed)).toBe(false); // wrong protocol
   });
 
   it("is case-sensitive on the origin string", () => {
     // Origin headers are sent verbatim by browsers; we deliberately do
     // not lowercase them. Matches the WHATWG behavior.
-    expect(isWsOriginAllowed("HTTP://LOCALHOST:5173", allowed)).toBe(false);
+    expect(isWsOriginAllowed("HTTPS://DESK.EXAMPLE.COM", allowed)).toBe(false);
   });
 });
 
