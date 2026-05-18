@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { renderAgentFile, chatNeedsBrowser, writeWorkspaceMcpConfig } from "../src/agentFile.js";
+import {
+  renderAgentFile,
+  chatNeedsBrowser,
+  writeWorkspaceMcpConfig,
+  writeAgentFile,
+  readAgentsModelDigest,
+} from "../src/agentFile.js";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 
 describe("renderAgentFile", () => {
@@ -251,4 +257,124 @@ describe("writeWorkspaceMcpConfig", () => {
     }
   });
 
+});
+
+describe("readAgentsModelDigest", () => {
+  const baseInput = {
+    agentName: "Jarvis",
+    userName: "Desk",
+  } as const;
+
+  it("returns an empty string when the agents dir does not exist yet", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      // No agent files written — readdir returns ENOENT or empty.
+      expect(await readAgentsModelDigest(home, "ws")).toBe("");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("digest changes when the agent file's model: field changes", async () => {
+    // The point of the digest: a model rewrite must produce a
+    // different value so `ensureOpencodeServer`'s env-digest compare
+    // restarts the daemon — otherwise opencode-serve keeps its
+    // startup-cached `agent.<id>.model` alive and the rewrite is
+    // silently invisible.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_x",
+        model: "opencode/big-pickle",
+      });
+      const first = await readAgentsModelDigest(home, "ws");
+      expect(first.length).toBeGreaterThan(0);
+
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_x",
+        model: "opencode/qwen3.6-plus-free",
+      });
+      const second = await readAgentsModelDigest(home, "ws");
+      expect(second).not.toBe(first);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("digest is stable across rewrites that don't touch model: (so the daemon doesn't churn on prompt-body refreshes)", async () => {
+    // The agent file is rewritten every turn — timestamps in the
+    // body, refreshed memory indexes, goal-fragment swaps. None of
+    // those need a daemon restart, only `model:` does. The digest
+    // hashes only the `model:` line so per-turn rewrites stay
+    // stable, avoiding a daemon restart on every single message.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_x",
+        model: "opencode/big-pickle",
+        userTimezone: "America/Los_Angeles",
+      });
+      const first = await readAgentsModelDigest(home, "ws");
+
+      // Different prompt body (different timezone changes the
+      // rendered prompt) but same `model:` line.
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_x",
+        model: "opencode/big-pickle",
+        userTimezone: "Europe/Berlin",
+      });
+      const second = await readAgentsModelDigest(home, "ws");
+      expect(second).toBe(first);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("covers every agent file in the workspace (the daemon caches all of them)", async () => {
+    // opencode-serve loads every file in the agents dir at startup,
+    // not just the one bound to the current run. So a model rewrite
+    // on a DIFFERENT agent must still flip the digest — otherwise a
+    // chat switching to a stale agent later would keep using the
+    // old cached model.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_a",
+        model: "opencode/big-pickle",
+      });
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_b",
+        model: "opencode/big-pickle",
+      });
+      const before = await readAgentsModelDigest(home, "ws");
+
+      // Touch the OTHER agent's model.
+      await writeAgentFile(home, "ws", {
+        ...baseInput,
+        agentId: "agt_b",
+        model: "opencode/qwen3.6-plus-free",
+      });
+      const after = await readAgentsModelDigest(home, "ws");
+      expect(after).not.toBe(before);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
 });

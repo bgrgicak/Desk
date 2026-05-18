@@ -50,7 +50,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` boots `desk-server` (tsx watch) and Vite together, and rebuilds the `desk/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/> and sign in with username `desk` and the password from `DESK_SEED_PASSWORD` (default: `change-me-before-first-boot`).
+`npm run dev` boots `desk-server` (tsx watch) and Vite together, and rebuilds the `desk/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>. In the default dev seed, the app auto-signs in as `desk`; if you changed `DESK_SEED_PASSWORD`, sign in manually with username `desk` and that password.
 
 ### Prerequisites
 
@@ -59,7 +59,7 @@ npm run dev
 | Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
 | Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
 
-API keys are configured per-user via Settings after the first sign-in. `npm run dev` generates `DESK_SECRET_KEY` into `.env` on first run.
+API keys are configured per-user via Settings after the first sign-in. `npm run dev` generates `DESK_VAULT_PASSWORD` into `.env` on first run so the per-user secrets vault can auto-unlock on restart.
 
 ### Common commands
 

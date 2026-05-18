@@ -41,6 +41,10 @@ let userId: string;
 let token: string;
 let workspaceId: string;
 let agentId: string;
+// Captures every userId passed to refreshSandboxConnections so tests can
+// assert the agent-model-change path actually triggers the same daemon-
+// restart pipeline used by connection mutations.
+const refreshCalls: Array<{ userId: string; workspaceId: string | undefined }> = [];
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-"));
@@ -79,6 +83,7 @@ beforeAll(async () => {
     // unavailable" branch — that's exactly the path we want covered:
     // sessions still clear, the route still succeeds.
     refreshSandboxConnections: async (uid, wsId) => {
+      refreshCalls.push({ userId: uid, workspaceId: wsId });
       await refreshSandboxConnections({
         pool,
         userId: uid,
@@ -364,5 +369,91 @@ describe("legacy /me/providers — sandbox env propagation", () => {
     // the key.
     const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
     expect(resolved.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+});
+
+/**
+ * Regression suite for the "I changed my agent's model in Settings but
+ * the sandbox keeps using the old model" bug. opencode-serve reads each
+ * agent file's `model:` field into an in-memory cache at daemon startup
+ * and ignores subsequent rewrites — and it also ignores per-message
+ * `providerID` / `modelID` overrides whenever an `agent` is bound to
+ * the session. So changing `agent.model` in Desk only propagates after
+ * the daemon restarts. PATCH /agents/:id therefore must run the same
+ * daemon-refresh pipeline used by connection mutations.
+ */
+describe("PATCH /agents/:id — daemon refresh on model change", () => {
+  it("clears sessions for chats using the agent when its model changes", async () => {
+    const chatId = await makeChatWithSession("ses_agent_model_change");
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBe("ses_agent_model_change");
+
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const previousModel = before.body.model;
+    const newModel = previousModel === "opencode/big-pickle"
+      ? "opencode/qwen3.6-plus-free"
+      : "opencode/big-pickle";
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: newModel });
+    expect(patched.status).toBe(200);
+    expect(patched.body.model).toBe(newModel);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+  });
+
+  it("triggers refreshSandboxConnections so daemons re-read the updated agent file", async () => {
+    // The opencode-serve daemon caches each agent's `model:` at startup
+    // and never re-reads the file. Without a daemon restart, a new
+    // session created in the same daemon still inherits the cached
+    // (stale) agent config. So clearing chat sessions is necessary but
+    // NOT sufficient — this test pins the daemon-restart side of the fix.
+    refreshCalls.length = 0;
+
+    // Force a real model flip even if the previous test left the agent
+    // at the "new" value already.
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const flipped = before.body.model === "opencode/big-pickle"
+      ? "opencode/qwen3.6-plus-free"
+      : "opencode/big-pickle";
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: flipped });
+    expect(patched.status).toBe(200);
+
+    // Allow the fire-and-forget refresh to complete. The handler awaits
+    // patchAgent but kicks refreshSandboxConnections asynchronously so a
+    // Docker hiccup can't stall the HTTP response — that means the test
+    // needs a microtask boundary before asserting.
+    await new Promise((r) => setImmediate(r));
+
+    expect(refreshCalls.length).toBeGreaterThanOrEqual(1);
+    expect(refreshCalls.at(-1)).toEqual({ userId, workspaceId: undefined });
+  });
+
+  it("does NOT trigger a daemon refresh when only the name changes", async () => {
+    refreshCalls.length = 0;
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { name: "Renamed Agent" });
+    expect(patched.status).toBe(200);
+    expect(patched.body.name).toBe("Renamed Agent");
+
+    await new Promise((r) => setImmediate(r));
+
+    // Renaming doesn't affect the daemon's agent cache (model: field is
+    // unchanged), so we must not pay the daemon-restart cost or churn
+    // the user's chat sessions.
+    expect(refreshCalls.length).toBe(0);
+  });
+
+  it("does NOT trigger a daemon refresh when the model is unchanged", async () => {
+    refreshCalls.length = 0;
+
+    const before = await request("GET", `/agents/${agentId}`, token);
+    const sameModel = before.body.model;
+
+    const patched = await request("PATCH", `/agents/${agentId}`, token, { model: sameModel });
+    expect(patched.status).toBe(200);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(refreshCalls.length).toBe(0);
   });
 });

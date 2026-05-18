@@ -30,6 +30,8 @@
 import { SANDBOX_HOME } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
+import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
+import { readAgentsModelDigest } from "./agentFile.js";
 import { OpencodeClient, OpencodeServerError, isServerGoneError } from "./opencodeClient.js";
 import { translateOpencodeSseEvent } from "./opencodeEvents.js";
 import {
@@ -282,10 +284,27 @@ function createRealDriver(): SandboxDriver {
       // env-digest stays the same across runs (no spurious daemon
       // restarts under concurrent load) while per-run token rotation is
       // preserved.
+      //
+      // Also: hash every agent file's `model:` line and feed it into
+      // the env. The daemon caches each agent's resolved model at
+      // startup (the daemon is single-threaded init + long-lived
+      // listener — there is no agent-file watcher) and ignores per-
+      // message `providerID`/`modelID` overrides for agent-bound
+      // sessions. So rewriting the agent file mid-life is invisible
+      // until the daemon restarts. Including the model-line digest
+      // here lets ensureOpencodeServer's env-digest compare detect
+      // *content* changes that should kick a restart — covers the
+      // fallback path that rewrites `codex/X` → `opencode/big-pickle`
+      // when auth is missing, and any future "agent's model changed
+      // out of band" path.
+      const agentFilesDigest = opts.home
+        ? await readAgentsModelDigest(opts.home, opts.workspaceSlug).catch(() => "")
+        : "";
       const daemonEnv = buildDaemonEnv({
         providerKeys: opts.providerKeys,
         extraEnv: opts.extraEnv,
         apiUrl: opts.apiUrl,
+        agentFilesDigest,
       });
 
       // The container can disappear between createOrReuse and
@@ -336,14 +355,15 @@ function createRealDriver(): SandboxDriver {
         }
       }
 
-      const client = new OpencodeClient(server.url, server.password);
+      let client = new OpencodeClient(server.url, server.password);
 
-      // Write the per-run sandbox token to the daemon's container at
-      // the stable path the in-sandbox CLI reads. Writing per-run keeps
-      // the daemon's env digest stable across runs (no restart per
-      // turn) while still rotating identity per chat-turn. Skipped when
-      // no token was minted (older callers).
-      if (opts.sandboxToken) {
+      const writeSandboxToken = async () => {
+        // Write the per-run sandbox token to the daemon's container at
+        // the stable path the in-sandbox CLI reads. Writing per-run keeps
+        // the daemon's env digest stable across runs (no restart per
+        // turn) while still rotating identity per chat-turn. Skipped when
+        // no token was minted (older callers).
+        if (!opts.sandboxToken) return;
         await writeSandboxTokenFile(engine, handle.containerId, user, opts.sandboxToken).catch(
           (err) => {
             console.warn(
@@ -352,9 +372,46 @@ function createRealDriver(): SandboxDriver {
             );
           },
         );
-      }
+      };
+      await writeSandboxToken();
 
-      const sessionResolution = await resolveSessionId(client, opts.opencodeSessionId ?? null);
+      // Same recovery window as the `ensureOpencodeServer` block above:
+      // between caching the daemon URL and the first POST, the daemon
+      // can die (idle-daemon sweeper, OOM-kill, container reaper that
+      // raced with this fire). The cached server instance points at a
+      // dead port; the next `fetch` here surfaces as a bare
+      // `TypeError: fetch failed` (ECONNREFUSED / socket closed). Catch
+      // server-gone failures, invalidate the cache, re-acquire the
+      // container, and retry the session resolve once before bubbling
+      // up so the scheduler logs a clean error.
+      let sessionResolution: { sessionId: string; recreated: boolean };
+      try {
+        sessionResolution = await resolveSessionId(client, opts.opencodeSessionId ?? null);
+      } catch (err) {
+        if (!isServerGoneError(err)) throw err;
+        invalidateOpencodeServerCache(handle.containerId);
+        handle = await acquireHandle();
+        try {
+          server = await ensureOpencodeServer(engine, {
+            containerId: handle.containerId,
+            cwd: SANDBOX_HOME,
+            user,
+            env: daemonEnv,
+          });
+        } catch (retryErr) {
+          await opts.onLog({
+            runId: opts.runId,
+            seq: 0,
+            kind: "stderr",
+            payload:
+              `opencode-serve was unreachable and re-spawn failed: ${(retryErr as Error).message ?? String(retryErr)}`,
+          });
+          return { exitCode: 1 };
+        }
+        client = new OpencodeClient(server.url, server.password);
+        await writeSandboxToken();
+        sessionResolution = await resolveSessionId(client, opts.opencodeSessionId ?? null);
+      }
       const sessionId = sessionResolution.sessionId;
       if (sessionResolution.recreated && opts.opencodeSessionId) {
         // Surface a stderr line so the chat shows the user that prior
@@ -482,7 +539,23 @@ function createRealDriver(): SandboxDriver {
           modelID,
           parts,
           ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
-        })) as { info?: { id?: string } };
+        })) as { info?: { id?: string; error?: unknown } };
+
+        // opencode-serve does NOT throw on upstream model errors. It
+        // resolves the HTTP call with an `info.error` field populated
+        // (e.g. `Model big-pickle not supported for format anthropic`
+        // when the zen endpoint deprecates a model, or per-provider
+        // 401/429). Without this check, the run "succeeds" with exit 0
+        // and zero text — the UI flags it as failed via the diagnostic
+        // banner heuristic, but the user gets no useful information
+        // about what went wrong. Surface the upstream error verbatim
+        // so retry / settings actions are actionable.
+        const upstreamError = describeDaemonError(response.info?.error);
+        if (upstreamError) {
+          emitLog("stderr", `opencode-serve model error (${modelID}): ${upstreamError}`);
+          await Promise.all(pendingLogs);
+          return { exitCode: 1, opencodeSessionId: sessionId };
+        }
         // After sendMessage settles, do one final synchronous pass to
         // capture parts the daemon committed in the last poll
         // interval. `partState` keeps it from re-emitting anything
@@ -695,6 +768,49 @@ export function* synthesizeNonTextEvents(
     const event: Record<string, unknown> = { type: runFormatType, part, sessionID };
     if (meta) event.model = meta;
     yield JSON.stringify(event);
+  }
+}
+
+/**
+ * Pulls a one-line human-readable description out of opencode-serve's
+ * `info.error` envelope. The daemon swallows upstream model failures
+ * (zen rate limit, deprecated model, provider 401) and resolves the
+ * `POST /session/:id/message` call cleanly with the error encoded in
+ * the response body — so the runtime never gets an HTTP exception
+ * even though no text was produced. Use this to detect that case and
+ * report it to the user as a real failure instead of letting the run
+ * fall through as "succeeded with no output."
+ *
+ * Returns null when there is no error — the caller treats null as
+ * "happy path." Handles the common shapes opencode-serve emits:
+ *
+ *   { name: "APIError", data: { message: "...", responseBody: "..." } }
+ *   { name, message }
+ *   bare string
+ */
+export function describeDaemonError(error: unknown): string | null {
+  if (!error) return null;
+  if (typeof error === "string") return error;
+  if (typeof error !== "object") return String(error);
+  const e = error as { name?: unknown; message?: unknown; data?: unknown };
+  const data = (e.data && typeof e.data === "object" ? e.data : null) as
+    | { message?: unknown; responseBody?: unknown; statusCode?: unknown }
+    | null;
+  // `data.message` is opencode's normalised "what went wrong" string —
+  // prefer it when present because top-level `name` is usually a
+  // generic class name (`APIError`, `ProviderModelNotFoundError`).
+  const inner = data && typeof data.message === "string" ? data.message : null;
+  const top = typeof e.message === "string" ? e.message : null;
+  const name = typeof e.name === "string" ? e.name : null;
+  const status = data && typeof data.statusCode === "number" ? ` (HTTP ${data.statusCode})` : "";
+  if (inner) return `${name ? `${name}: ` : ""}${inner}${status}`;
+  if (top) return `${name ? `${name}: ` : ""}${top}${status}`;
+  if (name) return `${name}${status}`;
+  // Last-resort serialization — never throw out of an error handler.
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
   }
 }
 
@@ -949,6 +1065,16 @@ function buildManagedConnectionAliases(
  * birth env. The blanks also feed into the env digest, so a toggle
  * invalidates the cached daemon and forces a fresh start.
  *
+ * The same blanking applies to local-source env vars
+ * (`LOCAL_SOURCE_ENV_NAMES`, e.g. Codex's `OPENCODE_AUTH_CONTENT`).
+ * Cloud provider keys disable cleanly without this because their names
+ * are part of `connectionEnvNames()`; local-source vars need their own
+ * explicit blanks because they are NOT in that set and were silently
+ * leaking from the container birth env into the daemon after the user
+ * disabled the local source in Settings — keeping the daemon's stale
+ * OAuth registration alive even when no auth was supposed to be
+ * configured.
+ *
  * Exported for direct unit testing — the integration path is exercised
  * indirectly through `execRun`, but the disabled-key override semantics
  * are easier to pin with a focused test on this helper.
@@ -957,9 +1083,23 @@ export function buildDaemonEnv(opts: {
   providerKeys?: Record<string, string>;
   extraEnv?: Record<string, string>;
   apiUrl?: string;
+  /**
+   * Hex digest of every agent file's `model:` line in the workspace's
+   * `.opencode/agents/` directory. Threaded into the daemon env (as a
+   * `DESK_*` sentinel the daemon itself ignores) so `ensureOpencodeServer`'s
+   * env-digest compare picks up agent-file rewrites that would otherwise
+   * be invisible — the daemon caches each agent's `model:` at startup
+   * and ignores per-message `providerID`/`modelID` overrides for
+   * agent-bound sessions. Without this, the fallback path that
+   * rewrites `codex/X` → `opencode/big-pickle` (when auth is missing)
+   * lands in the file but the daemon keeps using the cached old
+   * model and every sendMessage fails with `fetch failed`.
+   */
+  agentFilesDigest?: string;
 }): Record<string, string> {
   const blanks: Record<string, string> = {};
   for (const name of connectionEnvNames()) blanks[name] = "";
+  for (const name of LOCAL_SOURCE_ENV_NAMES) blanks[name] = "";
 
   return {
     ...blanks,
@@ -968,5 +1108,9 @@ export function buildDaemonEnv(opts: {
     ...buildManagedConnectionAliases(opts.providerKeys),
     DESK_SANDBOX_TOKEN_PATH: SANDBOX_TOKEN_PATH,
     ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
+    // Always emit, even when empty — an empty-vs-non-empty digest
+    // transition must still flip the env-digest so an agents dir that
+    // appeared/disappeared between spawns still triggers a restart.
+    DESK_AGENT_FILES_MODEL_DIGEST: opts.agentFilesDigest ?? "",
   };
 }

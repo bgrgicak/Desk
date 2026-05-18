@@ -68,12 +68,30 @@ function isDiagnosticEventType(type: string): boolean {
   return /\b(error|failed|failure|exception|traceback)\b/i.test(type)
 }
 
+function reasoningPartIds(log: AgentLogEntry[]): Set<string> {
+  const ids = new Set<string>()
+  for (const entry of log) {
+    if (entry.kind !== 'event' || entry.event.type !== 'reasoning') continue
+    const id = entry.event.part?.id
+    if (typeof id === 'string') ids.add(id)
+  }
+  return ids
+}
+
+function eventPartId(event: AgentEvent): string | undefined {
+  const id = event.part?.id
+  return typeof id === 'string' ? id : undefined
+}
+
 function eventsHasUserText(log: AgentLogEntry[]): boolean {
   let sawEvent = false
+  const hiddenReasoningTextIds = reasoningPartIds(log)
   for (const entry of log) {
     if (entry.kind === 'event') {
       sawEvent = true
       if (entry.event.type === 'text') {
+        const id = eventPartId(entry.event)
+        if (id && hiddenReasoningTextIds.has(id)) continue
         const t = entry.event.part?.text
         if (typeof t === 'string' && t.trim().length > 0) return true
       }

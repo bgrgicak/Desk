@@ -127,21 +127,23 @@ describeIf("productionReflectWorkspace (real opencode)", () => {
     });
 
     expect(typeof result.journal).toBe("string");
-    expect(result.journal.length).toBeGreaterThan(0);
-    // The reflection prompt asks for a markdown body with bullets and
-    // section breaks; either a leading "# heading" or any "## section"
-    // marker proves the model produced structured markdown rather than
-    // a degraded `(reflection failed: …)` placeholder.
-    const hasMarkdownStructure =
-      result.journal.includes("# ") ||
-      result.journal.includes("## ") ||
-      result.journal.includes("- ");
+    // The reflection prompt asks for a journal entry summarizing the
+    // activity. We don't pin the model to a specific format (markdown
+    // headings, bullets, plain prose are all valid journal styles, and
+    // `opencode/big-pickle` is the free model so its output varies
+    // turn-to-turn). The invariants we DO care about: it's a real
+    // response — non-trivial length, and not the degraded
+    // `(reflection failed: …)` placeholder the host emits when the
+    // sandbox call itself fell over.
     expect(
-      hasMarkdownStructure,
-      `journal should contain markdown structure; got: ${result.journal.slice(0, 200)}`,
-    ).toBe(true);
+      result.journal.length,
+      `journal should be a substantive response; got: ${JSON.stringify(result.journal.slice(0, 200))}`,
+    ).toBeGreaterThan(40);
     // Reflection must never mark itself as degraded for a healthy call.
-    expect(result.journal.startsWith("(reflection failed:")).toBe(false);
+    expect(
+      result.journal.startsWith("(reflection failed:"),
+      `reflection degraded unexpectedly: ${result.journal.slice(0, 400)}`,
+    ).toBe(false);
 
     // memoryEdits is optional but, if present, must be an array of
     // { path, body } objects.

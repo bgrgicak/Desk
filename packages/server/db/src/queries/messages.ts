@@ -170,6 +170,13 @@ function compactContentSql(column = "content"): string {
           CASE
             WHEN json_extract(e.value, '$.kind') = 'event'
               AND json_extract(e.value, '$.event.type') = 'text'
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(${column}, '$.log') AS r
+                WHERE json_extract(r.value, '$.kind') = 'event'
+                  AND json_extract(r.value, '$.event.type') = 'reasoning'
+                  AND json_type(e.value, '$.event.part.id') = 'text'
+                  AND json_extract(r.value, '$.event.part.id') = json_extract(e.value, '$.event.part.id')
+              )
             THEN json_object(
               'kind', 'event',
               'event', json_object(
@@ -190,6 +197,13 @@ function compactContentSql(column = "content"): string {
           json_extract(e.value, '$.kind') = 'event'
           AND json_extract(e.value, '$.event.type') = 'text'
           AND json_type(e.value, '$.event.part.text') = 'text'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${column}, '$.log') AS r
+            WHERE json_extract(r.value, '$.kind') = 'event'
+              AND json_extract(r.value, '$.event.type') = 'reasoning'
+              AND json_type(e.value, '$.event.part.id') = 'text'
+              AND json_extract(r.value, '$.event.part.id') = json_extract(e.value, '$.event.part.id')
+          )
         ) OR (
           json_extract(e.value, '$.kind') = 'event'
           AND ${userVisibleDiagnosticEventSql("e.value")}

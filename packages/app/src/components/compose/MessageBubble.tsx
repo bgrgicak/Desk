@@ -490,6 +490,7 @@ export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean)
   // collapsed group so they don't dominate the thread in dev mode.
   const chunks: EventDisplayChunk[] = []
   let sawEvent = false
+  const hiddenReasoningTextIds = reasoningPartIds(log)
 
   const appendText = (s: string) => {
     const last = chunks[chunks.length - 1]
@@ -516,6 +517,8 @@ export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean)
     if (entry.kind === 'event') {
       sawEvent = true
       if (entry.event.type === 'text') {
+        const id = eventPartId(entry.event)
+        if (id && hiddenReasoningTextIds.has(id)) continue
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
       } else {
@@ -543,6 +546,21 @@ export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean)
   }
 
   return chunks
+}
+
+function reasoningPartIds(log: AgentLogEntry[]): Set<string> {
+  const ids = new Set<string>()
+  for (const entry of log) {
+    if (entry.kind !== 'event' || entry.event.type !== 'reasoning') continue
+    const id = eventPartId(entry.event)
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+function eventPartId(event: AgentEvent): string | undefined {
+  const id = event.part?.id
+  return typeof id === 'string' ? id : undefined
 }
 
 function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {

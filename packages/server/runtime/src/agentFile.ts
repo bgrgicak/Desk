@@ -143,6 +143,58 @@ export async function writeAgentFile(
 }
 
 /**
+ * Returns a sha256 of every agent file's `model:` line under
+ * `<workspace>/.opencode/agents/`. Feeding this hash into the
+ * opencode-serve daemon's env makes our env-digest cache in
+ * `ensureOpencodeServer` notice when an agent file's model changes
+ * since the last spawn, even when no provider env has changed —
+ * triggering a daemon restart so the daemon re-reads the agent files
+ * (it caches `model:` in memory at startup and ignores per-message
+ * `providerID`/`modelID` overrides for agent-bound sessions).
+ *
+ * Hashing only the `model:` lines keeps the digest stable across
+ * the per-turn prompt-body rewrites that don't actually need a
+ * daemon restart (memory index updates, timestamp tweaks, etc.).
+ * Empty agents dir or read errors return an empty string — the
+ * digest still feeds into env equality, so an empty-vs-non-empty
+ * transition still flips the digest correctly.
+ */
+export async function readAgentsModelDigest(
+  home: string,
+  workspaceSlug: string,
+): Promise<string> {
+  const agentDir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode", "agents");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(agentDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+  const files = entries.filter((n) => n.endsWith(".md")).sort();
+  if (files.length === 0) return "";
+
+  const { createHash } = await import("node:crypto");
+  const hash = createHash("sha256");
+  for (const name of files) {
+    let body = "";
+    try {
+      body = await fs.readFile(path.join(agentDir, name), "utf-8");
+    } catch {
+      continue;
+    }
+    // Pull only the `model:` line out of the frontmatter — that's the
+    // sole field whose change forces a daemon restart. Everything
+    // else (prompt body, permissions) takes effect on the next
+    // sendMessage without a restart.
+    const match = body.match(/^model:\s*(.+)$/m);
+    const model = match ? match[1].trim() : "";
+    hash.update(`${name}=${model}\n`);
+  }
+  return hash.digest("hex");
+}
+
+/**
  * Goals where the agent will likely need to drive a browser. Only chats
  * tagged with one of these get playwright-mcp wired up; everything else
  * starts the sandbox without firefox/playwright in memory, which is the
