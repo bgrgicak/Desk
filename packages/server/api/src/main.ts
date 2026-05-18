@@ -344,16 +344,45 @@ async function main(): Promise<void> {
     await pruneDriftedContainers(drift);
   });
 
+  // Graceful shutdown: stop the accept queue, drain in-flight requests
+  // within a bounded grace period, drop WS clients, close the DB pool.
+  // If a request hangs past SHUTDOWN_GRACE_MS we force-exit so a stuck
+  // upstream call can never block restart.
+  const SHUTDOWN_GRACE_MS = parseInt(process.env.DESK_SHUTDOWN_GRACE_MS ?? "30000", 10);
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     // eslint-disable-next-line no-console
-    console.log(`received ${signal}, shutting down`);
+    console.log(`received ${signal}, shutting down (grace ${SHUTDOWN_GRACE_MS}ms)`);
     clearInterval(pollTimer);
     clearInterval(idleSweepTimer);
     clearInterval(softIdleSweepTimer);
     clearInterval(retentionTimer);
     clearConnections();
-    server.close();
-    await pool.end();
+
+    // Force-exit watchdog. We'd rather lose a few hung requests than
+    // leave the process zombie-running and confuse process supervisors.
+    const force = setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.error(`shutdown grace expired after ${SHUTDOWN_GRACE_MS}ms — forcing exit`);
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    force.unref();
+
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Node ≥18.2: hang up any still-open keep-alive connections so
+      // server.close() actually fires its callback instead of waiting
+      // forever on idle clients.
+      server.closeIdleConnections?.();
+    });
+    try {
+      await pool.end();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("pool.end() during shutdown:", err);
+    }
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
