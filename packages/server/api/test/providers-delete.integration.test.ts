@@ -150,4 +150,41 @@ describe("PUT /me/providers — remove connection", () => {
     const afterEmpty = await request("GET", "/me/providers", token);
     expect((afterEmpty.body as { providers: Record<string, string | null> }).providers.OPENAI_API_KEY).toBeNull();
   });
+
+  it("re-adding a key after a disable-toggle clears the stale enabled:false flag", async () => {
+    // Regression for the no-response-after-changing-model bug. Flow:
+    //   1. User saves an OpenAI key (provider goes live).
+    //   2. User disables the provider via the Settings toggle, which writes
+    //      `provider_meta.OPENAI_API_KEY.enabled = false`.
+    //   3. User re-enters / rotates the key.
+    // Before the fix, step 3 left the disable flag intact, so the new key
+    // was filtered out of every agent run's env even though the connection
+    // showed as active. Result: opencode reported "no openai models" and
+    // the agent returned silence.
+    await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-original" },
+    });
+
+    // Toggle the provider off through the dedicated meta endpoint.
+    const disableRes = await request("PUT", "/me/providers/meta", token, {
+      meta: { ANTHROPIC_API_KEY: { enabled: false } },
+    });
+    expect(disableRes.status).toBe(200);
+    expect(
+      (disableRes.body as { meta: Record<string, { enabled?: boolean }> }).meta.ANTHROPIC_API_KEY?.enabled,
+    ).toBe(false);
+
+    // Re-enter the key (e.g. rotation, or user re-adding after disabling).
+    const reAddRes = await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-rotated" },
+    });
+    expect(reAddRes.status).toBe(200);
+
+    // The stale disable flag must be cleared so resolveProviderKeys treats
+    // the freshly-saved key as live.
+    const afterMeta = await request("GET", "/me/providers/meta", token);
+    expect(afterMeta.status).toBe(200);
+    const meta = (afterMeta.body as { meta: Record<string, { enabled?: boolean }> }).meta;
+    expect(meta.ANTHROPIC_API_KEY?.enabled).not.toBe(false);
+  });
 });

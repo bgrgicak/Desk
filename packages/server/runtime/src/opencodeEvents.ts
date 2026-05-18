@@ -81,11 +81,15 @@ export function translateOpencodeSseEvent(
     };
     if (typeof p.field !== "string") return null;
     if (typeof p.delta !== "string") return null;
-    const runFormatType = p.field.replace(/-/g, "_");
-    // The downstream `AgentEventSchema` reads `part.text` for `text`-typed
-    // events. For other delta fields (e.g. `reasoning`) the same shape
-    // works — consumers that care look at the matching `part.<field>`,
-    // or `part.text` when field is "text".
+    // ONLY translate deltas for fields the downstream UI knows how to
+    // render incrementally — text and reasoning. Tool deltas come with
+    // field values like `state`, `input`, `output` that the UI doesn't
+    // recognize as tool events; surfacing them as `{type: "state"}` etc.
+    // leaks unrenderable rows into the chat. The consolidated
+    // `message.part.updated` event for the same part (which we DO
+    // translate) carries the full tool state for the UI to render.
+    if (p.field !== "text" && p.field !== "reasoning") return null;
+    const runFormatType = p.field;
     const part: Record<string, unknown> = {
       type: runFormatType,
       text: p.delta,

@@ -55,6 +55,35 @@ export interface ExecRunOptions {
   onLog: (event: LogEvent) => void;
 }
 
+/**
+ * Per-workspace serial queue for MCP-config writes + daemon restarts.
+ *
+ * Two `execRun` calls for the same workspace with different goals
+ * both have to (a) decide whether the workspace's `.opencode/opencode.json`
+ * needs changing, (b) write it if so, (c) trigger an opencode-serve
+ * restart. Without serialization, those steps interleave: both calls
+ * see the old config, both write, both restart. The second restart
+ * either no-ops (if the daemon already came back up) or fails with
+ * port-in-use.
+ *
+ * One promise chain per workspaceId; entries are pruned in `finally`
+ * when they're the tail. Cross-workspace work is independent.
+ */
+const mcpLocks = new Map<string, Promise<unknown>>();
+async function withMcpLock<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = mcpLocks.get(workspaceId);
+  const next = (prev ?? Promise.resolve()).then(fn, fn);
+  // The caller awaits `next` (rejection handled there). The tail promise
+  // stored in the map needs its own `.catch` or a failed `fn` becomes an
+  // unhandledRejection that crashes the process.
+  const tail = next.finally(() => {
+    if (mcpLocks.get(workspaceId) === tail) mcpLocks.delete(workspaceId);
+  });
+  tail.catch(() => {});
+  mcpLocks.set(workspaceId, tail);
+  return next;
+}
+
 function firstNonInternalIpv4(): string | null {
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
@@ -108,51 +137,58 @@ export async function execRun(
   // single-bind workspace mount. The per-chat artifact paths and any
   // goal fragment are part of the rendered system prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
-  // Lazy MCP: refresh the workspace-level opencode config so playwright is
-  // only present when the chat goal actually needs a browser. If the
-  // config changed compared to the last write, restart the in-sandbox
-  // opencode-serve daemon so it picks up the new MCP set — the daemon
-  // loads its config at boot and won't re-read it on its own.
-  const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
-    enablePlaywright: chatNeedsBrowser(opts.agent.goal),
-  });
-  // Browser-goal chats need Xvfb; chat-goal chats don't, and Xvfb is
-  // expensive (~68 MB resident). We start it lazily here whenever
-  // playwright is being enabled — idempotent, so a no-op when it's
-  // already up. Order matters: Xvfb must exist *before* the daemon
-  // spawns its playwright MCP child, otherwise firefox launches and
-  // fails to connect to the display.
-  if (process.env.DESK_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
-    try {
-      const engine = await detectEngine();
-      await ensureContainerXvfb(engine, handle.containerId).catch(() => {});
-    } catch {
-      // best-effort; playwright will fail loudly if it ends up needing
-      // a display that never came up.
-    }
-  }
 
-  // Skip the daemon-restart side-effect under the fake driver — there's
-  // no real container behind `handle.containerId`, so engine.inspect /
-  // engine.exec would fail and emit an unhandled rejection during test
-  // teardown. The real driver still restarts on MCP-config diff below.
-  if (process.env.DESK_SANDBOX_DRIVER !== "fake" && mcpResult?.changed) {
-    try {
-      const engine = await detectEngine();
-      await restartOpencodeServer(engine, {
-        containerId: handle.containerId,
-        cwd: SANDBOX_HOME,
-        user: await sandboxUser(engine),
-        // The driver will (re)spawn with the right env on the next exec
-        // anyway; pass an empty env here so the daemon comes up but the
-        // *full* env contract is satisfied by the next ensureOpencodeServer
-        // call, which holds the canonical provider-key set for this run.
-        env: {},
-      }).catch(() => invalidateOpencodeServerCache(handle.containerId));
-    } catch {
-      invalidateOpencodeServerCache(handle.containerId);
+  // MCP config write + daemon-restart side-effects are serialized per
+  // workspace via `withMcpLock`. Two chats in the same workspace with
+  // different goals (one needs playwright, the other doesn't) used to
+  // race — each call read+wrote the workspace's `.opencode/opencode.json`
+  // and both decided to restart the daemon, racing on port-9105.
+  // Serializing inside the workspace keeps "current MCP state" coherent
+  // and the restart decision atomic. Cross-workspace concurrency is
+  // unaffected — each workspace has its own lock.
+  await withMcpLock(opts.workspaceId, async () => {
+    // Lazy MCP: refresh the workspace-level opencode config so
+    // playwright is only present when the chat goal actually needs a
+    // browser. If the config changed compared to the last write,
+    // restart the in-sandbox opencode-serve daemon so it picks up the
+    // new MCP set — the daemon loads its config at boot.
+    const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
+      enablePlaywright: chatNeedsBrowser(opts.agent.goal),
+    });
+
+    // Browser-goal chats need Xvfb; chat-goal chats don't, and Xvfb
+    // is expensive (~68 MB resident). Start it lazily whenever
+    // playwright is enabled — idempotent, so a no-op when already up.
+    // Order matters: Xvfb must exist *before* the daemon spawns its
+    // playwright MCP child.
+    if (process.env.DESK_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
+      try {
+        const engine = await detectEngine();
+        await ensureContainerXvfb(engine, handle.containerId).catch(() => {});
+      } catch {
+        // best-effort; playwright will fail loudly if it ends up
+        // needing a display that never came up.
+      }
     }
-  }
+
+    // Skip the daemon-restart side-effect under the fake driver —
+    // there's no real container behind `handle.containerId`, so
+    // engine.inspect / engine.exec would fail and emit an unhandled
+    // rejection during test teardown.
+    if (process.env.DESK_SANDBOX_DRIVER !== "fake" && mcpResult?.changed) {
+      try {
+        const engine = await detectEngine();
+        await restartOpencodeServer(engine, {
+          containerId: handle.containerId,
+          cwd: SANDBOX_HOME,
+          user: await sandboxUser(engine),
+          env: {},
+        }).catch(() => invalidateOpencodeServerCache(handle.containerId));
+      } catch {
+        invalidateOpencodeServerCache(handle.containerId);
+      }
+    }
+  });
 
   try {
     const driver = createDriver();
@@ -166,6 +202,13 @@ export async function execRun(
       attachments: opts.attachments,
       sandboxToken: token,
       apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
+      // Forward the agent's currently-saved model so the per-message
+      // `providerID/modelID` sent to opencode-serve reflects the user's
+      // live UI selection. Without this, the driver falls back to a
+      // default and the daemon ends up using whatever model it bound
+      // to the session at creation time — so changing the model in
+      // the UI never propagates to subsequent turns.
+      model: opts.agent.model,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
       opencodeSessionId: opts.opencodeSessionId ?? null,

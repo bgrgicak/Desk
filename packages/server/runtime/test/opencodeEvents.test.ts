@@ -106,7 +106,7 @@ describe("translateOpencodeSseEvent", () => {
     });
   });
 
-  it("handles message.part.delta for non-text fields (reasoning, etc.)", () => {
+  it("handles message.part.delta for reasoning field", () => {
     const out = translateOpencodeSseEvent(
       {
         type: "message.part.delta",
@@ -122,6 +122,37 @@ describe("translateOpencodeSseEvent", () => {
     const parsed = JSON.parse(out!);
     expect(parsed.type).toBe("reasoning");
     expect((parsed.part as { text: string }).text).toBe("thinking step");
+  });
+
+  it("drops malformed part-updated events too (regression check)", () => {
+    expect(
+      translateOpencodeSseEvent(
+        { type: "message.part.updated", properties: { sessionID: SES, part: {} } },
+        { sessionID: SES },
+      ),
+    ).toBeNull();
+  });
+
+  it("drops tool-shaped deltas (state/input/output) so they don't leak as unknown event types", () => {
+    // The downstream UI renders `text` and `reasoning` events; for tool
+    // parts it uses the consolidated `message.part.updated` event. If the
+    // translator surfaced tool deltas with `{type: "state"}` /
+    // `{type: "input"}` etc., those would appear as unrenderable rows.
+    for (const field of ["state", "input", "output", "metadata", "snapshot"]) {
+      const out = translateOpencodeSseEvent(
+        {
+          type: "message.part.delta",
+          properties: {
+            sessionID: SES,
+            partID: "prt_t1",
+            field,
+            delta: "anything",
+          },
+        },
+        { sessionID: SES },
+      );
+      expect(out, `expected null for delta field=${field}`).toBeNull();
+    }
   });
 
   it("drops events that aren't part updates or deltas (busy, server.connected, session.*)", () => {

@@ -204,6 +204,56 @@ describeIf("opencode-serve end-to-end", () => {
 
   }, 600_000);
 
+  it("tool calls show up as `tool`/`step_*` events in the run's log stream", async () => {
+    // Regression coverage for the PR #111 architecture flip. The old
+    // dispatch (`opencode run`) printed every tool call to stdout, so the
+    // runtime piped it straight into the message's event log. The new
+    // long-lived `opencode serve` only broadcasts text/reasoning deltas
+    // over SSE — tool/step parts must be pulled back via `GET
+    // /session/:id/message` after the turn settles, and `driver.execRun`
+    // must synthesize them into the `onLog` stream. Without this, the UI
+    // can't render a tool card and the chat history loses provenance for
+    // anything the model did with tools.
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home, {});
+    const driver = createDriver();
+
+    const events: Array<{ type?: string }> = [];
+    const result = await driver.execRun(testWorkspaceId, {
+      runId: "run_serve_tool_synth",
+      prompt:
+        // Force a bash tool call. The free model occasionally answers
+        // from memory, but giving it a one-off shell hint pushes it to
+        // dispatch — confirmed during local development. The test only
+        // asserts the bookkeeping path, not which tool the model picks.
+        "Use the `bash` tool to run `echo TOOL_SYNTH_PROBE` and then tell me the output.",
+      workspaceSlug: testWorkspaceSlug,
+      model: FREE_MODEL,
+      providerKeys: {},
+      onLog: (evt) => {
+        if (evt.kind !== "event") return;
+        try {
+          events.push(JSON.parse(evt.payload) as { type?: string });
+        } catch {
+          // Translator output is always JSON; a parse error means the
+          // shape changed.
+        }
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+
+    const nonTextTypes = events
+      .map((e) => e.type)
+      .filter((t): t is string => typeof t === "string" && t !== "text" && t !== "reasoning");
+    expect(
+      nonTextTypes.length,
+      `expected ≥1 tool/step event from the synthesized turn, got: ${nonTextTypes.join(",") || "none"}`,
+    ).toBeGreaterThan(0);
+    // Specifically — step boundaries must appear. They mark turn
+    // segments and the UI uses them to fold tool clusters.
+    expect(nonTextTypes).toContain("step_finish");
+  }, 600_000);
+
   it("cancelRun aborts a running turn", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home, {});
     const driver = createDriver();

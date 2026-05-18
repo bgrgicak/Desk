@@ -128,6 +128,14 @@ export interface AppOptions {
   vault?: VaultStore;
   /** The userId to broadcast events to (v1: single user). */
   broadcastUserId?: string;
+  /**
+   * Hot-refreshes the user's sandbox daemons after a connector / local
+   * source mutation. Wired by main.ts to the runtime's
+   * `refreshSandboxConnections`. When omitted (tests) the routes still
+   * succeed but the running sandbox keeps its old env until the next
+   * env-digest restart.
+   */
+  refreshSandboxConnections?: (userId: string, workspaceId?: string) => Promise<void>;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -312,6 +320,32 @@ export function createApp(opts: AppOptions): Server {
     if (opts.broadcastUserId) {
       broadcast(opts.broadcastUserId, event);
     }
+  }
+
+  /**
+   * Best-effort hot-refresh after a connector / local-source mutation.
+   * Awaited (so the route response reflects the post-refresh state) but
+   * never re-throws — a flaky engine must not turn a successful settings
+   * mutation into a 500. Followed by a `connection.changed` broadcast so
+   * any open client UIs refetch.
+   */
+  async function refreshConnections(
+    userId: string,
+    payload: WsEvent & { type: "connection.changed" },
+    workspaceId?: string,
+  ): Promise<void> {
+    if (opts.refreshSandboxConnections) {
+      try {
+        await opts.refreshSandboxConnections(userId, workspaceId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `refreshSandboxConnections failed (userId=${userId} workspaceId=${workspaceId ?? "*"}):`,
+          (err as Error).message ?? err,
+        );
+      }
+    }
+    emitEvent(payload);
   }
 
   // Pre-generate the OpenAPI spec
@@ -1078,6 +1112,11 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/me/connections" && method === "POST") {
       const body = await parseBody(req) as Parameters<typeof accountRoutes.createConnection>[3];
       const result = await accountRoutes.createConnection(pool, vault, userId, body);
+      const providerId = result.connection?.providerId ?? "unknown";
+      await refreshConnections(userId, {
+        type: "connection.changed",
+        payload: { kind: "connector", providerId, op: "created" },
+      });
       sendJson(res, 201, result);
       return;
     }
@@ -1086,11 +1125,28 @@ export function createApp(opts: AppOptions): Server {
       if (m && method === "PATCH") {
         const body = await parseBody(req) as Parameters<typeof accountRoutes.updateConnection>[4];
         const result = await accountRoutes.updateConnection(pool, vault, userId, m[1], body);
+        const providerId = result.connection?.providerId ?? "unknown";
+        await refreshConnections(userId, {
+          type: "connection.changed",
+          payload: { kind: "connector", providerId, op: "updated" },
+        });
         sendJson(res, 200, result);
         return;
       }
       if (m && method === "DELETE") {
+        // Look up providerId before delete so the broadcast still has it.
+        const before = await import("@agent-desk/db").then((db) =>
+          db.queries.connectors.findConnection(pool, m[1], userId),
+        );
         const result = await accountRoutes.deleteConnection(pool, vault, userId, m[1]);
+        await refreshConnections(userId, {
+          type: "connection.changed",
+          payload: {
+            kind: "connector",
+            providerId: before?.providerId ?? "unknown",
+            op: "deleted",
+          },
+        });
         sendJson(res, 200, result);
         return;
       }
@@ -1105,6 +1161,14 @@ export function createApp(opts: AppOptions): Server {
       if (m && method === "PUT") {
         const body = await parseBody(req) as { enabled: boolean };
         const result = await localSourceRoutes.setLocalSourceEnabled(pool, userId, m[1], body);
+        await refreshConnections(userId, {
+          type: "connection.changed",
+          payload: {
+            kind: "local_source",
+            providerId: m[1],
+            op: body.enabled ? "enabled" : "disabled",
+          },
+        });
         sendJson(res, 200, result);
         return;
       }
@@ -1220,6 +1284,19 @@ export function createApp(opts: AppOptions): Server {
       await requireOwnedWorkspace(pool, segments[1], userId);
       const body = await parseBody(req) as Parameters<typeof accountRoutes.replaceWorkspaceGrants>[3];
       const result = await accountRoutes.replaceWorkspaceGrants(pool, userId, segments[1], body);
+      await refreshConnections(
+        userId,
+        {
+          type: "connection.changed",
+          payload: {
+            kind: "connector",
+            providerId: "*",
+            op: "updated",
+            workspaceId: segments[1],
+          },
+        },
+        segments[1],
+      );
       sendJson(res, 200, result);
       return;
     }

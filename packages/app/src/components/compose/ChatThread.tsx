@@ -230,6 +230,34 @@ export function liveDeveloperProgressMessage(
   }
 }
 
+/**
+ * Build a transient assistant message from the streaming text the model
+ * has produced so far. Rendered as a regular MessageBubble while the
+ * turn is in flight so the user sees the answer growing word-by-word
+ * (the same way a finalized message bubble looks) instead of a generic
+ * "Thinking…" status indicator. Returns null when no text has streamed
+ * yet, in which case the caller should keep showing the status text.
+ */
+export function liveAssistantTextMessage(
+  activeAgentTurn: ServerMessage | null,
+): ServerMessage | null {
+  if (!activeAgentTurn?.progressLog?.length) return null
+  const textEvents = activeAgentTurn.progressLog.filter(
+    (e) => e.kind === 'event' && e.event.type === 'text',
+  )
+  if (textEvents.length === 0) return null
+  return {
+    ...activeAgentTurn,
+    id: `${activeAgentTurn.id}:live-text`,
+    role: 'agent',
+    // EventsView with developerMode=false renders text chunks as a
+    // regular markdown paragraph (folded across consecutive text
+    // events) and ignores everything else — exactly what we want for
+    // the in-progress assistant bubble.
+    content: { type: 'events', log: textEvents },
+  }
+}
+
 function isLiveDeveloperProgressEntry(entry: AgentLogEntry): boolean {
   if (entry.kind === 'stderr') return true
   if (entry.kind !== 'event') return false
@@ -464,6 +492,11 @@ export function ChatThread({
   const liveDeveloperMessage = useMemo(
     () => liveDeveloperProgressMessage(activeAgentTurn, developerMode),
     [activeAgentTurn, developerMode],
+  )
+
+  const liveAssistantText = useMemo(
+    () => liveAssistantTextMessage(activeAgentTurn),
+    [activeAgentTurn],
   )
 
   // Detect the most recent failed turn, or a visually silent turn that only
@@ -712,7 +745,20 @@ export function ChatThread({
               />
             </div>
           )}
-          {isTyping && (
+          {liveAssistantText && (
+            <div className={resolvedStatusClassName}>
+              <MessageBubble
+                message={liveAssistantText}
+                workspaceId={workspaceId}
+                agentName={agentName}
+                isFirstInGroup
+                onAttachmentClick={onAttachmentClick}
+                agentHeaderClassName={agentHeaderClassName}
+                developerMode={false}
+              />
+            </div>
+          )}
+          {isTyping && !liveAssistantText && (
             <div className={resolvedStatusClassName}>
               <StatusIndicator text={statusText} isTyping={isTyping} />
             </div>

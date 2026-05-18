@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ListLibraryResponse } from '@/store/types'
-import { isDirectoryPath, workspaceRelativePath } from './PathChip'
+import { displayBasename, isDirectoryPath, workspaceRelativePath } from './PathChip'
 
 const library: ListLibraryResponse = {
   items: [
@@ -43,5 +43,25 @@ describe('PathChip path classification', () => {
 
   it('does not treat regular files as directories', () => {
     expect(isDirectoryPath('/home/agent/report.md', library)).toBe(false)
+  })
+})
+
+describe('displayBasename', () => {
+  it('returns the filename for file paths', () => {
+    expect(displayBasename('~/Desk/desk-dev/Desk/README.md')).toBe('README.md')
+  })
+
+  it('returns the folder name for paths with a trailing slash', () => {
+    expect(displayBasename('~/Desk/desk-dev/Desk/.claude/worktrees/opencode-serve-per-sandbox/')).toBe(
+      'opencode-serve-per-sandbox',
+    )
+  })
+
+  it('returns the folder name for directory paths without a trailing slash', () => {
+    expect(displayBasename('~/Projects/Alpha')).toBe('Alpha')
+  })
+
+  it('falls back to the full path when there is no basename to extract', () => {
+    expect(displayBasename('/')).toBe('/')
   })
 })

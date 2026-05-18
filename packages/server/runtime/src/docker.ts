@@ -152,6 +152,14 @@ export function classifyResourceError(
   // a non-OOM signal kill that hits this path will at worst grow the
   // sandbox once before the user-visible failure surfaces.
   if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
+  // opencode-serve daemon mid-run failure: HTTP calls to a dead daemon
+  // surface as `fetch failed` / `ECONNREFUSED` in stderr, not as a
+  // child-process exit code. The driver probes the container's cgroup
+  // `memory.events.oom_kill` after a daemon-gone error and emits a
+  // marker line when the kernel actually OOM-killed it. That's the
+  // signal the auto-scaler needs to grow memory before retry instead
+  // of failing the user with no recovery.
+  if (s.includes("opencode-serve was oom-killed")) return "memory";
   return null;
 }
 
@@ -593,6 +601,23 @@ export function providerKeyExecEnv(
     }
   }
   return out;
+}
+
+/**
+ * Names of every persisted connection env var the user can manage in
+ * Settings, plus the managed-connection aliases that mirror them. Daemon
+ * env builders prepend these as empty strings so a `docker exec -e KEY=`
+ * launching opencode-serve overrides anything the container inherited at
+ * create time. Without this, a key the user disabled in Settings stays
+ * visible to the warm daemon via the container's birth env and opencode
+ * exposes models for the "disabled" provider.
+ */
+export function connectionEnvNames(): string[] {
+  const names = new Set<string>(CONNECTION_ENV_VARS);
+  for (const definition of managedConnectionDefinitions()) {
+    for (const alias of definition.envAliases ?? []) names.add(alias);
+  }
+  return [...names];
 }
 
 /**

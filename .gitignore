@@ -9,6 +9,7 @@ test-results/
 .DS_Store
 NvVars
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 .playwright-mcp
 workspaces/
 .database/

@@ -29,8 +29,27 @@ export async function patchAgent(
   id: string,
   data: { name?: string; model?: string },
 ) {
+  const before = data.model !== undefined ? await queries.agents.findById(pool, id) : null;
   const agent = await queries.agents.updateMeta(pool, id, data);
   if (!agent) throw new NotFoundError(`Agent not found: ${id}`);
+
+  // Switching the agent's model invalidates every opencode-serve session
+  // bound to this agent: the daemon binds providerID/modelID to the
+  // session at creation time and ignores per-message overrides, so
+  // existing chats keep using the old model until their session is
+  // recreated. Forget the session ids here so the next turn in those
+  // chats creates a fresh session bound to the new model.
+  if (data.model !== undefined && before && before.model !== data.model) {
+    const cleared = await queries.chats.clearOpencodeSessionsForAgent(pool, id);
+    if (cleared.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `agent ${id} model changed (${before.model} → ${data.model}); ` +
+        `cleared opencode session id from ${cleared.length} chat(s)`,
+      );
+    }
+  }
+
   return agent;
 }
 

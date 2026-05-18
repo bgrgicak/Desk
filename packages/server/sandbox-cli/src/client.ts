@@ -11,11 +11,31 @@ function resolveTarget(pathname: string): URL {
 }
 
 function requireToken(): string {
-  const token = process.env.DESK_SANDBOX_TOKEN;
-  if (!token) {
-    throw new CliError("NO_TOKEN", "DESK_SANDBOX_TOKEN is not set");
+  // Direct env path: caller already wired the token in. Trunk-shaped.
+  const direct = process.env.DESK_SANDBOX_TOKEN;
+  if (direct) return direct;
+  // File path: the host runtime writes the per-run token to a known
+  // file before each turn and exposes DESK_SANDBOX_TOKEN_PATH on the
+  // daemon's stable env. The daemon's child tool processes (this CLI)
+  // inherit that env and read the freshest token off disk. This keeps
+  // the daemon's process env stable across runs (the env-digest stays
+  // the same so the daemon doesn't restart per turn) while preserving
+  // per-run token rotation semantics.
+  const tokenPath = process.env.DESK_SANDBOX_TOKEN_PATH;
+  if (tokenPath) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require("node:fs") as typeof import("node:fs");
+      const fileToken = fs.readFileSync(tokenPath, "utf8").trim();
+      if (fileToken) return fileToken;
+    } catch {
+      // fall through to NO_TOKEN
+    }
   }
-  return token;
+  throw new CliError(
+    "NO_TOKEN",
+    "DESK_SANDBOX_TOKEN is not set and DESK_SANDBOX_TOKEN_PATH did not yield a token",
+  );
 }
 
 function handleResponse(
