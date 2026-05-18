@@ -42,6 +42,14 @@ export interface RateLimitDecision {
 }
 
 export function consumeRateLimit(name: string, key: string, now: number = Date.now()): RateLimitDecision {
+  // Operator escape hatch: tests and one-off scripts that hammer the
+  // server with logins (e2e harness in particular) can disable the
+  // limiter via DESK_RATE_LIMIT_DISABLED=1. Production never sets this.
+  // Read at call time, not at module load, so flipping the env between
+  // spawn and request still works in fixtures.
+  if (process.env.DESK_RATE_LIMIT_DISABLED === "1") {
+    return { allowed: true, retryAfterMs: 0 };
+  }
   const bucket = buckets.get(name);
   if (!bucket) {
     throw new Error(`Unknown rate-limit bucket: ${name}`);
