@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Desk desktop application (Electron)",
+  "author": "Agent Desk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bgrgicak/Desk.git"
+  },
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",

@@ -413,7 +413,7 @@ async function main() {
     case "-h":
       process.stdout.write(
         "Usage: desk [start|init|service|version]\n" +
-        "  start                          boot desk-server (and Vite in monorepo dev) (default)\n" +
+        "  start                          boot desk-server (default)\n" +
         "  init                           create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
         "  service install|uninstall      register/unregister Desk as a system service\n" +
         "  service start|stop|status      control the installed system service\n" +
