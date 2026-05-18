@@ -504,6 +504,34 @@ export function createApp(opts: AppOptions): Server {
         return;
       }
 
+      if (method === "GET" && rawPath === "/ready") {
+        // Liveness vs readiness: /health is "process is up", /ready is
+        // "process is up AND its dependencies respond." Both are
+        // unauthenticated so a process supervisor (systemd, k8s,
+        // docker-compose healthcheck) can probe them without a token.
+        const checks: Record<string, "ok" | "fail"> = {};
+        let allOk = true;
+        try {
+          await pool.query("SELECT 1", []);
+          checks.db = "ok";
+        } catch {
+          checks.db = "fail";
+          allOk = false;
+        }
+        // Vault subsystem readiness — the store always exists, but we
+        // can still ask it for status on a dummy user to confirm the
+        // file backend is reachable.
+        try {
+          await vault.status("system");
+          checks.vault = "ok";
+        } catch {
+          checks.vault = "fail";
+          allOk = false;
+        }
+        sendJson(res, allOk ? 200 : 503, { ok: allOk, checks });
+        return;
+      }
+
       // SPA static-serve: GETs that aren't API/WS/internal/sandbox routes
       // get the SPA. No auth — these are the unauthenticated assets the
       // browser fetches before login (index.html, JS bundles, fonts).
