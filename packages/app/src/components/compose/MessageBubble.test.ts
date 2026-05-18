@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentAlignmentClass, eventDisplayChunks } from './MessageBubble'
+import { artifactRefHref, attachmentAlignmentClass, eventDisplayChunks } from './MessageBubble'
+
+describe('artifactRefHref', () => {
+  it('opens chat artifact app directories as items instead of library folders', () => {
+    expect(artifactRefHref('ws_123', '.chats/cht_123/artifacts/my-app.app', 'inode/directory'))
+      .toBe('/w/ws_123/context?item=.chats%2Fcht_123%2Fartifacts%2Fmy-app.app')
+  })
+
+  it('keeps regular directories routed to the folder browser', () => {
+    expect(artifactRefHref('ws_123', 'Project Files', 'inode/directory'))
+      .toBe('/w/ws_123/context?folder=Project+Files')
+  })
+})
 
 describe('attachmentAlignmentClass', () => {
   it('right-aligns user-uploaded message attachments', () => {

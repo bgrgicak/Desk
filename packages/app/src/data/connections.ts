@@ -4,11 +4,11 @@
 // `/me/providers` for Claude/ChatGPT/GitHub). The other kinds are listed in the
 // catalog so they appear in the picker as a roadmap, but they're disabled
 // until a backend lands — there is no mock data seeded.
-import { managedConnectionDefinitions, type ManagedConnectionDefinition } from '@agent-desk/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND, LOCAL_FILESYSTEM_PROVIDER_ID, LOCAL_FILESYSTEM_CAPABILITIES, managedConnectionDefinitions, type ManagedConnectionDefinition } from '@agent-desk/shared'
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt' | 'codex'
-  | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
+  | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper' | typeof LOCAL_FILESYSTEM_CONNECTION_KIND
 
 export interface ConnectionMeta {
   name: string
@@ -33,6 +33,7 @@ export const CONNECTION_CATALOG = {
   'figma':        { name: 'Figma',        description: 'Design files and prototypes',          icon: '🎨' },
   'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',          icon: '🔷' },
   'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
+  [LOCAL_FILESYSTEM_CONNECTION_KIND]: { name: 'Local folders', description: 'Mount server-local directories into the sandbox home folder', icon: '📁' },
 } as Record<ConnectionKind, ConnectionMeta>
 
 // Maps a cloud connection kind to the env key in /me/providers where its
@@ -72,13 +73,18 @@ export function providerKeyEntries(): [ConnectionKind, string][] {
  * here. Single-key API connectors (Claude, ChatGPT, …) do not belong here;
  * they use the legacy /me/providers env-key surface.
  */
-export const CONNECTOR_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>> = {}
+export const CONNECTOR_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>> = {
+  [LOCAL_FILESYSTEM_CONNECTION_KIND]: LOCAL_FILESYSTEM_PROVIDER_ID,
+}
 
 export function allowsMultipleConnections(kind: ConnectionKind): boolean {
+  if (kind === LOCAL_FILESYSTEM_CONNECTION_KIND) return false
   return CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined
 }
 
-export const DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND: Partial<Record<ConnectionKind, string[]>> = {}
+export const DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND: Partial<Record<ConnectionKind, string[]>> = {
+  [LOCAL_FILESYSTEM_CONNECTION_KIND]: [...LOCAL_FILESYSTEM_CAPABILITIES],
+}
 
 export const DEFAULT_SCOPES_BY_CONNECTOR_KIND: Partial<Record<ConnectionKind, string[]>> = {}
 

@@ -23,6 +23,37 @@ export async function handleLogin(
 }
 
 /**
+ * Auto-login for the local Desk owner. This is intentionally not tied to
+ * Vite/dev mode: production desktop/static-server builds need the same
+ * no-friction boot path as `npm run dev`.
+ *
+ * Set DESK_AUTO_LOGIN=off to force the manual LoginScreen instead.
+ */
+export async function handleAutoLogin(
+  pool: Pool,
+): Promise<{ token: string }> {
+  if ((process.env.DESK_AUTO_LOGIN ?? "on").toLowerCase() === "off") {
+    throw new UnauthorizedError("Auto-login is disabled");
+  }
+
+  const preferredUsername = process.env.DESK_SEED_USERNAME ?? "desk";
+  const preferred = await queries.users.findByUsername(pool, preferredUsername);
+  let userId = preferred?.id;
+
+  if (!userId) {
+    const { rows } = await pool.query<{ id: string }>(
+      "SELECT id FROM users ORDER BY created_at ASC LIMIT 1",
+    );
+    userId = rows[0]?.id;
+  }
+
+  if (!userId) throw new UnauthorizedError("No user is available for auto-login");
+
+  const token = await issueSession(pool, userId);
+  return { token };
+}
+
+/**
  * Logout — revokes the bearer token and, when no live sessions remain
  * for the same user, locks that user's secrets vault so the in-memory
  * master is dropped. Multi-device users keep the vault unlocked while

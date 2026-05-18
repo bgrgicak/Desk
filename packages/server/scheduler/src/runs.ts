@@ -16,7 +16,7 @@ import {
 import { queries } from "@agent-desk/db";
 import { resolveDeskHome } from "@agent-desk/storage";
 import {
-  buildDefaultMountPlan,
+  buildWorkspaceMountPlan,
   createOrReuse,
   execRun as runtimeExecRun,
   classifyResourceError,
@@ -760,6 +760,18 @@ export function createRunManager(opts: RunManagerOptions) {
       // the host (interactive `codex` use) propagates without recreating the
       // sandbox.
       const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
+      const siblingSlugs = workspaceKind === "hub" && userId
+        ? (await queries.workspaces.listByUser(pool, userId))
+            .filter((w) => w.id !== workspaceId)
+            .map((w) => w.path)
+        : [];
+      const localFsResolution = await buildWorkspaceMountPlan(pool, {
+        home,
+        workspaceId,
+        workspaceSlug,
+        userId,
+        siblingWorkspaceSlugs: workspaceKind === "hub" ? siblingSlugs : [],
+      });
       const agent = await queries.agents.findById(pool, agentId);
       const agentFileInput: AgentFileInput = {
         agentId,
@@ -771,6 +783,7 @@ export function createRunManager(opts: RunManagerOptions) {
         goal: chatGoal,
         runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" && (msg.executeAt || msg.cron) ? "scheduled-task" : "chat"),
         workspaceKind,
+        localFilesystemDirectories: localFsResolution.agentDirectories,
       };
 
       let result: { exitCode: number };
@@ -794,13 +807,8 @@ export function createRunManager(opts: RunManagerOptions) {
         // Hub mounts every owned project workspace read-only at
         // `~/workspaces/{slug}/`. Project-workspace runs get the default
         // single-workspace mount plan (no siblings).
-        const siblingSlugs = workspaceKind === "hub" && userId
-          ? (await queries.workspaces.listByUser(pool, userId))
-              .filter((w) => w.id !== workspaceId)
-              .map((w) => w.path)
-          : [];
-        const mountPlan = workspaceKind === "hub"
-          ? buildDefaultMountPlan(home, workspaceSlug, siblingSlugs)
+        const mountPlan = workspaceKind === "hub" || localFsResolution.agentDirectories.length > 0
+          ? localFsResolution.mountPlan
           : undefined;
 
         // Event-driven resource auto-scaling: capture stderr per-attempt
@@ -903,6 +911,7 @@ export function createRunManager(opts: RunManagerOptions) {
               attachments,
               providerKeys: billing.providerKeys,
               extraEnv,
+              mountPlan,
               opencodeSessionId,
               onLog: onLogWithStderrCapture,
             });

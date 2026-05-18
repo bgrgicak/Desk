@@ -127,6 +127,30 @@ export const MANAGED_CONNECTIONS = {
   },
 } as const satisfies Record<string, ManagedConnectionDefinition>;
 
+export const LOCAL_FILESYSTEM_CONNECTION_KIND = "local-filesystem" as const;
+export const LOCAL_FILESYSTEM_PROVIDER_ID = "local_filesystem" as const;
+export const LOCAL_FILESYSTEM_MOUNT_MARKER = ".desk-local-filesystem-mount.json" as const;
+export const LOCAL_FILESYSTEM_CAPABILITIES = [
+  "local_filesystem.read",
+  "local_filesystem.write",
+] as const;
+
+export type LocalFilesystemAccess = "read_only" | "read_write";
+
+export interface LocalFilesystemDirectoryConfig {
+  id: string;
+  hostPath: string;
+  homeName: string;
+  access: LocalFilesystemAccess;
+  description?: string;
+}
+
+export interface LocalFilesystemConnectionMetadata {
+  localFilesystem: {
+    directories: LocalFilesystemDirectoryConfig[];
+  };
+}
+
 export const MANAGED_CONNECTION_DEFINITIONS = Object.values(MANAGED_CONNECTIONS) as ManagedConnectionDefinition[];
 
 export const MANAGED_CONNECTION_ENV_ALIASES = MANAGED_CONNECTION_DEFINITIONS

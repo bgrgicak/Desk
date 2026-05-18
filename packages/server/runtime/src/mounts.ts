@@ -1,5 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { queries, type Pool } from "@agent-desk/db";
+import {
+  ConflictError,
+  LOCAL_FILESYSTEM_MOUNT_MARKER,
+  LOCAL_FILESYSTEM_PROVIDER_ID,
+  type LocalFilesystemConnectionMetadata,
+  type LocalFilesystemDirectoryConfig,
+} from "@agent-desk/shared";
 import type { SandboxHandle } from "./docker.js";
 import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent-desk/storage";
 
@@ -112,6 +120,10 @@ export interface MountPlanEntry {
    * Desk-managed tree.
    */
   category: "workspace" | "external";
+  /** When false, createOrReuse must not create a missing source path. */
+  ensureSource?: boolean;
+  /** Stable identity for nested mount-point placeholder directories. */
+  mountPointId?: string;
 }
 
 export type MountPlan = MountPlanEntry[];
@@ -161,6 +173,120 @@ export function buildDefaultMountPlan(
     });
   }
   return plan;
+}
+
+export interface LocalFilesystemAgentDirectory {
+  path: string;
+  access: LocalFilesystemDirectoryConfig["access"];
+  description?: string;
+}
+
+export interface LocalFilesystemMountResolution {
+  mountPlan: MountPlan;
+  agentDirectories: LocalFilesystemAgentDirectory[];
+}
+
+function localFilesystemDirectories(metadata: Record<string, unknown>): LocalFilesystemDirectoryConfig[] {
+  const parsed = metadata as Partial<LocalFilesystemConnectionMetadata>;
+  return Array.isArray(parsed.localFilesystem?.directories)
+    ? parsed.localFilesystem.directories.filter((dir): dir is LocalFilesystemDirectoryConfig => (
+      Boolean(dir)
+      && typeof dir.hostPath === "string"
+      && typeof dir.homeName === "string"
+      && (dir.access === "read_only" || dir.access === "read_write")
+    ))
+    : [];
+}
+
+async function readMountMarker(targetPath: string): Promise<{ mountId?: string } | null> {
+  try {
+    const raw = await fs.readFile(path.join(targetPath, LOCAL_FILESYSTEM_MOUNT_MARKER), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as { mountId?: string } : null;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return null;
+    return null;
+  }
+}
+
+async function targetIsAvailableMountPoint(targetPath: string, mountId: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(targetPath);
+    if (!stat.isDirectory()) return false;
+    const marker = await readMountMarker(targetPath);
+    // Any Desk local-filesystem marker means this directory is only a host-side
+    // placeholder for a nested bind mount. The directory id can change when the
+    // connection is edited, so do not treat a stale marker id as user content.
+    // Duplicate selected mount names are rejected before this check.
+    if (marker?.mountId) return true;
+    return false;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return true;
+    throw err;
+  }
+}
+
+export async function buildWorkspaceMountPlan(
+  pool: Pool,
+  opts: {
+    home: string;
+    workspaceId: string;
+    workspaceSlug: string;
+    userId?: string | null;
+    siblingWorkspaceSlugs?: string[];
+  },
+): Promise<LocalFilesystemMountResolution> {
+  const mountPlan = buildDefaultMountPlan(opts.home, opts.workspaceSlug, opts.siblingWorkspaceSlugs ?? []);
+  const agentDirectories: LocalFilesystemAgentDirectory[] = [];
+  if (!opts.userId) return { mountPlan, agentDirectories };
+
+  const workspaceRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
+  const grants = await queries.connectors.listWorkspaceGrants(pool, opts.workspaceId);
+  const localGrantIds = grants
+    .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
+    .map((grant) => grant.connectionId);
+  const all = await queries.connectors.listConnections(pool, opts.userId, LOCAL_FILESYSTEM_PROVIDER_ID);
+  const active = all.filter((connection) => connection.status === "active");
+  const selected = localGrantIds.length > 0
+    ? active.filter((connection) => localGrantIds.includes(connection.id))
+    : active;
+
+  const seenHomeNames = new Set<string>();
+  for (const connection of selected) {
+    for (const directory of localFilesystemDirectories(connection.metadata)) {
+      const homeName = path.basename(directory.homeName);
+      if (seenHomeNames.has(homeName.toLowerCase())) {
+        throw new ConflictError(`Multiple local filesystem directories want to mount at ~/${homeName}`);
+      }
+      seenHomeNames.add(homeName.toLowerCase());
+
+      const targetPath = path.join(workspaceRoot, homeName);
+      const mountId = `${connection.id}:${directory.id}`;
+      if (!(await targetIsAvailableMountPoint(targetPath, mountId))) {
+        throw new ConflictError(`~/${homeName} already exists. Rename or remove it, or choose a different mount name.`);
+      }
+      const sourceStat = await fs.stat(directory.hostPath).catch(() => null);
+      if (!sourceStat?.isDirectory()) {
+        throw new ConflictError(`Local filesystem source is not available: ${directory.hostPath}`);
+      }
+
+      mountPlan.push({
+        sourcePath: directory.hostPath,
+        targetPath: `${SANDBOX_HOME}/${homeName}`,
+        mode: directory.access === "read_only" ? "ro" : "rw",
+        category: "external",
+        ensureSource: false,
+        mountPointId: mountId,
+      });
+      agentDirectories.push({
+        path: `~/${homeName}`,
+        access: directory.access,
+        ...(directory.description ? { description: directory.description } : {}),
+      });
+    }
+  }
+
+  return { mountPlan, agentDirectories };
 }
 
 /**
