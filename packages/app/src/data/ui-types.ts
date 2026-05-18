@@ -447,17 +447,8 @@ export function getItemsInFolder(folderId: string | null, items: ContextItem[]):
   return items.filter(i => (i.folderId ?? null) === folderId)
 }
 
-export function countItemsRecursive(folders: Folder[], folderId: string, items: ContextItem[]): number {
-  const descendantIds = new Set<string>([folderId])
-  let added = true
-  while (added) {
-    added = false
-    for (const f of folders) {
-      if (f.parentId && descendantIds.has(f.parentId) && !descendantIds.has(f.id)) {
-        descendantIds.add(f.id)
-        added = true
-      }
-    }
-  }
-  return items.filter(i => i.folderId && descendantIds.has(i.folderId)).length
+export function countDirectChildren(folders: Folder[], folderId: string, items: ContextItem[]): number {
+  const directItems = items.filter(i => (i.folderId ?? null) === folderId).length
+  const directFolders = folders.filter(f => f.parentId === folderId).length
+  return directItems + directFolders
 }

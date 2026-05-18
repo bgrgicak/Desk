@@ -87,6 +87,23 @@ describe("listLibrary", () => {
     expect(folderPaths).toContain("Work/Plans");
   });
 
+  it("projects connected local filesystem directories into the library listing", async () => {
+    const source = path.join(ctx.home, ".tmp", "connected-projects-source");
+    await fs.mkdir(path.join(source, "Desk", "packages"), { recursive: true });
+    await fs.writeFile(path.join(source, "Desk", "package.json"), "{}");
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug, {
+      virtualMounts: [{ homeName: "Projects", sourcePath: source }],
+    });
+
+    const itemPaths = items.map((i) => i.path);
+    const folderPaths = folders.map((f) => f.path);
+    expect(folderPaths).toContain("Projects");
+    expect(folderPaths).toContain("Projects/Desk");
+    expect(folderPaths).toContain("Projects/Desk/packages");
+    expect(itemPaths).toContain("Projects/Desk/package.json");
+  });
+
   it("returns the full tree when no limit is given, even if a subtree dominates mtime", async () => {
     // Simulate the node_modules problem: a freshly-written subtree whose mtimes
     // sort above an older root file. Without a limit, the older root file must

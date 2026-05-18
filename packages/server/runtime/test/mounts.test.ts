@@ -3,12 +3,16 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
+import { generateId, LOCAL_FILESYSTEM_MOUNT_MARKER, LOCAL_FILESYSTEM_PROVIDER_ID } from "@agent-desk/shared";
+import { setupTestDb, teardownTestDb } from "../../db/test/helpers/db.js";
+import { queries, type Pool } from "@agent-desk/db";
 import {
   projectMounts,
   teardownMounts,
   activeRunCount,
   containerBinds,
   buildDefaultMountPlan,
+  buildWorkspaceMountPlan,
   bindsFromPlan,
   SANDBOX_HOME,
   SKILLS_SANDBOX_MOUNT_DIR,
@@ -17,6 +21,9 @@ import {
 import type { SandboxHandle } from "../src/docker.js";
 
 let home: string;
+let pool: Pool;
+let userId: string;
+let workspaceId: string;
 const TEST_SLUG = "test-ws";
 const handle: SandboxHandle = { containerId: "fake-container", workspaceId: "wks_test123" };
 
@@ -24,9 +31,20 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-mount-test-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, TEST_SLUG);
+  pool = await setupTestDb();
+  userId = generateId("user");
+  workspaceId = generateId("workspace");
+  await queries.users.insert(pool, {
+    id: userId,
+    username: "mount-user",
+    passwordHash: "hash",
+    email: "mount@example.com",
+  });
+  await queries.workspaces.insert(pool, { id: workspaceId, userId, name: "Test WS", path: TEST_SLUG });
 });
 
 afterAll(async () => {
+  await teardownTestDb(pool);
   await fs.rm(home, { recursive: true, force: true });
 });
 
@@ -99,6 +117,98 @@ describe("mounts", () => {
       { sourcePath: "/b", targetPath: "/home/agent/x", mode: "rw", category: "external" },
     ]);
     expect(binds).toEqual(["/b:/home/agent/x:rw"]);
+  });
+
+  it("buildWorkspaceMountPlan adds active local filesystem mounts and agent context", async () => {
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-source-"));
+    await queries.connectors.createConnection(pool, {
+      ownerUserId: userId,
+      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+      displayName: "Local folders",
+      status: "active",
+      metadata: {
+        localFilesystem: {
+          directories: [{
+            id: "dir_docs",
+            hostPath: source,
+            homeName: "Docs",
+            access: "read_only",
+            description: "Reference docs.",
+          }],
+        },
+      },
+    });
+
+    const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId });
+
+    expect(result.mountPlan).toContainEqual({
+      sourcePath: source,
+      targetPath: `${SANDBOX_HOME}/Docs`,
+      mode: "ro",
+      category: "external",
+      ensureSource: false,
+      mountPointId: `${result.mountPlan.find((entry) => entry.targetPath === `${SANDBOX_HOME}/Docs`)?.mountPointId}`,
+    });
+    expect(result.agentDirectories).toEqual([{ path: "~/Docs", access: "read_only", description: "Reference docs." }]);
+  });
+
+  it("buildWorkspaceMountPlan accepts stale local filesystem mount placeholders for the same home name", async () => {
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-stale-marker-"));
+    const staleUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: staleUserId,
+      username: "mount-stale-marker-user",
+      passwordHash: "hash",
+      email: "mount-stale-marker@example.com",
+    });
+    const target = path.join(workspaceRootPath(home, TEST_SLUG), "Projects");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER), JSON.stringify({ mountId: "old:dir" }));
+    const connection = await queries.connectors.createConnection(pool, {
+      ownerUserId: staleUserId,
+      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+      displayName: "Local folders",
+      status: "active",
+      metadata: {
+        localFilesystem: {
+          directories: [{ id: "dir_projects", hostPath: source, homeName: "Projects", access: "read_write" }],
+        },
+      },
+    });
+
+    const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: staleUserId });
+
+    expect(result.mountPlan).toContainEqual(expect.objectContaining({
+      sourcePath: source,
+      targetPath: `${SANDBOX_HOME}/Projects`,
+      mountPointId: `${connection.id}:dir_projects`,
+    }));
+  });
+
+  it("buildWorkspaceMountPlan rejects home-name collisions", async () => {
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-collision-"));
+    await fs.mkdir(path.join(workspaceRootPath(home, TEST_SLUG), "Taken"));
+    const collisionUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: collisionUserId,
+      username: "mount-collision-user",
+      passwordHash: "hash",
+      email: "mount-collision@example.com",
+    });
+    await queries.connectors.createConnection(pool, {
+      ownerUserId: collisionUserId,
+      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+      displayName: "Local folders",
+      status: "active",
+      metadata: {
+        localFilesystem: {
+          directories: [{ id: "dir_taken", hostPath: source, homeName: "Taken", access: "read_write" }],
+        },
+      },
+    });
+
+    await expect(buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: collisionUserId }))
+      .rejects.toThrow("~/Taken already exists");
   });
 
   it("activeRunCount tracks runs correctly", async () => {

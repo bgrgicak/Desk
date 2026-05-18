@@ -73,6 +73,7 @@ import {
 } from '@/data/connections'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import type { ManagedConnectionDefinition } from '@agent-desk/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@agent-desk/shared'
 
 interface LocalSourceState {
   kind: string
@@ -80,6 +81,34 @@ interface LocalSourceState {
   enabled: boolean
   reason?: string
   detail?: Record<string, string | number | boolean>
+}
+
+type LocalFilesystemDirectoryForm = {
+  id: string
+  hostPath: string
+  access: 'read_only' | 'read_write'
+  description: string
+}
+
+function localFilesystemDirectoriesFromMetadata(metadata: Record<string, unknown> | undefined): LocalFilesystemDirectoryForm[] {
+  const root = metadata?.localFilesystem
+  const dirs = root && typeof root === 'object' && !Array.isArray(root)
+    ? (root as { directories?: unknown }).directories
+    : undefined
+  if (!Array.isArray(dirs)) return []
+  return dirs.map((raw, index) => {
+    const entry = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+    return {
+      id: typeof entry.id === 'string' ? entry.id : `dir_${index + 1}`,
+      hostPath: typeof entry.hostPath === 'string' ? entry.hostPath : '',
+      access: entry.access === 'read_only' ? 'read_only' : 'read_write',
+      description: typeof entry.description === 'string' ? entry.description : '',
+    }
+  })
+}
+
+function defaultLocalDirectory(): LocalFilesystemDirectoryForm {
+  return { id: `dir_${Date.now()}`, hostPath: '', access: 'read_write', description: '' }
 }
 
 type ProviderMetaEntry = {
@@ -1130,7 +1159,7 @@ function ConnectionDetail({
   onCancel: () => void
   onDelete: (id: string) => void
   onSaveProviderKey: (envKey: string, value: string) => Promise<boolean>
-  onSaveGenericConnector: (input: { id?: string; kind: ConnectionKind; displayName: string; externalAccountId?: string; credentials?: Record<string, unknown> }) => void
+  onSaveGenericConnector: (input: { id?: string; kind: ConnectionKind; displayName: string; externalAccountId?: string; credentials?: Record<string, unknown>; metadata?: Record<string, unknown> }) => void
   onToggleLocalSource: (kind: string, enabled: boolean) => void
 }) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
@@ -1153,6 +1182,11 @@ function ConnectionDetail({
   const [apiKey, setApiKey]   = useState(persistedKey ?? '')
   const [apiKeyDirty, setApiKeyDirty] = useState(false)
   const [externalAccountId, setExternalAccountId] = useState(persistedExternalAccountId)
+  const isLocalFilesystem = kind === LOCAL_FILESYSTEM_CONNECTION_KIND
+  const [localDirectories, setLocalDirectories] = useState<LocalFilesystemDirectoryForm[]>(() => {
+    const existingDirs = localFilesystemDirectoriesFromMetadata(connectorConnection?.metadata)
+    return existingDirs.length > 0 ? existingDirs : [defaultLocalDirectory()]
+  })
 
   // Backfill the masked key once /me/providers resolves.
   useEffect(() => {
@@ -1167,7 +1201,33 @@ function ConnectionDetail({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistedName])
 
+  useEffect(() => {
+    if (!isLocalFilesystem) return
+    const existingDirs = localFilesystemDirectoriesFromMetadata(connectorConnection?.metadata)
+    setLocalDirectories(existingDirs.length > 0 ? existingDirs : [defaultLocalDirectory()])
+  }, [connectorConnection?.metadata, isLocalFilesystem])
+
   const handleSave = async () => {
+    if (isLocalFilesystem) {
+      const directories = localDirectories.map((directory, index) => ({
+        id: directory.id || `dir_${index + 1}`,
+        hostPath: directory.hostPath.trim(),
+        access: directory.access,
+        description: directory.description.trim() || undefined,
+      }))
+      const invalid = directories.find(directory => !directory.hostPath)
+      if (invalid) {
+        toast.error('Directory path is required')
+        return
+      }
+      onSaveGenericConnector({
+        id: connectorConnection?.id,
+        kind,
+        displayName: catalogMeta.name,
+        metadata: { localFilesystem: { directories } },
+      })
+      return
+    }
     if (connectorProviderId) {
       let credentials: Record<string, unknown> | undefined
       {
@@ -1304,17 +1364,82 @@ function ConnectionDetail({
             </div>
           </div>
 
-        <Field label="Display name" help="Optional custom label shown in the connections list.">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
-        </Field>
+        {!isLocalFilesystem && (
+          <Field label="Display name" help="Optional custom label shown in the connections list.">
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
+          </Field>
+        )}
 
-        {connectorProviderId && (
+        {isLocalFilesystem && (
+          <Field
+            label="Mounted directories"
+            help="Add the server-local folders this workspace can use. Desk mounts each one into the sandbox automatically."
+          >
+            <div className="space-y-3">
+              {localDirectories.map((directory, index) => (
+                <div key={directory.id} className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-muted-foreground">Directory {index + 1}</p>
+                    {localDirectories.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-destructive hover:text-destructive"
+                        onClick={() => setLocalDirectories((dirs) => dirs.filter((d) => d.id !== directory.id))}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid gap-3">
+                    <Field label="Server path" help="Absolute path on the Desk server.">
+                      <Input
+                        value={directory.hostPath}
+                        onChange={e => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, hostPath: e.target.value } : d))}
+                        placeholder="/Users/you/Projects/client"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Access" help="Read-write is the default; choose read-only for reference folders.">
+                    <div className="flex flex-wrap gap-2">
+                      {(['read_write', 'read_only'] as const).map(access => (
+                        <Button
+                          key={access}
+                          type="button"
+                          size="sm"
+                          variant={directory.access === access ? 'default' : 'outline'}
+                          onClick={() => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, access } : d))}
+                        >
+                          {access === 'read_write' ? 'Read-write' : 'Read-only'}
+                        </Button>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field label="Description" help="Helps the agent understand when to use this folder. Optional, but recommended.">
+                    <Textarea
+                      value={directory.description}
+                      onChange={e => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, description: e.target.value } : d))}
+                      placeholder="What can the agent find here?"
+                      className="min-h-20"
+                    />
+                  </Field>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => setLocalDirectories((dirs) => [...dirs, defaultLocalDirectory()])}>
+                <Plus className="h-3.5 w-3.5" />Add directory
+              </Button>
+            </div>
+          </Field>
+        )}
+
+        {connectorProviderId && !isLocalFilesystem && (
           <Field label="Account email or ID" help="Used to distinguish multiple accounts for the same connector.">
             <Input value={externalAccountId} onChange={e => setExternalAccountId(e.target.value)} placeholder="name@example.com" />
           </Field>
         )}
 
-        {connectorProviderId ? (
+        {connectorProviderId && !isLocalFilesystem ? (
           <Field
             label="Credentials"
             help="Paste OAuth token JSON; Desk stores it encrypted server-side and never echoes it back."
@@ -1327,7 +1452,7 @@ function ConnectionDetail({
               className="min-h-24 min-w-0 flex-1 font-mono text-xs"
             />
           </Field>
-        ) : (
+        ) : !isLocalFilesystem ? (
           <TokenConnectionForm
             definition={connectionDefinition}
             envKey={providerEnvKey}
@@ -1337,7 +1462,7 @@ function ConnectionDetail({
             onChange={(value) => { setApiKey(value); setApiKeyDirty(true) }}
             onSave={handleSaveKey}
           />
-        )}
+        ) : null}
       </div>
 
       <div
@@ -1384,7 +1509,7 @@ function ConnectionDetail({
             size="sm"
             className="flex-1 sm:flex-none"
             onClick={handleSave}
-            disabled={busySaveMeta || busySaveKey || busyGenericConnector || Boolean(connectorProviderId && focus.mode === 'new' && !apiKey.trim())}
+            disabled={busySaveMeta || busySaveKey || busyGenericConnector || Boolean(connectorProviderId && !isLocalFilesystem && focus.mode === 'new' && !apiKey.trim())}
           >
             {focus.mode === 'new'
               ? ((busySaveMeta || busySaveKey || busyGenericConnector) ? 'Adding…' : 'Add connection')
@@ -1819,6 +1944,7 @@ export function SettingsModal({
     displayName: string
     externalAccountId?: string
     credentials?: Record<string, unknown>
+    metadata?: Record<string, unknown>
   }) => {
     const providerId = CONNECTOR_PROVIDER_BY_KIND[input.kind]
     if (!providerId) return
@@ -1829,6 +1955,7 @@ export function SettingsModal({
           patch: {
             displayName: input.displayName,
             externalAccountId: input.externalAccountId,
+            metadata: input.metadata,
             credentials: input.credentials,
             status: 'active',
           },
@@ -1840,7 +1967,7 @@ export function SettingsModal({
           externalAccountId: input.externalAccountId,
           scopes: DEFAULT_SCOPES_BY_CONNECTOR_KIND[input.kind] ?? [],
           capabilities: DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND[input.kind] ?? [],
-          metadata: { connectorKind: input.kind },
+          metadata: { connectorKind: input.kind, ...(input.metadata ?? {}) },
           credentials: input.credentials,
           status: 'active',
           isDefault: true,

@@ -1127,6 +1127,11 @@ export function createApp(opts: AppOptions): Server {
       sendJson(res, 200, result);
       return;
     }
+    if (path === "/auth/auto-login" && method === "POST") {
+      const result = await authRoutes.handleAutoLogin(pool);
+      sendJson(res, 200, result);
+      return;
+    }
     if (path === "/auth/logout" && method === "POST") {
       const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
       sendJson(res, 200, result);
@@ -1214,7 +1219,7 @@ export function createApp(opts: AppOptions): Server {
     }
     if (path === "/me/connections" && method === "POST") {
       const body = await parseBody(req) as Parameters<typeof accountRoutes.createConnection>[3];
-      const result = await accountRoutes.createConnection(pool, vault, userId, body);
+      const result = await accountRoutes.createConnection(pool, vault, userId, body, { home: storage.home });
       const providerId = result.connection?.providerId ?? "unknown";
       await refreshConnections(userId, {
         type: "connection.changed",
@@ -1227,7 +1232,7 @@ export function createApp(opts: AppOptions): Server {
       const m = path.match(/^\/me\/connections\/([A-Za-z0-9_-]+)$/);
       if (m && method === "PATCH") {
         const body = await parseBody(req) as Parameters<typeof accountRoutes.updateConnection>[4];
-        const result = await accountRoutes.updateConnection(pool, vault, userId, m[1], body);
+        const result = await accountRoutes.updateConnection(pool, vault, userId, m[1], body, { home: storage.home });
         const providerId = result.connection?.providerId ?? "unknown";
         await refreshConnections(userId, {
           type: "connection.changed",
@@ -1241,7 +1246,7 @@ export function createApp(opts: AppOptions): Server {
         const before = await import("@agent-desk/db").then((db) =>
           db.queries.connectors.findConnection(pool, m[1], userId),
         );
-        const result = await accountRoutes.deleteConnection(pool, vault, userId, m[1]);
+        const result = await accountRoutes.deleteConnection(pool, vault, userId, m[1], { home: storage.home });
         await refreshConnections(userId, {
           type: "connection.changed",
           payload: {
@@ -1837,7 +1842,7 @@ export function createApp(opts: AppOptions): Server {
       const showHidden = query.get("showHidden") === "true";
       const pinned = query.get("pinned") === "true";
       const result = wsId
-        ? await libraryRoutes.list(storage, wsId, { cursor, limit, showHidden, pinned })
+        ? await libraryRoutes.list(storage, userId, wsId, { cursor, limit, showHidden, pinned })
         : { items: [] };
       sendJson(res, 200, result);
       return;

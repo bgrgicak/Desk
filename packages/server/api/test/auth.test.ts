@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@agent-desk/db";
-import { runMigrations, queries } from "@agent-desk/db";
+import { hashPassword, runMigrations, queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import {
   issueSession,
@@ -11,6 +11,7 @@ import {
   verifySession,
   clearSessions,
 } from "../src/auth/sessions.js";
+import { handleAutoLogin } from "../src/routes/auth.js";
 
 let pool: Pool;
 let userId: string;
@@ -35,11 +36,54 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await clearSessions(pool);
+  await pool.query("DELETE FROM users WHERE username = ?", ["second-user"]);
+  delete process.env.DESK_AUTO_LOGIN;
+  delete process.env.DESK_SEED_USERNAME;
 });
 
 afterAll(async () => {
   await pool?.end();
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+});
+
+describe("auto-login", () => {
+  it("issues a session for the configured local user without a password", async () => {
+    process.env.DESK_SEED_USERNAME = "auth-test";
+
+    const { token } = await handleAutoLogin(pool);
+
+    expect(token).toMatch(/^ses_/);
+    expect(await verifySession(pool, token)).toBe(userId);
+  });
+
+  it("falls back to the first local user when the configured seed user is absent", async () => {
+    process.env.DESK_SEED_USERNAME = "missing-user";
+
+    const { token } = await handleAutoLogin(pool);
+
+    expect(await verifySession(pool, token)).toBe(userId);
+  });
+
+  it("can be disabled with DESK_AUTO_LOGIN=off", async () => {
+    process.env.DESK_AUTO_LOGIN = "off";
+
+    await expect(handleAutoLogin(pool)).rejects.toThrow("Auto-login is disabled");
+  });
+
+  it("prefers the configured seed user when multiple users exist", async () => {
+    const secondUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: secondUserId,
+      username: "second-user",
+      passwordHash: await hashPassword("unused"),
+      email: "second-user@example.com",
+    });
+    process.env.DESK_SEED_USERNAME = "second-user";
+
+    const { token } = await handleAutoLogin(pool);
+
+    expect(await verifySession(pool, token)).toBe(secondUserId);
+  });
 });
 
 describe("session store", () => {

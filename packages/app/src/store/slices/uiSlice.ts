@@ -49,6 +49,20 @@ const slice = createSlice({
       if (!state.savedArtifactIds.includes(action.payload))
         state.savedArtifactIds.push(action.payload);
     },
+    // Bulk variant: callers with a list (e.g. the library-load effect) used
+    // to dispatch markArtifactSaved per item, which fanned out into N Redux
+    // round-trips, N Immer drafts, and N SerializableStateInvariantMiddleware
+    // passes — locking the UI for seconds on large libraries. This collapses
+    // the work to a single action.
+    markArtifactsSaved(state, action: PayloadAction<string[]>) {
+      if (action.payload.length === 0) return;
+      const seen = new Set(state.savedArtifactIds);
+      for (const id of action.payload) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        state.savedArtifactIds.push(id);
+      }
+    },
     markUpdateRead(state, action: PayloadAction<string>) {
       if (!state.readUpdateIds.includes(action.payload))
         state.readUpdateIds.push(action.payload);
@@ -73,6 +87,7 @@ export const {
   setArtifactTransitionSource,
   setArtifactBackLabel,
   markArtifactSaved,
+  markArtifactsSaved,
   markUpdateRead,
 
   setTodaySheetOpen,

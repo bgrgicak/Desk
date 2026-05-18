@@ -1,10 +1,16 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   CONNECTION_ENV_VARS,
+  LOCAL_FILESYSTEM_MOUNT_MARKER,
+  LOCAL_FILESYSTEM_PROVIDER_ID,
   NotFoundError,
   ValidationError,
 } from "@agent-desk/shared";
+import { workspaceRootPath } from "@agent-desk/storage";
+import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
 import { deleteCredentials, readCredentials, writeCredentials } from "../connectors/credentialStore.js";
 
@@ -35,6 +41,7 @@ type GrantInput = {
 };
 
 const CONNECTION_STATUSES = new Set(["active", "disabled", "error", "revoked"]);
+const LOCAL_FILESYSTEM_ACCESS = new Set(["read_only", "read_write"]);
 
 function asStringArray(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined;
@@ -69,6 +76,179 @@ function asInputRecord<T extends Record<string, unknown>>(value: unknown, field:
     throw new ValidationError(`${field} must be an object`);
   }
   return value as T;
+}
+
+function validateHomeName(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new ValidationError(`${field} must be a string`);
+  const trimmed = value.trim();
+  if (!trimmed) throw new ValidationError(`${field} is required`);
+  if (trimmed !== path.basename(trimmed) || trimmed === "." || trimmed === ".." || trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new ValidationError(`${field} must be a single home-directory name`);
+  }
+  return trimmed;
+}
+
+function uniqueHomeNameForPath(hostPath: string, seenHomeNames: Set<string>): string {
+  const fallback = "local-folder";
+  const base = validateHomeName(path.basename(hostPath) || fallback, "local filesystem mount name");
+  let candidate = base;
+  let suffix = 2;
+  while (seenHomeNames.has(candidate.toLowerCase())) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+async function sanitizeLocalFilesystemMetadata(metadata: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
+  const root = asRecord(metadata?.localFilesystem, "metadata.localFilesystem");
+  if (!root) throw new ValidationError("metadata.localFilesystem is required");
+  const rawDirectories = root.directories;
+  if (!Array.isArray(rawDirectories) || rawDirectories.length === 0) {
+    throw new ValidationError("metadata.localFilesystem.directories must be a non-empty array");
+  }
+  const directories: LocalFilesystemDirectoryConfig[] = [];
+  const seenHomeNames = new Set<string>();
+  for (let index = 0; index < rawDirectories.length; index++) {
+    const raw = asInputRecord<Record<string, unknown>>(rawDirectories[index], `metadata.localFilesystem.directories[${index}]`);
+    const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `dir_${index + 1}`;
+    const hostPathRaw = asOptionalString(raw.hostPath, `metadata.localFilesystem.directories[${index}].hostPath`)?.trim();
+    if (!hostPathRaw) throw new ValidationError(`metadata.localFilesystem.directories[${index}].hostPath is required`);
+    if (!path.isAbsolute(hostPathRaw)) throw new ValidationError(`metadata.localFilesystem.directories[${index}].hostPath must be absolute`);
+    let hostPath: string;
+    try {
+      hostPath = await fs.realpath(hostPathRaw);
+      const stat = await fs.stat(hostPath);
+      if (!stat.isDirectory()) throw new ValidationError(`Local filesystem path is not a directory: ${hostPathRaw}`);
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      throw new ValidationError(`Local filesystem path is not readable: ${hostPathRaw}`);
+    }
+    const homeName = raw.homeName === undefined
+      ? uniqueHomeNameForPath(hostPath, seenHomeNames)
+      : validateHomeName(raw.homeName, `metadata.localFilesystem.directories[${index}].homeName`);
+    const homeKey = homeName.toLowerCase();
+    if (seenHomeNames.has(homeKey)) throw new ValidationError(`Duplicate mounted folder name: ${homeName}`);
+    seenHomeNames.add(homeKey);
+    const access = typeof raw.access === "string" ? raw.access : "read_write";
+    if (!LOCAL_FILESYSTEM_ACCESS.has(access)) {
+      throw new ValidationError(`metadata.localFilesystem.directories[${index}].access must be read_only or read_write`);
+    }
+    const description = asOptionalString(raw.description, `metadata.localFilesystem.directories[${index}].description`)?.trim();
+    directories.push({
+      id,
+      hostPath,
+      homeName,
+      access: access as LocalFilesystemDirectoryConfig["access"],
+      ...(description ? { description: description.slice(0, 1000) } : {}),
+    });
+  }
+  return { localFilesystem: { directories } } satisfies LocalFilesystemConnectionMetadata as unknown as Record<string, unknown>;
+}
+
+function localFilesystemDirectories(metadata: Record<string, unknown> | undefined): LocalFilesystemDirectoryConfig[] {
+  const parsed = metadata as Partial<LocalFilesystemConnectionMetadata> | undefined;
+  return Array.isArray(parsed?.localFilesystem?.directories) ? parsed.localFilesystem.directories : [];
+}
+
+async function pathExists(value: string): Promise<boolean> {
+  try {
+    await fs.lstat(value);
+    return true;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+async function readLocalFilesystemMountMarker(target: string): Promise<{ mountId?: string } | null> {
+  try {
+    const raw = await fs.readFile(path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as { mountId?: string } : null;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return null;
+    return null;
+  }
+}
+
+async function removeLocalFilesystemMountPlaceholder(target: string): Promise<boolean> {
+  const marker = await readLocalFilesystemMountMarker(target);
+  if (!marker?.mountId) return false;
+  const entries = await fs.readdir(target).catch(() => null);
+  if (!entries || entries.some((entry) => entry !== LOCAL_FILESYSTEM_MOUNT_MARKER)) return false;
+  await fs.rm(target, { recursive: true, force: true });
+  return true;
+}
+
+async function localFilesystemMountTargetExists(target: string, allowedMountIds: Set<string>): Promise<boolean> {
+  if (!(await pathExists(target))) return false;
+  const marker = await readLocalFilesystemMountMarker(target);
+  if (marker?.mountId && allowedMountIds.has(marker.mountId)) return false;
+  if (marker?.mountId && await removeLocalFilesystemMountPlaceholder(target)) return false;
+  return true;
+}
+
+async function validateLocalFilesystemMountTargets(
+  pool: Pool,
+  userId: string,
+  metadata: Record<string, unknown>,
+  opts: { home?: string; excludeConnectionId?: string } = {},
+): Promise<void> {
+  const directories = localFilesystemDirectories(metadata);
+  if (directories.length === 0) return;
+
+  const seen = new Set<string>();
+  for (const connection of await queries.connectors.listConnections(pool, userId, LOCAL_FILESYSTEM_PROVIDER_ID)) {
+    if (connection.id === opts.excludeConnectionId || connection.status !== "active") continue;
+    for (const dir of localFilesystemDirectories(connection.metadata)) seen.add(dir.homeName.toLowerCase());
+  }
+
+  for (const dir of directories) {
+    const key = dir.homeName.toLowerCase();
+    if (seen.has(key)) {
+      throw new ValidationError(`~/${dir.homeName} is already used by another local filesystem connection.`);
+    }
+    seen.add(key);
+  }
+
+  if (!opts.home) return;
+  const workspaces = await queries.workspaces.listByUser(pool, userId);
+  const allowedMountIds = new Set<string>();
+  if (opts.excludeConnectionId) {
+    for (const dir of directories) allowedMountIds.add(`${opts.excludeConnectionId}:${dir.id}`);
+  }
+  for (const workspace of workspaces) {
+    const root = workspaceRootPath(opts.home, workspace.path);
+    for (const dir of directories) {
+      const target = path.join(root, dir.homeName);
+      if (await localFilesystemMountTargetExists(target, allowedMountIds)) {
+        throw new ValidationError(`~/${dir.homeName} already exists in workspace "${workspace.name}". Rename or remove it, or choose a different mount name.`);
+      }
+    }
+  }
+}
+
+async function cleanupLocalFilesystemMountPlaceholders(pool: Pool, userId: string, home: string | undefined, connection: { id: string; metadata: Record<string, unknown> }): Promise<void> {
+  if (!home) return;
+  const directories = localFilesystemDirectories(connection.metadata);
+  if (directories.length === 0) return;
+  const workspaces = await queries.workspaces.listByUser(pool, userId);
+  for (const workspace of workspaces) {
+    const root = workspaceRootPath(home, workspace.path);
+    for (const dir of directories) {
+      const target = path.join(root, dir.homeName);
+      const marker = await readLocalFilesystemMountMarker(target);
+      if (marker?.mountId === `${connection.id}:${dir.id}`) {
+        await removeLocalFilesystemMountPlaceholder(target);
+      } else if (marker?.mountId) {
+        // Directory ids were not stable in early local-filesystem UI drafts.
+        // If this target is just a Desk-created mount placeholder, remove it
+        // even when the stored marker id no longer matches this connection row.
+        await removeLocalFilesystemMountPlaceholder(target);
+      }
+    }
+  }
 }
 
 export async function getMe(pool: Pool, userId: string) {
@@ -285,6 +465,7 @@ export interface ConnectionView {
 function viewConnection(connection: Awaited<ReturnType<typeof queries.connectors.findConnection>>, vault: VaultStore, userId: string): ConnectionView | null {
   if (!connection) return null;
   const credentials = readCredentials(vault, userId, connection.providerId, connection.id);
+  const credentialsRequired = connection.providerId !== LOCAL_FILESYSTEM_PROVIDER_ID;
   return {
     id: connection.id,
     providerId: connection.providerId,
@@ -295,7 +476,7 @@ function viewConnection(connection: Awaited<ReturnType<typeof queries.connectors
     metadata: connection.metadata,
     status: connection.status,
     isDefault: connection.isDefault,
-    hasCredentials: credentials !== null,
+    hasCredentials: credentialsRequired ? credentials !== null : true,
     createdAt: connection.createdAt,
     updatedAt: connection.updatedAt,
   };
@@ -306,7 +487,7 @@ export async function listConnections(pool: Pool, vault: VaultStore, userId: str
   return { connections: rows.map((r) => viewConnection(r, vault, userId)).filter((c): c is ConnectionView => c !== null) };
 }
 
-export async function createConnection(pool: Pool, vault: VaultStore, userId: string, data: ConnectionInput) {
+export async function createConnection(pool: Pool, vault: VaultStore, userId: string, data: ConnectionInput, opts: { home?: string } = {}) {
   data = asInputRecord<ConnectionInput>(data, "connection");
   const providerId = asOptionalString(data.providerId, "providerId");
   const displayName = asOptionalString(data.displayName, "displayName");
@@ -314,7 +495,14 @@ export async function createConnection(pool: Pool, vault: VaultStore, userId: st
   if (!displayName) throw new ValidationError("displayName is required");
   const status = asOptionalString(data.status, "status");
   if (status && !CONNECTION_STATUSES.has(status)) throw new ValidationError(`Invalid status: ${status}`);
-  const credentials = asRecord(data.credentials, "credentials");
+  const metadata = providerId === LOCAL_FILESYSTEM_PROVIDER_ID
+    ? await sanitizeLocalFilesystemMetadata(asRecord(data.metadata, "metadata"))
+    : asRecord(data.metadata, "metadata");
+  const credentials = providerId === LOCAL_FILESYSTEM_PROVIDER_ID ? undefined : asRecord(data.credentials, "credentials");
+
+  if (providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {
+    await validateLocalFilesystemMountTargets(pool, userId, metadata ?? {}, { home: opts.home });
+  }
 
   // Pre-flight: writing credentials requires an unlocked vault. Check
   // before creating the row so a locked vault does not produce an
@@ -330,7 +518,7 @@ export async function createConnection(pool: Pool, vault: VaultStore, userId: st
     externalAccountId: asOptionalString(data.externalAccountId, "externalAccountId"),
     scopes: asStringArray(data.scopes, "scopes"),
     capabilities: asStringArray(data.capabilities, "capabilities"),
-    metadata: asRecord(data.metadata, "metadata"),
+    metadata,
     status: status as ConnectorStatus | undefined,
     isDefault: asOptionalBoolean(data.isDefault, "isDefault"),
   });
@@ -346,16 +534,26 @@ export async function createConnection(pool: Pool, vault: VaultStore, userId: st
   return { connection: view };
 }
 
-export async function updateConnection(pool: Pool, vault: VaultStore, userId: string, id: string, data: ConnectionInput) {
+export async function updateConnection(pool: Pool, vault: VaultStore, userId: string, id: string, data: ConnectionInput, opts: { home?: string } = {}) {
   data = asInputRecord<ConnectionInput>(data, "connection");
   const status = asOptionalString(data.status, "status");
   if (status && !CONNECTION_STATUSES.has(status)) throw new ValidationError(`Invalid status: ${status}`);
 
-  const credentialsField = data.credentials;
+  const current = await queries.connectors.findConnection(pool, id, userId);
+  if (!current) throw new NotFoundError("Connector connection not found");
+  const metadata = current.providerId === LOCAL_FILESYSTEM_PROVIDER_ID && data.metadata !== undefined
+    ? await sanitizeLocalFilesystemMetadata(asRecord(data.metadata, "metadata"))
+    : asRecord(data.metadata, "metadata");
+  const credentialsField = current.providerId === LOCAL_FILESYSTEM_PROVIDER_ID ? undefined : data.credentials;
   const updateCredentials = credentialsField !== undefined;
   const newCredentials = credentialsField === null ? null : (asRecord(credentialsField, "credentials") ?? null);
   if (updateCredentials && newCredentials !== null && vault.isLocked(userId)) {
     throw new ValidationError("Secrets vault must be unlocked to store connector credentials");
+  }
+
+  if (current.providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {
+    const nextMetadata = metadata ?? current.metadata;
+    await validateLocalFilesystemMountTargets(pool, userId, nextMetadata, { home: opts.home, excludeConnectionId: id });
   }
 
   const connection = await queries.connectors.updateConnection(pool, id, userId, {
@@ -363,7 +561,7 @@ export async function updateConnection(pool: Pool, vault: VaultStore, userId: st
     externalAccountId: asOptionalString(data.externalAccountId, "externalAccountId"),
     scopes: asStringArray(data.scopes, "scopes"),
     capabilities: asStringArray(data.capabilities, "capabilities"),
-    metadata: asRecord(data.metadata, "metadata"),
+    metadata,
     status: status as ConnectorStatus | undefined,
     isDefault: asOptionalBoolean(data.isDefault, "isDefault"),
   });
@@ -379,11 +577,14 @@ export async function updateConnection(pool: Pool, vault: VaultStore, userId: st
   return { connection: viewConnection(connection, vault, userId) };
 }
 
-export async function deleteConnection(pool: Pool, vault: VaultStore, userId: string, id: string) {
+export async function deleteConnection(pool: Pool, vault: VaultStore, userId: string, id: string, opts: { home?: string } = {}) {
   const connection = await queries.connectors.findConnection(pool, id, userId);
   const deleted = await queries.connectors.deleteConnection(pool, id, userId);
   if (!deleted) throw new NotFoundError("Connector connection not found");
   if (connection) await deleteCredentials(vault, userId, connection.providerId, connection.id);
+  if (connection?.providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {
+    await cleanupLocalFilesystemMountPlaceholders(pool, userId, opts.home, connection);
+  }
   return { ok: true };
 }
 

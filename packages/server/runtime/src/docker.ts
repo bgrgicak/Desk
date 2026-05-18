@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   CONNECTION_ENV_VARS,
   MANAGED_CONNECTION_ENV_ALIASES,
+  LOCAL_FILESYSTEM_MOUNT_MARKER,
   managedConnectionDefinitions,
   PROVIDER_KEY_VARS,
   SANDBOX_CONNECTION_ENV_VARS,
@@ -345,7 +346,7 @@ export async function createOrReuse(
   // Pre-create every source dir and nested target mount point so the runtime
   // doesn't auto-create them as root and break subsequent non-root writes.
   for (const entry of plan) {
-    await fs.mkdir(entry.sourcePath, { recursive: true });
+    if (entry.ensureSource !== false) await fs.mkdir(entry.sourcePath, { recursive: true });
   }
   await ensureNestedMountTargets(plan);
 
@@ -449,8 +450,47 @@ async function ensureNestedMountTargets(plan: MountPlan): Promise<void> {
       if (parent.category !== "workspace" || parent.mode !== "rw") continue;
       const rel = path.posix.relative(parent.targetPath, entry.targetPath);
       if (!rel || rel.startsWith("..") || path.posix.isAbsolute(rel)) continue;
-      await fs.mkdir(path.join(parent.sourcePath, rel), { recursive: true });
+      const target = path.join(parent.sourcePath, rel);
+      await ensureNestedMountTarget(target, entry.mountPointId);
     }
+  }
+}
+
+async function ensureNestedMountTarget(target: string, mountPointId?: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(target);
+    if (!stat.isDirectory()) throw new Error(`${target} already exists and is not a directory`);
+    if (mountPointId) {
+      const markerPath = path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER);
+      const marker = await readLocalFilesystemMountMarker(markerPath);
+      if (!marker) {
+        const entries = await fs.readdir(target);
+        if (entries.length > 0) throw new Error(`${target} already exists and is not an empty local filesystem mount placeholder`);
+      }
+    }
+  } catch (err) {
+    if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) throw err;
+    await fs.mkdir(target, { recursive: true });
+  }
+
+  if (mountPointId) {
+    await fs.writeFile(
+      path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER),
+      JSON.stringify({ mountId: mountPointId }, null, 2),
+    );
+  }
+}
+
+async function readLocalFilesystemMountMarker(markerPath: string): Promise<{ mountId?: string } | null> {
+  try {
+    const raw = await fs.readFile(markerPath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && typeof (parsed as { mountId?: unknown }).mountId === "string"
+      ? parsed as { mountId?: string }
+      : null;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return null;
+    return null;
   }
 }
 

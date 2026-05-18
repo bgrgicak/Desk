@@ -62,6 +62,7 @@ export interface AgentFileInput {
    * Defaults to true.
    */
   includeGoalAutodetect?: boolean;
+  localFilesystemDirectories?: Array<{ path: string; access: "read_only" | "read_write"; description?: string }>;
 }
 
 /**
@@ -116,6 +117,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     workspaceSlug: input.workspaceSlug,
     workspaceKind: input.workspaceKind ?? "project",
     includeGoalAutodetect: input.includeGoalAutodetect,
+    localFilesystemDirectories: input.localFilesystemDirectories,
   });
 
   return `${frontmatter}\n\n${body}\n`;

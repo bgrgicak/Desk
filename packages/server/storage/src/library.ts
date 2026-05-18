@@ -40,6 +40,13 @@ export interface FolderRef {
   createdAt: string;
 }
 
+export interface VirtualLibraryMount {
+  /** Workspace-root basename where the connected directory appears, e.g. `Projects`. */
+  homeName: string;
+  /** Absolute server path selected by the user for this mount. */
+  sourcePath: string;
+}
+
 function guessMime(name: string): string {
   const ext = path.extname(name).toLowerCase();
   switch (ext) {
@@ -208,7 +215,7 @@ const APP_DIR_MIME = "application/vnd.desk.app+directory";
 export async function listLibrary(
   ctx: LibraryContext,
   slug: string,
-  opts?: { cursor?: string; limit?: number; showHidden?: boolean },
+  opts?: { cursor?: string; limit?: number; showHidden?: boolean; virtualMounts?: VirtualLibraryMount[] },
 ): Promise<{ items: FileRef[]; folders: FolderRef[]; nextCursor?: string }> {
   const root = workspaceRootPath(ctx.home, slug);
   await fs.mkdir(root, { recursive: true });
@@ -216,15 +223,49 @@ export async function listLibrary(
   const showHidden = opts?.showHidden ?? false;
   const { files, folders, appDirs } = await walk(root, { showHidden });
 
+  const fileEntries = files.map((abs) => ({ abs, rel: path.relative(root, abs).split(path.sep).join("/") }));
+  const folderEntries = folders.map((abs) => ({ abs, rel: path.relative(root, abs).split(path.sep).join("/") }));
+  const appDirEntriesInput = appDirs.map((abs) => ({ abs, rel: path.relative(root, abs).split(path.sep).join("/") }));
+
+  // Local filesystem connections are Docker-mounted into the sandbox, so the
+  // host-side workspace tree contains only a tiny mount placeholder (or, before
+  // the first sandbox starts, no directory at all). The Library API runs on the
+  // host, not inside the sandbox, so it has to project those approved host
+  // directories into the listing explicitly for the UI to match what agents see
+  // at `~/{homeName}`.
+  for (const mount of opts?.virtualMounts ?? []) {
+    const sourceStat = await fs.stat(mount.sourcePath).catch(() => null);
+    if (!sourceStat?.isDirectory()) continue;
+    const homeName = path.basename(mount.homeName);
+    if (!homeName || homeName === "." || homeName === "..") continue;
+    folderEntries.push({ abs: mount.sourcePath, rel: homeName });
+    const mounted = await walk(mount.sourcePath, { showHidden });
+    for (const abs of mounted.files) {
+      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
+      fileEntries.push({ abs, rel: `${homeName}/${childRel}` });
+    }
+    for (const abs of mounted.folders) {
+      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
+      folderEntries.push({ abs, rel: `${homeName}/${childRel}` });
+    }
+    for (const abs of mounted.appDirs) {
+      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
+      appDirEntriesInput.push({ abs, rel: `${homeName}/${childRel}` });
+    }
+  }
+
   const fileItems: FileRef[] = [];
-  for (const abs of files) {
+  const seenFilePaths = new Set<string>();
+  for (const { abs, rel } of fileEntries) {
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat) continue;
     const name = path.basename(abs);
     const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
     if (!stat.isFile() && !isAppDir) continue;
+    if (seenFilePaths.has(rel)) continue;
+    seenFilePaths.add(rel);
     fileItems.push({
-      path: path.relative(root, abs).split(path.sep).join("/"),
+      path: rel,
       name,
       mime: isAppDir ? "inode/directory" : guessMime(abs),
       size: isAppDir ? 0 : stat.size,
@@ -234,21 +275,24 @@ export async function listLibrary(
     });
   }
   const appDirEntries = await Promise.all(
-    appDirs.map(async (abs) => ({
+    appDirEntriesInput.map(async ({ abs, rel }) => ({
       abs,
+      rel,
       isSymlink: (await fs.lstat(abs).catch(() => null))?.isSymbolicLink() ?? false,
       realPath: await fs.realpath(abs).catch(() => abs),
     })),
   );
   const seenAppRealPaths = new Set<string>();
   appDirEntries.sort((a, b) => Number(a.isSymlink) - Number(b.isSymlink));
-  for (const { abs, realPath } of appDirEntries) {
+  for (const { abs, rel, realPath } of appDirEntries) {
     if (seenAppRealPaths.has(realPath)) continue;
     seenAppRealPaths.add(realPath);
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isDirectory()) continue;
+    if (seenFilePaths.has(rel)) continue;
+    seenFilePaths.add(rel);
     fileItems.push({
-      path: path.relative(root, abs).split(path.sep).join("/"),
+      path: rel,
       name: path.basename(abs),
       mime: APP_DIR_MIME,
       // Size of a directory entry isn't meaningful — the user-facing
@@ -263,11 +307,14 @@ export async function listLibrary(
   fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
   const folderItems: FolderRef[] = [];
-  for (const abs of folders) {
+  const seenFolderPaths = new Set<string>();
+  for (const { abs, rel } of folderEntries) {
     const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isDirectory()) continue;
+    if (seenFolderPaths.has(rel)) continue;
+    seenFolderPaths.add(rel);
     folderItems.push({
-      path: path.relative(root, abs).split(path.sep).join("/"),
+      path: rel,
       name: path.basename(abs),
       createdAt: stat.mtime.toISOString(),
     });

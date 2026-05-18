@@ -68,7 +68,7 @@ import {
   getFolderPath,
   getChildFolders,
   getItemsInFolder,
-  countItemsRecursive,
+  countDirectChildren,
 } from '@/data/ui-types'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
@@ -755,7 +755,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
+                const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
                 return (
                   <motion.div
                     key={folder.id}
@@ -866,7 +866,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countItemsRecursive(folders, folder.id, effectiveItems)
+              const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
               return (
                 <motion.div
                   key={folder.id}

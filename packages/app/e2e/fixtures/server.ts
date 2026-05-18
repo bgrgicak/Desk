@@ -90,6 +90,7 @@ export async function startDeskServer(
     DESK_HOME: home,
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
+    DESK_AUTO_LOGIN: "off",
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.
     DESK_SANDBOX_DRIVER: "fake",

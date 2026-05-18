@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { queries } from "@agent-desk/db";
-import { ConflictError, NotFoundError, ValidationError, type WsEvent } from "@agent-desk/shared";
+import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -15,6 +15,7 @@ import {
   type StorageContext,
   type FileRef,
   type FolderRef,
+  type VirtualLibraryMount,
 } from "@agent-desk/storage";
 
 /**
@@ -33,17 +34,52 @@ function normalizePinnedLibraryPath(rawPath: string): string {
   return normalized;
 }
 
+function localFilesystemVirtualMounts(metadata: Record<string, unknown>): VirtualLibraryMount[] {
+  const parsed = metadata as Partial<LocalFilesystemConnectionMetadata>;
+  const directories = parsed.localFilesystem?.directories;
+  if (!Array.isArray(directories)) return [];
+  return directories
+    .filter((dir) => (
+      dir
+      && typeof dir.hostPath === "string"
+      && typeof dir.homeName === "string"
+    ))
+    .map((dir) => ({ homeName: dir.homeName, sourcePath: dir.hostPath }));
+}
+
+async function connectedLocalFilesystemMounts(
+  ctx: StorageContext,
+  userId: string,
+  workspaceId: string,
+): Promise<VirtualLibraryMount[]> {
+  const [connections, grants] = await Promise.all([
+    queries.connectors.listConnections(ctx.pool, userId, LOCAL_FILESYSTEM_PROVIDER_ID),
+    queries.connectors.listWorkspaceGrants(ctx.pool, workspaceId),
+  ]);
+  const localGrantIds = grants
+    .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
+    .map((grant) => grant.connectionId);
+  const active = connections.filter((connection) => connection.status === "active");
+  const selected = localGrantIds.length > 0
+    ? active.filter((connection) => localGrantIds.includes(connection.id))
+    : active;
+  return selected
+    .flatMap((connection) => localFilesystemVirtualMounts(connection.metadata));
+}
+
 export async function list(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   opts?: { cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean },
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
-  const [result, authors, pinnedPaths] = await Promise.all([
-    listLibrary(ctx, slug, opts),
+  const [virtualMounts, authors, pinnedPaths] = await Promise.all([
+    connectedLocalFilesystemMounts(ctx, userId, workspaceId),
     queries.libraryFileAuthors.listByWorkspace(ctx.pool, workspaceId),
     queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
   ]);
+  const result = await listLibrary(ctx, slug, { ...opts, virtualMounts });
   for (const item of result.items) {
     const author = authors.get(item.path);
     if (author) {

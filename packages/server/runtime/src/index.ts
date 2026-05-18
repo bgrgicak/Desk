@@ -30,6 +30,7 @@ export {
   activeRunCount,
   containerBinds,
   buildDefaultMountPlan,
+  buildWorkspaceMountPlan,
   bindsFromPlan,
   SANDBOX_HOME,
 } from "./mounts.js";

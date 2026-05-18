@@ -27,7 +27,7 @@
  * the daemon.
  */
 
-import { SANDBOX_HOME } from "./mounts.js";
+import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
 import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
@@ -57,6 +57,7 @@ export interface RunOptions {
   chatId?: string;
   /** DESK_HOME root. When omitted, runtime storage resolution is used. */
   home?: string;
+  mountPlan?: MountPlan;
   /**
    * Existing opencode-serve session id for the chat. Pass null/undefined
    * on the chat's first turn under the new runtime — the driver creates a
@@ -263,7 +264,7 @@ function createRealDriver(): SandboxDriver {
           opts.workspaceSlug,
           opts.home,
           opts.providerKeys,
-          undefined,
+          opts.mountPlan,
           opts.extraEnv,
         );
 

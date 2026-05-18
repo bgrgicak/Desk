@@ -25,6 +25,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
+import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { TasksPage } from '@/components/tasks/TasksPage'
 import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
@@ -58,6 +59,7 @@ import {
   setArtifactBackLabel,
   setTodaySheetOpen,
   markArtifactSaved,
+  markArtifactsSaved,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
@@ -587,9 +589,14 @@ function AppInner() {
   // mark them as saved so any inline "Save to Library" affordance is
   // correctly disabled. Newly-promoted chat attachments are marked by the
   // mutation handler in `handleSaveArtifact`.
+  //
+  // One batched dispatch instead of N. The previous per-item loop fanned
+  // out into N Redux round-trips × the SerializableStateInvariantMiddleware
+  // pass (~100ms per action on a sizeable state), freezing the UI long
+  // enough to trip Firefox's SlowScript dialog on large libraries.
   useEffect(() => {
-    if (!libraryResp?.items) return
-    for (const f of libraryResp.items) dispatch(markArtifactSaved(f.path))
+    if (!libraryResp?.items?.length) return
+    dispatch(markArtifactsSaved(libraryResp.items.map((f) => f.path)))
   }, [libraryResp, dispatch])
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
@@ -753,7 +760,7 @@ function AppInner() {
             onSaveArtifact={handleSaveArtifact}
             highlightMessageId={selectedMessageId ?? undefined}
             onAttachmentClick={(att) =>
-              att.kind === 'directory'
+              att.kind === 'directory' && !appAttachmentToPreview(att.path)
                 ? goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
                 : goTo({
                     wsId: att.workspaceId,

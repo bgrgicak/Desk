@@ -54,7 +54,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` boots `desk-server` (tsx watch) and Vite together, and rebuilds the `desk/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>. In the default dev seed, the app auto-signs in as `desk`; if you changed `DESK_SEED_PASSWORD`, sign in manually with username `desk` and that password.
+`npm run dev` boots `desk-server` (tsx watch) and Vite together, and rebuilds the `desk/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>. Desk auto-signs in to the local owner account in both dev and production builds; set `DESK_AUTO_LOGIN=off` if you need to force the manual login screen.
 
 ### Prerequisites
 

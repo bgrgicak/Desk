@@ -1,7 +1,7 @@
 import { useState, type MouseEvent } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
-import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
+import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
@@ -319,8 +319,14 @@ function isDirectoryArtifact(mime?: string | null) {
   return mime === 'inode/directory'
 }
 
-function artifactRefHref(workspaceId: string | undefined, path: string, mime?: string | null, params?: Record<string, string>) {
+export function artifactRefHref(workspaceId: string | undefined, path: string, mime?: string | null, params?: Record<string, string>) {
   if (!workspaceId) return undefined
+  if (appAttachmentToPreview(path)) {
+    return buildPath(workspaceId, 'context', {
+      item: path,
+      artifactParams: params ? JSON.stringify(params) : null,
+    })
+  }
   return buildPath(workspaceId, 'context', {
     item: isDirectoryArtifact(mime) ? null : path,
     folder: isDirectoryArtifact(mime) ? path : null,
@@ -390,14 +396,6 @@ function AttachmentCard({
   onClick?: () => void
 }) {
   const appPreview = appAttachmentToPreview(attachment.path)
-  if (appPreview) {
-    return (
-      <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
-        <AppPreview {...appPreview} variant="inline" />
-      </div>
-    )
-  }
-
   const className =
     `inline-flex min-w-0 max-w-full items-center gap-2 ${attachmentAlignmentClass(align)} overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]`
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
@@ -416,7 +414,40 @@ function AttachmentCard({
       </div>
     </>
   )
-  const href = artifactRefHref(attachment.workspaceId ?? workspaceId, attachment.path, attachment.mime, attachment.params)
+  const effectiveWorkspaceId = attachment.workspaceId ?? workspaceId
+  const href = artifactRefHref(effectiveWorkspaceId, attachment.path, attachment.mime, attachment.params)
+  if (appPreview && effectiveWorkspaceId) {
+    return (
+      <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
+        <InlineArtifactPreview
+          workspaceId={effectiveWorkspaceId}
+          path={attachment.path}
+          name={attachment.name}
+          mime={attachment.mime}
+          params={attachment.params}
+          onOpen={onClick}
+          openHref={href}
+          fallback={href ? (
+            <a
+              href={href}
+              onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+              className={`${className} hover:bg-muted/40 transition-colors`}
+            >
+              {inner}
+            </a>
+          ) : !onClick ? <div className={className}>{inner}</div> : (
+            <button
+              type="button"
+              onClick={onClick}
+              className={`${className} hover:bg-muted/40 transition-colors`}
+            >
+              {inner}
+            </button>
+          )}
+        />
+      </div>
+    )
+  }
   if (href) {
     return (
       <a

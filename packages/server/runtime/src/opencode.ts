@@ -5,7 +5,7 @@ import type { SandboxHandle } from "./docker.js";
 import type { ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
-import { projectMounts, teardownMounts } from "./mounts.js";
+import { projectMounts, teardownMounts, type MountPlan } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
 import { restartOpencodeServer, invalidateOpencodeServerCache, ensureContainerXvfb } from "./opencodeServer.js";
 import { detectEngine } from "./engine.js";
@@ -45,6 +45,7 @@ export interface ExecRunOptions {
    * (`OPENCODE_AUTH_CONTENT`).
    */
   extraEnv?: Record<string, string>;
+  mountPlan?: MountPlan;
   /**
    * Existing opencode-serve session for this chat. Null/undefined on the
    * chat's first turn under the new runtime — the runtime creates a
@@ -211,6 +212,7 @@ export async function execRun(
       model: opts.agent.model,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
+      mountPlan: opts.mountPlan,
       opencodeSessionId: opts.opencodeSessionId ?? null,
       onLog: opts.onLog,
     });
