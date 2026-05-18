@@ -1,5 +1,4 @@
 import { generateId } from "@agent-desk/shared";
-import { encryptJson, decryptJson } from "../encryption.js";
 import { type Pool, transact } from "../pool.js";
 
 export type ConnectorStatus = "active" | "disabled" | "error" | "revoked";
@@ -39,7 +38,7 @@ type ConnectionRow = {
   display_name: string;
   scopes_json: string;
   capabilities_json: string;
-  metadata_encrypted: Buffer | null;
+  metadata_json: string | null;
   status: ConnectorStatus;
   is_default: number;
   created_at: string;
@@ -67,10 +66,12 @@ function parseArray(value: string): string[] {
   }
 }
 
-function decodeMeta(value: Buffer | null): Record<string, unknown> {
-  if (!value || value.length === 0) return {};
+function parseObject(value: string | null): Record<string, unknown> {
+  if (!value) return {};
   try {
-    return decryptJson<Record<string, unknown>>(value);
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -85,7 +86,7 @@ function mapConnection(row: ConnectionRow): ConnectorConnection {
     displayName: row.display_name,
     scopes: parseArray(row.scopes_json),
     capabilities: parseArray(row.capabilities_json),
-    metadata: decodeMeta(row.metadata_encrypted),
+    metadata: parseObject(row.metadata_json),
     status: row.status,
     isDefault: row.is_default === 1,
     createdAt: row.created_at,
@@ -153,7 +154,7 @@ export async function createConnection(
     }
     tx.querySync(
       `INSERT INTO connector_connections
-        (id, provider_id, owner_user_id, external_account_id, display_name, scopes_json, capabilities_json, metadata_encrypted, status, is_default)
+        (id, provider_id, owner_user_id, external_account_id, display_name, scopes_json, capabilities_json, metadata_json, status, is_default)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
@@ -163,7 +164,7 @@ export async function createConnection(
         data.displayName,
         JSON.stringify(data.scopes ?? []),
         JSON.stringify(data.capabilities ?? []),
-        data.metadata ? encryptJson(data.metadata) : null,
+        data.metadata ? JSON.stringify(data.metadata) : null,
         data.status ?? "active",
         data.isDefault ? 1 : 0,
       ],
@@ -187,7 +188,7 @@ export async function updateConnection(
   }
   await db.query(
     `UPDATE connector_connections SET
-       display_name = ?, external_account_id = ?, scopes_json = ?, capabilities_json = ?, metadata_encrypted = ?, status = ?, is_default = ?,
+       display_name = ?, external_account_id = ?, scopes_json = ?, capabilities_json = ?, metadata_json = ?, status = ?, is_default = ?,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      WHERE id = ? AND owner_user_id = ?`,
     [
@@ -195,7 +196,7 @@ export async function updateConnection(
       patch.externalAccountId ?? current.externalAccountId ?? null,
       JSON.stringify(patch.scopes ?? current.scopes),
       JSON.stringify(patch.capabilities ?? current.capabilities),
-      patch.metadata ? encryptJson(patch.metadata) : (Object.keys(current.metadata).length > 0 ? encryptJson(current.metadata) : null),
+      patch.metadata ? JSON.stringify(patch.metadata) : (Object.keys(current.metadata).length > 0 ? JSON.stringify(current.metadata) : null),
       patch.status ?? current.status,
       patch.isDefault ?? current.isDefault ? 1 : 0,
       id,

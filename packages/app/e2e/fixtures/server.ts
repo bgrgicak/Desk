@@ -88,11 +88,6 @@ export async function startDeskServer(
     // does in production.
     DESK_DB_PATH: dbPath,
     DESK_HOME: home,
-    // The encryption module falls back to a key file when DESK_SECRET_KEY
-    // is unset. Pin its path inside DESK_HOME so the /me/providers PUT
-    // (which encrypts keys) actually works under e2e even without the
-    // dev-launcher's .env writeback.
-    DESK_SECRET_KEY_PATH: path.join(home, "secret.key"),
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
     // Use the fake sandbox driver so task runs complete instantly without

@@ -9,7 +9,7 @@ if [ -z "${DESK_HOME:-}" ]; then
   DESK_HOME=$(mktemp -d)
   export DESK_HOME
 fi
-export DESK_SECRET_KEY_PATH="${DESK_SECRET_KEY_PATH:-$DESK_HOME/secret.key}"
+export DESK_VAULT_PASSWORD="${DESK_VAULT_PASSWORD:-ci-local-vault-password}"
 export DESK_DB_PATH="${DESK_DB_PATH:-$DESK_HOME/.database/desk.sqlite3}"
 
 mkdir -p "$DESK_HOME" "$(dirname "$DESK_DB_PATH")"

@@ -19,7 +19,7 @@ lives under `~/Desk/`.
   [`packages/server/runtime/src/engine.ts`](../runtime/src/engine.ts);
   override the auto-pick with `DESK_CONTAINER_ENGINE=docker|nerdctl`.
 - A `.env` file at the repo root (gitignored). The dev script
-  generates `DESK_SECRET_KEY` on first run and writes it here.
+  generates `DESK_VAULT_PASSWORD` on first run and writes it here.
   AI-provider API keys are configured per-user via
   Settings → Connections, not via this file.
 
@@ -55,7 +55,7 @@ npm run dev
 
 That:
 
-1. Generates `DESK_SECRET_KEY` into `.env` if missing.
+1. Generates `DESK_VAULT_PASSWORD` into `.env` if missing.
 2. Ensures `~/Desk/` exists.
 3. Starts `desk-server` (tsx watch) on http://127.0.0.1:35138/.
 4. Starts the Vite dev server on http://127.0.0.1:5173/.

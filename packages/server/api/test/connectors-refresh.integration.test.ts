@@ -16,7 +16,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, resetSecretKeyCache, queries } from "@agent-desk/db";
+import { Pool, runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import {
@@ -55,9 +55,6 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-home-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-  resetSecretKeyCache();
-
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
   vault = new VaultStore(path.join(home, "vaults"));
@@ -291,5 +288,81 @@ describe("connection-mutation refresh wiring", () => {
         op: "created",
       });
     }
+  });
+});
+
+/**
+ * Regression suite for the "I added a GitHub PAT but the sandbox can't
+ * see it" bug. The Settings UI saves GitHub tokens through legacy PUT
+ * /me/providers (not POST /me/connections), and the resolver previously
+ * skipped GITHUB_TOKEN entirely — and the legacy route didn't trigger a
+ * connection refresh. End result: the token landed in the DB/vault but
+ * never reached opencode-serve.
+ *
+ * These tests cover both halves of the fix:
+ *   - PUT /me/providers writes the token in a shape resolveProviderKeys
+ *     actually finds, and emits both the canonical env var and the
+ *     managed-alias env var when wrapped by buildDaemonEnv.
+ *   - PUT /me/providers (and /me/providers/meta) triggers the same
+ *     refresh wiring as POST /me/connections (session clear + WS
+ *     broadcast).
+ */
+describe("legacy /me/providers — sandbox env propagation", () => {
+  it("makes GITHUB_TOKEN visible to resolveProviderKeys after PUT /me/providers", async () => {
+    const put = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_legacy_resolves" },
+    });
+    expect(put.status).toBe(200);
+
+    const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(resolved.GITHUB_TOKEN).toBe("ghp_legacy_resolves");
+  });
+
+  it("buildDaemonEnv mirrors GITHUB_TOKEN to the GH_TOKEN alias the GitHub CLI reads", async () => {
+    await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_alias_value" },
+    });
+
+    const providerKeys = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    const env = buildDaemonEnv({ providerKeys });
+    expect(env.GITHUB_TOKEN).toBe("ghp_alias_value");
+    expect(env.GH_TOKEN).toBe("ghp_alias_value");
+  });
+
+  it("clears sessions and broadcasts when PUT /me/providers saves a key", async () => {
+    const chatId = await makeChatWithSession("ses_put_providers");
+    const ws = new CapturingWs();
+    addConnection(userId, ws);
+
+    const put = await request("PUT", "/me/providers", token, {
+      providers: { GITHUB_TOKEN: "ghp_triggers_refresh" },
+    });
+    expect(put.status).toBe(200);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    const events: WsEvent[] = ws.sent.map((s) => JSON.parse(s));
+    const connectionChanged = events.find((e) => e.type === "connection.changed");
+    expect(connectionChanged).toBeDefined();
+  });
+
+  it("clears sessions when PUT /me/providers/meta toggles a provider", async () => {
+    // Seed a key so the toggle has something meaningful to flip.
+    await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-toggle" },
+    });
+    const chatId = await makeChatWithSession("ses_put_meta");
+
+    const meta = await request("PUT", "/me/providers/meta", token, {
+      meta: { ANTHROPIC_API_KEY: { enabled: false } },
+    });
+    expect(meta.status).toBe(200);
+
+    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+
+    // Disabled providers must not appear in the resolved env — otherwise
+    // the Settings toggle is purely cosmetic and the daemon still sees
+    // the key.
+    const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(resolved.ANTHROPIC_API_KEY).toBeUndefined();
   });
 });

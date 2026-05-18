@@ -43,6 +43,20 @@ describe("migrations", () => {
     }
   });
 
+  it("does not leave secret-key encrypted metadata columns in the schema", async () => {
+    const userSettingsCols = await pool.query<{ name: string }>("SELECT name FROM pragma_table_info('user_settings')");
+    const userSettingsNames = userSettingsCols.rows.map((r) => r.name);
+    expect(userSettingsNames).toContain("provider_meta_json");
+    expect(userSettingsNames).not.toContain("provider_keys_encrypted");
+    expect(userSettingsNames).not.toContain("provider_meta_encrypted");
+
+    const connectionCols = await pool.query<{ name: string }>("SELECT name FROM pragma_table_info('connector_connections')");
+    const connectionNames = connectionCols.rows.map((r) => r.name);
+    expect(connectionNames).toContain("metadata_json");
+    expect(connectionNames).not.toContain("credentials_encrypted");
+    expect(connectionNames).not.toContain("metadata_encrypted");
+  });
+
   it("creates composite indexes", async () => {
     const { rows } = await pool.query<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name`,

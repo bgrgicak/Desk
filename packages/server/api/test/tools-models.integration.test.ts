@@ -56,8 +56,6 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.DESK_HOME = home;
 
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-
   const runManager = createRunManager({
     pool,
     execRunFn: async (runId, _a, _p, onLog) => {

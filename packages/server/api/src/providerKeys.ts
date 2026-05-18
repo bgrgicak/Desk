@@ -63,6 +63,17 @@ export async function resolveProviderKeys(
     workspaceGrants: workspaceId ? await queries.connectors.listWorkspaceGrants(pool, workspaceId) : [],
   };
 
+  // Warn once per resolve call when the vault is locked — every handler
+  // is about to return empty, and one log line per call is enough signal
+  // to debug "I added a key but the sandbox can't see it" without
+  // multiplying noise by the number of registered providers.
+  if (vault && vault.isLocked(resolvedUserId)) {
+    console.warn(
+      `resolveProviderKeys: vault is locked for user ${resolvedUserId} — ` +
+        `no connector credentials will be forwarded to the sandbox until /vault/unlock`,
+    );
+  }
+
   const out: Record<string, string> = {};
   for (const handler of providerHandlers()) {
     if (isDisabled(ctx, handler)) continue;
@@ -79,41 +90,70 @@ export async function resolveProviderKeys(
 
 // ── Provider registry ──────────────────────────────────────────────────
 
+/**
+ * Built once per resolve call. Today the registry is fully derived from
+ * `CONNECTION_ENV_VARS` — adding a new LLM key (extend `PROVIDER_KEY_VARS`
+ * in `@agent-desk/shared`) or a new tool token (extend
+ * `SANDBOX_CONNECTION_ENV_VARS`) automatically makes it resolvable here
+ * with zero changes to this file. The matching DB row is written by
+ * `PUT /me/providers` with `providerId = <env-var-name>` and credentials
+ * `{ value: '<secret>' }`.
+ *
+ * Forward-compat note for the in-progress multi-account UI:
+ * `POST /me/connections` allows arbitrary providerIds (typically the
+ * kind, e.g. "github"). When that UI ships, register a kind-based
+ * handler here that reads the same vault entry shape and emits the
+ * provider's env var(s). The split mirrors what `connectionRefresh.ts`
+ * already supports — both update paths trigger the same hot-refresh.
+ */
 function providerHandlers(): ProviderHandler[] {
-  return [
-    githubHandler,
-    ...legacyApiKeyHandlers(),
-  ];
+  return envVarHandlers();
 }
 
-const githubHandler: ProviderHandler = {
-  providerId: "github",
-  envVars: ["GITHUB_TOKEN", "GH_TOKEN"],
-  async resolve(ctx, connection) {
-    const credentials = ctx.vault ? readCredentials(ctx.vault, ctx.userId, "github", connection.id) : null;
-    const token = stringField(credentials?.token) ?? stringField(credentials?.value);
-    const out: Record<string, string> = {};
-    if (!token) return out;
-    out.GITHUB_TOKEN = token;
-    out.GH_TOKEN = token;
-    return out;
-  },
-};
-
 /**
- * Legacy API-key providers — providerId is the env var name itself
- * (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY). Credential bag shape:
- * `{ value: '<api-key>' }`. New providers should be modeled like
- * githubHandler above (named providerId, explicit env-var list).
+ * Reads `credentials.value` first (legacy single-key shape written by
+ * `PUT /me/providers`), falls back to `credentials.token` (multi-account
+ * shape written by `POST /me/connections`). Returns null when the
+ * credential bag is missing, the vault is locked, or neither field is a
+ * non-empty string — and logs the reason so a missing key never fails
+ * silently.
  */
-function legacyApiKeyHandlers(): ProviderHandler[] {
-  const skip = new Set<string>(["GITHUB_TOKEN"]);
-  return CONNECTION_ENV_VARS.filter((envVar) => !skip.has(envVar)).map((envVar): ProviderHandler => ({
+function readSecretValue(
+  ctx: ResolutionContext,
+  providerId: string,
+  connectionId: string,
+  envVarForLog: string,
+): string | null {
+  const credentials = ctx.vault ? readCredentials(ctx.vault, ctx.userId, providerId, connectionId) : null;
+  if (!credentials) {
+    // Vault-locked is already logged once at the top of
+    // resolveProviderKeys; skip the per-provider duplicate. A missing
+    // vault entry while the vault is unlocked is a real anomaly (active
+    // row in DB but no credential in vault) and worth surfacing per
+    // provider so the operator can identify which connection is broken.
+    if (!ctx.vault?.isLocked(ctx.userId)) {
+      console.warn(
+        `provider ${envVarForLog}: connection ${connectionId} (providerId=${providerId}) has no readable vault entry — sandbox will not see this key`,
+      );
+    }
+    return null;
+  }
+  const value = stringField(credentials.value) ?? stringField(credentials.token);
+  if (!value) {
+    console.warn(
+      `provider ${envVarForLog}: connection ${connectionId} (providerId=${providerId}) vault entry missing value/token field`,
+    );
+    return null;
+  }
+  return value;
+}
+
+function envVarHandlers(): ProviderHandler[] {
+  return CONNECTION_ENV_VARS.map((envVar): ProviderHandler => ({
     providerId: envVar,
     envVars: [envVar],
     async resolve(ctx, connection) {
-      const credentials = ctx.vault ? readCredentials(ctx.vault, ctx.userId, envVar, connection.id) : null;
-      const value = stringField(credentials?.value) ?? stringField(credentials?.token);
+      const value = readSecretValue(ctx, envVar, connection.id, envVar);
       return value ? { [envVar]: value } : {};
     },
   }));

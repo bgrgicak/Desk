@@ -9,8 +9,8 @@ desk-agent secret list — list the user's secrets vault entries.
 Returns metadata only (titles, usernames, urls). To read a secret's
 plaintext password use \`desk-agent secret get <title>\`.
 
-If the vault is locked, the command exits with code VAULT_LOCKED. Tell
-the user to open Desk → Settings → Secrets and unlock the vault.
+If the vault is locked, the command exits with code VAULT_LOCKED. Ask
+the user to unlock the vault before trying again.
 
 Output:
   JSON object {"secrets": [{ title, username?, url?, hasNotes, fieldNames }]}.

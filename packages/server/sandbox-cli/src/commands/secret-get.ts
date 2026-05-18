@@ -12,8 +12,8 @@ Returns the entry's password and any other fields the user filled in
 (username, url, notes, custom fields). Use this at the moment of need
 — do not echo or log the result.
 
-If the vault is locked, the command exits with code VAULT_LOCKED. Tell
-the user to open Desk → Settings → Secrets and unlock the vault.
+If the vault is locked, the command exits with code VAULT_LOCKED. Ask
+the user to unlock the vault before trying again.
 
 Output:
   JSON object {"title", "password", "username"?, "url"?, "notes"?, "fields"?}.

@@ -1,18 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { type Pool } from "../../src/pool.js";
 import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as providerKeyAccessLog from "../../src/queries/providerKeyAccessLog.js";
 import * as users from "../../src/queries/users.js";
-import { resetSecretKeyCache } from "../../src/encryption.js";
 import { hashPassword } from "../../src/passwords.js";
 
 let pool: Pool;
-let keyDir: string;
-let prevEnv: string | undefined;
 
 beforeAll(async () => {
   pool = await setupTestDb();
@@ -20,20 +14,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestDb(pool);
-});
-
-beforeEach(() => {
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-pkal-"));
-  prevEnv = process.env.DESK_SECRET_KEY_PATH;
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
-  resetSecretKeyCache();
-});
-
-afterEach(() => {
-  if (prevEnv === undefined) delete process.env.DESK_SECRET_KEY_PATH;
-  else process.env.DESK_SECRET_KEY_PATH = prevEnv;
-  resetSecretKeyCache();
-  fs.rmSync(keyDir, { recursive: true, force: true });
 });
 
 async function makeUser(username: string): Promise<string> {

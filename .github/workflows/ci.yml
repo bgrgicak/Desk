@@ -95,7 +95,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -125,7 +125,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -159,7 +159,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -206,7 +206,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
