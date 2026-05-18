@@ -31,6 +31,7 @@ import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as authRoutes from "./routes/auth.js";
+import { consumeRateLimit, getClientIp } from "./auth/rateLimit.js";
 import * as accountRoutes from "./routes/account.js";
 import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -142,6 +143,27 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
   res.end(json);
+}
+
+/**
+ * Consults a named rate-limit bucket and emits a 429 if the key is
+ * over budget. Returns true when a response has been written and the
+ * caller should early-return.
+ *
+ * The Retry-After header carries the time-to-recover in seconds, with
+ * a floor of 1s so well-behaved clients don't busy-loop.
+ */
+function denyOverLimit(res: ServerResponse, bucket: string, key: string): boolean {
+  if (!key) return false; // unknown client IP — don't block, log only
+  const decision = consumeRateLimit(bucket, key);
+  if (decision.allowed) return false;
+  const retryAfterSec = Math.max(1, Math.ceil(decision.retryAfterMs / 1000));
+  res.setHeader("Retry-After", String(retryAfterSec));
+  sendJson(res, 429, {
+    code: "RATE_LIMITED",
+    message: "Too many requests; slow down",
+  });
+  return true;
 }
 
 /**
@@ -1212,6 +1234,10 @@ export function createApp(opts: AppOptions): Server {
 
     // Auth routes
     if (path === "/auth/login" && method === "POST") {
+      // Per-IP cap blocks bruteforce. Applied before reading the body so
+      // a slow-loris caller can't slip past the limiter by stalling the
+      // POST.
+      if (denyOverLimit(res, "auth.login", getClientIp(req))) return;
       const body = await parseBody(req) as { username: string; password: string };
       const result = await authRoutes.handleLogin(pool, body);
       sendJson(res, 200, result);
@@ -1246,6 +1272,10 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/me/password" && method === "POST") {
+      // Per-user cap on password-change attempts. Combined with the
+      // per-IP login cap this blocks both online bruteforce and replay
+      // against a single compromised session.
+      if (denyOverLimit(res, "me.password", userId)) return;
       const body = await parseBody(req) as { currentPassword: string; newPassword: string };
       const result = await accountRoutes.changePassword(pool, userId, body);
       sendJson(res, 200, result);
@@ -1391,6 +1421,12 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/vault/unlock" && method === "POST") {
+      // Vault unlock is the highest-value bruteforce target on the
+      // server. Both per-IP and per-user buckets: per-IP catches a
+      // single attacker, per-user catches a distributed attacker who
+      // has the user's username but is rotating IPs.
+      if (denyOverLimit(res, "vault.unlock.ip", getClientIp(req))) return;
+      if (denyOverLimit(res, "vault.unlock.user", userId)) return;
       const body = await parseBody(req) as { password?: unknown };
       const result = await vaultRoutes.unlock(vault, userId, body);
       sendJson(res, 200, result);
