@@ -209,7 +209,7 @@ async function readMountMarker(targetPath: string): Promise<{ mountId?: string }
   }
 }
 
-async function targetIsAvailableMountPoint(targetPath: string, mountId: string): Promise<boolean> {
+async function targetIsAvailableMountPoint(targetPath: string, _mountId: string): Promise<boolean> {
   try {
     const stat = await fs.lstat(targetPath);
     if (!stat.isDirectory()) return false;
