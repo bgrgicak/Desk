@@ -282,13 +282,18 @@ export async function dispatchChats(
     const targetPath = typeof body?.targetPath === "string" ? body.targetPath : "";
     if (!artifactName) throw new ValidationError("Missing 'name' in body");
     if (!targetPath) throw new ValidationError("Missing 'targetPath' in body");
+    // Canonical ETag semantics: `If-Match` header is the precondition.
+    // Accept `body.expectedSourceVersion` as a fallback when the header
+    // is absent (older clients) but never let the body override an
+    // explicit header — two different values would otherwise silently
+    // pick body and ignore the precondition.
     const headerIfMatch = req.headers["if-match"];
     const ifMatch = Array.isArray(headerIfMatch) ? headerIfMatch[0] : headerIfMatch;
     const expectedSourceVersion =
-      typeof body?.expectedSourceVersion === "string"
-        ? body.expectedSourceVersion
-        : typeof ifMatch === "string" && ifMatch
-          ? ifMatch
+      typeof ifMatch === "string" && ifMatch
+        ? ifMatch
+        : typeof body?.expectedSourceVersion === "string"
+          ? body.expectedSourceVersion
           : undefined;
     try {
       const result = await chatRoutes.replaceLibraryAppWithChatArtifact(
