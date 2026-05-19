@@ -4,7 +4,7 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, ValidationError, generateId, type PinKind, type WsEvent } from "@agent-desk/shared";
+import { DeskError, ValidationError, type PinKind, type WsEvent } from "@agent-desk/shared";
 import {
   ReplaceLibraryAppConflictError,
   workspaceRootPath,
@@ -13,7 +13,6 @@ import {
 import type { createRunManager } from "@agent-desk/scheduler";
 import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
-import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
 import {
   requireOwnedAgent,
@@ -26,10 +25,7 @@ import { broadcast } from "./ws/registry.js";
 import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
-import * as authRoutes from "./routes/auth.js";
-import { getClientIp } from "./auth/rateLimit.js";
 import * as accountRoutes from "./routes/account.js";
-import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
 import * as pinRoutes from "./routes/pins.js";
 import * as agentRoutes from "./routes/agents.js";
@@ -38,12 +34,10 @@ import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
-import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
 import { withModule } from "@agent-desk/shared/logger";
 import {
   defaultBackupPath,
-  denyOverLimit,
   parseBody,
   parseMultipart,
   parseMultipartFileStream,
@@ -52,10 +46,10 @@ import {
   sendJson,
 } from "./http/request-helpers.js";
 import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
-import {
-  findDuplicateScheduledSandboxTask,
-  sandboxSessionRunsScheduledTask,
-} from "./routes/sandbox-task-helpers.js";
+import type { DispatchContext } from "./dispatch/context.js";
+import { dispatchSandbox } from "./dispatch/sandbox.js";
+import { dispatchAccount } from "./dispatch/account.js";
+import { dispatchWorkspaces } from "./dispatch/workspaces.js";
 const log = withModule("api/app");
 
 import * as appsRoutes from "./routes/apps.js";
@@ -177,6 +171,19 @@ export function createApp(opts: AppOptions): Server {
     }
     emitEvent(payload);
   }
+
+  // Closure bundle handed to extracted dispatch sub-modules (dispatch/*).
+  // Re-built once per createApp so handlers don't have to take eight
+  // separate parameters.  Add new shared deps here; per-route helpers
+  // still take their narrow inputs directly.
+  const dispatchCtx: DispatchContext = {
+    pool,
+    storage,
+    vault,
+    runManager,
+    emit: emitEvent,
+    refreshConnections,
+  };
 
   // Pre-generate the OpenAPI spec
   const openApiSpec = generateOpenApiSpec();
@@ -368,29 +375,13 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Sandbox secrets — agent-side reads. The sandbox token resolves to
-    // (session, agent); the agent's userId is what we read from. There's
-    // no agent-side write path: secrets come in through the user UI.
-    if (path === "/sandbox/secrets" && method === "GET") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
-      const result = vaultRoutes.sandboxList(vault, agent.userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "sandbox" && segments[1] === "secrets" && segments.length === 3 && method === "GET") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
-      const title = decodeURIComponent(segments[2]);
-      const result = vaultRoutes.sandboxGet(vault, agent.userId, title);
-      if (!result) {
-        sendJson(res, 404, { code: "NOT_FOUND", message: "No such secret" });
-        return;
-      }
-      sendJson(res, 200, result);
-      return;
+    // Sandbox routes — all /sandbox/* paths share the X-Desk-Sandbox-Token
+    // auth scheme and bypass requireAuth. dispatchSandbox returns true when
+    // it handled the request; false means the path isn't a sandbox route
+    // and we fall through to the next branch.
+    if (segments[0] === "sandbox") {
+      const handled = await dispatchSandbox(req, res, method, path, segments, dispatchCtx);
+      if (handled) return;
     }
 
     // Per-app storage routes (PR-H). Match before the static-app
@@ -507,842 +498,20 @@ export function createApp(opts: AppOptions): Server {
         if (handled) return;
       }
     }
-
-    // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
-    // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
-    // and we use the agent's userId to gate the chat ownership check.
-    if (path === "/sandbox/messages" && method === "POST") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
-      if (!body.chatId || typeof body.chatId !== "string") {
-        throw new ValidationError("Missing chatId");
-      }
-      const sourceChatId = body.chatId;
-      await requireOwnedChat(pool, sourceChatId, agent.userId);
-      let targetChatId = sourceChatId;
-      let createdChat: unknown;
-
-      const sendBody = { kind: "task", ...body };
-      delete (sendBody as { chatId?: string }).chatId;
-      delete (sendBody as { newChat?: boolean }).newChat;
-
-      const attachments = (sendBody as { attachments?: unknown }).attachments;
-      if (Array.isArray(attachments)) {
-        for (const attachment of attachments) {
-          const attachmentPath = (attachment as { path?: unknown })?.path;
-          if (typeof attachmentPath !== "string" || !attachmentPath.trim()) {
-            throw new ValidationError("Invalid attachment path");
-          }
-          if (attachmentPath.includes("\0") || attachmentPath.includes("\\") || attachmentPath.startsWith("/")) {
-            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
-          }
-          const segments = attachmentPath.split("/");
-          if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-            throw new ValidationError(`Invalid attachment path: ${attachmentPath}`);
-          }
-          if (attachmentPath.startsWith(".chats/") && !attachmentPath.startsWith(`.chats/${sourceChatId}/artifacts/`)) {
-            throw new ValidationError("Sandbox task attachments must be library files or artifacts from the source chat");
-          }
-        }
-      }
-
-      if (body.newChat === true) {
-        if (typeof body.executeAt === "string" || typeof body.cron === "string") {
-          throw new ValidationError("newChat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
-        }
-        if (typeof body.kind === "string" && body.kind !== "task") {
-          throw new ValidationError("newChat is only for simple manual tasks; kind must be omitted or task");
-        }
-        sendBody.kind = "task";
-        const sourceChat = await chatRoutes.getChat(pool, sourceChatId);
-        const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
-        const rawContent = typeof body.content === "string" ? body.content.trim() : "";
-        if (typeof body.content === "string" && !body.content.includes(sourceChatId)) {
-          sendBody.content = `${body.content}\n\nOriginating chat: ${sourceChatId}`;
-        }
-        chatRoutes.validateSendMessageBody(sendBody);
-        createdChat = await chatRoutes.createChat(pool, {
-          workspaceId: sourceChat.workspaceId,
-          agentId: sourceChat.agentId,
-          title: rawTitle ?? (rawContent.slice(0, 80) || "New task"),
-          goal: "task",
-        });
-        targetChatId = (createdChat as { id: string }).id;
-      }
-
-      // Default kind = "task" for sandbox-issued messages: the agent calls
-      // this from `desk-agent task schedule`, so a chat reply isn't the intent.
-      // Caller can still override (e.g. kind="summary") if they have a
-      // reason to.
-      if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
-
-      if (
-        !createdChat &&
-        await sandboxSessionRunsScheduledTask(pool, session.runId) &&
-        ((typeof sendBody.executeAt === "string" && sendBody.executeAt.trim()) || (typeof sendBody.cron === "string" && sendBody.cron.trim())) &&
-        (sendBody.kind === undefined || sendBody.kind === "task") &&
-        typeof sendBody.content === "string"
-      ) {
-        const duplicate = await findDuplicateScheduledSandboxTask(pool, {
-          userId: agent.userId,
-          chatId: targetChatId,
-          title: typeof sendBody.title === "string" && sendBody.title.trim() ? sendBody.title.trim() : undefined,
-          content: sendBody.content,
-          executeAt: typeof sendBody.executeAt === "string" ? sendBody.executeAt : undefined,
-          cron: typeof sendBody.cron === "string" ? sendBody.cron : undefined,
-        });
-        if (duplicate) {
-          sendJson(res, 200, duplicate);
-          return;
-        }
-      }
-
-      const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emitEvent, { role: "agent" });
-      sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);
-      return;
-    }
-
-    // Sandbox task cancellation — lets an agent cancel follow-up checks it
-    // previously scheduled without needing a browser user-session token.
-    if (path === "/sandbox/messages/cancel" && method === "POST") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown };
-      if (typeof body.chatId !== "string" || !body.chatId) {
-        throw new ValidationError("Missing chatId");
-      }
-      if (typeof body.messageId !== "string" || !body.messageId) {
-        throw new ValidationError("Missing messageId");
-      }
-
-      await requireOwnedChat(pool, body.chatId, agent.userId);
-      const current = await queries.messages.findById(pool, body.messageId);
-      if (!current || current.chatId !== body.chatId) {
-        throw new NotFoundError(`Message not found in chat: ${body.messageId}`);
-      }
-      if (current.kind !== "task") {
-        throw new ValidationError("Only task messages can be cancelled via the sandbox task API");
-      }
-
-      const updated = await chatRoutes.patchMessage(
-        pool,
-        storage,
-        body.chatId,
-        body.messageId,
-        { state: "cancelled" },
-        emitEvent,
-        runManager,
-      );
-      sendJson(res, 200, updated);
-      return;
-    }
-
-    // Seed messages — bulk-inserts text messages without triggering agent
-    // turns. Used by the agent to populate a chat for scrollback testing.
-    if (path === "/sandbox/seed-messages" && method === "POST") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as {
-        chatId?: string;
-        messages?: Array<{ role?: string; text: string }>;
-      };
-      if (!body.chatId || typeof body.chatId !== "string") {
-        throw new ValidationError("Missing chatId");
-      }
-      if (!Array.isArray(body.messages) || body.messages.length === 0) {
-        throw new ValidationError("Missing or empty messages array");
-      }
-      await requireOwnedChat(pool, body.chatId, agent.userId);
-
-      const inserted: unknown[] = [];
-      for (const m of body.messages) {
-        const role = m.role === "agent" ? "agent" : "user";
-        const msg = await queries.messages.insert(pool, {
-          id: generateId("message"),
-          chatId: body.chatId,
-          role,
-          content: { type: "text", text: m.text },
-        });
-        inserted.push(msg);
-      }
-      sendJson(res, 201, { count: inserted.length });
-      return;
-    }
-
-    // Memory-system P3.5 — full-text search for the in-sandbox agent.
-    // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
-    // session's workspace by default; the hub session widens to all
-    // workspaces the user owns (scope.kind === 'owned').
-    if (path === "/sandbox/search/messages" && method === "GET") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent, workspace, scope } = await authenticateSandboxToken(pool, token);
-      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
-      const q = params.get("q") ?? params.get("query") ?? "";
-      const chatIdParam = params.get("chat") ?? undefined;
-      const workspaceParam = params.get("workspace") ?? undefined;
-      const kindParam = params.get("kind") ?? "any";
-      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
-
-      if (!session.workspaceId || !workspace) {
-        throw new NotFoundError("Workspace not found for sandbox session");
-      }
-      if (workspace.userId !== agent.userId) {
-        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
-      }
-      // For non-hub sessions, the workspace param must match the session
-      // workspace (or `*`). Hub sessions accept any owned workspace's
-      // slug or id; the search routes themselves still enforce
-      // `user_id` equality so leakage is impossible.
-      let workspaceSlugFilter: string | undefined = workspace.path;
-      let workspaceSlugsFilter: string[] | undefined;
-      if (workspaceParam && workspaceParam !== "*") {
-        if (scope.kind === "owned") {
-          const owned = await queries.workspaces.listByUser(pool, agent.userId);
-          const match = owned.find(
-            (w) => w.path === workspaceParam || w.id === workspaceParam,
-          );
-          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-          workspaceSlugFilter = match.path;
-        } else if (workspaceParam !== workspace.path) {
-          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-        }
-      } else if (workspaceParam === "*" || scope.kind === "owned") {
-        // Hub sessions (scope.kind === "owned") default to all owned workspaces,
-        // whether or not workspace=* is explicit. Project sessions that pass
-        // workspace=* enter this branch but the inner guard is false — they fall
-        // through with workspaceSlugFilter unchanged (session workspace only).
-        // This is correct: project tokens cannot broaden beyond their workspace.
-        if (scope.kind === "owned") {
-          const owned = await queries.workspaces.listByUser(pool, agent.userId);
-          workspaceSlugsFilter = owned.map((w) => w.path);
-          workspaceSlugFilter = undefined;
-        }
-      }
-
-      // When chatId is supplied, gate ownership.
-      if (chatIdParam) {
-        const chat = await requireOwnedChat(pool, chatIdParam, agent.userId);
-        if (scope.kind === "single" && chat.workspaceId !== session.workspaceId) {
-          throw new NotFoundError(`Chat not found: ${chatIdParam}`);
-        }
-      }
-
-      const hits = await queries.search.searchChatMessages(pool, {
-        query: q,
-        chatId: chatIdParam,
-        ...(workspaceSlugsFilter ? { workspaceSlugs: workspaceSlugsFilter } : { workspaceSlug: workspaceSlugFilter ?? workspace.path }),
-        kind: kindParam === "message" || kindParam === "summary" ? kindParam : "any",
-        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
-      });
-
-      sendJson(res, 200, { hits });
-      return;
-    }
-
-    if (path === "/sandbox/search" && method === "GET") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent, scope } = await authenticateSandboxToken(pool, token);
-      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
-      const q = params.get("q") ?? params.get("query") ?? "";
-      const workspaceParam = params.get("workspace") ?? undefined;
-      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
-      if (!session.workspaceId) {
-        throw new NotFoundError("Workspace not found for sandbox session");
-      }
-      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
-      if (!sessionWorkspace) {
-        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
-      }
-      // Resolve the search workspace. Hub sessions can target any owned
-      // workspace via path or id, or omit the param to search the
-      // session workspace; project sessions can only target their own.
-      let resolvedWorkspace = sessionWorkspace;
-      if (workspaceParam && workspaceParam !== "*") {
-        if (scope.kind === "owned") {
-          const match = ownedWorkspaces.find(
-            (w) => w.path === workspaceParam || w.id === workspaceParam,
-          );
-          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-          resolvedWorkspace = match;
-        } else if (
-          workspaceParam !== sessionWorkspace.path &&
-          workspaceParam !== sessionWorkspace.id
-        ) {
-          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-        }
-      }
-      const result = await searchRoutes.search(
-        pool,
-        storage,
-        agent.userId,
-        q,
-        parseSearchScope(params.get("scope")),
-        {
-          workspaceId: resolvedWorkspace.id,
-          chatId: params.get("chatId") ?? params.get("chat") ?? undefined,
-          kinds: parseSearchKinds(params.get("kind")),
-          showHidden: params.get("showHidden") === "true",
-        },
-      );
-      sendJson(res, 200, { hits: result });
-      return;
-    }
-
-    if ((path === "/sandbox/find/library" || path === "/sandbox/find/artifacts") && method === "GET") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent, scope } = await authenticateSandboxToken(pool, token);
-      const params = new URL(req.url ?? "/", "http://localhost").searchParams;
-      const workspaceParam = params.get("workspace") ?? undefined;
-      const ownedWorkspaces = await queries.workspaces.listByUser(pool, agent.userId);
-      if (!session.workspaceId) {
-        throw new NotFoundError("Workspace not found for sandbox session");
-      }
-      const sessionWorkspace = ownedWorkspaces.find((w) => w.id === session.workspaceId);
-      if (!sessionWorkspace) {
-        throw new NotFoundError(`Workspace not found: ${session.workspaceId}`);
-      }
-      let resolvedWorkspace = sessionWorkspace;
-      if (workspaceParam && workspaceParam !== "*") {
-        if (scope.kind === "owned") {
-          const match = ownedWorkspaces.find(
-            (w) => w.path === workspaceParam || w.id === workspaceParam,
-          );
-          if (!match) throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-          resolvedWorkspace = match;
-        } else if (
-          workspaceParam !== sessionWorkspace.path &&
-          workspaceParam !== sessionWorkspace.id
-        ) {
-          throw new NotFoundError(`Workspace not found: ${workspaceParam}`);
-        }
-      }
-      const kindParam = params.get("kind") ?? "any";
-      const limitParam = Number.parseInt(params.get("limit") ?? "25", 10);
-      const result = await searchRoutes.findLibraryItems(pool, storage, agent.userId, {
-        query: params.get("q") ?? params.get("query") ?? undefined,
-        kind:
-          kindParam === "app" || kindParam === "fragment" || kindParam === "note" || kindParam === "doc"
-            ? kindParam
-            : "any",
-        workspaceId: resolvedWorkspace.id,
-        limit: Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 25,
-      });
-      sendJson(res, 200, { hits: result });
-      return;
-    }
-
-    if (path === "/sandbox/artifacts" && method === "POST") {
-      const tokenHeader = req.headers["x-desk-sandbox-token"];
-      const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-      const { session, agent } = await authenticateSandboxToken(pool, token);
-      const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;
-      if (!session.runId) {
-        throw new ValidationError("Sandbox artifact attachment requires a live run token");
-      }
-      const runMessage = await queries.messages.findById(pool, session.runId);
-      if (!runMessage) {
-        throw new ValidationError("Sandbox run is no longer active");
-      }
-      if (runMessage.state !== "running") {
-        throw new ValidationError("Sandbox run is no longer active");
-      }
-      const runChatId = runMessage.chatId;
-      if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
-        throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
-      }
-      if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
-        throw new ValidationError("Summary runs cannot attach artifacts");
-      }
-      const chat = await requireOwnedChat(pool, runChatId, agent.userId);
-      if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
-        throw new NotFoundError(`Chat not found: ${runChatId}`);
-      }
-
-      const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emitEvent, {
-        agentId: agent.id,
-        model: agent.model,
-      });
-      sendJson(res, 201, message);
-      return;
-    }
-
-    // Auth routes
-    if (path === "/auth/login" && method === "POST") {
-      // Per-IP cap blocks bruteforce. Applied before reading the body so
-      // a slow-loris caller can't slip past the limiter by stalling the
-      // POST.
-      if (denyOverLimit(res, "auth.login", getClientIp(req))) return;
-      const body = await parseBody(req) as { username: string; password: string };
-      const result = await authRoutes.handleLogin(pool, body);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/auth/auto-login" && method === "POST") {
-      // Auto-login mints a bearer for the seed user without credentials,
-      // so the call must originate from loopback. A request that reaches
-      // the API from a remote address either means the operator put
-      // desk-server on a public interface deliberately or a reverse-proxy
-      // forwarded it — both should fall back to the manual LoginScreen
-      // rather than minting a free token. DESK_TRUST_PROXY=1 disables
-      // the loopback check so an operator who really wants public auto-
-      // login can opt in explicitly.
-      // req.socket?.remoteAddress is undefined for inherited-fd /
-      // socket-pair listeners and for some test harnesses; treat the
-      // empty string as "not loopback" so auto-login refuses rather
-      // than minting a token for a caller we can't identify.
-      const remote = req.socket?.remoteAddress ?? "";
-      // Reuse the same loopback definition as the WS Origin check —
-      // 127.0.0.0/8 + ::1 + ::ffff:127.*. A host that binds to
-      // 127.0.0.2 should still get the auto-login affordance.
-      if (!isLoopbackAddress(remote) && process.env.DESK_TRUST_PROXY !== "1") {
-        sendJson(res, 403, { code: "FORBIDDEN", message: "Auto-login restricted to loopback" });
-        return;
-      }
-      if (denyOverLimit(res, "auth.autoLogin", getClientIp(req))) return;
-      const result = await authRoutes.handleAutoLogin(pool);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/auth/signup" && method === "POST") {
-      // Same per-IP cap shape as /auth/login but tighter — signup is
-      // gated by DESK_ENABLE_SIGNUP and only opted-in for multi-user
-      // installs. If anyone hits this in bulk on a public host, that
-      // is a red flag regardless of the gate.
-      if (denyOverLimit(res, "auth.signup", getClientIp(req))) return;
-      const body = await parseBody(req) as { username?: unknown; email?: unknown; password?: unknown };
-      const result = await authRoutes.handleSignup(
-        { pool, home: storage.home, vault },
-        body,
-      );
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/auth/signup-status" && method === "GET") {
-      // Unauthenticated probe. Lets the SPA decide whether to surface
-      // the "Sign up" link on the login screen without needing a
-      // separate /config endpoint.
-      sendJson(res, 200, { enabled: authRoutes.isSignupEnabled() });
-      return;
-    }
-    if (path === "/auth/logout" && method === "POST") {
-      const result = await authRoutes.handleLogout(pool, vault, req.headers.authorization);
-      sendJson(res, 200, result);
-      return;
-    }
-
-    // Account routes
-    if (path === "/me" && method === "GET") {
-      const result = await accountRoutes.getMe(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me" && method === "PATCH") {
-      const body = await parseBody(req) as { username?: string; email?: string; avatarPath?: string };
-      const result = await accountRoutes.patchMe(pool, userId, body);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me" && method === "DELETE") {
-      const result = await accountRoutes.deleteMe(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/password" && method === "POST") {
-      // Per-user cap on password-change attempts. Combined with the
-      // per-IP login cap this blocks both online bruteforce and replay
-      // against a single compromised session.
-      if (denyOverLimit(res, "me.password", userId)) return;
-      const body = await parseBody(req) as { currentPassword: string; newPassword: string };
-      const result = await accountRoutes.changePassword(pool, userId, body);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/providers" && method === "GET") {
-      const result = await accountRoutes.getProviders(pool, vault, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/providers" && method === "PUT") {
-      const body = await parseBody(req) as { providers: Record<string, string | null> };
-      const result = await accountRoutes.setProviders(pool, vault, userId, body);
-      // Hot-refresh the sandbox: PUT /me/providers is the path the
-      // Settings UI uses for Claude / ChatGPT / GitHub credential
-      // changes, and without this an existing daemon keeps its old env
-      // (including no env at all for first-time GitHub adds) until
-      // something else triggers a respawn. Same one-shot guarantees as
-      // POST /me/connections.
-      const providerIds = Object.keys(body?.providers ?? {});
-      await refreshConnections(userId, {
-        type: "connection.changed",
-        payload: {
-          kind: "connector",
-          providerId: providerIds.length === 1 ? providerIds[0] : "*",
-          op: "updated",
-        },
-      });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/providers/meta" && method === "GET") {
-      const result = await accountRoutes.getProvidersMeta(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/key-access-log" && method === "GET") {
-      const result = await accountRoutes.getKeyAccessLog(pool, userId, query.get("limit") ?? undefined);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/providers/meta" && method === "PUT") {
-      const body = await parseBody(req) as { meta: Record<string, { name?: string; enabled?: boolean } | null> };
-      const result = await accountRoutes.setProvidersMeta(pool, userId, body);
-      // The `enabled` toggle in Settings flips a provider on/off — this
-      // changes what resolveProviderKeys returns, so the daemon needs
-      // a respawn with the new env. Name-only changes still fire the
-      // refresh; that's harmless (the digest will match and the
-      // ensure-cache short-circuits) and keeps the route simple.
-      const providerIds = Object.keys(body?.meta ?? {});
-      await refreshConnections(userId, {
-        type: "connection.changed",
-        payload: {
-          kind: "connector",
-          providerId: providerIds.length === 1 ? providerIds[0] : "*",
-          op: "updated",
-        },
-      });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/connections" && method === "GET") {
-      const result = await accountRoutes.listConnections(pool, vault, userId, query.get("providerId") ?? undefined);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/me/connections" && method === "POST") {
-      const body = await parseBody(req) as Parameters<typeof accountRoutes.createConnection>[3];
-      const result = await accountRoutes.createConnection(pool, vault, userId, body, { home: storage.home });
-      const providerId = result.connection?.providerId ?? "unknown";
-      await refreshConnections(userId, {
-        type: "connection.changed",
-        payload: { kind: "connector", providerId, op: "created" },
-      });
-      sendJson(res, 201, result);
-      return;
-    }
+    // Account routes — /auth/*, /me/*, /vault/*, /secrets/*
+    // are all handled by the account dispatcher in dispatch/account.ts.
+    // It owns rate limits + loopback gate for the unauthenticated
+    // /auth/* endpoints too (userId is "" for those).
     {
-      const m = path.match(/^\/me\/connections\/([A-Za-z0-9_-]+)$/);
-      if (m && method === "PATCH") {
-        const body = await parseBody(req) as Parameters<typeof accountRoutes.updateConnection>[4];
-        const result = await accountRoutes.updateConnection(pool, vault, userId, m[1], body, { home: storage.home });
-        const providerId = result.connection?.providerId ?? "unknown";
-        await refreshConnections(userId, {
-          type: "connection.changed",
-          payload: { kind: "connector", providerId, op: "updated" },
-        });
-        sendJson(res, 200, result);
-        return;
-      }
-      if (m && method === "DELETE") {
-        // Look up providerId before delete so the broadcast still has it.
-        const before = await import("@agent-desk/db").then((db) =>
-          db.queries.connectors.findConnection(pool, m[1], userId),
-        );
-        const result = await accountRoutes.deleteConnection(pool, vault, userId, m[1], { home: storage.home });
-        await refreshConnections(userId, {
-          type: "connection.changed",
-          payload: {
-            kind: "connector",
-            providerId: before?.providerId ?? "unknown",
-            op: "deleted",
-          },
-        });
-        sendJson(res, 200, result);
-        return;
-      }
+      const handled = await dispatchAccount(req, res, method, path, segments, userId, query, dispatchCtx);
+      if (handled) return;
     }
-    if (path === "/me/providers/local" && method === "GET") {
-      const result = await localSourceRoutes.listLocalSources(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
+
+    // Workspace + agent + pin routes — all scoped to the authenticated
+    // user.  See dispatch/workspaces.ts for the per-resource handlers.
     {
-      const m = path.match(/^\/me\/providers\/local\/([A-Za-z0-9_-]+)$/);
-      if (m && method === "PUT") {
-        const body = await parseBody(req) as { enabled: boolean };
-        const result = await localSourceRoutes.setLocalSourceEnabled(pool, userId, m[1], body);
-        await refreshConnections(userId, {
-          type: "connection.changed",
-          payload: {
-            kind: "local_source",
-            providerId: m[1],
-            op: body.enabled ? "enabled" : "disabled",
-          },
-        });
-        sendJson(res, 200, result);
-        return;
-      }
-    }
-
-    // Vault — per-user secrets vault setup/unlock/lock/status. Secrets
-    // themselves are read/written via /secrets and /sandbox/secrets.
-    if (path === "/vault/status" && method === "GET") {
-      const result = await vaultRoutes.getStatus(vault, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/vault/setup" && method === "POST") {
-      const body = await parseBody(req) as { password?: unknown };
-      const result = await vaultRoutes.setup(vault, userId, body);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/vault/unlock" && method === "POST") {
-      // Vault unlock is the highest-value bruteforce target on the
-      // server. Both per-IP and per-user buckets: per-IP catches a
-      // single attacker, per-user catches a distributed attacker who
-      // has the user's username but is rotating IPs.
-      if (denyOverLimit(res, "vault.unlock.ip", getClientIp(req))) return;
-      if (denyOverLimit(res, "vault.unlock.user", userId)) return;
-      const body = await parseBody(req) as { password?: unknown };
-      const result = await vaultRoutes.unlock(vault, userId, body);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/vault/lock" && method === "POST") {
-      const result = vaultRoutes.lock(vault, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-
-    // Secrets — user side. Metadata-only on list/get; create + overwrite
-    // are the only mutations. There's deliberately no reveal endpoint:
-    // even a hijacked SPA session can't exfiltrate plaintext, only
-    // sandboxed agents (via /sandbox/secrets/:title) can.
-    if (path === "/secrets" && method === "GET") {
-      const result = vaultRoutes.listSecrets(vault, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/secrets" && method === "POST") {
-      const body = await parseBody(req);
-      const result = await vaultRoutes.createSecret(vault, userId, body);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "secrets" && segments.length === 2 && method === "PUT") {
-      const body = await parseBody(req);
-      const title = decodeURIComponent(segments[1]);
-      const result = await vaultRoutes.updateSecret(vault, userId, title, body);
-      sendJson(res, 200, result);
-      return;
-    }
-
-    // Workspace routes — all scoped to the authenticated user. Non-owned
-    // workspaces return 404 to avoid leaking existence.
-    if (path === "/workspaces" && method === "GET") {
-      const result = await workspaceRoutes.listWorkspaces(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/workspaces" && method === "POST") {
-      const body = (await parseBody(req)) as Record<string, unknown>;
-      // `kind` is server-only; the API never trusts a client-supplied
-      // value. Internal callers (createHub) bypass this layer entirely.
-      if ("kind" in body) {
-        throw new ValidationError("`kind` is not accepted in workspace creation requests");
-      }
-      const data = {
-        name: typeof body.name === "string" ? body.name : "",
-        description: typeof body.description === "string" ? body.description : undefined,
-        icon: typeof body.icon === "string" ? body.icon : undefined,
-        color: typeof body.color === "string" ? body.color : undefined,
-      };
-      const result = await workspaceRoutes.createWorkspace(pool, userId, storage.home, data);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments.length === 2 && method === "GET") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.getWorkspace(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments.length === 2 && method === "PATCH") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = (await parseBody(req)) as Record<string, unknown>;
-      if ("kind" in body) {
-        throw new ValidationError("`kind` is not accepted in workspace patch requests");
-      }
-      const data = {
-        name: typeof body.name === "string" ? body.name : undefined,
-        description: typeof body.description === "string" ? body.description : undefined,
-        icon: typeof body.icon === "string" ? body.icon : undefined,
-        color: typeof body.color === "string" ? body.color : undefined,
-      };
-      const result = await workspaceRoutes.patchWorkspace(pool, storage.home, segments[1], data);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments.length === 2 && method === "DELETE") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.deleteWorkspace(pool, storage.home, userId, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "connections" && segments.length === 3 && method === "GET") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await accountRoutes.listWorkspaceGrants(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "connections" && segments.length === 3 && method === "PUT") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as Parameters<typeof accountRoutes.replaceWorkspaceGrants>[3];
-      const result = await accountRoutes.replaceWorkspaceGrants(pool, userId, segments[1], body);
-      await refreshConnections(
-        userId,
-        {
-          type: "connection.changed",
-          payload: {
-            kind: "connector",
-            providerId: "*",
-            op: "updated",
-            workspaceId: segments[1],
-          },
-        },
-        segments[1],
-      );
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "GET") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.listWorkspaceAgents(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 3 && method === "POST") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = await parseBody(req) as { agentId: string };
-      await requireOwnedAgent(pool, body.agentId, userId);
-      const result = await workspaceRoutes.addAgentToWorkspace(pool, segments[1], body.agentId);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "agents" && segments.length === 4 && method === "DELETE") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await workspaceRoutes.removeAgentFromWorkspace(pool, segments[1], segments[3]);
-      sendJson(res, 200, result);
-      return;
-    }
-
-    // Cross-workspace pin routes (hub only). The within-workspace
-    // library-pins endpoints below remain — they're a separate concept
-    // (toggle a file's "pinned" flag inside the same workspace).
-    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 3 && method === "GET") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await pinRoutes.listPins(pool, segments[1], userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 3 && method === "POST") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = (await parseBody(req)) as {
-        sourceWorkspaceId?: unknown;
-        kind?: unknown;
-        refId?: unknown;
-      };
-      const sourceWorkspaceId = typeof body.sourceWorkspaceId === "string" ? body.sourceWorkspaceId : "";
-      const kind = typeof body.kind === "string" ? body.kind : "";
-      const refId = typeof body.refId === "string" ? body.refId : "";
-      const result = await pinRoutes.createPin(pool, segments[1], userId, {
-        sourceWorkspaceId,
-        kind: kind as PinKind,
-        refId,
-      });
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "pins" && segments.length === 4 && method === "DELETE") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const result = await pinRoutes.deletePin(pool, segments[1], userId, segments[3]);
-      sendJson(res, 200, result);
-      return;
-    }
-
-    // Library pin routes
-    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "POST") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { path?: unknown };
-      const filePath = typeof body?.path === "string" ? body.path : "";
-      if (!filePath) throw new ValidationError("Missing 'path' in body");
-      await libraryRoutes.pin(storage, segments[1], filePath);
-      sendJson(res, 201, { ok: true });
-      return;
-    }
-    if (segments[0] === "workspaces" && segments[2] === "library-pins" && segments.length === 3 && method === "DELETE") {
-      await requireOwnedWorkspace(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { path?: unknown };
-      const filePath = typeof body?.path === "string" ? body.path : "";
-      if (!filePath) throw new ValidationError("Missing 'path' in body");
-      await libraryRoutes.unpin(storage, segments[1], filePath);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-
-    // Agent routes
-    if (path === "/agents" && method === "GET") {
-      const result = await agentRoutes.listAgents(pool, userId);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/agents" && method === "POST") {
-      const body = await parseBody(req) as { name: string; model?: string };
-      const result = await agentRoutes.createAgent(pool, userId, body);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "agents" && segments.length === 2 && method === "GET") {
-      await requireOwnedAgent(pool, segments[1], userId);
-      const result = await agentRoutes.getAgent(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
-      await requireOwnedAgent(pool, segments[1], userId);
-      const body = await parseBody(req) as { name?: string; model?: string };
-      const { agent, modelChanged } = await agentRoutes.patchAgent(pool, segments[1], body);
-      if (modelChanged && opts.refreshSandboxConnections) {
-        // opencode-serve caches each agent file's `model:` field at
-        // startup and ignores rewrites. Clearing chat sessions (done
-        // inside patchAgent) is necessary but not sufficient — a new
-        // session in the same daemon still inherits the cached agent
-        // config. Restart the daemons so they re-read the agent files.
-        // Fire-and-forget: the HTTP response shouldn't block on a
-        // Docker round-trip, and a transient engine hiccup must not
-        // turn a successful agent update into a 500.
-        void opts.refreshSandboxConnections(userId).catch((err: unknown) => {
-          log.warn(
-            { agentId: segments[1], err: (err as Error)?.message ?? String(err) },
-            "refreshSandboxConnections after agent model change failed",
-          );
-        });
-      }
-      sendJson(res, 200, agent);
-      return;
-    }
-    if (segments[0] === "agents" && segments.length === 2 && method === "DELETE") {
-      await requireOwnedAgent(pool, segments[1], userId);
-      const result = await agentRoutes.deleteAgent(pool, userId, segments[1]);
-      sendJson(res, 200, result);
-      return;
+      const handled = await dispatchWorkspaces(req, res, method, path, segments, userId, dispatchCtx, { refreshSandboxConnections: opts.refreshSandboxConnections });
+      if (handled) return;
     }
 
     // Chat routes
