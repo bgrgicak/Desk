@@ -19,6 +19,7 @@ import {
   Button,
   Input,
   Switch,
+  Textarea,
   Popover,
   PopoverContent,
   PopoverTrigger,
