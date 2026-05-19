@@ -1,14 +1,10 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { Cron } from "croner";
 import { type Pool } from "@agent-desk/db";
 import {
   generateId,
-  AgentEventSchema,
   GOAL_KEYS,
-  type AgentEvent,
-  type AgentLogEntry,
   type GoalKey,
   type Message,
   type WsEvent,
@@ -21,22 +17,37 @@ import {
   execRun as runtimeExecRun,
   classifyResourceError,
   growSandboxForResourceError,
-  reapIdleSandboxes,
-  softReapIdleDaemons,
   cancelRun as runtimeCancelRun,
-  estimateMessagesTokens,
-  listModels,
+  isContainerGoneError,
   productionReflectWorkspace,
   resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
+  type SandboxHandle,
 } from "@agent-desk/runtime";
+import * as sandboxSweep from "./runs-sandbox-sweep.js";
+import { createSummaryScheduler } from "./runs-summary.js";
+import { derivePromptInputs as derivePromptInputsExtern } from "./runs-prompt.js";
+import * as lifecycle from "./runs-lifecycle.js";
 import {
   runWorkspaceReflection,
   yesterdayDateLocal,
   type ReflectFn,
   type WorkspaceReflectionInput,
 } from "./reflection.js";
+import {
+  buildOutputContent,
+  computeNextRun,
+  errorLogLines,
+  isNonEmpty,
+  isUnscheduledTask,
+  outputContentTypeFor,
+  readLogEntries,
+  reflectionOutcomeText,
+  type SummaryModelTokenLimits,
+} from "./runs-helpers.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("scheduler/runs");
 
 export interface RunManagerOptions {
   pool: Pool;
@@ -65,12 +76,6 @@ export interface RunManagerOptions {
   home?: string;
   /** Test hook for model metadata used by the adaptive summary trigger. */
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
-}
-
-interface SummaryModelTokenLimits {
-  contextWindow: number;
-  inputLimit?: number;
-  outputLimit?: number;
 }
 
 /**
@@ -162,10 +167,6 @@ export function resolveModelForRun(
   return { runtimeModel: model, providerKeys, reason: null };
 }
 
-function isNonEmpty(v: string | undefined): boolean {
-  return typeof v === "string" && v.length > 0;
-}
-
 /**
  * @deprecated Kept for backwards-compatibility with existing tests
  * that import the old name. New code should use `resolveModelForRun`.
@@ -184,17 +185,28 @@ export interface FireMessageOptions {
   manual?: boolean;
 }
 
-function computeNextRun(cronExpr: string): string {
-  const next = new Cron(cronExpr).nextRun();
-  if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
-  return next.toISOString();
+/**
+ * True when the message row's current state is 'cancelled' — i.e. a
+ * preempt already wrote that state and any in-flight failure on this
+ * run is downstream noise that should not surface to the user as a
+ * "failed" banner.
+ */
+async function isAlreadyCancelled(pool: Pool, messageId: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE id = ?`,
+      [messageId],
+    );
+    return rows[0]?.state === "cancelled";
+  } catch {
+    return false;
+  }
 }
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
   const home = opts.home ?? resolveDeskHome();
   const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
-  const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
@@ -218,327 +230,7 @@ export function createRunManager(opts: RunManagerOptions) {
     return dir;
   }
 
-  /**
-   * Parses a per-message log file (`{kind}\t{payload}\n` per onLog call)
-   * into the tagged AgentLogEntry stream used by `events`-content
-   * messages. Each payload may itself contain embedded newlines (a single
-   * stdout write can cover multiple JSON events), so we split inside
-   * each payload before parsing.
-   */
-  async function readLogEntries(p: string): Promise<AgentLogEntry[]> {
-    let buf: string;
-    try {
-      buf = await fsp.readFile(p, "utf8");
-    } catch {
-      return [];
-    }
-    const entries: AgentLogEntry[] = [];
-    for (const rawLine of buf.split("\n")) {
-      if (!rawLine) continue;
-      const tab = rawLine.indexOf("\t");
-      if (tab <= 0) continue;
-      const kind = rawLine.slice(0, tab);
-      const payload = rawLine.slice(tab + 1);
-      for (const line of payload.split("\n")) {
-        if (line === "") continue;
-        if (kind === "stderr") {
-          entries.push({ kind: "stderr", line });
-          continue;
-        }
-        // stdout / event: attempt to parse as JSON and validate.
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          entries.push({ kind: "unparsed", line });
-          continue;
-        }
-        const validated = AgentEventSchema.safeParse(parsed);
-        if (validated.success) {
-          entries.push({ kind: "event", event: validated.data });
-        } else {
-          entries.push({ kind: "unparsed", line });
-        }
-      }
-    }
-    return entries;
-  }
-
-  /** Concatenates text from `text`-type agent events; falls back to any
-   * `unparsed` lines so plain-string test drivers still produce output. */
-  function deriveTextFromLog(entries: AgentLogEntry[]): string {
-    const parts: string[] = [];
-    let sawEvent = false;
-    const hiddenReasoningTextIds = reasoningPartIds(entries);
-    for (const e of entries) {
-      if (e.kind === "event") {
-        sawEvent = true;
-        if (e.event.type === "text") {
-          const id = eventPartId(e.event);
-          if (id && hiddenReasoningTextIds.has(id)) continue;
-          const t = e.event.part?.text;
-          if (typeof t === "string") parts.push(t);
-        }
-      }
-    }
-    if (sawEvent) return parts.join("").trim();
-    // No structured events — fall back to unparsed stdout lines.
-    return entries
-      .filter((e) => e.kind === "unparsed")
-      .map((e) => (e as { line: string }).line)
-      .join("\n")
-      .trim();
-  }
-
-  /**
-   * Summaries should be a clean final markdown body. If the model used tools, keep
-   * the final text part instead of concatenating planning chatter with the final
-   * answer. Current opencode streams that final part as many text deltas, so
-   * reconstruct chunks that share a part/message id.
-   */
-  function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
-    let sawEvent = false;
-    let currentPartKey: string | null = null;
-    let currentPartText = "";
-    const hiddenReasoningTextIds = reasoningPartIds(entries);
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e.kind !== "event") continue;
-      sawEvent = true;
-      if (e.event.type === "text") {
-        const id = eventPartId(e.event);
-        if (id && hiddenReasoningTextIds.has(id)) continue;
-        const t = e.event.part?.text;
-        if (typeof t !== "string" || !t.trim()) continue;
-        const messageId = typeof e.event.part?.messageID === "string" ? e.event.part.messageID : undefined;
-        // Deltas from the same assistant text part carry the same part id. Older
-        // run-format fixtures sometimes omit ids, so make those individual parts
-        // to preserve the old "last text event wins" behavior after tool use.
-        const partKey = id ?? messageId ?? `event:${i}`;
-        if (partKey !== currentPartKey) {
-          currentPartKey = partKey;
-          currentPartText = t;
-        } else if (t.startsWith(currentPartText)) {
-          // A consolidated `message.part.updated` snapshot for a part may arrive
-          // after deltas. Replace accumulated chunks with the full snapshot rather
-          // than duplicating the response.
-          currentPartText = t;
-        } else {
-          currentPartText += t;
-        }
-      }
-    }
-    if (currentPartText) return currentPartText.trim();
-    if (sawEvent) return "";
-    return entries
-      .filter((e) => e.kind === "unparsed")
-      .map((e) => (e as { line: string }).line)
-      .join("\n")
-      .trim();
-  }
-
-  function reasoningPartIds(entries: AgentLogEntry[]): Set<string> {
-    const ids = new Set<string>();
-    for (const e of entries) {
-      if (e.kind !== "event" || e.event.type !== "reasoning") continue;
-      const id = eventPartId(e.event);
-      if (id) ids.add(id);
-    }
-    return ids;
-  }
-
-  function eventPartId(event: AgentEvent): string | undefined {
-    const id = event.part?.id;
-    return typeof id === "string" ? id : undefined;
-  }
-
-  const CHAT_SUMMARY_PROMPT = [
-    "Refresh this chat's running summary.",
-    "Return only the final markdown body; do not create files, write artifacts, or attach artifacts.",
-    "Use the chat-summary format described in the agent instructions.",
-  ].join("\n");
-
-  function messageTextForPrompt(message: Message): string | null {
-    const content = message.content;
-    switch (content.type) {
-      case "text":
-        return content.text;
-      case "artifactRef":
-        return `Attached artifact: ${content.name ?? content.path} (${content.path})`;
-      case "summary":
-        return content.body;
-      case "events":
-        return deriveTextFromLog(content.log) || null;
-      default:
-        return null;
-    }
-  }
-
-  function formatMessageForPrompt(message: Message): { role: string; text: string } | null {
-    const text = messageTextForPrompt(message);
-    const attachmentText = (message.attachments ?? [])
-      .map((attachment) => `${attachment.name ?? path.basename(attachment.path)} (${attachment.path})`)
-      .join(", ");
-    const body = [text, attachmentText ? `Attachments: ${attachmentText}` : ""]
-      .filter((part): part is string => Boolean(part && part.trim()))
-      .join("\n");
-    if (!body.trim()) return null;
-    const role = message.content.type === "summary"
-      ? "Summary"
-      : message.role === "user"
-        ? "User"
-        : message.role === "agent"
-          ? "Agent"
-          : "System";
-    return {
-      role,
-      text: body.trim(),
-    };
-  }
-
-  function shouldIncludeInPromptContext(message: Message, taskRunParentIds: Set<string> = new Set()): boolean {
-    const type = message.content.type;
-    if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
-    // Scheduled task definitions and their run children are operational records,
-    // not conversational turns. If included as normal Agent/User transcript text,
-    // a later agent run can misread an old task as a fresh instruction and
-    // schedule it again.
-    if (message.kind === "task" || message.kind === "task_run") return false;
-    // Task run output is stored as a normal agent chat child under the task_run
-    // row, so exclude those children too.
-    if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
-    if (message.state === "pending" || message.state === "running") return false;
-    return message.role === "user" || message.role === "agent" || type === "summary";
-  }
-
-  // Maximum UTF-8 bytes the transcript context may occupy before being
-  // trimmed. The full prompt (context + task) must fit inside the
-  // container's ARG_MAX (2 097 152 bytes on Linux). We reserve ~500 KB for
-  // the task text, wrapper headers, and other env vars, leaving 1.5 MB for
-  // the context. Oldest entries are dropped first so the most recent
-  // messages are always preserved.
-  const MAX_CONTEXT_BYTES = 1_500_000;
-
-  async function buildChatTranscriptContext(
-    currentMessage: Message,
-    currentUserMessageId?: string,
-  ): Promise<string> {
-    const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
-    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
-    const entries = items
-      .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
-      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
-      .map(formatMessageForPrompt)
-      .filter((entry): entry is { role: string; text: string } => entry !== null);
-
-    // Trim from oldest → newest until the serialised context fits.
-    const sep = "\n\n---\n\n";
-    let bytes = 0;
-    let trimFrom = 0; // first index to keep
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const chunk = `${entries[i].role}:\n${entries[i].text}`;
-      bytes += Buffer.byteLength(chunk, "utf8") + (i < entries.length - 1 ? Buffer.byteLength(sep, "utf8") : 0);
-      if (bytes > MAX_CONTEXT_BYTES) {
-        trimFrom = i + 1;
-        break;
-      }
-    }
-    const kept = trimFrom > 0 ? entries.slice(trimFrom) : entries;
-    const parts = kept.map((entry) => `${entry.role}:\n${entry.text}`);
-    if (trimFrom > 0) {
-      parts.unshift(`System:\n[Earlier context omitted — transcript exceeded size limit. ${trimFrom} older message(s) not shown.]`);
-    }
-    return parts.join(sep);
-  }
-
-  async function withChatTranscriptContext(
-    currentMessage: Message,
-    prompt: string,
-    currentUserMessageId?: string,
-  ): Promise<string> {
-    const context = await buildChatTranscriptContext(currentMessage, currentUserMessageId);
-    if (!context) return prompt;
-    return [
-      "Chat transcript context (oldest to newest; newest summary, if any, is the compaction boundary):",
-      context,
-      "",
-      "Current task:",
-      prompt,
-    ].join("\n");
-  }
-
-  /**
-   * Returns the prompt the agent will receive plus any workspace-relative
-   * attachment paths to forward to opencode via `--file`. We don't inline
-   * paths into the prompt: opencode surfaces the file content directly,
-   * and the picker-side path may live anywhere in the workspace, not just
-   * `~/.chats/.../attachments/`.
-   */
-  async function derivePromptInputs(
-    msg: Message,
-  ): Promise<{ prompt: string; attachments?: string[] }> {
-    // Self-firing kinds (task / summary) carry the prompt directly on the
-    // message — no parent lookup needed.
-    if (msg.kind === "summary") {
-      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
-    }
-    if (msg.kind === "task") {
-      const c = msg.content as { type?: string; text?: string };
-      const text = c?.type === "text" && typeof c.text === "string" ? c.text : "";
-      const refs = msg.attachments ?? [];
-      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: await withChatTranscriptContext(msg, text), attachments };
-    }
-    if (msg.content.type === "reflection_request") {
-      return { prompt: "Run the daily workspace memory reflection." };
-    }
-    const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
-    if (c?.type === "text" && typeof c.text === "string") {
-      return { prompt: await withChatTranscriptContext(msg, c.text) };
-    }
-    if (c?.type === "summary_request") {
-      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
-    }
-    if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
-      const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
-      const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
-      const refs = userMsg?.attachments ?? [];
-      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
-    }
-    const fallback = JSON.stringify(msg.content);
-    return { prompt: await withChatTranscriptContext(msg, fallback) };
-  }
-
-
-
-  function outputContentTypeFor(msg: Message): "summary" | "text" {
-    if (msg.kind === "summary") return "summary";
-    const c = msg.content as { type?: string };
-    return c?.type === "summary_request" ? "summary" : "text";
-  }
-
-  function buildOutputContent(
-    kind: "summary" | "text",
-    entries: AgentLogEntry[],
-  ): Message["content"] | null {
-    if (kind === "summary") {
-      const body = deriveSummaryTextFromLog(entries);
-      if (!body) return null;
-      return { type: "summary", body };
-    }
-    if (entries.length === 0) return null;
-    return { type: "events", log: entries };
-  }
-
-  function errorLogLines(err: unknown): string[] {
-    const message = err instanceof Error ? err.message : String(err);
-    return [
-      "Agent run failed before it could complete.",
-      message,
-    ].filter((line) => line.trim().length > 0);
-  }
+  const derivePromptInputs = (msg: Message) => derivePromptInputsExtern(pool, msg);
 
   async function fireReflectionTask(
     msg: Message,
@@ -577,29 +269,6 @@ export function createRunManager(opts: RunManagerOptions) {
     });
   }
 
-  // Convert the reflection journal into a brief task-run log entry. The prompt
-  // (`reflection-workspace.md`) is the source of truth for output shape — it
-  // asks the model for at most 3 plain bullets. We strip headings/leading
-  // bullet markers, drop blanks, and keep the first few lines verbatim so a
-  // bad model run is visible (and fixable in the prompt) instead of silently
-  // sanitised here.
-  function reflectionOutcomeText(journal: string | null): string {
-    if (journal === null) return "- No activity.";
-    if (journal.trim().length === 0) return "- Empty reflection.";
-
-    const bullets: string[] = [];
-    for (const rawLine of journal.split(/\r?\n/)) {
-      const line = rawLine
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/^[-*]\s+/, "")
-        .trim();
-      if (!line) continue;
-      bullets.push(`- ${line}`);
-      if (bullets.length >= 3) break;
-    }
-    return bullets.length > 0 ? bullets.join("\n") : "- Empty reflection.";
-  }
-
   async function logReflectionOutcome(runId: string, journal: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
     const text = reflectionOutcomeText(journal);
     await onLog({
@@ -633,6 +302,30 @@ export function createRunManager(opts: RunManagerOptions) {
    * or another fire is already in flight (the task lock declined us).
    */
   async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
+    try {
+      return await fireMessageImpl(messageId, fireOptions);
+    } catch (err) {
+      // The inner fireMessageImpl has its own big try/catch that
+      // routes most failures through finalizeExecution + a failed
+      // child message, so the UI sees them. This outer catch covers
+      // pre-claim failures (findById/claimPending throwing a DB
+      // error before the inner try/catch is entered): without it,
+      // the message would be stuck in `pending`/`running` forever
+      // and the user sees an HTTP 201 but no chat feedback. Mark it
+      // failed and emit so the FailedRunBanner ("Try again") renders.
+      log.error({ messageId, err }, "fireMessage outer failure — marking message failed");
+      try {
+        await queries.messages.finalizeExecution(pool, messageId, "failed");
+        const failed = await queries.messages.findById(pool, messageId);
+        if (failed) emit({ type: "message.updated", payload: failed });
+      } catch (fallbackErr) {
+        log.error({ messageId, fallbackErr }, "fireMessage failure-finalize also threw");
+      }
+      throw err;
+    }
+  }
+
+  async function fireMessageImpl(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
     const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
@@ -746,7 +439,14 @@ export function createRunManager(opts: RunManagerOptions) {
 
       const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
       logFile = path.join(logDir, `${runId}.log`);
-      logStream = fs.createWriteStream(logFile, { flags: "a" });
+      // `flags: "w"` so a manual re-fire of a previously-failed
+      // chat/summary message starts with a clean log instead of
+      // appending the prior failure's stderr to the new attempt's
+      // event stream. (Task fires use a fresh task_run child runId so
+      // their log is always brand-new; "w" is equivalent to "a" in
+      // that case.) The resource-retry path already truncates
+      // explicitly mid-fire; this matches that behaviour at the start.
+      logStream = fs.createWriteStream(logFile, { flags: "w" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
@@ -884,37 +584,70 @@ export function createRunManager(opts: RunManagerOptions) {
           billing.runtimeModel === agentFileInput.model
             ? agentFileInput
             : { ...agentFileInput, model: billing.runtimeModel };
+        // Transparent container-gone retry: a reaper, manual `rm -f`, or
+        // some other rare race outside the per-workspace createOrReuse
+        // mutex can leave the sandbox container removed between
+        // acquisition and the first daemon exec. The driver already
+        // self-heals inside `runtimeExecRun`, but the scheduler-level
+        // `createOrReuse` call (used for mounts setup) is unguarded.
+        // Catch the "no such container" / "container … is not running"
+        // shape here and try once more with a clean log slate so the
+        // user just sees a tiny delay rather than a failure banner.
+        const MAX_CONTAINER_GONE_RETRIES = 2;
+        let containerGoneAttempts = 0;
         while (true) {
           if (opts.execRunFn) {
             result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput: runtimeAgentInput, attachments });
           } else {
-            const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
-              ? { containerId: "fake-sandbox", workspaceId }
-              : await createOrReuse(
-                  workspaceId,
-                  workspaceSlug,
-                  home,
-                  billing.providerKeys,
-                  mountPlan,
-                  extraEnv,
-                  workspaceKind,
+            try {
+              const handle: SandboxHandle = process.env.DESK_SANDBOX_DRIVER === "fake"
+                ? { containerId: "fake-sandbox", workspaceId }
+                : await createOrReuse(
+                    workspaceId,
+                    workspaceSlug,
+                    home,
+                    billing.providerKeys,
+                    mountPlan,
+                    extraEnv,
+                    workspaceKind,
+                  );
+              result = await runtimeExecRun(pool, handle, {
+                runId,
+                prompt,
+                home,
+                workspaceId,
+                workspaceSlug,
+                workspaceKind,
+                chatId: msg.chatId,
+                agent: runtimeAgentInput,
+                attachments,
+                providerKeys: billing.providerKeys,
+                extraEnv,
+                mountPlan,
+                opencodeSessionId,
+                onLog: onLogWithStderrCapture,
+              });
+            } catch (err) {
+              const errMsg = (err as Error).message ?? String(err);
+              if (isContainerGoneError(errMsg) && containerGoneAttempts < MAX_CONTAINER_GONE_RETRIES) {
+                containerGoneAttempts++;
+                log.warn(
+                  { runId, attempt: containerGoneAttempts, err: errMsg },
+                  "sandbox container vanished during acquisition; retrying transparently",
                 );
-            result = await runtimeExecRun(pool, handle, {
-              runId,
-              prompt,
-              home,
-              workspaceId,
-              workspaceSlug,
-              workspaceKind,
-              chatId: msg.chatId,
-              agent: runtimeAgentInput,
-              attachments,
-              providerKeys: billing.providerKeys,
-              extraEnv,
-              mountPlan,
-              opencodeSessionId,
-              onLog: onLogWithStderrCapture,
-            });
+                // Reset the per-attempt log so the retry doesn't tail-mix
+                // with the failed acquisition's stderr.
+                await new Promise<void>((resolve) => {
+                  logStream!.once("close", resolve);
+                  logStream!.end();
+                });
+                await fs.promises.truncate(logFile!, 0);
+                logStream = fs.createWriteStream(logFile!, { flags: "a" });
+                stderrCapture = "";
+                continue;
+              }
+              throw err;
+            }
             // Persist the session id after every attempt (not just success):
             // a resource-retry inside the loop should reuse the same session
             // so the model's context across attempts stays consistent.
@@ -943,13 +676,13 @@ export function createRunManager(opts: RunManagerOptions) {
           if (!growth.grew) {
             // Already at the maximum — no point retrying. Fall through to
             // finalise as failed; the user does see the failure in this case.
-            console.warn(
+            log.warn(
               `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
             );
             break;
           }
           attempt++;
-          console.info(
+          log.info(
             `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
               `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
           );
@@ -1020,8 +753,30 @@ export function createRunManager(opts: RunManagerOptions) {
       emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [] };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(`fireMessage ${messageId} failed:`, err);
+      log.error({ messageId, err }, "fireMessage failed");
+      // If the run was preempted before the failure (the user's next
+      // send moved on; `preemptChatRun` already set state='cancelled'),
+      // the failure here is downstream noise — typically the
+      // preempting fire's createOrReuse drift-recreated the container
+      // under us. Don't surface it as a "failed" banner; the cancelled
+      // state is the user-facing outcome. Without this guard, a
+      // preempted turn shows up in the UI with "Agent run failed
+      // before it could complete" even though the user already moved
+      // on with a fresh turn.
+      const preempted = await isAlreadyCancelled(pool, runId);
+      if (preempted) {
+        if (logStream) {
+          await new Promise<void>((resolve) => {
+            logStream!.once("finish", resolve);
+            logStream!.end();
+          });
+        }
+        // finalizeExecution would WHERE-clause out anyway since state
+        // is already 'cancelled', but skip it explicitly so we don't
+        // spend the round-trip. Don't emit a child failure message —
+        // the cancelled state is its own UI affordance.
+        return { fired: true, childIds: [] };
+      }
       for (const line of errorLogLines(err)) {
         await onLog({ runId, seq: 0, kind: "stderr", payload: line });
       }
@@ -1063,14 +818,6 @@ export function createRunManager(opts: RunManagerOptions) {
    * and clear execute_at. Failed one-shot runs clear the missed occurrence but
    * keep the parent task pending so an error does not count as completion.
    */
-  function isUnscheduledTask(task: Message): boolean {
-    // Unscheduled tasks are kanban cards first and execution prompts second.
-    // A completed agent run is history on a task_run child; it must not
-    // silently move the parent card out of Todo/Active regardless of who
-    // authored the parent task.
-    return task.kind === "task" && !task.executeAt && !task.cron;
-  }
-
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
@@ -1132,7 +879,7 @@ export function createRunManager(opts: RunManagerOptions) {
         inFlight++;
         return fireMessage(row.id)
           .catch((err: unknown) => {
-            console.error(`fireMessage ${row.id} failed:`, err);
+            log.error({ messageId: row.id, err }, "fireMessage failed");
           })
           .finally(() => {
             inFlight--;
@@ -1147,91 +894,13 @@ export function createRunManager(opts: RunManagerOptions) {
     return timer;
   }
 
-  /**
-   * Removes sandbox containers for workspaces that have had no
-   * `state='running'` rows and no message activity in the last
-   * `idleMs`. Next fire for that workspace builds a fresh container
-   * at the baseline 512 / 512 MB — so this also serves as the
-   * "scale back to baseline" mechanism, free of charge.
-   *
-   * One SQL query, one `docker ps`, then one `docker rm -f` per
-   * idle workspace. Cheap enough to live alongside the existing
-   * 60 s `pollTimer` without measurable cost.
-   */
-  /**
-   * Returns the set of workspace ids that should keep their sandbox
-   * alive: any workspace with a `state='running'` row, or any message
-   * whose `updated_at` is within `idleMs` of now. Exposed separately
-   * from `sweepIdleSandboxes` so tests can pin down the SQL-side
-   * decision directly without needing a real container engine.
-   */
-  async function getActiveWorkspaceIds(idleMs: number): Promise<Set<string>> {
-    const cutoff = new Date(Date.now() - idleMs).toISOString();
-    // Workspaces with *any* recent activity — running rows, just-fired
-    // pending rows, or just-edited rows — count as active and keep their
-    // sandbox. Joining through chats so we get workspace_id directly.
-    const { rows } = await pool.query<{ workspace_id: string }>(
-      `SELECT DISTINCT c.workspace_id
-       FROM messages m JOIN chats c ON c.id = m.chat_id
-       WHERE m.state = 'running'
-          OR m.updated_at >= ?`,
-      [cutoff],
-    );
-    return new Set(rows.map((r) => r.workspace_id));
-  }
-
-  async function sweepIdleSandboxes(
-    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
-  ): Promise<string[]> {
-    const active = await getActiveWorkspaceIds(idleMs);
-    // Pass `idleMs` as the per-container minimum age so a brand-new
-    // container created in the window between the SQL query and the
-    // `docker ps` can't be reaped — the very next sweep will see its
-    // first message row and treat the workspace as active.
-    return reapIdleSandboxes(active, idleMs);
-  }
-
-  function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
-    const timer = setInterval(() => {
-      void sweepIdleSandboxes().catch((err) => {
-        console.warn("idle sandbox sweep failed:", err);
-      });
-    }, intervalMs);
-    timer.unref();
-    return timer;
-  }
-
-  /**
-   * Soft-tier idle sweep: kill the opencode-serve daemon inside
-   * sandbox containers whose workspace has been quiet for
-   * `softIdleMs` (default 10 min), but keep the container running.
-   * Saves ~400 MB of warm-daemon RSS per sandbox; the next message
-   * pays only the ~2-5 s daemon respawn cost, not a full container
-   * cold-start.
-   *
-   * Distinct from `sweepIdleSandboxes`: that one nukes the container
-   * after a longer quiet window (default 30 min) and is the
-   * scale-back-to-baseline mechanism.
-   */
-  async function sweepIdleDaemons(
-    softIdleMs: number = parseInt(
-      process.env.DESK_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
-      10,
-    ),
-  ): Promise<string[]> {
-    const active = await getActiveWorkspaceIds(softIdleMs);
-    return softReapIdleDaemons(active, softIdleMs);
-  }
-
-  function startSoftIdleDaemonSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
-    const timer = setInterval(() => {
-      void sweepIdleDaemons().catch((err) => {
-        console.warn("soft daemon sweep failed:", err);
-      });
-    }, intervalMs);
-    timer.unref();
-    return timer;
-  }
+  // Sandbox sweep functions live in runs-sandbox-sweep.ts. Bind them to
+  // the closure's pool so callers can use them without re-passing.
+  const getActiveWorkspaceIds = (idleMs: number) => sandboxSweep.getActiveWorkspaceIds(pool, idleMs);
+  const sweepIdleSandboxes = (idleMs?: number) => sandboxSweep.sweepIdleSandboxes(pool, idleMs);
+  const startIdleSweeper = (intervalMs?: number) => sandboxSweep.startIdleSweeper(pool, intervalMs);
+  const sweepIdleDaemons = (softIdleMs?: number) => sandboxSweep.sweepIdleDaemons(pool, softIdleMs);
+  const startSoftIdleDaemonSweeper = (intervalMs?: number) => sandboxSweep.startSoftIdleDaemonSweeper(pool, intervalMs);
   // Note: an earlier draft of this file shipped a stale-run watchdog that
   // cancelled any `state='running'` row whose `started_at` was older than
   // 30 minutes. That was the wrong shape of fix — a single task should be
@@ -1259,214 +928,19 @@ export function createRunManager(opts: RunManagerOptions) {
    * local models keep enough working context and frontier models do not wait
    * until chats become unwieldy. Env overrides remain available for ops.
    */
-  async function scheduleSummary(chatId: string): Promise<void> {
-    await cancelSummaryForChat(chatId);
-    const urgent = await isSummaryBudgetExceeded(chatId);
-    const summaryContext = await summaryRequestDisplayContext(chatId);
-    const executeAt = urgent
-      ? new Date().toISOString()
-      : new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    const messageId = generateId("message");
-    await queries.messages.insert(pool, {
-      id: messageId,
-      chatId,
-      role: "system",
-      content: {
-        type: "summary_request",
-        ...(summaryContext.chatTitle ? { chatTitle: summaryContext.chatTitle } : {}),
-        ...(summaryContext.messagePreview ? { messagePreview: summaryContext.messagePreview } : {}),
-      },
-      state: "pending",
-      kind: "summary",
-      title: summaryContext.title,
-      executeAt,
-    });
-  }
-
-  async function summaryRequestDisplayContext(chatId: string): Promise<{
-    chatTitle?: string;
-    messagePreview?: string;
-    title: string;
-  }> {
-    const chat = await queries.chats.findById(pool, chatId);
-    const chatTitle = chat?.title?.trim() || undefined;
-    const messagePreview = await latestUserMessagePreview(chatId);
-    const titleParts = [chatTitle, messagePreview].filter((part): part is string => !!part);
-    return {
-      chatTitle,
-      messagePreview,
-      title: titleParts.length > 0 ? `Summarize - ${titleParts.join(": ")}` : "Summarize chat",
-    };
-  }
-
-  async function latestUserMessagePreview(chatId: string): Promise<string | undefined> {
-    const { rows } = await pool.query(
-      `SELECT content FROM messages
-       WHERE chat_id = ?
-         AND role = 'user'
-         AND json_extract(content, '$.type') = 'text'
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1`,
-      [chatId],
-    );
-    if (rows.length === 0) return undefined;
-    const raw = rows[0].content;
-    const content = typeof raw === "string" ? JSON.parse(raw) as { text?: unknown } : raw as { text?: unknown };
-    if (typeof content.text !== "string") return undefined;
-    return summarizeMessagePreview(content.text);
-  }
-
-  function summarizeMessagePreview(text: string): string | undefined {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    if (!normalized) return undefined;
-    return normalized.length > 96 ? `${normalized.slice(0, 95).trimEnd()}…` : normalized;
-  }
-
-  function envPositiveInt(name: string): number | null {
-    const fromEnv = Number.parseInt(
-      process.env[name] ?? "",
-      10,
-    );
-    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : null;
-  }
-
-  function summaryTriggerFraction(): number {
-    const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
-    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.15;
-  }
-
-  function summaryTriggerBudget(limits: SummaryModelTokenLimits): number {
-    const explicit = envPositiveInt("DESK_SUMMARY_TRIGGER_TOKENS");
-    if (explicit !== null) return explicit;
-
-    const min = envPositiveInt("DESK_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
-    const max = envPositiveInt("DESK_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
-    const effectiveInputWindow = limits.inputLimit ?? limits.contextWindow;
-    const fractional = Math.floor(effectiveInputWindow * summaryTriggerFraction());
-    const safeUpperBound = Math.floor(effectiveInputWindow * 0.6);
-    return Math.max(1, Math.min(Math.max(fractional, min), max, safeUpperBound));
-  }
-
-  async function chatAgentModel(chatId: string): Promise<string> {
-    const { rows } = await pool.query(
-      `SELECT c.agent_id AS chat_agent_id
-       FROM chats c
-       WHERE c.id = ?`,
-      [chatId],
-    );
-    const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
-    const agent = await queries.agents.findById(pool, agentId as string);
-    return agent?.model ?? "opencode/big-pickle";
-  }
-
-  function normalizeModelLimits(value: number | SummaryModelTokenLimits | null): SummaryModelTokenLimits | null {
-    if (typeof value === "number") {
-      return Number.isFinite(value) && value > 0 ? { contextWindow: value } : null;
-    }
-    if (value === null) return null;
-    if (!Number.isFinite(value.contextWindow) || value.contextWindow <= 0) return null;
-    return {
-      contextWindow: value.contextWindow,
-      ...(value.inputLimit !== undefined && Number.isFinite(value.inputLimit) && value.inputLimit > 0 ? { inputLimit: value.inputLimit } : {}),
-      ...(value.outputLimit !== undefined && Number.isFinite(value.outputLimit) && value.outputLimit > 0 ? { outputLimit: value.outputLimit } : {}),
-    };
-  }
-
-  function modelLimitsFromRef(model: {
-    id: string;
-    provider: string;
-    contextWindow?: number;
-    inputLimit?: number;
-    outputLimit?: number;
-  }): SummaryModelTokenLimits | null {
-    return normalizeModelLimits({
-      contextWindow: model.contextWindow ?? model.inputLimit ?? 0,
-      ...(model.inputLimit !== undefined ? { inputLimit: model.inputLimit } : {}),
-      ...(model.outputLimit !== undefined ? { outputLimit: model.outputLimit } : {}),
-    });
-  }
-
-  async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
-    const fromEnv = envPositiveInt("DESK_SUMMARY_MODEL_CONTEXT_WINDOW");
-    if (fromEnv !== null) return { contextWindow: fromEnv };
-
-    if (opts.summaryModelContextWindowFn) {
-      const resolved = normalizeModelLimits(await opts.summaryModelContextWindowFn(chatId, modelId).catch(() => null));
-      if (resolved !== null) return resolved;
-    }
-
-    const { rows } = await pool.query(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.user_id AS user_id
-       FROM chats c
-       JOIN workspaces w ON w.id = c.workspace_id
-       WHERE c.id = ?`,
-      [chatId],
-    );
-    const row = rows[0];
-    const workspaceId = row?.workspace_id as string | undefined;
-    const workspaceSlug = row?.workspace_path as string | undefined;
-    if (workspaceId && workspaceSlug) {
-      const cacheKey = `${workspaceId}:${row?.user_id ?? ""}`;
-      const cached = modelContextCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        const value = cached.values.get(modelId);
-        if (value !== undefined) return value;
-      }
-      try {
-        const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
-        const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
-        const models = await listModels(workspaceId, workspaceSlug, {
-          providerKeys,
-          env: extraEnv,
-          timeoutMs: 5_000,
-        });
-        const values = new Map<string, SummaryModelTokenLimits>();
-        for (const model of models) {
-          const limits = modelLimitsFromRef(model);
-          if (limits !== null) values.set(model.id, limits);
-        }
-        modelContextCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, values });
-        const value = values.get(modelId);
-        if (value !== undefined) return value;
-      } catch {
-        // Model metadata is best-effort. Scheduling must never fail because the
-        // sandbox or provider key lookup is temporarily unavailable.
-      }
-    }
-
-    // Conservative fallback for unknown/local models when OpenCode metadata is
-    // unavailable: enough room for a useful transcript, much lower than old 60K.
-    return { contextWindow: 60_000 };
-  }
-
-  async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
-    const items = await queries.messages.listAgentContextByChat(pool, chatId);
-    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
-    const tokenized = items
-      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
-      .map((m) => {
-        const formatted = formatMessageForPrompt(m);
-        return formatted ? { role: formatted.role, text: formatted.text } : null;
-      })
-      .filter((m): m is { role: string; text: string } => m !== null);
-    const used = estimateMessagesTokens(tokenized);
-    const modelId = await chatAgentModel(chatId);
-    const limits = await summaryModelTokenLimits(chatId, modelId);
-    const budget = summaryTriggerBudget(limits);
-    return used >= budget;
-  }
-
-  async function cancelSummaryForChat(chatId: string): Promise<void> {
-    await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
-      [chatId],
-    );
-  }
-
-  async function cancelSummary(chatId: string): Promise<void> {
-    await cancelSummaryForChat(chatId);
-  }
+  // Summary scheduling lives in runs-summary.ts. The factory owns the
+  // per-chat model-context cache; we just hold its bound methods here so
+  // the rest of the closure (and the public return surface) can call
+  // them under their old names.
+  const summaryScheduler = createSummaryScheduler({
+    pool,
+    resolveProviderKeys,
+    summaryModelContextWindowFn: opts.summaryModelContextWindowFn,
+    getDefaultAgentId,
+  });
+  const scheduleSummary = summaryScheduler.scheduleSummary;
+  const cancelSummary = summaryScheduler.cancelSummary;
+  const cancelSummaryForChat = summaryScheduler.cancelSummaryForChat;
 
   /** Cancels an in-flight exec: kills the opencode child if possible. */
   async function cancelRun(messageId: string): Promise<void> {
@@ -1477,37 +951,15 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
-   * If the chat's currently-running agent_turn has gone silent (no log
-   * activity for `staleAfterMs`), cancel it so a follow-up user message
-   * can be fired in its place. An active run — one whose opencode is
-   * still emitting events (tokens, tool calls, step boundaries) — is
-   * left untouched; a user follow-up sent while a healthy run is in
-   * flight will create a new agent_turn but won't interrupt the old one.
-   *
-   * The signal is *log mtime*, not wall-clock age of the row. Opencode
-   * writes to the per-message log file on every event via `onLog`, so a
-   * legitimately long-running step (large LLM stream, slow tool, chatty
-   * build) keeps the file growing and is never considered stalled. The
-   * file only stops growing when opencode is genuinely waiting on
-   * something that isn't coming back (deadlocked tool, dropped LLM
-   * connection, internal hang).
-   *
-   * Why this exists: the user noticed chats sitting in `state='running'`
-   * for very long stretches with no reply, and our previous behavior had
-   * no way to recover without a server restart. With this hook called
-   * from the POST /messages route, a follow-up like "Are you stuck?"
-   * unblocks the chat by preempting the hung run, while a follow-up to a
-   * healthy long task does nothing harmful.
+   * Find the chat's currently-running chat-kind agent_turn, if any.
+   * Returns `null` when there is nothing in flight. Filtered to
+   * `kind='chat'` so a scheduled `task_run` in the same chat doesn't
+   * get preempted by an interactive follow-up.
    */
-  async function preemptStalledChatRun(
-    chatId: string,
-    opts: { staleAfterMs?: number } = {},
-  ): Promise<{ preempted: string } | null> {
-    const staleAfterMs = opts.staleAfterMs
-      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
-    // Only consider 'chat'-kind agent_turn rows: scheduled task_runs in the
-    // same chat have their own lifecycle and shouldn't be interrupted by a
-    // chat follow-up.
+  async function findRunningChatTurn(chatId: string): Promise<
+    | { id: string; workspaceSlug: string; startedAt: string | null }
+    | null
+  > {
     const { rows } = await pool.query<{
       id: string;
       workspace_slug: string;
@@ -1527,10 +979,62 @@ export function createRunManager(opts: RunManagerOptions) {
       [chatId],
     );
     if (rows.length === 0) return null;
-    const running = rows[0];
+    return {
+      id: rows[0].id,
+      workspaceSlug: rows[0].workspace_slug,
+      startedAt: rows[0].started_at,
+    };
+  }
+
+  /**
+   * Unconditionally cancel the chat's in-flight agent_turn so a new
+   * user send can fire cleanly. This matches opencode's own client
+   * pattern: opencode itself silently drops the new message's `parts`
+   * if you POST to a busy session, so its bundled TUI/CLI calls
+   * `session.abort(...)` before any new turn. We mirror that here.
+   *
+   * `POST /session/:id/abort` is safe to follow with a fresh send:
+   * opencode preserves session history/messages-on-disk and the new
+   * turn starts cleanly against an `Idle` session. The prior turn's
+   * partial assistant reply is kept on the row (the cancel path
+   * resolves with `Cancelled` after `lastAssistant` is captured).
+   *
+   * Returns the preempted run id, or `null` when nothing was running.
+   */
+  async function preemptChatRun(
+    chatId: string,
+  ): Promise<{ preempted: string } | null> {
+    const running = await findRunningChatTurn(chatId);
+    if (!running) return null;
+    await cancelRun(running.id);
+    return { preempted: running.id };
+  }
+
+  /**
+   * Older, stale-only variant. Kept for diagnostics / scripted recovery
+   * of zombie rows: only cancels when the log file has been silent for
+   * `staleAfterMs`, so a healthy long-running step is never killed by
+   * a periodic sweep. Not wired to the chat-send route any more — that
+   * uses `preemptChatRun` (always-preempt) to match opencode semantics.
+   *
+   * Why we keep it: a follow-up that catches a wedged daemon (e.g. a
+   * deadlocked tool with the row stuck in `running` and no log
+   * activity) can call this explicitly without forcing a preempt
+   * decision on healthy runs. The signal is log mtime — opencode
+   * writes to the per-message log file on every event, so a
+   * legitimately long-running step keeps the file growing.
+   */
+  async function preemptStalledChatRun(
+    chatId: string,
+    opts: { staleAfterMs?: number } = {},
+  ): Promise<{ preempted: string } | null> {
+    const staleAfterMs = opts.staleAfterMs
+      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+    const running = await findRunningChatTurn(chatId);
+    if (!running) return null;
     const logPath = path.join(
       home,
-      running.workspace_slug,
+      running.workspaceSlug,
       ".chats",
       chatId,
       "logs",
@@ -1541,14 +1045,12 @@ export function createRunManager(opts: RunManagerOptions) {
       const stat = await fsp.stat(logPath);
       mtimeMs = stat.mtimeMs;
     } catch {
-      // Deliberately conservative: a missing log file means opencode hasn't
-      // emitted its first event yet, which usually means the run is still
-      // in container-cold-start (entrypoint downloading deps, image pull,
-      // `.deskrc` running). Those legitimately take minutes; preempting
-      // there would abandon valid in-flight work. We only preempt when we
-      // have positive evidence of activity-then-silence — that's the
-      // "opencode wedged" signal. Stuck rows with no log ever are recovered
-      // by `recoverOrphanedRuns` at the requeue cap, not this hook.
+      // Missing log file means opencode hasn't emitted its first event
+      // yet — usually container cold-start (entrypoint downloading
+      // deps, `.deskrc` running). Stale-only mode is conservative:
+      // skip rather than risk killing legitimately-progressing work.
+      // Stuck-with-no-log rows are recovered by `recoverOrphanedRuns`
+      // at the requeue cap.
       return null;
     }
     const ageMs = Date.now() - mtimeMs;
@@ -1557,64 +1059,10 @@ export function createRunManager(opts: RunManagerOptions) {
     return { preempted: running.id };
   }
 
-  /** Pauses a pending scheduled message: transitions state to 'paused'. */
-  async function pauseMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state !== "pending") return msg;
-    const updated = await queries.messages.updateMessage(pool, messageId, { state: "paused" });
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Resumes a non-running message back to 'pending'. For cron tasks without
-   * an execute_at, computes the next run time. Source state can be paused,
-   * cancelled, succeeded, or failed; no-op only if already running or pending.
-   */
-  async function resumeMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state === "pending") return msg;
-    const patch: Parameters<typeof queries.messages.updateMessage>[2] = { state: "pending" };
-    if (msg.cron && !msg.executeAt) {
-      patch.executeAt = computeNextRun(msg.cron);
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, patch);
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Reconciles the execute_at/cron after a PATCH that mutates schedule without
-   * crossing a state boundary. For cron tasks, recomputes the next run time.
-   */
-  async function rescheduleMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state !== "pending") return msg;
-    if (msg.cron) {
-      const nextRun = computeNextRun(msg.cron);
-      const updated = await queries.messages.updateMessage(pool, messageId, { executeAt: nextRun });
-      if (updated) emit({ type: "message.updated", payload: updated });
-      return updated;
-    }
-    const updated = await queries.messages.findById(pool, messageId);
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Cancels a pending scheduled message without deleting it: transitions state
-   * to 'cancelled' so the row stays visible in the chat timeline.
-   */
-  async function cancelScheduledMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    const updated = await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
+  const pauseMessage = (messageId: string) => lifecycle.pauseMessage(pool, emit, messageId);
+  const resumeMessage = (messageId: string) => lifecycle.resumeMessage(pool, emit, messageId);
+  const rescheduleMessage = (messageId: string) => lifecycle.rescheduleMessage(pool, emit, messageId);
+  const cancelScheduledMessage = (messageId: string) => lifecycle.cancelScheduledMessage(pool, emit, messageId);
 
   return {
     fireMessage,
@@ -1627,6 +1075,7 @@ export function createRunManager(opts: RunManagerOptions) {
     getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
+    preemptChatRun,
     preemptStalledChatRun,
     pauseMessage,
     resumeMessage,

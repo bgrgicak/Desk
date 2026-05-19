@@ -22,6 +22,7 @@ import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/schedu
 import {
   auditSandboxMounts,
   buildDaemonEnv,
+  detectEngine,
   killOpencodeDaemonsForOrphans,
   productionReflectWorkspace,
   pruneDriftedContainers,
@@ -37,6 +38,8 @@ import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
 import { ensureVaultPasswordEnv } from "./envFile.js";
 import type { WsEvent } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("api/main");
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const DESK_HOME = resolveDeskHome();
@@ -47,12 +50,76 @@ const DESK_DB_PATH =
   process.env.DESK_DB_PATH
   ?? path.join(DESK_HOME, ".database", "desk.sqlite3");
 
+const PRE_MIGRATION_BACKUP_KEEP = parseInt(
+  process.env.DESK_PRE_MIGRATION_BACKUP_KEEP ?? "10",
+  10,
+);
+
+/**
+ * Snapshot the SQLite DB to ${DESK_HOME}/backups/pre-migration-<ts>.db
+ * before migrations run. Uses the same VACUUM INTO path as the
+ * /internal/backup endpoint — works while the pool holds an exclusive
+ * lock, produces a checkpointed copy. Old snapshots beyond
+ * PRE_MIGRATION_BACKUP_KEEP are deleted, oldest first.
+ *
+ * Skipped silently when the DB is empty (first boot) since VACUUM INTO
+ * needs at least one page to operate on. Errors are logged and the boot
+ * continues — losing the safety net is preferable to refusing to start.
+ */
+async function snapshotBeforeMigrations(
+  pool: ReturnType<typeof createPool>,
+  deskHome: string,
+  dbPath: string,
+): Promise<void> {
+  try {
+    const stat = await fs.stat(dbPath).catch(() => null);
+    if (!stat || stat.size === 0) return; // first boot
+
+    const backupDir = path.join(deskHome, "backups");
+    await fs.mkdir(backupDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const target = path.join(backupDir, `pre-migration-${ts}.db`);
+
+    // VACUUM INTO takes the path as a literal SQL string. SQLite's
+    // single-quote escape covers the normal injection vectors, but a
+    // DESK_HOME containing newlines, NUL bytes or backslashes would
+    // sneak past the escape on certain SQLite versions. Reject those
+    // explicitly so the backup never runs with a path we didn't sanitise.
+    // eslint-disable-next-line no-control-regex -- intentional: rejecting NUL byte injection in path
+    if (/[\u0000\n\r]/.test(target)) {
+      log.warn({ target }, "pre-migration backup skipped: target path contains disallowed characters");
+      return;
+    }
+    pool.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    log.info(`pre-migration backup: ${target}`);
+
+    // Retention: keep only the most-recent N pre-migration-*.db files.
+    const entries = (await fs.readdir(backupDir))
+      .filter((name) => name.startsWith("pre-migration-") && name.endsWith(".db"))
+      .sort(); // ISO timestamps sort lexicographically
+    const stale = entries.slice(0, Math.max(0, entries.length - PRE_MIGRATION_BACKUP_KEEP));
+    for (const name of stale) {
+      await fs.rm(path.join(backupDir, name), { force: true });
+    }
+  } catch (err) {
+    log.warn({ err: (err as Error).message }, "pre-migration backup failed (continuing boot)");
+  }
+}
+
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the
   // tree exists before opening the file (a fresh ~/Desk doesn't have
   // .database yet).
   await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
   const pool = createPool({ path: DESK_DB_PATH });
+
+  // Snapshot the DB before migrations run. Forward-only migrations
+  // can leave the schema wedged if a partial run errors halfway; the
+  // snapshot is the safety net documented in BACKUP.md. Skip on a
+  // truly-empty file (first boot) to avoid surfacing a "VACUUM INTO
+  // requires content" error during install. Retention is bounded by
+  // DESK_PRE_MIGRATION_BACKUP_KEEP (default 10).
+  await snapshotBeforeMigrations(pool, DESK_HOME, DESK_DB_PATH);
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
@@ -62,13 +129,11 @@ async function main(): Promise<void> {
   // Boot-time visibility for the on-disk root. A silent split between this
   // value and the bind source the runtime computes once dropped every user
   // upload into a parallel tree.
-  // eslint-disable-next-line no-console
-  console.log(
+  log.info(
     `desk-server DESK_HOME=${DESK_HOME} (source=${process.env.DESK_HOME ? "env" : process.env.HOME ? "$HOME" : "fallback"})`,
   );
   if (!process.env.DESK_HOME) {
-    // eslint-disable-next-line no-console
-    console.warn(
+    log.warn(
       "DESK_HOME is not set explicitly. Falling back to $HOME; " +
         "set DESK_HOME to pin the on-disk root.",
     );
@@ -79,8 +144,7 @@ async function main(): Promise<void> {
   // nothing once the legacy parent is gone.
   const wsMigration = await migrateLegacyWorkspaceLayout(DESK_HOME);
   if (wsMigration.migrated > 0 || wsMigration.conflicts.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
+    log.info(
       `workspace layout migration: migrated=${wsMigration.migrated} ` +
         `skipped=${wsMigration.skipped} conflicts=${JSON.stringify(wsMigration.conflicts)}`,
     );
@@ -100,8 +164,7 @@ async function main(): Promise<void> {
   if (!hubAutoCreateDisabled) {
     await ensureHubsForAllUsers(pool, DESK_HOME);
   } else {
-    // eslint-disable-next-line no-console
-    console.log("hub auto-create: disabled via DESK_HUB_AUTO_CREATE=off");
+    log.info("hub auto-create: disabled via DESK_HUB_AUTO_CREATE=off");
   }
 
   // Ensure every existing workspace has its on-disk tree, so a server
@@ -130,8 +193,7 @@ async function main(): Promise<void> {
     const killResults = await killOpencodeDaemonsForOrphans(workspaceIds);
     const actuallyKilled = killResults.filter((r: { killed: boolean }) => r.killed).length;
     if (actuallyKilled > 0) {
-      // eslint-disable-next-line no-console
-      console.log(
+      log.info(
         `killed orphaned opencode-serve daemon in ${actuallyKilled}/${workspaceIds.length} workspace(s) before requeue`,
       );
     }
@@ -144,8 +206,7 @@ async function main(): Promise<void> {
   const orphaned = await queries.messages.recoverOrphanedRuns(pool);
   const totalOrphaned = orphaned.requeued.length + orphaned.failed;
   if (totalOrphaned > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
+    log.info(
       `recovered ${totalOrphaned} orphaned message(s): ` +
       `${orphaned.requeued.length} re-queued, ${orphaned.failed} failed`,
     );
@@ -155,8 +216,7 @@ async function main(): Promise<void> {
   // the server was down.
   const reconciled = await reconcileArtifactRefs(pool, DESK_HOME);
   if (reconciled.checked > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
+    log.info(
       `artifactRef reconcile: checked=${reconciled.checked} repaired=${reconciled.repaired} missing=${reconciled.missing}`,
     );
   }
@@ -169,17 +229,47 @@ async function main(): Promise<void> {
     try {
       const res = await enforceLogRetention(DESK_HOME, LOG_RETENTION_FILES);
       if (res.evicted > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`log retention: scanned=${res.scanned} evicted=${res.evicted}`);
+        log.info(`log retention: scanned=${res.scanned} evicted=${res.evicted}`);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("log retention failed:", err);
+      log.error({ err }, "log retention failed");
     }
   };
   await runRetention();
   const retentionTimer = setInterval(() => { void runRetention(); }, LOG_RETENTION_INTERVAL_MS);
   retentionTimer.unref();
+
+  // Provider-key audit log retention. The table records every read /
+  // write / delete touching a user's provider keys (see SECURITY.md)
+  // and grows unbounded otherwise. 90-day default rolling window;
+  // operators can tune via DESK_KEY_ACCESS_LOG_RETENTION_DAYS.
+  const KEY_LOG_RETENTION_DAYS = parseInt(
+    process.env.DESK_KEY_ACCESS_LOG_RETENTION_DAYS ?? "90",
+    10,
+  );
+  const KEY_LOG_REAPER_INTERVAL_MS = parseInt(
+    process.env.DESK_KEY_ACCESS_LOG_REAPER_INTERVAL_MS ?? "86400000", // daily
+    10,
+  );
+  const runKeyAccessLogReaper = async (): Promise<void> => {
+    try {
+      const removed = await queries.providerKeyAccessLog.pruneKeyAccessLog(
+        pool,
+        KEY_LOG_RETENTION_DAYS,
+      );
+      if (removed > 0) {
+        log.info(`key-access-log reaper: pruned ${removed} entries older than ${KEY_LOG_RETENTION_DAYS} days`);
+      }
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, "key-access-log reaper failed");
+    }
+  };
+  await runKeyAccessLogReaper();
+  const keyAccessLogReaperTimer = setInterval(
+    () => { void runKeyAccessLogReaper(); },
+    KEY_LOG_REAPER_INTERVAL_MS,
+  );
+  keyAccessLogReaperTimer.unref();
 
   // Broadcast targets the single v1 user.
   const { rows } = await pool.query<{ id: string }>(
@@ -196,8 +286,7 @@ async function main(): Promise<void> {
     const vaultPassword = await ensureVaultPasswordEnv({
       deskHome: DESK_HOME,
       log: (message) => {
-        // eslint-disable-next-line no-console
-        console.log(message);
+        log.info(message);
       },
     });
     const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
@@ -206,18 +295,15 @@ async function main(): Promise<void> {
       try {
         if (!exists) {
           await vault.setup(user.id, vaultPassword);
-          // eslint-disable-next-line no-console
-          console.log(`vault: auto-setup for user ${user.id} via DESK_VAULT_PASSWORD`);
+          log.info(`vault: auto-setup for user ${user.id} via DESK_VAULT_PASSWORD`);
         } else {
           await vault.unlock(user.id, vaultPassword);
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(`vault: auto-unlock failed for user ${user.id}:`, err);
+        log.warn({ userId: user.id, err }, "vault: auto-unlock failed");
       }
     }
-    // eslint-disable-next-line no-console
-    console.log("vault: auto-unlocked via DESK_VAULT_PASSWORD");
+    log.info("vault: auto-unlocked via DESK_VAULT_PASSWORD");
   }
 
   const runManager = createRunManager({
@@ -283,8 +369,7 @@ async function main(): Promise<void> {
     });
   }
   if (reflectionDisabled) {
-    // eslint-disable-next-line no-console
-    console.log("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
+    log.info("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
   }
 
   const server = createApp({
@@ -311,16 +396,14 @@ async function main(): Promise<void> {
       // nothing cleared) is exactly where bugs hide. We want to see one
       // log line per connection mutation so the operator can correlate
       // "I saved the GitHub key" with the refresh outcome.
-      // eslint-disable-next-line no-console
-      console.log(
+      log.info(
         `connection refresh user=${userId} ws=${workspaceId ?? "*"}: ` +
         `restarted=${result.restarted.length} skippedActive=${result.skippedActive.length} ` +
         `skippedNoContainer=${result.skippedNoContainer.length} failed=${result.failed.length} ` +
         `clearedSessions=${result.clearedSessions.length}`,
       );
       for (const f of result.failed) {
-        // eslint-disable-next-line no-console
-        console.warn(`connection refresh: workspace ${f.workspaceId} failed: ${f.error}`);
+        log.warn(`connection refresh: workspace ${f.workspaceId} failed: ${f.error}`);
       }
     },
   });
@@ -329,13 +412,26 @@ async function main(): Promise<void> {
     server.listen(PORT, "0.0.0.0", resolve);
   });
 
-  // eslint-disable-next-line no-console
-  console.log(`desk-server listening on :${PORT}`);
+  log.info(`desk-server listening on :${PORT}`);
+
+  // Probe the container engine once at startup and log the choice so
+  // operators don't have to re-read DESK_CONTAINER_ENGINE / docker info
+  // to know which path is live. Best-effort: a host without an engine
+  // can still serve the API; sandbox-launching routes will surface the
+  // failure with the right error code at request time.
+  try {
+    const engine = await detectEngine();
+    const override = process.env.DESK_CONTAINER_ENGINE
+      ? ` (pinned via DESK_CONTAINER_ENGINE)`
+      : ` (autodetected)`;
+    log.info(`sandbox driver: ${engine.name}${override}`);
+  } catch (err) {
+    log.warn(`sandbox driver: unavailable — ${(err as Error).message}`);
+  }
 
   void auditSandboxMounts(DESK_HOME).then(async (drift) => {
     for (const d of drift) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      log.warn(
         `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
           `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
           `Removing stale container.`,
@@ -344,16 +440,43 @@ async function main(): Promise<void> {
     await pruneDriftedContainers(drift);
   });
 
+  // Graceful shutdown: stop the accept queue, drain in-flight requests
+  // within a bounded grace period, drop WS clients, close the DB pool.
+  // If a request hangs past SHUTDOWN_GRACE_MS we force-exit so a stuck
+  // upstream call can never block restart.
+  const SHUTDOWN_GRACE_MS = parseInt(process.env.DESK_SHUTDOWN_GRACE_MS ?? "30000", 10);
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    // eslint-disable-next-line no-console
-    console.log(`received ${signal}, shutting down`);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`received ${signal}, shutting down (grace ${SHUTDOWN_GRACE_MS}ms)`);
     clearInterval(pollTimer);
     clearInterval(idleSweepTimer);
     clearInterval(softIdleSweepTimer);
     clearInterval(retentionTimer);
+    clearInterval(keyAccessLogReaperTimer);
     clearConnections();
-    server.close();
-    await pool.end();
+
+    // Force-exit watchdog. We'd rather lose a few hung requests than
+    // leave the process zombie-running and confuse process supervisors.
+    const force = setTimeout(() => {
+      log.error(`shutdown grace expired after ${SHUTDOWN_GRACE_MS}ms — forcing exit`);
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    force.unref();
+
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Node ≥18.2: hang up any still-open keep-alive connections so
+      // server.close() actually fires its callback instead of waiting
+      // forever on idle clients.
+      server.closeIdleConnections?.();
+    });
+    try {
+      await pool.end();
+    } catch (err) {
+      log.warn({ err }, "pool.end() during shutdown");
+    }
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
@@ -361,7 +484,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error("desk-server fatal error:", err);
+  log.error({ err }, "desk-server fatal error");
   process.exit(1);
 });

@@ -85,7 +85,7 @@ describe("WorkspaceSchema", () => {
 });
 
 describe("ChatSchema", () => {
-  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", updatedAt: now, awaitingUser: false, unread: true };
+  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", createdAt: now, updatedAt: now, awaitingUser: false, unread: true };
 
   it("parses a valid chat", () => {
     expect(ChatSchema.parse(valid)).toEqual(valid);

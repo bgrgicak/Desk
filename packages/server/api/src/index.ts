@@ -1,4 +1,3 @@
-export { createServer } from "./server.js";
 export { createApp } from "./app.js";
 export type { AppOptions } from "./app.js";
 export { errorToStatus } from "./errors.js";

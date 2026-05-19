@@ -57,6 +57,7 @@ describe('task selectors', () => {
       description: '',
       icon: '',
       color: '',
+      kind: 'project',
       createdAt: '2099-05-07T10:00:00.000Z',
     }])
 
@@ -82,6 +83,7 @@ describe('task selectors', () => {
       workspaceId: 'wks_test',
       agentId: 'agent_test',
       title: 'Launch planning',
+      createdAt: '2099-05-07T10:00:00.000Z',
       updatedAt: '2099-05-07T10:00:00.000Z',
       awaitingUser: false,
       unread: false,

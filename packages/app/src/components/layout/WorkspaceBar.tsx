@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Reorder } from 'framer-motion'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   Inbox, Sun, Moon, Search, Sparkles,
   HelpCircle, LogOut, Monitor, Check, Settings2,
@@ -9,6 +10,7 @@ import {
 import { useTheme } from '@/hooks/use-theme'
 import { initialsOf } from '@/lib/initials'
 import { useAvatarUrl } from '@/hooks/use-avatar'
+import { extractApiError } from '@/lib/api-error'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import {
   ContextMenu,
@@ -186,8 +188,7 @@ export function WorkspaceBar({
     try {
       await deleteWorkspaceMutation(wsId).unwrap()
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('delete workspace failed:', err)
+      toast.error('Failed to delete workspace', { description: extractApiError(err) })
     }
   }
 
@@ -481,8 +482,7 @@ export function WorkspaceBar({
                       },
                     }).unwrap()
                   } catch (err) {
-                    // eslint-disable-next-line no-console
-                    console.error('patch workspace failed:', err)
+                    toast.error('Failed to update workspace', { description: extractApiError(err) })
                   }
                   setCreateOpen(false)
                   resetForm()
@@ -499,8 +499,7 @@ export function WorkspaceBar({
                   resetForm()
                   onSelectWorkspace(created.id)
                 } catch (err) {
-                  // eslint-disable-next-line no-console
-                  console.error('create workspace failed:', err)
+                  toast.error('Failed to create workspace', { description: extractApiError(err) })
                 }
               }}
             >

@@ -28,6 +28,8 @@ import {
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
 import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/docker");
 
 import type { WorkspaceKind } from "@agent-desk/shared";
 
@@ -176,9 +178,22 @@ export function classifyResourceError(
  */
 const growthInFlight = new Map<string, Promise<GrowthResult>>();
 
+/**
+ * Per-workspace serial queue around `createOrReuse`. Two rapid chat
+ * sends to the same workspace hit `createOrReuse` within milliseconds
+ * of each other and otherwise race on inspect/create/remove — one call
+ * can remove the container the other is mid-polling, surfacing as
+ * "Sandbox entrypoint check: container … is no longer present" on
+ * what looks to the user like a brand-new chat. Chaining each call
+ * after the previous one for the same workspace eliminates the race;
+ * different workspaces remain independent.
+ */
+const createOrReuseInFlight = new Map<string, Promise<SandboxHandle>>();
+
 /** Test-only: clears the in-flight-growth lock and any related state. */
 export function _resetGrowthStateForTest(): void {
   growthInFlight.clear();
+  createOrReuseInFlight.clear();
 }
 
 export interface GrowthResult {
@@ -230,7 +245,7 @@ export async function growSandboxForResourceError(
       }
       const next = Math.min(info.pidsLimit * 2, SANDBOX_MAX_PIDS);
       const ok = await engine.update(containerName, { pidsLimit: next });
-      console.info(
+      log.info(
         `sandbox ${containerName} grew pids ${info.pidsLimit} → ${next} after resource failure (engine accepted=${ok})`,
       );
       return { grew: ok, dimension: "pids", pidsLimit: ok ? next : info.pidsLimit, memoryBytes: info.memoryBytes, atMax: false };
@@ -241,7 +256,7 @@ export async function growSandboxForResourceError(
     }
     const nextMem = Math.min(info.memoryBytes * 2, SANDBOX_MAX_MEMORY_BYTES);
     const ok = await engine.update(containerName, { memoryBytes: nextMem });
-    console.info(
+    log.info(
       `sandbox ${containerName} grew memory ${info.memoryBytes} → ${nextMem} after resource failure (engine accepted=${ok})`,
     );
     return { grew: ok, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: ok ? nextMem : info.memoryBytes, atMax: false };
@@ -270,7 +285,7 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
       process.stderr.write(`pull ${image}: ${line}\n`);
     });
   } catch (err) {
-    console.warn(
+    log.warn(
       `${image} image not found locally and pull failed (${(err as Error).message}). ` +
         "If this is a monorepo dev checkout, build the image from " +
         "packages/server/runtime/Dockerfile.sandbox.",
@@ -308,6 +323,46 @@ export async function createOrReuse(
   extraEnv?: Record<string, string>,
   workspaceKind: WorkspaceKind = "project",
 ): Promise<SandboxHandle> {
+  // Chain this call after any in-flight createOrReuse for the same
+  // workspace. Without this, a rapid second chat send finds the first
+  // call mid-`engine.create` / mid-`waitForEntrypointReady` and races
+  // its inspect/create/remove — the loser ends up exec'ing against a
+  // container the winner just removed, surfacing as the user-visible
+  // "container … is no longer present" failure. See PR #125's "known
+  // follow-up".
+  const containerName = `desk-sandbox-${workspaceId}`;
+  const prev = createOrReuseInFlight.get(containerName);
+  const work = (async () => {
+    if (prev) await prev.catch(() => {});
+    return createOrReuseImpl(
+      workspaceId,
+      workspaceSlug,
+      home,
+      providerKeys,
+      mountPlan,
+      extraEnv,
+      workspaceKind,
+    );
+  })();
+  createOrReuseInFlight.set(containerName, work);
+  try {
+    return await work;
+  } finally {
+    if (createOrReuseInFlight.get(containerName) === work) {
+      createOrReuseInFlight.delete(containerName);
+    }
+  }
+}
+
+async function createOrReuseImpl(
+  workspaceId: string,
+  workspaceSlug: string,
+  home?: string,
+  providerKeys?: Record<string, string>,
+  mountPlan?: MountPlan,
+  extraEnv?: Record<string, string>,
+  workspaceKind: WorkspaceKind = "project",
+): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
   const expectedResourceProfile = resourceProfileString();
@@ -330,17 +385,41 @@ export async function createOrReuse(
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    let containerAlreadyGone = false;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
-      await waitForEntrypointReady(engine, existing.id);
-      // Note: we never resize on plain reuse. Sandboxes start at the
-      // baseline and only grow when a run actually fails with a
-      // resource-shaped error — see `growSandboxForResourceError`. A
-      // re-use that *would* benefit from a larger sandbox surfaces that
-      // need by failing first, which is the correct signal.
-      return { containerId: existing.id, workspaceId };
+      try {
+        await waitForEntrypointReady(engine, existing.id);
+        // Note: we never resize on plain reuse. Sandboxes start at the
+        // baseline and only grow when a run actually fails with a
+        // resource-shaped error — see `growSandboxForResourceError`. A
+        // re-use that *would* benefit from a larger sandbox surfaces that
+        // need by failing first, which is the correct signal.
+        return { containerId: existing.id, workspaceId };
+      } catch (err) {
+        // The container can vanish between inspect() above and the first
+        // exec poll — reaper, drift recreate elsewhere, parallel fire's
+        // remove, or a manual rm. waitForEntrypointReady's fast-bail
+        // surfaces that as a "no longer present" error. Falling through
+        // to the create-fresh path below recovers in seconds rather than
+        // making every caller paper over the race with its own retry.
+        if (!/no longer present|no such (container|object)/i.test(
+          (err as Error).message ?? "",
+        )) {
+          throw err;
+        }
+        containerAlreadyGone = true;
+      }
     }
-    await engine.remove(containerName, true);
+    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
+    // confirmed the container is gone. Under a parallel fire, the name
+    // may already point at the winner's brand-new container — issuing
+    // `docker rm -f <name>` here would clobber it. The drift-recreate
+    // path still needs the remove because the existing container is
+    // alive but no longer matches our expected layout.
+    if (!containerAlreadyGone) {
+      await engine.remove(containerName, true);
+    }
   }
 
   // Pre-create every source dir and nested target mount point so the runtime
@@ -351,6 +430,22 @@ export async function createOrReuse(
   await ensureNestedMountTargets(plan);
 
   try {
+    // Egress policy. Default is "bridge" (full outbound) because the
+    // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
+    // opencode), GitHub for git operations, and tool registries.
+    // Operators running a paranoid deployment can set
+    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
+    // and any tooling that downloads from the network, but keeps the
+    // sandbox effective for purely-local workloads (file editing,
+    // text-only chats with a pre-cached model).
+    //
+    // A full domain-based allowlist would require a sidecar HTTP
+    // proxy (squid / mitmproxy in transparent mode) and is out of
+    // scope for v1; the two-option knob ("unrestricted" vs "none")
+    // covers the realistic deployment matrix.
+    const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
+    const network = egressMode === "none" ? "none" : "bridge";
+
     const containerId = await engine.create({
       name: containerName,
       image: sandboxImage(workspaceKind),
@@ -367,12 +462,14 @@ export async function createOrReuse(
         [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
-      network: "bridge",
+      network,
       // host-gateway lets the in-sandbox `desk` CLI reach the host-side
       // desk-server REST API as `host.docker.internal`. Without it the
       // bridge default has no DNS name for the host, so the agent has no
-      // route back to /sandbox/messages.
-      extraHosts: ["host.docker.internal:host-gateway"],
+      // route back to /sandbox/messages. `--network none` drops this
+      // capability; an operator who picks "none" accepts losing in-
+      // sandbox host callbacks.
+      extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
       pidsLimit: SANDBOX_BASELINE_PIDS,
       memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,
@@ -421,8 +518,12 @@ export async function createOrReuse(
   }
 }
 
-async function waitForEntrypointReady(engine: Engine, containerId: string): Promise<void> {
-  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
+export async function waitForEntrypointReady(
+  engine: Engine,
+  containerId: string,
+  timeoutMs: number = SANDBOX_READY_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let lastStderr = "";
   while (Date.now() < deadline) {
     const handle = await engine.exec({
@@ -435,11 +536,23 @@ async function waitForEntrypointReady(engine: Engine, containerId: string): Prom
     const exitCode = await handle.wait();
     if (exitCode === 0) return;
     lastStderr = Buffer.concat(stderr).toString("utf8");
+    // If the container has been removed underneath us (drift recreate,
+    // idle sweep, parallel fire's createOrReuse race, manual rm -f),
+    // every subsequent `docker exec` will fail with "No such container"
+    // until the 5-minute deadline. Bail immediately so the caller's
+    // single-shot re-acquire-and-retry path (see driver.ts:329-359) can
+    // rebuild the sandbox in seconds rather than freezing the chat for
+    // five minutes. The string we throw must match `isContainerGoneError`.
+    if (/no such (container|object)/i.test(lastStderr)) {
+      throw new Error(
+        `Sandbox entrypoint check: container ${containerId} is no longer present: ${lastStderr.trim()}`,
+      );
+    }
     await delay(250);
   }
 
   throw new Error(
-    `Sandbox entrypoint did not become ready within ${SANDBOX_READY_TIMEOUT_MS}ms${lastStderr ? `: ${lastStderr}` : ""}`,
+    `Sandbox entrypoint did not become ready within ${timeoutMs}ms${lastStderr ? `: ${lastStderr}` : ""}`,
   );
 }
 
@@ -774,9 +887,9 @@ export async function reapIdleSandboxes(
     try {
       await engine.remove(c.name, true);
       removed.push(c.name);
-      console.info(`reaped idle sandbox ${c.name}`);
+      log.info(`reaped idle sandbox ${c.name}`);
     } catch (err) {
-      console.warn(`failed to reap ${c.name}:`, (err as Error).message);
+      log.warn({ container: c.name, err: (err as Error).message }, "failed to reap");
     }
   }
   return removed;
@@ -837,7 +950,7 @@ export async function softReapIdleDaemons(
       invalidateOpencodeServerCache(info.id);
       killed.push(c.name);
     } catch (err) {
-      console.warn(`soft-reap failed for ${c.name}:`, (err as Error).message);
+      log.warn({ container: c.name, err: (err as Error).message }, "soft-reap failed");
     }
   }
   return killed;

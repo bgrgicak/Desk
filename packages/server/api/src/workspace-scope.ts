@@ -161,7 +161,7 @@ export async function requireReadablePathInWorkspace(
   pool: Pool,
   userId: string,
   relPath: string,
-  workspaceId: string,
+  _workspaceId: string,
 ): Promise<void> {
   const att = relPath.match(CHAT_ATTACHMENT_PATTERN);
   if (att) {

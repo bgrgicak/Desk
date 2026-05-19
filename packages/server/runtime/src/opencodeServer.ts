@@ -21,6 +21,8 @@ import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Engine } from "./engine.js";
 import { SANDBOX_HOME } from "./mounts.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/opencodeServer");
 
 /** Container-internal port the daemon binds to. Published to host at an auto-assigned port via `-p`. */
 export const OPENCODE_SERVE_CONTAINER_PORT = 9105;
@@ -180,8 +182,7 @@ export async function ensureOpencodeServer(
           const nextKeys = populatedKeys(opts.env);
           const added = nextKeys.filter((k) => !live.populatedEnvKeys.includes(k));
           const removed = live.populatedEnvKeys.filter((k) => !nextKeys.includes(k));
-          // eslint-disable-next-line no-console
-          console.log(
+          log.info(
             `opencode-serve: env changed for container ${opts.containerId}, respawning daemon ` +
               `(added: ${added.join(",") || "-"}; removed: ${removed.join(",") || "-"})`,
           );
@@ -367,10 +368,9 @@ async function startOpencodeServer(
   // accumulate over time.
   await wipeDaemonAuthStore(engine, opts.containerId, signal).catch((err: unknown) => {
     if (isAbortError(err)) throw err;
-    // eslint-disable-next-line no-console
-    console.warn(
-      `opencode-serve: failed to wipe persistent auth store for ${opts.containerId}:`,
-      (err as Error)?.message ?? err,
+    log.warn(
+      { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+      "opencode-serve: failed to wipe persistent auth store",
     );
   });
   signal?.throwIfAborted();
@@ -453,10 +453,9 @@ async function startOpencodeServer(
   if (opts.env.OPENCODE_AUTH_CONTENT) {
     await registerAuthBlobs(url, password, opts.env.OPENCODE_AUTH_CONTENT, signal).catch((err) => {
       if (isAbortError(err)) throw err;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `opencode-serve: failed to register OPENCODE_AUTH_CONTENT for ${opts.containerId}:`,
-        (err as Error)?.message ?? err,
+      log.warn(
+        { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+        "opencode-serve: failed to register OPENCODE_AUTH_CONTENT",
       );
     });
   }
@@ -470,10 +469,9 @@ async function startOpencodeServer(
   // is fine because we only run this when the key is absent).
   if (!opts.env.OPENCODE_API_KEY) {
     await registerAuthBlobs(url, password, JSON.stringify({ opencode: { type: "api", key: "" } })).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `opencode-serve: failed to register opencode free-tier for ${opts.containerId}:`,
-        (err as Error)?.message ?? err,
+      log.warn(
+        { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+        "opencode-serve: failed to register opencode free-tier",
       );
     });
   }
@@ -527,8 +525,7 @@ async function registerAuthBlobs(
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
-      // eslint-disable-next-line no-console
-      console.warn(
+      log.warn(
         `opencode-serve: PUT /auth/${providerID} returned ${r.status}: ${body.slice(0, 200)}`,
       );
     }

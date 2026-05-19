@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { configureStore } from '@reduxjs/toolkit'
-import { applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
+import { __flushWsBatchForTest, applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
 import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed } from '../slices/derivedSlice'
 import { api } from '../api'
 
@@ -28,6 +28,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
         items: [{
           id: 'msg_turn', chatId: 'cht_1', role: 'system', state: 'running',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_user' },
           createdAt: new Date().toISOString(),
         }],
@@ -41,6 +42,7 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'bash' } }),
         },
       }, 'cht_1', store.getState)
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
       expect(entry.data?.items[0].progressLog).toEqual([
@@ -62,10 +64,15 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'read' } }),
         },
       }, 'cht_1', store.getState)
+      // Drain the rAF batch — without this the entry sits in the per-frame
+      // buffer and never reaches pendingProgressLogByMessageId, so the
+      // subsequent cache hydration has nothing to merge.
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
         items: [{
           id: 'msg_turn_late_cache', chatId: 'cht_1', role: 'system', state: 'running',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_user' },
           createdAt: new Date().toISOString(),
         }],
@@ -139,6 +146,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_1', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello' },
           createdAt: new Date().toISOString(),
         },
@@ -159,6 +167,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_2', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_1' },
           createdAt: new Date().toISOString(),
         },
@@ -181,6 +190,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_3', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'summary', body: '# Summary' },
           createdAt: new Date().toISOString(),
         },
@@ -201,6 +211,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_ar', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'artifactRef', path: 'artifacts/test.md', name: 'test.md' },
           createdAt: new Date().toISOString(),
         },
@@ -242,6 +253,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_vc', chatId: 'cht_viewed', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello from agent' },
           createdAt: new Date().toISOString(),
         },
@@ -262,6 +274,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_nv', chatId: 'cht_other', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello from agent' },
           createdAt: new Date().toISOString(),
         },
@@ -285,6 +298,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_error', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -318,6 +332,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -343,6 +358,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -371,7 +387,7 @@ describe('applyEventToCache', () => {
         applyEventToCache(dispatch, {
           type: 'message.appended',
           payload: {
-            id: 'msg_qm', chatId: 'cht_viewed', role: 'agent',
+            id: 'msg_qm', chatId: 'cht_viewed', role: 'agent', kind: 'chat',
             content: { type: 'events', log: [{ kind: 'stderr', line: 'hi' }] },
             createdAt: new Date().toISOString(),
           },
@@ -405,11 +421,13 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Viewed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: false,
         },
         {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Other',
+          createdAt: '2099-01-01T00:00:00.000Z',
           updatedAt: '2099-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: false,
         },
@@ -422,6 +440,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_vc_bump', chatId: 'cht_viewed', role: 'user',
+          kind: 'chat',
           content: { type: 'text', text: 'push me up' },
           createdAt: messageCreatedAt,
         },
@@ -447,6 +466,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -456,6 +476,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_retry', chatId: 'cht_failed', role: 'user',
+          kind: 'chat',
           content: { type: 'text', text: 'try again' },
           createdAt: '2026-01-01T00:01:00.000Z',
         },
@@ -474,6 +495,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -483,6 +505,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_turn', chatId: 'cht_failed', role: 'system', state: 'running',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_retry' },
           createdAt: '2026-01-01T00:01:00.000Z',
         },
@@ -501,6 +524,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -516,6 +540,9 @@ describe('applyEventToCache', () => {
         type: 'message.streaming',
         payload: { chatId: 'cht_failed', messageId: 'msg_agent', delta: 'hello' },
       }, null, store.getState)
+      // Streaming deltas are coalesced per animation frame to avoid Redux
+      // thrash. The flush helper drives that drain synchronously for tests.
+      __flushWsBatchForTest(dispatch, store.getState)
 
       expect(dispatched).toContainEqual(markChatRunning('cht_failed'))
       const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
@@ -536,7 +563,7 @@ describe('applyEventToCache', () => {
           queries: {
             'getChats({"workspaceId":"wks_1"})': {
               data: [
-                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', updatedAt: new Date().toISOString(), awaitingUser: false },
+                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), awaitingUser: false },
               ],
             },
           },
@@ -547,7 +574,7 @@ describe('applyEventToCache', () => {
         applyEventToCache(dispatch, {
           type: 'message.appended',
           payload: {
-            id: 'msg_gs', chatId: 'cht_viewed', role: 'agent',
+            id: 'msg_gs', chatId: 'cht_viewed', role: 'agent', kind: 'chat',
             content: { type: 'events', log: [{ kind: 'event', event: { type: 'text', part: { text: 'hi' } } }] },
             createdAt: new Date().toISOString(),
           },
@@ -572,6 +599,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_4', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'summary_request' },
           createdAt: new Date().toISOString(),
         },
@@ -594,7 +622,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -619,7 +648,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -639,7 +669,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other', updatedAt: new Date().toISOString(),
+          title: 'Other', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -660,7 +691,8 @@ describe('applyEventToCache', () => {
           type: 'chat.updated',
           payload: {
             id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-            title: 'Test', updatedAt: new Date().toISOString(),
+            title: 'Test', createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
             awaitingUser: false, unread: false,
           },
         }, 'cht_viewed')
@@ -679,7 +711,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other Chat', updatedAt: new Date().toISOString(),
+          title: 'Other Chat', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -698,6 +731,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_at1', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_u1' },
           state: 'pending',
           createdAt: new Date().toISOString(),
@@ -715,6 +749,7 @@ describe('applyEventToCache', () => {
         type: 'message.updated',
         payload: {
           id: 'msg_at1', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_u1' },
           state: 'running',
           createdAt: new Date().toISOString(),
@@ -732,6 +767,7 @@ describe('applyEventToCache', () => {
         type: 'message.updated',
         payload: {
           id: 'msg_at1', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_u1' },
           state: 'succeeded',
           createdAt: new Date().toISOString(),
@@ -749,6 +785,7 @@ describe('applyEventToCache', () => {
         type: 'message.updated',
         payload: {
           id: 'msg_at1', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_u1' },
           state: 'failed',
           createdAt: new Date().toISOString(),
@@ -766,6 +803,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_t1', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello' },
           state: 'succeeded',
           createdAt: new Date().toISOString(),

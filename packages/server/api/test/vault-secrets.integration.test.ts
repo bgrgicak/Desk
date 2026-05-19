@@ -168,7 +168,9 @@ describe("vault setup + unlock + status", () => {
   });
 
   it("setup again fails because the file already exists", async () => {
-    const res = await request("POST", "/vault/setup", token, { password: "anything" });
+    // Use a policy-compliant password so we exercise the conflict path,
+    // not the password-policy validation that fires first.
+    const res = await request("POST", "/vault/setup", token, { password: "another-strong-passphrase" });
     expect(res.status).toBe(409);
   });
 

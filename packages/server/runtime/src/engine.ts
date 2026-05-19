@@ -138,10 +138,11 @@ export interface ExecSpec {
   cwd?: string;
 }
 
-export interface ExecDetachedSpec extends ExecSpec {
-  // Same shape — semantic difference is the engine returns once the engine
-  // CLI has handed off, not when the in-container process exits.
-}
+// Same shape as ExecSpec — semantic difference is the engine returns
+// once the engine CLI has handed off, not when the in-container process
+// exits. Kept as a type alias instead of an empty-extending interface
+// so the lint rule against zero-member interfaces stays happy.
+export type ExecDetachedSpec = ExecSpec;
 
 export interface ExecHandle {
   /** Demuxed stdout. Ends when the process exits. */

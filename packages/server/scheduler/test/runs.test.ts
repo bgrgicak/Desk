@@ -345,6 +345,52 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(msg?.state).toBe("failed");
   });
 
+  it("re-fire of a previously failed message starts with a clean log", async () => {
+    // Regression: the "Try again" path (POST /chats/.../messages/{id}/run)
+    // resets state to pending and re-invokes fireMessage with the same
+    // runId. The log file is reused — when it was opened with flags:"a"
+    // the new attempt's events got appended to the prior failure's
+    // stderr, so the successful retry's child message contained both
+    // the old "Agent run failed before it could complete." line and the
+    // new tokens. Flags:"w" truncates at fire-start.
+    let firstCall = true;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_runId, _agentId, _prompt, onLog) => {
+        if (firstCall) {
+          firstCall = false;
+          await onLog({ runId: _runId, seq: 0, kind: "stderr", payload: "FIRST_RUN_STDERR_TOKEN" });
+          return { exitCode: 1 };
+        }
+        await onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "SECOND_RUN_STDOUT_TOKEN" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "fire then refire" });
+    await mgr.fireMessage(messageId);
+    const failed = await queries.messages.findById(pool, messageId);
+    expect(failed?.state).toBe("failed");
+
+    // Simulate /run: flip state back to pending and fire again.
+    await pool.query("UPDATE messages SET state = 'pending' WHERE id = ?", [messageId]);
+    await mgr.fireMessage(messageId);
+
+    const succeeded = await queries.messages.findById(pool, messageId);
+    expect(succeeded?.state).toBe("succeeded");
+
+    const logDir = path.join(
+      process.env.DESK_HOME!,
+      "desk",
+      ".chats",
+      chatId,
+      "logs",
+    );
+    const logBody = await fs.readFile(path.join(logDir, `${messageId}.log`), "utf-8").catch(() => "");
+    expect(logBody).toContain("SECOND_RUN_STDOUT_TOKEN");
+    expect(logBody).not.toContain("FIRST_RUN_STDERR_TOKEN");
+  });
+
   it("thrown run setup errors are appended as stderr event messages", async () => {
     const events: WsEvent[] = [];
     const mgr = createRunManager({

@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { memo, useState, type MouseEvent } from 'react'
 import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare } from 'lucide-react'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
@@ -6,7 +6,7 @@ import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
-import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
+import { useGetSummaryHistoryQuery } from '@/store/api'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
@@ -15,6 +15,15 @@ import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiag
 interface MessageBubbleProps {
   message: ServerMessage
   workspaceId?: string
+  /**
+   * Filesystem path of the workspace, used to rewrite sandbox paths inside
+   * markdown links and tool output. Passed in by the parent — historically
+   * each bubble subscribed to `useGetWorkspacesQuery` itself, but with N
+   * bubbles in a long thread that fans out into N RTK Query subscribers
+   * notified on every workspace update. Look it up once at the thread
+   * level and pass it down.
+   */
+  workspacePath?: string
   isFirstInGroup?: boolean
   isNew?: boolean
   /** Agent name to display in the message header. */
@@ -33,9 +42,10 @@ interface MessageBubbleProps {
   currentChatId?: string
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   workspaceId,
+  workspacePath,
   isFirstInGroup = true,
   isNew = false,
   agentName,
@@ -45,8 +55,6 @@ export function MessageBubble({
   developerMode = false,
   currentChatId,
 }: MessageBubbleProps) {
-  const { data: workspaces } = useGetWorkspacesQuery()
-  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
@@ -133,7 +141,7 @@ export function MessageBubble({
       </div>
     </div>
   )
-}
+})
 
 function ThreadButton({
   message,

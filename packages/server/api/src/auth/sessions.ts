@@ -6,7 +6,10 @@ const TOKEN_PREFIX = "ses_";
 const TOKEN_BYTES = 32;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function hashToken(token: string): string {
+/** Bearer-token hash. Exported so call sites that need to look up by
+ * token (handleLogout) reuse the same hashing rule instead of
+ * re-implementing it. */
+export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 

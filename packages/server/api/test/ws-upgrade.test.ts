@@ -36,7 +36,7 @@ function getServerPort(server: http.Server): number {
   return addr.port;
 }
 
-let servers: http.Server[] = [];
+const servers: http.Server[] = [];
 
 function startServer(): Promise<http.Server> {
   return new Promise((resolve) => {

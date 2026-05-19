@@ -47,6 +47,8 @@ import {
 } from "./opencodeServer.js";
 import { sandboxUser } from "./docker.js";
 import { SANDBOX_HOME } from "./mounts.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/connectionRefresh");
 
 export interface RefreshSandboxConnectionsOpts {
   pool: Pool;
@@ -161,8 +163,7 @@ export async function refreshSandboxConnections(
           // (rather than re-using the cached daemon and its stale env).
           invalidateOpencodeServerCache(info.id);
           result.skippedActive.push(workspaceId);
-          // eslint-disable-next-line no-console
-          console.log(
+          log.info(
             `connection refresh: workspace ${workspaceId} has an active run — ` +
               `dropped daemon cache, next turn will respawn with fresh env`,
           );
@@ -187,8 +188,7 @@ export async function refreshSandboxConnections(
   );
 
   if (result.clearedSessions.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
+    log.info(
       `connection refresh: cleared ${result.clearedSessions.length} opencode session(s) for user ${opts.userId}` +
         (opts.workspaceId ? ` (workspace ${opts.workspaceId})` : ""),
     );

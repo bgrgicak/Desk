@@ -1,15 +1,14 @@
-import * as crypto from "node:crypto";
-import { type Pool } from "@agent-desk/db";
+import { hashPassword, type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { UnauthorizedError } from "@agent-desk/shared";
-import { issueSession, revokeSession } from "../auth/sessions.js";
+import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
+import { hashToken, issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
+import { createHub } from "./workspaces.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
+const log = withModule("api/routes/auth");
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
-}
 
 export async function handleLogin(
   pool: Pool,
@@ -50,6 +49,141 @@ export async function handleAutoLogin(
   if (!userId) throw new UnauthorizedError("No user is available for auto-login");
 
   const token = await issueSession(pool, userId);
+  return { token };
+}
+
+/**
+ * Signup is intentionally gated by the DESK_ENABLE_SIGNUP env var. Desk
+ * is single-user-per-host by default and exposing a public registration
+ * endpoint on a misconfigured deployment would let anyone create
+ * accounts. Operators who want multi-user mode opt in explicitly with
+ * `DESK_ENABLE_SIGNUP=1`.
+ *
+ * When enabled, this creates the user row, bootstraps a hub workspace,
+ * sets up the per-user vault when DESK_VAULT_PASSWORD is set, and
+ * returns a session token. Hub creation + vault setup mirror what
+ * main.ts does for users that existed at boot — a new signup gets the
+ * same shape immediately so the SPA doesn't land on "No workspaces"
+ * right after the redirect.
+ */
+export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.DESK_ENABLE_SIGNUP === "1";
+}
+
+const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,32}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export interface SignupContext {
+  pool: Pool;
+  home: string;
+  vault?: VaultStore;
+  env?: NodeJS.ProcessEnv;
+}
+
+export async function handleSignup(
+  ctx: SignupContext,
+  body: { username?: unknown; email?: unknown; password?: unknown },
+): Promise<{ token: string }> {
+  const env = ctx.env ?? process.env;
+  if (!isSignupEnabled(env)) {
+    throw new ValidationError("Signup is disabled on this server");
+  }
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!USERNAME_PATTERN.test(username)) {
+    throw new ValidationError(
+      "Username must be 3–32 characters of letters, digits, underscore, or dash",
+    );
+  }
+  if (!EMAIL_PATTERN.test(email)) {
+    throw new ValidationError("Email must be a valid address");
+  }
+  enforcePasswordPolicy(password);
+
+  // Single non-specific 409 for both username and email collisions. A
+  // distinct message would be a user/email enumeration oracle for
+  // anyone who can reach /auth/signup (rate-limited but observable).
+  // The SPA shows the generic message and asks the user to try a
+  // different combination.
+  //
+  // Run both lookups in parallel so the response time doesn't reveal
+  // which one matched — short-circuiting would let an attacker
+  // distinguish "username taken" (1 DB query) from "email taken" or
+  // "neither taken" (2 queries) by timing alone.
+  const [existingByUsername, existingByEmail] = await Promise.all([
+    queries.users.findByUsername(ctx.pool, username),
+    queries.users.findByEmail(ctx.pool, email),
+  ]);
+  if (existingByUsername || existingByEmail) {
+    throw new ConflictError("Account could not be created with the supplied credentials");
+  }
+
+  const id = generateId("user");
+  const passwordHash = await hashPassword(password);
+  // Race window: between the parallel findByUsername/findByEmail
+  // above and this insert, another concurrent signup with the same
+  // credentials could have committed.  Catch the UNIQUE-constraint
+  // error and map it to the same generic 409 the preflight emits —
+  // otherwise the SECOND request bubbles a 500 instead of a clean
+  // collision response.
+  try {
+    await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE constraint failed/i.test(msg)) {
+      throw new ConflictError(
+        "Account could not be created with the supplied credentials",
+      );
+    }
+    throw err;
+  }
+
+  // Mint the session first — that and the user row are the two pieces
+  // the client absolutely needs to recover. If session issuance
+  // throws (DB hiccup, exhausted entropy, …) we roll back the user
+  // insert so a retry isn't blocked by a 409.
+  let token: string;
+  try {
+    token = await issueSession(ctx.pool, id);
+  } catch (err) {
+    try {
+      await ctx.pool.query("DELETE FROM users WHERE id = ?", [id]);
+    } catch (rollbackErr) {
+      log.warn(
+        { id, username, err: (rollbackErr as Error).message },
+        "signup: failed to roll back user row after issueSession failure",
+      );
+    }
+    throw err;
+  }
+
+  // Mirror the post-boot bootstrap that existing users get in main.ts —
+  // a new signup needs a hub workspace immediately, otherwise the SPA
+  // lands on "No workspaces" right after the redirect. Best-effort: a
+  // hub-creation failure should not undo the account; the next /me
+  // hits the workspace-create path through the normal SPA flow.
+  try {
+    await createHub(ctx.pool, ctx.home, id, username);
+  } catch (err) {
+    log.warn({ username, err: (err as Error).message }, "signup: hub-creation failed");
+  }
+
+  // If the server is in auto-unlock mode (DESK_VAULT_PASSWORD set), the
+  // boot loop already set up vaults for the users that existed at boot.
+  // A user who signs up after boot needs the same treatment so the AI
+  // provider key flow (PUT /me/providers) works without a manual vault
+  // setup step. Also best-effort.
+  const vaultPassword = env.DESK_VAULT_PASSWORD;
+  if (ctx.vault && vaultPassword) {
+    try {
+      await ctx.vault.setup(id, vaultPassword);
+    } catch (err) {
+      log.warn({ username, err: (err as Error).message }, "signup: vault auto-setup failed");
+    }
+  }
+
   return { token };
 }
 

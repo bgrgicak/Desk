@@ -26,6 +26,16 @@ RUN cd app && \
 # ---- Runtime stage ----
 FROM node:22-slim
 
+# OCI image metadata. `docker inspect desk/sandbox:v1` now surfaces the
+# upstream source URL + a human-readable description so operators can
+# trace which build of which repo produced the image they're running.
+# version / revision / created are intentionally not set here — CI fills
+# them via --label at build time when it has the commit SHA in scope.
+LABEL org.opencontainers.image.title="Desk Sandbox" \
+      org.opencontainers.image.description="Container image for Desk agent runs (opencode CLI + sandbox helpers)" \
+      org.opencontainers.image.source="https://github.com/bgrgicak/Desk" \
+      org.opencontainers.image.licenses="MIT"
+
 # Install basics. Node.js/npm are provided by the base image; installing Ubuntu's
 # npm package pulls hundreds of Debian packages and has made CI builds stall.
 RUN apt-get update && apt-get install -y --no-install-recommends \

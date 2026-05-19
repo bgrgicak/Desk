@@ -33,7 +33,7 @@ beforeAll(async () => {
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
+  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
   // Create temp home directory with storage layout
@@ -185,7 +185,7 @@ describe("API e2e (real Postgres)", () => {
   it("POST /auth/login authenticates against real DB", async () => {
     const res = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(res.status).toBe(200);
     const body = res.body as { token: string };
@@ -364,7 +364,7 @@ describe("API e2e (real Postgres)", () => {
     // Login to get a new token to revoke
     const loginRes = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     const tempToken = (loginRes.body as { token: string }).token;
 
@@ -380,7 +380,7 @@ describe("API e2e (real Postgres)", () => {
     // Login fresh
     const loginRes = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     const wsToken = (loginRes.body as { token: string }).token;
 
@@ -1059,7 +1059,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
 
     await runMigrations(realPool);
     process.env.DESK_SEED_USERNAME = "testuser";
-    process.env.DESK_SEED_PASSWORD = "testpass";
+    process.env.DESK_SEED_PASSWORD = "test-pass-1234";
     await seedIfEmpty(realPool);
     const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
     realWorkspaceIds = workspaceRows.map((row) => row.id as string);
@@ -1123,7 +1123,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     // Login
     const loginRes = await realRequest("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(loginRes.status).toBe(200);
     realToken = (loginRes.body as { token: string }).token;
@@ -1175,7 +1175,7 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
         username: "testuser",
-        password: "testpass",
+        password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
     }

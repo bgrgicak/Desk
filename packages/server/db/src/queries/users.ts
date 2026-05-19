@@ -10,6 +10,7 @@ function rowToUser(row: Record<string, unknown>): User {
     avatarPath: row.avatar_path ?? undefined,
     timezone: row.timezone ?? undefined,
     createdAt: row.created_at as string,
+    mustChangePassword: row.must_change_password === 1 || row.must_change_password === true,
   });
 }
 
@@ -76,8 +77,13 @@ export async function updatePassword(
   id: string,
   passwordHash: string,
 ): Promise<boolean> {
+  // Clear must_change_password whenever the password changes — a successful
+  // change means the user is no longer on the public seed credential. The
+  // legacy-hash rehash path (login.ts) also goes through here, so anyone
+  // logging in with a non-seed password also has the flag cleared even if
+  // it was incorrectly set.
   const { rowCount } = await db.query(
-    "UPDATE users SET password_hash = ? WHERE id = ?",
+    "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
     [passwordHash, id],
   );
   return (rowCount ?? 0) > 0;

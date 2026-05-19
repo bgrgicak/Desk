@@ -14,6 +14,10 @@ export const UserSchema = z.object({
    * the default zone for ambiguous user-supplied times. */
   timezone: z.string().optional(),
   createdAt: z.string(),
+  /** True when the user signed in with the documented public seed
+   * password and hasn't changed it yet. SPA uses it to prompt for a
+   * password change after first login. Cleared by POST /me/password. */
+  mustChangePassword: z.boolean().optional(),
 });
 export type User = z.infer<typeof UserSchema>;
 
@@ -79,11 +83,37 @@ export const ChatSchema = z.object({
   agentId: z.string(),
   title: z.string(),
   goal: z.string().optional(),
+  createdAt: z.string(),
   updatedAt: z.string(),
   awaitingUser: z.boolean(),
   unread: z.boolean(),
 });
 export type Chat = z.infer<typeof ChatSchema>;
+
+/**
+ * Chat shape returned by the chat-list endpoint (`GET /chats`).
+ * Wraps `Chat` with the denormalised sidebar fields the chats_list
+ * cache maintains: the latest non-fallback message kind, whether the
+ * latest agent_turn is in flight or failed, and a short preview of
+ * the latest user/agent text message.
+ *
+ * WS `chat.updated` events ship the base `Chat` (without these list-
+ * meta fields); the sidebar refetches on chat-list invalidation to
+ * pick the new preview up.  The fields are therefore optional on the
+ * shared type so the same shape covers both surfaces.
+ */
+export const ChatWithListMetaSchema = ChatSchema.extend({
+  /** Newest user-action message kind (`task` / `task_run`).  `chat`
+   *  and `summary` are fallbacks the sidebar treats specially. */
+  kind: z.enum(["chat", "task", "task_run"]).optional(),
+  /** True when the chat's most recent `agent_turn` is pending/running. */
+  running: z.boolean().optional(),
+  /** True when the chat's most recent `agent_turn` failed. */
+  failed: z.boolean().optional(),
+  /** Short preview of the chat's most recent visible text message. */
+  lastMessage: z.string().optional(),
+});
+export type ChatWithListMeta = z.infer<typeof ChatWithListMetaSchema>;
 
 export const MessageContentTextSchema = z.object({
   type: z.literal("text"),

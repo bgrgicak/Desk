@@ -40,7 +40,7 @@ beforeAll(async () => {
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
+  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));
@@ -202,7 +202,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login
     const res = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     token = (res.body as { token: string }).token;
 
@@ -222,8 +222,8 @@ describe("Routes coverage (real Postgres)", () => {
   // ── 1. POST /me/password ─────────────────────────────────────────
   it("POST /me/password — new password works for login, old fails", async () => {
     const changeRes = await request("POST", "/me/password", token, {
-      currentPassword: "testpass",
-      newPassword: "newpass123",
+      currentPassword: "test-pass-1234",
+      newPassword: "new-pass-strong-1",
     });
     expect(changeRes.status).toBe(200);
     expect((changeRes.body as { ok: boolean }).ok).toBe(true);
@@ -231,7 +231,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with new password succeeds
     const okLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "newpass123",
+      password: "new-pass-strong-1",
     });
     expect(okLogin.status).toBe(200);
     expect((okLogin.body as { token: string }).token).toMatch(/^ses_/);
@@ -239,14 +239,14 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with old password fails
     const failLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(failLogin.status).toBe(401);
 
     // Restore original password for other tests
     await request("POST", "/me/password", token, {
-      currentPassword: "newpass123",
-      newPassword: "testpass",
+      currentPassword: "new-pass-strong-1",
+      newPassword: "test-pass-1234",
     });
   });
 
@@ -260,7 +260,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with original password still works
     const okLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(okLogin.status).toBe(200);
   });
