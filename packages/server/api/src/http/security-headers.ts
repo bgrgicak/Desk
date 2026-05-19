@@ -89,6 +89,21 @@ const ALLOWED_WS_ORIGINS = getAllowedWsOrigins();
 const LOOPBACK_ORIGIN_PATTERN =
   /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\]|\[::ffff:127(?:\.\d{1,3}){3}\])(:\d+)?$/;
 
+/**
+ * True when `addr` is a loopback IP. Shared by the WS Origin check
+ * (matches against the host part of an origin URL) and the
+ * /auth/auto-login dispatcher (matches against req.socket.remoteAddress
+ * directly). Covers 127.0.0.0/8 and the two IPv6 loopback shapes Node
+ * emits.
+ */
+export function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  if (addr === "::1") return true;
+  if (addr.startsWith("::ffff:127.")) return true;
+  if (/^127(?:\.\d{1,3}){3}$/.test(addr)) return true;
+  return addr === "localhost"; // some clients pass the name through
+}
+
 export function isWsOriginAllowed(
   origin: string | undefined,
   allowed: Set<string> = ALLOWED_WS_ORIGINS,

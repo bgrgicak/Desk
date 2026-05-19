@@ -205,7 +205,14 @@ export async function execRun(
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
+      // When DESK_SANDBOX_NETWORK=none the host-gateway entry is
+      // dropped from the container, so `host.docker.internal` won't
+      // resolve. Suppressing DESK_API_URL in that mode means the
+      // in-sandbox `desk` CLI surfaces its existing "DESK_API_URL is
+      // not set" error immediately, not a TCP connection timeout.
+      apiUrl: process.env.DESK_SANDBOX_NETWORK === "none"
+        ? undefined
+        : (opts.apiUrl ?? defaultSandboxApiUrl()),
       // Forward the agent's currently-saved model so the per-message
       // `providerID/modelID` sent to opencode-serve reflects the user's
       // live UI selection. Without this, the driver falls back to a

@@ -129,6 +129,33 @@ describe("verifyWebhookSignature", () => {
     ).toBe(true);
   });
 
+  it("rejects timestamp='0' (epoch) when the replay window is enforced", () => {
+    const sig = hmacHex(body, secret);
+    const r = verifyWebhookSignature({
+      body,
+      signatureHeader: sig,
+      secret,
+      timestamp: "0",
+      now,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("replay-too-old");
+  });
+
+  it("rejects a prefix that doesn't match the requested algorithm", () => {
+    const sig = "sha512=" + hmacHex(body, secret, "sha256"); // wrong-prefix replay
+    const r = verifyWebhookSignature({
+      body,
+      signatureHeader: sig,
+      secret,
+      algorithm: "sha256",
+      timestamp: String(Math.floor(NOW / 1000)),
+      now,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("bad-signature");
+  });
+
   it("rejects an unparseable signature header", () => {
     const r = verifyWebhookSignature({
       body,

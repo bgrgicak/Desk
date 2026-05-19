@@ -284,3 +284,39 @@ The SQLite pool wraps every query and warns when elapsed time exceeds
 `DESK_SLOW_QUERY_MS` (default 50ms). Log line carries the prepared SQL
 text (normalised + truncated to 240 chars) and row count; bind values
 are never logged. Set to 0 to disable.
+
+---
+
+## Sandbox-side controls
+
+### Egress policy (`DESK_SANDBOX_NETWORK`)
+
+| Value | Behaviour |
+|---|---|
+| `bridge` (default) | Default Docker bridge network. Sandbox can reach AI provider APIs, GitHub, package registries — every URL the runtime needs. |
+| `none` | `--network none`. No outbound connectivity. Drops the `host.docker.internal:host-gateway` extra-host entry. The in-sandbox `desk` CLI gets a clear "DESK_API_URL is not set" error (rather than a TCP timeout) when invoked, because the runtime now omits `DESK_API_URL` in this mode. |
+
+`none` is the right pick for paranoid deployments running agent
+workloads that only need on-disk file editing + a pre-cached local
+model. AI API calls (Anthropic, OpenAI, OpenCode), sandbox callbacks
+to `host.docker.internal`, and any tool that downloads dependencies
+all break — those are the intended trade-offs.
+
+A real domain-level allowlist would need a sidecar HTTP proxy
+(squid/mitmproxy in transparent mode) and is out of scope for v1; the
+two-option knob covers the realistic deployment matrix today.
+
+### Reproducible-build sanity check
+
+The CI workflow builds `desk/sandbox:v1` twice on every run (same
+source, same `SOURCE_DATE_EPOCH`) and compares the resulting image
+digests. **Drift is advisory today**: a `::warning::` annotation
+shows up on the job summary instead of a hard failure. Promoting it
+to blocking waits on the Dockerfile being made deterministic — apt
+caches and `npm install` orderings currently leak ordering into the
+layer digest. Tracked in ADR-0006.
+
+Operators who depend on stable image digests (image-signing workflows,
+content-addressable deployments) should rebuild from a trusted source
+and compare against the previously-shipped digest until the
+Dockerfile is hardened.

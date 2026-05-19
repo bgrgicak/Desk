@@ -114,8 +114,15 @@ export async function handleSignup(
   // anyone who can reach /auth/signup (rate-limited but observable).
   // The SPA shows the generic message and asks the user to try a
   // different combination.
-  const existingByUsername = await queries.users.findByUsername(ctx.pool, username);
-  const existingByEmail = existingByUsername ? null : await queries.users.findByEmail(ctx.pool, email);
+  //
+  // Run both lookups in parallel so the response time doesn't reveal
+  // which one matched — short-circuiting would let an attacker
+  // distinguish "username taken" (1 DB query) from "email taken" or
+  // "neither taken" (2 queries) by timing alone.
+  const [existingByUsername, existingByEmail] = await Promise.all([
+    queries.users.findByUsername(ctx.pool, username),
+    queries.users.findByEmail(ctx.pool, email),
+  ]);
   if (existingByUsername || existingByEmail) {
     throw new ConflictError("Account could not be created with the supplied credentials");
   }

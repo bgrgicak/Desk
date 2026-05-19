@@ -26,24 +26,43 @@
 import { pino, type Logger as PinoLogger } from "pino";
 
 const REDACT_PATHS = [
-  // Auth header values (rare in logs, but never leak).
+  // Auth header values (rare in logs, but never leak). Cover top-level
+  // and the common nesting patterns (axios-style err.config.headers,
+  // node http err.req.headers).
   "req.headers.authorization",
   "headers.authorization",
   "authorization",
+  "*.headers.authorization",
+  "err.config.headers.authorization",
   // Cookies can carry session bearer tokens.
   "req.headers.cookie",
   "headers.cookie",
   "cookie",
-  // Token query params on /ws upgrade etc.
+  "*.headers.cookie",
+  // Token query params on /ws upgrade etc. Wildcards catch nested
+  // contexts (e.g. log.error({user: {token}}, ...)).
   "token",
+  "*.token",
   "password",
+  "*.password",
   "currentPassword",
   "newPassword",
   // Provider/connection credentials.
   "apiKey",
+  "*.apiKey",
   "api_key",
+  "*.api_key",
   "credentials",
+  "*.credentials",
   "secret",
+  "*.secret",
+  // Error objects that get logged via {err}. Common nesting comes
+  // through axios (err.config), fetch errors (err.cause), and pg
+  // (err.where/err.detail can carry table contents).
+  "err.config",
+  "err.cause",
+  "err.config.data",
+  "err.response.data",
 ];
 
 const root: PinoLogger = pino({

@@ -81,7 +81,7 @@ export function verifyWebhookSignature(args: VerifySignatureArgs): VerifySignatu
   // Constant-time compare against the expected HMAC.
   const bodyBuf = typeof args.body === "string" ? Buffer.from(args.body, "utf8") : args.body;
   const expected = createHmac(algorithm, args.secret).update(bodyBuf).digest();
-  const supplied = parseSignature(args.signatureHeader);
+  const supplied = parseSignature(args.signatureHeader, algorithm);
   if (!supplied) return { ok: false, reason: "bad-signature" };
   if (supplied.length !== expected.length) return { ok: false, reason: "bad-signature" };
   return timingSafeEqual(supplied, expected)
@@ -89,15 +89,20 @@ export function verifyWebhookSignature(args: VerifySignatureArgs): VerifySignatu
     : { ok: false, reason: "bad-signature" };
 }
 
-/** Parses sig header: accepts hex, base64, and the "sha256=" prefix. */
-function parseSignature(header: string): Buffer | null {
-  const cleaned = header.startsWith("sha256=")
-    ? header.slice(7)
-    : header.startsWith("sha1=")
-      ? header.slice(5)
-      : header.startsWith("sha512=")
-        ? header.slice(7)
-        : header;
+/**
+ * Parses sig header: accepts hex or base64, optionally with a
+ * "sha256=" / "sha1=" / "sha512=" prefix. The prefix is validated
+ * against the caller-supplied algorithm — a "sha512=..." prefix on a
+ * sha256 verification is rejected so an attacker can't game the
+ * parser by replaying a wrong-algorithm signature.
+ */
+function parseSignature(header: string, algorithm: "sha256" | "sha1" | "sha512"): Buffer | null {
+  let cleaned = header;
+  const prefixMatch = /^(sha1|sha256|sha512)=/.exec(header);
+  if (prefixMatch) {
+    if (prefixMatch[1] !== algorithm) return null;
+    cleaned = header.slice(prefixMatch[0].length);
+  }
   if (/^[0-9a-fA-F]+$/.test(cleaned) && cleaned.length % 2 === 0) {
     return Buffer.from(cleaned, "hex");
   }

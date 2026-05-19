@@ -172,8 +172,8 @@ function denyOverLimit(res: ServerResponse, bucket: string, key: string): boolea
 // so this file isn't carrying ~100 lines of mostly-prose helpers.
 // Re-exported from app.ts so the existing test imports
 // (`import { isWsOriginAllowed } from "../src/app.js"`) keep working.
-import { getAllowedWsOrigins, isWsOriginAllowed, setSecurityHeaders } from "./http/security-headers.js";
-export { getAllowedWsOrigins, isWsOriginAllowed };
+import { getAllowedWsOrigins, isLoopbackAddress, isWsOriginAllowed, setSecurityHeaders } from "./http/security-headers.js";
+export { getAllowedWsOrigins, isLoopbackAddress, isWsOriginAllowed };
 
 /**
  * The /apps/* dispatcher's `issue` endpoint runs after requireAuth has
@@ -598,6 +598,20 @@ export function createApp(opts: AppOptions): Server {
     const userId = await verifySession(pool, token);
     if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    // The HTTP request dispatcher refuses every endpoint outside a
+    // narrow allowlist while must_change_password is set; the WS
+    // upgrade gets the same treatment. A live WS connection
+    // broadcasts every workspace WsEvent — letting a user who's
+    // still on the public seed credential subscribe to those events
+    // would defeat the rest of the gate.
+    try {
+      await enforceMustChangePassword(pool, userId, "GET", "/ws");
+    } catch {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
     }
@@ -1228,8 +1242,10 @@ export function createApp(opts: AppOptions): Server {
       // the loopback check so an operator who really wants public auto-
       // login can opt in explicitly.
       const remote = req.socket?.remoteAddress ?? "";
-      const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-      if (!isLoopback && process.env.DESK_TRUST_PROXY !== "1") {
+      // Reuse the same loopback definition as the WS Origin check —
+      // 127.0.0.0/8 + ::1 + ::ffff:127.*. A host that binds to
+      // 127.0.0.2 should still get the auto-login affordance.
+      if (!isLoopbackAddress(remote) && process.env.DESK_TRUST_PROXY !== "1") {
         sendJson(res, 403, { code: "FORBIDDEN", message: "Auto-login restricted to loopback" });
         return;
       }
