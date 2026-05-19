@@ -1241,6 +1241,10 @@ export function createApp(opts: AppOptions): Server {
       // rather than minting a free token. DESK_TRUST_PROXY=1 disables
       // the loopback check so an operator who really wants public auto-
       // login can opt in explicitly.
+      // req.socket?.remoteAddress is undefined for inherited-fd /
+      // socket-pair listeners and for some test harnesses; treat the
+      // empty string as "not loopback" so auto-login refuses rather
+      // than minting a token for a caller we can't identify.
       const remote = req.socket?.remoteAddress ?? "";
       // Reuse the same loopback definition as the WS Origin check —
       // 127.0.0.0/8 + ::1 + ::ffff:127.*. A host that binds to
