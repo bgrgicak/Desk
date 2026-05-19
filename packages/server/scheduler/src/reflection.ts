@@ -7,7 +7,7 @@ import { queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 import { resolveLocalSourceEnv } from "@agent-desk/runtime";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("scheduler/reflection");
 
 /**

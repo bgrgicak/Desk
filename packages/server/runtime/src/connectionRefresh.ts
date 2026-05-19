@@ -47,7 +47,7 @@ import {
 } from "./opencodeServer.js";
 import { sandboxUser } from "./docker.js";
 import { SANDBOX_HOME } from "./mounts.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/connectionRefresh");
 
 export interface RefreshSandboxConnectionsOpts {

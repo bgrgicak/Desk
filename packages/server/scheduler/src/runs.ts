@@ -37,7 +37,7 @@ import {
   type ReflectFn,
   type WorkspaceReflectionInput,
 } from "./reflection.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("scheduler/runs");
 
 export interface RunManagerOptions {

@@ -38,7 +38,7 @@ import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
 import { ensureVaultPasswordEnv } from "./envFile.js";
 import type { WsEvent } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/main");
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);

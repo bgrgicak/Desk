@@ -31,7 +31,7 @@ import {
   type SummaryVersion,
   type StorageContext,
 } from "@agent-desk/storage";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/routes/chats");
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;

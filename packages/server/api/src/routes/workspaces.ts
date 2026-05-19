@@ -12,7 +12,7 @@ import {
 } from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
 import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/routes/workspaces");
 
 const DEFAULT_AGENT_NAME = "Desk";

@@ -1,6 +1,6 @@
 import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { withModule, type Logger } from "@agent-desk/shared";
+import { withModule, type Logger } from "@agent-desk/shared/logger";
 let slowQueryLogger: Logger = withModule("db/pool");
 
 /** Test-only: replace the slow-query logger with one whose destination

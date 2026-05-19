@@ -10,6 +10,11 @@
       "@agent-desk/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./logger": {
+      "@agent-desk/dev": "./src/logger.ts",
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js"
     }
   },
   "files": [

@@ -9,7 +9,7 @@
  */
 
 import { readOpencodeSseEvents, type OpencodeSseEvent } from "./opencodeEvents.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/opencodeClient");
 
 export interface OpencodeSessionInfo {

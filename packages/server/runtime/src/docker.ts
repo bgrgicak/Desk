@@ -28,7 +28,7 @@ import {
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
 import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/docker");
 
 import type { WorkspaceKind } from "@agent-desk/shared";

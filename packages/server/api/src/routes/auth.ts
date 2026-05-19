@@ -1,6 +1,7 @@
 import { hashPassword, type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { ConflictError, generateId, UnauthorizedError, ValidationError, withModule } from "@agent-desk/shared";
+import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 import { hashToken, issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
 import { createHub } from "./workspaces.js";

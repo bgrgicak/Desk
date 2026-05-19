@@ -21,7 +21,7 @@ import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Engine } from "./engine.js";
 import { SANDBOX_HOME } from "./mounts.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/opencodeServer");
 
 /** Container-internal port the daemon binds to. Published to host at an auto-assigned port via `-p`. */

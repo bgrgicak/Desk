@@ -44,7 +44,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/app");
 
 async function sandboxSessionRunsScheduledTask(pool: Pool, runId: string | undefined): Promise<boolean> {

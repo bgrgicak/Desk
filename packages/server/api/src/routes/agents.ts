@@ -1,7 +1,7 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/routes/agents");
 
 export async function listAgents(pool: Pool, userId: string) {

@@ -2,7 +2,7 @@ import { type Pool, queries } from "@agent-desk/db";
 import { CONNECTION_ENV_VARS } from "@agent-desk/shared";
 import type { VaultStore } from "./vault/store.js";
 import { readCredentials } from "./connectors/credentialStore.js";
-import { withModule } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/providerKeys");
 
 /**
