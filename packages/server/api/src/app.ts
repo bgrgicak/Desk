@@ -1,29 +1,17 @@
-import { createReadStream } from "node:fs";
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
-import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
-import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
-import {
-  workspaceRootPath,
-  type StorageContext,
-} from "@agent-desk/storage";
+import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { type Pool, queries } from "@agent-desk/db";
+import { DeskError, type WsEvent } from "@agent-desk/shared";
+import { type StorageContext } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
 import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
-import { verifySession } from "./auth/sessions.js";
-import {
-  requireOwnedChat,
-  requireOwnedWorkspace,
-} from "./auth/ownership.js";
 import { errorToStatus } from "./errors.js";
 import { broadcast } from "./ws/registry.js";
 import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
-import * as chatRoutes from "./routes/chats.js";
-import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
@@ -32,9 +20,6 @@ import { withModule } from "@agent-desk/shared/logger";
 import {
   defaultBackupPath,
   parseBody,
-  parseMultipartFileStream,
-  requireBearerForApps,
-  requireReadablePathForRoute,
   sendJson,
 } from "./http/request-helpers.js";
 import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
@@ -43,15 +28,10 @@ import { dispatchSandbox } from "./dispatch/sandbox.js";
 import { dispatchAccount } from "./dispatch/account.js";
 import { dispatchWorkspaces } from "./dispatch/workspaces.js";
 import { dispatchChats } from "./dispatch/chats.js";
+import { dispatchLibrary } from "./dispatch/library.js";
+import { dispatchApps } from "./dispatch/apps.js";
+import { IssueRateLimitError } from "./routes/apps.js";
 const log = withModule("api/app");
-
-import * as appsRoutes from "./routes/apps.js";
-import { handleAppStorageRequest } from "./routes/app-storage.js";
-import {
-  requireLibraryPathInWorkspace,
-  requireWorkspaceId,
-  resolveWorkspaceId,
-} from "./workspace-scope.js";
 
 type RunManager = ReturnType<typeof createRunManager>;
 
@@ -309,7 +289,7 @@ export function createApp(opts: AppOptions): Server {
       // Route dispatch
       await dispatch(method, params, req, res);
     } catch (err) {
-      if (err instanceof appsRoutes.IssueRateLimitError) {
+      if (err instanceof IssueRateLimitError) {
         // Rate-limit response carries Retry-After so the parent SPA can
         // back off cleanly instead of hammering the endpoint.
         res.setHeader("Retry-After", String(err.retryAfterSeconds));
@@ -377,120 +357,15 @@ export function createApp(opts: AppOptions): Server {
       if (handled) return;
     }
 
-    // Per-app storage routes (PR-H). Match before the static-app
-    // dispatcher so a request to `.../storage/...` doesn't get caught
-    // by the dist-serve branch.
-    if (segments[0] === "apps" && segments.includes("storage")) {
-      const handled = await handleAppStorageRequest(
-        pool,
-        storage,
-        segments,
-        method,
-        req,
-        res,
-      );
+    // /apps/* surface — covers storage, chat/library issue+delete,
+    // and workspace-scoped dist serving.  These paths intentionally
+    // bypass requireAuth; each branch enforces its own auth (Bearer
+    // for issue/DELETE, HttpOnly app-token cookie for static dist).
+    {
+      const handled = await dispatchApps(req, res, method, segments, query, dispatchCtx);
       if (handled) return;
     }
 
-    // Static-app routes — `/apps/chat/:chatId/:appName/dist/*` and the
-    // companion `POST /apps/chat/:chatId/:appName/issue` mint-token
-    // endpoint. Auth: the static GET path validates a per-app HttpOnly
-    // cookie issued on first load; the issue endpoint re-validates the
-    // user's bearer session directly because requireAuth let it through.
-    if (segments[0] === "apps" && segments[1] === "chat" && segments.length >= 4) {
-      if (
-        method === "POST" &&
-        segments.length === 5 &&
-        segments[4] === "issue"
-      ) {
-        const issuerId = await requireBearerForApps(pool, req);
-        const chatId = decodeURIComponent(segments[2]);
-        const appName = decodeURIComponent(segments[3]);
-        const result = await appsRoutes.handleIssueAppSession(
-          pool,
-          storage,
-          issuerId,
-          chatId,
-          appName,
-        );
-        sendJson(res, 201, result);
-        return;
-      }
-      if (
-        method === "DELETE" &&
-        segments.length === 4
-      ) {
-        // PR-E: delete a chat-artifact `<name>.app/`. Cascade-revokes any
-        // active app_sessions bound to (chatId, appName). The .storage/
-        // SQLite file goes with the directory.
-        const issuerId = await requireBearerForApps(pool, req);
-        const chatId = decodeURIComponent(segments[2]);
-        const appName = decodeURIComponent(segments[3]);
-        await requireOwnedChat(pool, chatId, issuerId);
-        await chatRoutes.removeChatApp(storage, chatId, appName, emitEvent);
-        sendJson(res, 200, { ok: true });
-        return;
-      }
-      if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
-        const handled = await appsRoutes.handleStaticAppRequest(
-          pool,
-          storage,
-          segments,
-          new URL(req.url ?? "/", "http://localhost"),
-          req,
-          res,
-        );
-        if (handled) return;
-      }
-    }
-
-    // Library-scoped variant: /apps/library/:appName/dist/* and the
-    // companion `POST /apps/library/:appName/issue` (PR-E).
-    if (segments[0] === "apps" && segments[1] === "library" && segments.length >= 3) {
-      if (
-        method === "POST" &&
-        segments.length === 4 &&
-        segments[3] === "issue"
-      ) {
-        const issuerId = await requireBearerForApps(pool, req);
-        const appName = decodeURIComponent(segments[2]);
-        const result = await appsRoutes.handleIssueLibraryAppSession(
-          pool,
-          storage,
-          issuerId,
-          appName,
-          {
-            workspaceId: query.get("workspaceId") ?? undefined,
-            appPath: query.get("path") ?? undefined,
-          },
-        );
-        sendJson(res, 201, result);
-        return;
-      }
-      if (method === "DELETE" && segments.length === 3) {
-        // PR-E: delete a library `<name>.app/` (moves it to .trash for
-        // recovery) and revoke all sessions for that app. Library scope
-        // doesn't include a sub-path: the route deletes the
-        // workspace-root `<appName>.app/`. Library apps under a
-        // subfolder are deleted via the generic library-delete path.
-        const issuerId = await requireBearerForApps(pool, req);
-        const appName = decodeURIComponent(segments[2]);
-        await chatRoutes.removeLibraryApp(storage, issuerId, appName, emitEvent);
-        sendJson(res, 200, { ok: true });
-        return;
-      }
-      if (method === "GET") {
-        const handled = await appsRoutes.handleStaticLibraryAppRequest(
-          pool,
-          storage,
-          segments,
-          new URL(req.url ?? "/", "http://localhost"),
-          req,
-          res,
-        );
-        if (handled) return;
-      }
-    }
     // Account routes — /auth/*, /me/*, /vault/*, /secrets/*
     // are all handled by the account dispatcher in dispatch/account.ts.
     // It owns rate limits + loopback gate for the unauthenticated
@@ -515,149 +390,13 @@ export function createApp(opts: AppOptions): Server {
     }
 
 
-    // Library routes. Because library files live at arbitrary nested paths
-    // on the filesystem, we pass the workspace-relative path via ?path=...
-    // query parameter rather than embedding it in the URL path — simpler to
-    // parse and no URL-encoding of slashes.
-    if (path === "/library" && method === "GET") {
-      const wsId = await resolveWorkspaceId(pool, userId, query);
-      const cursor = query.get("cursor") ?? undefined;
-      const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
-      const showHidden = query.get("showHidden") === "true";
-      const pinned = query.get("pinned") === "true";
-      const result = wsId
-        ? await libraryRoutes.list(storage, userId, wsId, { cursor, limit, showHidden, pinned })
-        : { items: [] };
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/library" && method === "POST") {
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      const { name, mime, stream, subpath } = await parseMultipartFileStream(req);
-      const result = await libraryRoutes.upload(storage, wsId, { name, mime, stream, subpath }, emitEvent);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (path === "/library" && method === "PATCH") {
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      const body = await parseBody(req) as { from?: unknown; to?: unknown };
-      if (typeof body.from !== "string" || typeof body.to !== "string") {
-        throw new ValidationError("Body must be { from: string, to: string }");
-      }
-      requireLibraryPathInWorkspace(body.from, wsId);
-      requireLibraryPathInWorkspace(body.to, wsId);
-      const result = await libraryRoutes.move(storage, wsId, body.from, body.to, emitEvent);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/library/folder" && method === "POST") {
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      const body = await parseBody(req) as { path?: unknown };
-      if (typeof body.path !== "string" || body.path === "") {
-        throw new ValidationError("Body must include { path: string }");
-      }
-      const result = await libraryRoutes.createFolder(storage, wsId, body.path, emitEvent);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (path === "/library/link" && method === "POST") {
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      const body = await parseBody(req) as { url?: unknown; name?: unknown; subpath?: unknown };
-      if (typeof body.url !== "string" || body.url === "") {
-        throw new ValidationError("Body must include { url: string, name?: string, subpath?: string }");
-      }
-      const name = typeof body.name === "string" && body.name.trim() !== ""
-        ? body.name
-        : new URL(body.url).hostname || body.url;
-      const subpath = typeof body.subpath === "string" && body.subpath !== "" ? body.subpath : undefined;
-      const result = await libraryRoutes.createLink(storage, wsId, { url: body.url, name, subpath }, emitEvent);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (path === "/library/meta" && method === "GET") {
-      const p = query.get("path");
-      if (!p) throw new ValidationError("Missing path query parameter");
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-      const result = await libraryRoutes.get(storage, wsId, p);
-      // Summary mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
-      // user-friendly "Chat summary" label so the detail view doesn't title
-      // the page with the messageId-based filename.
-      const decorated = /^\.chats\/cht_[A-Za-z0-9_-]+\/notes\/[^/]+\.md$/.test(p)
-        ? { ...result, label: "Chat summary" }
-        : result;
-      sendJson(res, 200, decorated);
-      return;
-    }
-    if (path === "/library/download" && method === "GET") {
-      const p = query.get("path");
-      if (!p) throw new ValidationError("Missing path query parameter");
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
-      res.writeHead(200, {
-        "Content-Type": file.mime,
-        "Content-Disposition": `attachment; filename="${file.name}"`,
-      });
-      stream.pipe(res);
-      return;
-    }
-    if (path === "/library/content" && method === "GET") {
-      const p = query.get("path");
-      if (!p) throw new ValidationError("Missing path query parameter");
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-      const { stream, file } = await libraryRoutes.download(storage, wsId, p);
-      res.writeHead(200, {
-        "Content-Type": file.mime,
-        "Content-Disposition": `inline; filename="${file.name}"`,
-        "Content-Length": String(file.size),
-        "ETag": `"${file.updatedAtMs}"`,
-      });
-      stream.pipe(res);
-      return;
-    }
-    if (path === "/library/content" && method === "PUT") {
-      const p = query.get("path");
-      if (!p) throw new ValidationError("Missing path query parameter");
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
-      const rawIfMatch = req.headers["if-match"];
-      // Strip quotes from ETag header value: "123" → 123
-      const ifMatch = rawIfMatch ? rawIfMatch.replace(/^"|"$/g, "") : undefined;
-      try {
-        const result = await libraryRoutes.saveContent(storage, wsId, p, req, emitEvent, ifMatch);
-        sendJson(res, 200, result);
-      } catch (err) {
-        if (err instanceof (await import("@agent-desk/shared")).ConflictError) {
-          const { stream: currentStream, file: currentFile } = await libraryRoutes.download(storage, wsId, p);
-          const chunks: Buffer[] = [];
-          await new Promise<void>((resolve, reject) => {
-            currentStream.on("data", (c: Buffer) => chunks.push(c));
-            currentStream.on("end", resolve);
-            currentStream.on("error", reject);
-          });
-          sendJson(res, 409, {
-            code: "VERSION_CONFLICT",
-            message: "Library file changed since your If-Match etag — current content returned alongside",
-            conflict: true,
-            content: Buffer.concat(chunks).toString("utf8"),
-            etag: currentFile.updatedAtMs,
-          });
-        } else {
-          throw err;
-        }
-      }
-      return;
-    }
-    if (path === "/library" && method === "DELETE") {
-      const p = query.get("path");
-      if (!p) throw new ValidationError("Missing path query parameter");
-      const wsId = await requireWorkspaceId(pool, userId, query);
-      requireLibraryPathInWorkspace(p, wsId);
-      await libraryRoutes.remove(storage, wsId, p, emitEvent);
-      sendJson(res, 200, { ok: true });
-      return;
+    // Library routes — workspace file management.  Library files live
+    // at arbitrary nested paths so the path rides as a ?path= query
+    // parameter rather than being embedded in the URL.  See
+    // dispatch/library.ts for the per-route handlers.
+    {
+      const handled = await dispatchLibrary(req, res, method, path, userId, query, dispatchCtx);
+      if (handled) return;
     }
 
     // Legacy /runs and /scheduled-jobs routes are gone — chat-scoped
@@ -707,179 +446,6 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // App static-file serving: /apps/<workspaceId>/<...appRelPath>/dist/<...file>
-    // Serves the built dist/ output of a `.app/` directory so the frontend
-    // can embed the app in an iframe.
-    if (segments[0] === "apps" && segments.length >= 4 && method === "GET") {
-      const wsId = segments[1];
-      if (!wsId || !/^wks_[A-Za-z0-9_-]+$/.test(wsId)) {
-        sendJson(res, 400, { code: "BAD_REQUEST", message: "Invalid workspaceId in path" });
-        return;
-      }
-      // /apps/* is skipped by the global auth middleware; resolve the user
-      // here from Bearer header, ?token= query param, or desk-app-token cookie.
-      let appsUserId: string;
-      {
-        let tokenHeader = req.headers.authorization;
-        if (!tokenHeader) {
-          const qt = query.get("token");
-          if (qt) {
-            tokenHeader = `Bearer ${qt}`;
-          } else {
-            const cookieHeader = req.headers.cookie ?? "";
-            const cookieToken = cookieHeader
-              .split(";")
-              .map((c) => c.trim())
-              .find((c) => c.startsWith("desk-app-token="))
-              ?.slice("desk-app-token=".length);
-            if (cookieToken) tokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
-          }
-        }
-        if (!tokenHeader || !tokenHeader.startsWith("Bearer ")) {
-          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Missing or invalid Authorization" });
-          return;
-        }
-        const resolvedId = await verifySession(pool, tokenHeader.slice(7));
-        if (!resolvedId) {
-          sendJson(res, 401, { code: "UNAUTHORIZED", message: "Invalid or expired session token" });
-          return;
-        }
-        appsUserId = resolvedId;
-      }
-      await requireOwnedWorkspace(pool, wsId, appsUserId);
-
-      // segments: ['apps', wsId, ...appParts, 'dist', ...fileParts]
-      // Find the 'dist' marker — it must appear after at least one app segment.
-      const distIdx = segments.indexOf("dist", 2);
-      if (distIdx < 3) {
-        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
-        return;
-      }
-      // Reconstruct the workspace-relative app path and the in-dist file path.
-      // Segments from url.pathname are still percent-encoded; decode each one
-      // and reject any that normalise to '.' or '..' to prevent traversal.
-      const decodeSeg = (s: string) => {
-        try { return decodeURIComponent(s); } catch { return s; }
-      };
-      const appSegments = segments.slice(2, distIdx).map(decodeSeg);
-      const fileSegmentsRaw = segments.slice(distIdx + 1).map(decodeSeg);
-      // Reject traversal attempts in either the app path or the file path.
-      if ([...appSegments, ...fileSegmentsRaw].some((s) => s === ".." || s === ".")) {
-        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
-        return;
-      }
-      const appRelPath = appSegments.join("/");
-      const distRelFile = fileSegmentsRaw.length > 0 ? fileSegmentsRaw.join("/") : "index.html";
-
-      // Validate: appRelPath must end with .app
-      if (!appRelPath.endsWith(".app")) {
-        sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
-        return;
-      }
-
-      // Verify the user can read the app directory (re-uses existing auth logic).
-      await requireReadablePathForRoute(pool, storage, appsUserId, appRelPath, wsId);
-
-      const { rows: wsRows } = await pool.query<{ path: string }>(
-        "SELECT path FROM workspaces WHERE id = ?",
-        [wsId],
-      );
-      const slug = wsRows[0]?.path;
-      if (!slug) {
-        sendJson(res, 404, { code: "NOT_FOUND", message: "Workspace not found" });
-        return;
-      }
-
-      const wsRoot = workspaceRootPath(storage.home, slug);
-      // Build the candidate dist file path. We must not allow path traversal.
-      const distRoot = pathJoin(wsRoot, appRelPath, "dist");
-      const candidate = pathNormalize(pathJoin(distRoot, distRelFile));
-      if (!candidate.startsWith(distRoot + pathSep) && candidate !== distRoot) {
-        sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
-        return;
-      }
-
-      const realDistRoot = await fsRealpath(distRoot).catch(() => null);
-      if (!realDistRoot) {
-        sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
-        return;
-      }
-      const assertInsideDist = async (filePath: string): Promise<string | null> => {
-        const realCandidate = await fsRealpath(filePath).catch(() => null);
-        if (!realCandidate) return null;
-        return realCandidate === realDistRoot || realCandidate.startsWith(realDistRoot + pathSep)
-          ? realCandidate
-          : null;
-      };
-
-      const APP_MIME: Record<string, string> = {
-        ".html": "text/html; charset=utf-8",
-        ".js":   "application/javascript; charset=utf-8",
-        ".mjs":  "application/javascript; charset=utf-8",
-        ".css":  "text/css; charset=utf-8",
-        ".json": "application/json; charset=utf-8",
-        ".svg":  "image/svg+xml",
-        ".png":  "image/png",
-        ".jpg":  "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif":  "image/gif",
-        ".webp": "image/webp",
-        ".ico":  "image/x-icon",
-        ".woff": "font/woff",
-        ".woff2":"font/woff2",
-        ".ttf":  "font/ttf",
-        ".map":  "application/json; charset=utf-8",
-        ".txt":  "text/plain; charset=utf-8",
-      };
-      const mime = APP_MIME[pathExtname(candidate).toLowerCase()] ?? "application/octet-stream";
-
-      const appQueryToken = query.get("token");
-      const appTokenCookie = appQueryToken
-        ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
-        : null;
-
-      try {
-        const st = await fsStat(candidate);
-        if (!st.isFile()) throw new Error("not a file");
-        const realCandidate = await assertInsideDist(candidate);
-        if (!realCandidate) {
-          sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
-          return;
-        }
-        const headers: Record<string, string | string[]> = {
-          "Content-Type": mime,
-          "Content-Length": String(st.size),
-          "Cache-Control": "no-cache",
-        };
-        if (appTokenCookie && mime.startsWith("text/html")) {
-          headers["Set-Cookie"] = appTokenCookie;
-        }
-        res.writeHead(200, headers);
-        createReadStream(realCandidate).pipe(res);
-      } catch {
-        // Fallback to index.html for SPA client-side routing within the app.
-        const indexPath = pathJoin(distRoot, "index.html");
-        try {
-          const ist = await fsStat(indexPath);
-          const realIndexPath = await assertInsideDist(indexPath);
-          if (!realIndexPath) {
-            sendJson(res, 403, { code: "FORBIDDEN", message: "Path traversal detected" });
-            return;
-          }
-          const headers: Record<string, string | string[]> = {
-            "Content-Type": "text/html; charset=utf-8",
-            "Content-Length": String(ist.size),
-            "Cache-Control": "no-cache",
-          };
-          if (appTokenCookie) headers["Set-Cookie"] = appTokenCookie;
-          res.writeHead(200, headers);
-          createReadStream(realIndexPath).pipe(res);
-        } catch {
-          sendJson(res, 404, { code: "NOT_FOUND", message: "App dist not found" });
-        }
-      }
-      return;
-    }
 
     // Fallback
     sendJson(res, 404, { code: "NOT_FOUND", message: "Not found" });
