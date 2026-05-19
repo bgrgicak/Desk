@@ -58,6 +58,70 @@ describe("chats queries", () => {
     expect(list.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("lastMessage previews the newest visible user/agent text message", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Preview chat" });
+
+    // Newest non-text payload first; should NOT win the preview.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: { type: "artifactRef", path: "x.txt", name: "x", workspaceId: wsId },
+    });
+    // User text — should be the preview.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: "  hello\n  there\t friend  " },
+    });
+    // Internal trigger row — must not win even though it's the newest row.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "ignored" },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("hello there friend");
+  });
+
+  it("lastMessage is empty when the chat has no visible text messages", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "No text" });
+    // Only an internal agent_turn row — no user/agent text yet.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "ignored" },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("");
+  });
+
+  it("lastMessage truncates at 200 chars with an ellipsis", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Long preview" });
+    const longText = "x".repeat(500);
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: longText },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toHaveLength(200);
+    expect(entry?.lastMessage.endsWith("…")).toBe(true);
+  });
+
   it("kind picks the newest user-action kind; chat and summary are fallbacks", async () => {
     // Chat A: starts as chat, later gets a task. kind should be 'task'.
     const chatA = generateId("chat");

@@ -280,9 +280,11 @@ export function getArtifactIcon(type: ArtifactType): LucideIcon {
   }
 }
 
-// Folder helpers — accept the folder list explicitly so they can be used
-// against whatever derivedSlice selector returns (empty for now, see
-// matrix §4.2.1).
+// Folder helpers — accept the folder list explicitly so they can be
+// used against whatever folder source the caller has handy. The
+// server does not currently expose folders as a first-class entity
+// (tracked as a roadmap feature); callers using a derived list pass
+// an empty array and the helpers behave correctly.
 
 export function getFolderById(folders: Folder[], id: string | null | undefined): Folder | undefined {
   if (!id) return undefined

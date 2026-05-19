@@ -1,4 +1,4 @@
-import type { GoalKey } from "@agent-desk/shared";
+import type { Agent, ChatWithListMeta, Workspace } from "@agent-desk/shared";
 
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
@@ -47,29 +47,21 @@ export interface ServerUser {
   createdAt: string;
 }
 
-export interface ServerAgent {
-  id: string;
-  userId: string;
-  name: string;
-  model: string;
-}
+/**
+ * Server agent / workspace types — re-exported from
+ * `@agent-desk/shared` so the API contract has a single source of
+ * truth.  The `ServerWorkspaceAgent` membership row is server-side
+ * only (no shared schema yet) since it pairs an Agent with its
+ * workspace enrollment timestamp.
+ */
+export type ServerAgent = Agent;
 
 /** Membership row from `GET /workspaces/:id/agents`: agent + enrollment timestamp. */
 export interface ServerWorkspaceAgent extends ServerAgent {
   addedAt: string;
 }
 
-export interface ServerWorkspace {
-  id: string;
-  userId: string;
-  name: string;
-  description: string;
-  icon: string;
-  color: string;
-  /** On-disk directory name under ~/Desk/. Used for sandbox path translation. */
-  path: string;
-  createdAt: string;
-}
+export type ServerWorkspace = Workspace;
 
 export type ConnectorStatus = "active" | "disabled" | "error" | "revoked";
 
@@ -107,35 +99,16 @@ export interface WorkspaceConnectorGrant {
   updatedAt: string;
 }
 
-export interface ServerChat {
-  id: string;
-  workspaceId: string;
-  agentId: string;
-  title: string;
-  goal?: GoalKey;
-  updatedAt: string;
-  awaitingUser: boolean;
-  unread: boolean;
-  /**
-   * Drives the chat-list icon (fallback signal). Newest user-action
-   * message kind (`task` / `task_run`), with `'chat'` as the fallback.
-   * `summary` is auto-emitted on every chat turn and is treated as a
-   * fallback. Only populated by /chats list responses.
-   */
-  kind?: "chat" | "task" | "task_run";
-  /**
-   * True when the chat's most recent `agent_turn` message is in `pending`
-   * or `running` state. Only populated by /chats list responses (maintained
-   * on the chat row so sidebar loads do not scan messages). WS `chat.updated`
-   * events omit this.
-   */
-  running?: boolean;
-  /**
-   * True when the chat's most recent `agent_turn` failed and can be retried.
-   * Only populated by /chats list responses; WS message events refine it live.
-   */
-  failed?: boolean;
-}
+/**
+ * Server chat type — re-exported from `@agent-desk/shared` so both
+ * sides of the API agree on the shape by definition (the same Zod
+ * schema is parsed on the server and inferred here).  The list-meta
+ * fields (kind / running / failed / lastMessage) are optional in the
+ * shared type because the WS `chat.updated` payload omits them — the
+ * server's `GET /chats` response sets them, the sidebar refetch on
+ * list invalidation picks up the new preview.
+ */
+export type ServerChat = ChatWithListMeta;
 
 export interface AttachmentRef {
   path: string;

@@ -4,8 +4,8 @@ import {
   GOAL_KEYS,
   ValidationError,
   type Chat,
+  type ChatWithListMeta,
   type GoalKey,
-  type MessageKind,
 } from "@agent-desk/shared";
 
 function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
@@ -24,6 +24,9 @@ function rowToChat(row: Record<string, unknown>): Chat {
     agentId: row.agent_id,
     title: row.title,
     goal: row.goal ?? undefined,
+    // Pre-migration chats backfilled created_at from updated_at
+    // (see migration 0042); the column is NOT NULL going forward.
+    createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
     awaitingUser: !!row.awaiting_user,
@@ -31,17 +34,47 @@ function rowToChat(row: Record<string, unknown>): Chat {
   });
 }
 
-export interface ChatWithLastMessage extends Chat {
-  /** Kind that drives the chat-list icon when no chat goal is persisted. */
-  kind: MessageKind;
-  /**
-   * True when the chat's most recent `agent_turn` message is pending/running.
-   */
-  running: boolean;
-  /**
-   * True when the chat's most recent `agent_turn` message failed and can be retried.
-   */
-  failed: boolean;
+/**
+ * Server-side chat-list response row.  Same shape as
+ * `ChatWithListMeta` from `@agent-desk/shared`, but with the four
+ * sidebar-meta fields promoted from optional to required because the
+ * server query always populates them (the shared type leaves them
+ * optional so the WS `chat.updated` payload — which omits them — fits
+ * the same definition).
+ */
+export type ChatWithLastMessage = Chat & Required<Pick<ChatWithListMeta, "kind" | "running" | "failed" | "lastMessage">>;
+
+const LAST_MESSAGE_PREVIEW_LIMIT = 200;
+
+/**
+ * Correlated subquery that produces the chat's most recent
+ * user/agent text message's content. Used by `listWithLatestMessage`
+ * so the sidebar's "last message" preview lands in the same single
+ * indexed query as the rest of the chat-list cache.  Filters out
+ * internal types (agent_turn, summary_request, summary, artifactRef)
+ * so the preview shows what the user wrote/saw, not scheduler
+ * plumbing.
+ */
+function lastTextSubquerySql(): string {
+  return `(
+    SELECT json_extract(m.content, '$.text')
+    FROM messages m
+    WHERE m.chat_id = c.id
+      AND m.role IN ('user', 'agent')
+      AND json_valid(m.content)
+      AND json_extract(m.content, '$.type') = 'text'
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) AS last_text`;
+}
+
+function previewFromRaw(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > LAST_MESSAGE_PREVIEW_LIMIT
+    ? `${normalized.slice(0, LAST_MESSAGE_PREVIEW_LIMIT - 1).trimEnd()}…`
+    : normalized;
 }
 
 export async function listWithLatestMessage(
@@ -52,7 +85,8 @@ export async function listWithLatestMessage(
     `SELECT c.*,
             c.list_kind AS kind,
             c.list_running AS is_running,
-            c.list_failed AS is_failed
+            c.list_failed AS is_failed,
+            ${lastTextSubquerySql()}
       FROM chats c
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
@@ -61,9 +95,10 @@ export async function listWithLatestMessage(
   );
   return rows.map((r) => ({
     ...rowToChat(r),
-    kind: r.kind as MessageKind,
+    kind: r.kind as ChatWithLastMessage["kind"],
     running: !!r.is_running,
     failed: !!r.is_failed,
+    lastMessage: previewFromRaw(r.last_text),
   }));
 }
 
@@ -91,9 +126,15 @@ export async function insert(
     );
   }
 
+  // Migration 0042 added `created_at` with an empty-string default
+  // because SQLite refuses non-constant DEFAULTs in ALTER TABLE ADD
+  // COLUMN. Stamp it explicitly here so new chats land with a real
+  // ISO timestamp instead of an empty string. (`updated_at` keeps
+  // its row-level default since that column predates the ADD COLUMN
+  // restriction — it lives in the original CREATE TABLE.)
   const { rows } = await db.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO chats (id, workspace_id, agent_id, title, goal, created_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      RETURNING *`,
     [data.id, data.workspaceId, data.agentId, data.title ?? "", goal ?? null],
   );

@@ -66,6 +66,7 @@ describe('parseEntityUrl', () => {
           workspaceId: 'wks_456',
           agentId: 'agent_1',
           title: 'Planning thread',
+          createdAt: '2026-05-13T00:00:00.000Z',
           updatedAt: '2026-05-13T00:00:00.000Z',
           awaitingUser: false,
           unread: false,
