@@ -83,7 +83,14 @@ interface EventLogEntry {
   event?: { type?: string; part?: { text?: unknown } };
 }
 
-function previewFromContent(raw: unknown): string {
+/**
+ * Exported so the JSON-walking logic that turns a server-side
+ * message row into the sidebar preview can be unit-tested directly
+ * against the discriminated union without round-tripping through
+ * SQLite.  Not part of the public queries surface — consumers
+ * should call `listWithLatestMessage` instead.
+ */
+export function previewFromContent(raw: unknown): string {
   if (raw === null || raw === undefined) return "";
   let parsed: unknown = raw;
   if (typeof raw === "string") {
