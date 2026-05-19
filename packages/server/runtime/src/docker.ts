@@ -353,6 +353,22 @@ export async function createOrReuse(
   await ensureNestedMountTargets(plan);
 
   try {
+    // Egress policy. Default is "bridge" (full outbound) because the
+    // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
+    // opencode), GitHub for git operations, and tool registries.
+    // Operators running a paranoid deployment can set
+    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
+    // and any tooling that downloads from the network, but keeps the
+    // sandbox effective for purely-local workloads (file editing,
+    // text-only chats with a pre-cached model).
+    //
+    // A full domain-based allowlist would require a sidecar HTTP
+    // proxy (squid / mitmproxy in transparent mode) and is out of
+    // scope for v1; the two-option knob ("unrestricted" vs "none")
+    // covers the realistic deployment matrix.
+    const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
+    const network = egressMode === "none" ? "none" : "bridge";
+
     const containerId = await engine.create({
       name: containerName,
       image: sandboxImage(workspaceKind),
@@ -369,12 +385,14 @@ export async function createOrReuse(
         [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
-      network: "bridge",
+      network,
       // host-gateway lets the in-sandbox `desk` CLI reach the host-side
       // desk-server REST API as `host.docker.internal`. Without it the
       // bridge default has no DNS name for the host, so the agent has no
-      // route back to /sandbox/messages.
-      extraHosts: ["host.docker.internal:host-gateway"],
+      // route back to /sandbox/messages. `--network none` drops this
+      // capability; an operator who picks "none" accepts losing in-
+      // sandbox host callbacks.
+      extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
       pidsLimit: SANDBOX_BASELINE_PIDS,
       memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,

@@ -98,4 +98,23 @@ describe("must_change_password flag", () => {
     });
     expect(inserted.mustChangePassword).toBe(false);
   });
+
+  it("seedIfEmpty is a no-op on an already-seeded DB and never flips the flag back", async () => {
+    // Set up state: one user already exists with mustChangePassword=0
+    // (they previously changed their password).
+    await pool.query("DELETE FROM users", []);
+    delete process.env.DESK_SEED_USERNAME;
+    delete process.env.DESK_SEED_PASSWORD;
+    await seedIfEmpty(pool);
+    const seeded = await users.findByUsername(pool, "desk");
+    await users.setPassword(pool, seeded!.id, "change-me-before-first-boot", "now-rotated-pw");
+    const beforeCleared = await users.findByUsername(pool, "desk");
+    expect(beforeCleared!.mustChangePassword).toBe(false);
+
+    // Re-run seedIfEmpty — should be a complete no-op.
+    await seedIfEmpty(pool);
+    const after = await users.findByUsername(pool, "desk");
+    expect(after!.id).toBe(beforeCleared!.id); // same row
+    expect(after!.mustChangePassword).toBe(false); // flag stays cleared
+  });
 });

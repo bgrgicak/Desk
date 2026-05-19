@@ -416,6 +416,14 @@ export async function setProviders(
  * Bound to `GET /me/key-access-log`, optional `?limit=` (1–500,
  * default 100). Returns ISO timestamps so the client doesn't need to
  * know the DB column shape.
+ *
+ * Threat model: the audit table holds only metadata (key names, never
+ * values). A SPA session that's been hijacked can read what the
+ * legitimate user could see anyway — the timestamps and "this key was
+ * used by a sandbox run" reason strings aren't sensitive on their own.
+ * For that reason this endpoint deliberately does NOT require a vault
+ * unlock; the threat model matches GET /me/providers (masked-key
+ * metadata available at any time).
  */
 export async function getKeyAccessLog(
   pool: Pool,

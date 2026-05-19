@@ -1,18 +1,12 @@
-import * as crypto from "node:crypto";
 import { hashPassword, type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@agent-desk/shared";
-import { issueSession, revokeSession } from "../auth/sessions.js";
+import { ConflictError, generateId, UnauthorizedError, ValidationError, withModule } from "@agent-desk/shared";
+import { hashToken, issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
 import { createHub } from "./workspaces.js";
-import { withModule } from "@agent-desk/shared";
 const log = withModule("api/routes/auth");
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
-}
 
 export async function handleLogin(
   pool: Pool,
