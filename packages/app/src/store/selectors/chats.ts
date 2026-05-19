@@ -10,7 +10,11 @@ export function toUiChat(c: ServerChat): UiChat {
   return {
     id: c.id,
     title: c.title,
-    lastMessage: "", // TODO(api-gap): derive from last message fetched per chat
+    // Server fills lastMessage on /chats list responses (correlated
+    // subquery against the latest user/agent text message). WS
+    // chat.updated events omit it; the sidebar refetch on chat-list
+    // invalidation picks up the new preview.
+    lastMessage: c.lastMessage ?? "",
     updatedAt: new Date(c.updatedAt),
     createdAt: new Date(c.createdAt),
     artifactIds: [], // populated by slice 8

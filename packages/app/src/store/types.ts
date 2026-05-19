@@ -136,6 +136,13 @@ export interface ServerChat {
    * Only populated by /chats list responses; WS message events refine it live.
    */
   failed?: boolean;
+  /**
+   * Short preview of the chat's most recent visible text message. Only
+   * populated by /chats list responses; WS `chat.updated` events omit it
+   * (the next list refetch picks up the new preview). Empty string when
+   * the chat has no visible text messages yet.
+   */
+  lastMessage?: string;
 }
 
 export interface AttachmentRef {

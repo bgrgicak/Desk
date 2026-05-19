@@ -45,6 +45,47 @@ export interface ChatWithLastMessage extends Chat {
    * True when the chat's most recent `agent_turn` message failed and can be retried.
    */
   failed: boolean;
+  /**
+   * Short preview of the chat's most recent visible message (user-typed
+   * text or agent reply). Empty string when the chat has no visible
+   * messages yet, or when the latest one isn't a text payload (artifact
+   * refs, tool results, etc.). Trimmed and collapsed; truncated at 200
+   * UTF-16 code units so the sidebar can render a stable single-line.
+   */
+  lastMessage: string;
+}
+
+const LAST_MESSAGE_PREVIEW_LIMIT = 200;
+
+/**
+ * Correlated subquery that produces the chat's most recent
+ * user/agent text message's content. Used by `listWithLatestMessage`
+ * so the sidebar's "last message" preview lands in the same single
+ * indexed query as the rest of the chat-list cache.  Filters out
+ * internal types (agent_turn, summary_request, summary, artifactRef)
+ * so the preview shows what the user wrote/saw, not scheduler
+ * plumbing.
+ */
+function lastTextSubquerySql(): string {
+  return `(
+    SELECT json_extract(m.content, '$.text')
+    FROM messages m
+    WHERE m.chat_id = c.id
+      AND m.role IN ('user', 'agent')
+      AND json_valid(m.content)
+      AND json_extract(m.content, '$.type') = 'text'
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) AS last_text`;
+}
+
+function previewFromRaw(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > LAST_MESSAGE_PREVIEW_LIMIT
+    ? `${normalized.slice(0, LAST_MESSAGE_PREVIEW_LIMIT - 1).trimEnd()}…`
+    : normalized;
 }
 
 export async function listWithLatestMessage(
@@ -55,7 +96,8 @@ export async function listWithLatestMessage(
     `SELECT c.*,
             c.list_kind AS kind,
             c.list_running AS is_running,
-            c.list_failed AS is_failed
+            c.list_failed AS is_failed,
+            ${lastTextSubquerySql()}
       FROM chats c
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
@@ -67,6 +109,7 @@ export async function listWithLatestMessage(
     kind: r.kind as MessageKind,
     running: !!r.is_running,
     failed: !!r.is_failed,
+    lastMessage: previewFromRaw(r.last_text),
   }));
 }
 
