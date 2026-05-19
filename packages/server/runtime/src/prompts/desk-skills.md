@@ -76,6 +76,19 @@ Start with the user's terms and requested kind when clear; otherwise use
 `--kind any`. Broaden when results are empty, surprising, or incomplete.
 Filesystem search may supplement current-turn discovery, not replace it.
 
+**Asking the user a structured question** is itself a library-satisfiable
+request. When you would otherwise ask the user a yes/no, single-choice,
+multi-select, or short-form question in plain text, first check the library
+for a matching fragment and attach it with concrete params instead. The
+chat-forms global app at `/opt/desk-apps/chat-forms.app/` (also browsable at
+`~/.apps/chat-forms.app/`) ships these as built-in fragments — for a yes/no
+question, attach `/opt/desk-apps/chat-forms.app/dist/fragments/yes-no` with
+`--param question="..."`. Each fragment is a single question; attach one,
+let the user answer (their reply comes back as a normal chat message), then
+attach the next. Don't stack several question fragments in one turn unless
+the user explicitly asks for a batch. Fall back to plain-text questions only
+when no fragment matches the question shape.
+
 If discovery finds a satisfying current-workspace item, reuse or update it
 instead of creating a duplicate. If the user says an item exists but discovery
 misses it, broaden the query before assuming they are mistaken. When returning a

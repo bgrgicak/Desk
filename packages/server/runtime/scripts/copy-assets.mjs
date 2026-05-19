@@ -59,3 +59,19 @@ const persistenceSkillSrc = path.join(runtimeRoot, "src", "skills", "persistence
 const persistenceSkillDest = path.join(runtimeRoot, "dist", "persistence-skill.md");
 fs.mkdirSync(path.dirname(persistenceSkillDest), { recursive: true });
 fs.copyFileSync(persistenceSkillSrc, persistenceSkillDest);
+
+// Mirror the @agent-desk/desk-apps source tree into dist/desk-apps/ so the
+// built runtime artifact is self-contained. `writeBuiltinApps` reads from
+// this location in built mode (and from the workspace path in source mode).
+const deskAppsSrc = path.resolve(runtimeRoot, "..", "..", "desk-apps");
+const deskAppsDest = path.join(runtimeRoot, "dist", "desk-apps");
+fs.rmSync(deskAppsDest, { recursive: true, force: true });
+if (fs.existsSync(deskAppsSrc)) {
+  // Only copy `*.app/` directories — skip package.json, scripts/, README.
+  for (const entry of fs.readdirSync(deskAppsSrc)) {
+    if (!entry.endsWith(".app")) continue;
+    const entryStat = fs.statSync(path.join(deskAppsSrc, entry));
+    if (!entryStat.isDirectory()) continue;
+    copyTree(path.join(deskAppsSrc, entry), path.join(deskAppsDest, entry));
+  }
+}

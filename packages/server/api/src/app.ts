@@ -755,6 +755,43 @@ export function createApp(opts: AppOptions): Server {
       }
     }
 
+    // Global-scope variant: /apps/global/:chatId/:appName/dist/* and the
+    // companion `POST /apps/global/:chatId/:appName/issue`. Resolves
+    // built-in apps from `${DESK_HOME}/.apps/` (populated by
+    // `writeBuiltinApps` from @agent-desk/desk-apps on server start) and
+    // mounted into every sandbox at `/opt/desk-apps/`.
+    if (segments[0] === "apps" && segments[1] === "global" && segments.length >= 4) {
+      if (
+        method === "POST" &&
+        segments.length === 5 &&
+        segments[4] === "issue"
+      ) {
+        const issuerId = await requireBearerForApps(pool, req);
+        const chatId = decodeURIComponent(segments[2]);
+        const appName = decodeURIComponent(segments[3]);
+        const result = await appsRoutes.handleIssueGlobalAppSession(
+          pool,
+          storage,
+          issuerId,
+          chatId,
+          appName,
+        );
+        sendJson(res, 201, result);
+        return;
+      }
+      if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
+        const handled = await appsRoutes.handleStaticGlobalAppRequest(
+          pool,
+          storage,
+          segments,
+          new URL(req.url ?? "/", "http://localhost"),
+          req,
+          res,
+        );
+        if (handled) return;
+      }
+    }
+
     // Sandbox routes — called by `desk` CLI from inside an OpenCode run.
     // Auth is X-Desk-Sandbox-Token; the token resolves to (session, agent),
     // and we use the agent's userId to gate the chat ownership check.

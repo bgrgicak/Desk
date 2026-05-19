@@ -16,7 +16,9 @@ import {
   bindsFromPlan,
   SANDBOX_HOME,
   SKILLS_SANDBOX_MOUNT_DIR,
+  APPS_SANDBOX_MOUNT_DIR,
   skillsHostDir,
+  appsHostDir,
 } from "../src/mounts.js";
 import type { SandboxHandle } from "../src/docker.js";
 
@@ -79,17 +81,18 @@ describe("mounts", () => {
     );
   });
 
-  it("containerBinds binds the workspace root and global skills", () => {
+  it("containerBinds binds the workspace root, global skills, and built-in apps", () => {
     const binds = containerBinds(home, TEST_SLUG);
     expect(binds).toEqual([
       `${workspaceRootPath(home, TEST_SLUG)}:${SANDBOX_HOME}:rw`,
       `${skillsHostDir(home)}:${SKILLS_SANDBOX_MOUNT_DIR}:ro`,
+      `${appsHostDir(home)}:${APPS_SANDBOX_MOUNT_DIR}:ro`,
     ]);
   });
 
-  it("buildDefaultMountPlan mounts workspace rw and skills ro", () => {
+  it("buildDefaultMountPlan mounts workspace rw, skills ro, and built-in apps ro", () => {
     const plan = buildDefaultMountPlan(home, TEST_SLUG);
-    expect(plan).toHaveLength(2);
+    expect(plan).toHaveLength(3);
     expect(plan[0].mode).toBe("rw");
     expect(plan[0].category).toBe("workspace");
     expect(plan[0].targetPath).toBe(SANDBOX_HOME);
@@ -97,6 +100,9 @@ describe("mounts", () => {
     expect(plan[1].mode).toBe("ro");
     expect(plan[1].targetPath).toBe(SKILLS_SANDBOX_MOUNT_DIR);
     expect(plan[1].sourcePath).toBe(skillsHostDir(home));
+    expect(plan[2].mode).toBe("ro");
+    expect(plan[2].targetPath).toBe(APPS_SANDBOX_MOUNT_DIR);
+    expect(plan[2].sourcePath).toBe(appsHostDir(home));
     expect(bindsFromPlan(plan)).toEqual(containerBinds(home, TEST_SLUG));
   });
 

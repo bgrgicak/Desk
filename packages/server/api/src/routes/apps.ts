@@ -163,6 +163,10 @@ function libraryCookieNameFor(workspaceId: string, appName: string): string {
   return `desk_libapp_${workspaceId}_${appName}`;
 }
 
+function globalCookieNameFor(chatId: string, appName: string): string {
+  return `desk_globalapp_${chatId}_${appName}`;
+}
+
 function parseCookies(req: IncomingMessage): Record<string, string> {
   const raw = req.headers.cookie;
   if (!raw) return {};
@@ -404,7 +408,7 @@ function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   // sandboxed iframes without `allow-same-origin` have an opaque `null`
   // origin, so the parent authenticates messages by exact contentWindow
   // identity instead of by Origin.
-  const script = `<script nonce="${nonce}">(()=>{const c=${payload};const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?.scrollHeight||0,b?.offsetHeight||0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const b=document.body;const ro=new ResizeObserver(v);if(b)ro.observe(b);window.addEventListener("load",v,{once:true})}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};})();</script>`;
+  const script = `<script nonce="${nonce}">(()=>{const c=${payload};const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?.scrollHeight||0,b?.offsetHeight||0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const b=document.body;const ro=new ResizeObserver(v);if(b)ro.observe(b);window.addEventListener("load",v,{once:true})}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};})();</script>`;
   if (html.includes("</head>")) {
     return html.replace("</head>", `${script}</head>`);
   }
@@ -626,7 +630,12 @@ export async function handleStaticAppRequest(
   // on the app-session cookie. Keep HTML entrypoints authenticated and bridge-
   // injected; serve non-HTML assets as unprivileged bytes under an unguessable
   // chat/app URL. Privileged data still requires the parent-mediated bridge.
-  if (tail !== "" && path.extname(tail).toLowerCase() !== ".html") {
+  //
+  // Skip the unprivileged-asset branch when the tail is a recognized HTML
+  // entry point (`fragments/<name>` or `fragments/<name>/`) — those need
+  // the cookie/bridge injection path.
+  const chatEntry = matchEntryPoint(tail);
+  if (tail !== "" && !chatEntry && path.extname(tail).toLowerCase() !== ".html") {
     const { distDir } = await resolveChatAppDist(pool, storage, chatId, appName);
     await serveAsset(distDir, tail, res);
     return true;
@@ -720,6 +729,214 @@ export class IssueRateLimitError extends Error {
     this.name = "IssueRateLimitError";
     this.retryAfterSeconds = Math.ceil(ISSUE_LIMIT_WINDOW_MS / 1000);
   }
+}
+
+// ── Global scope (built-in apps) ───────────────────────────────────────
+//
+// Built-in apps live in `${DESK_HOME}/.apps/<name>.app/`, populated by
+// `writeBuiltinApps` on server start (mirrors @agent-desk/desk-apps) and
+// mounted into every sandbox at `/opt/desk-apps/`. They're visible from
+// every chat without being scoped to any particular workspace.
+//
+// URL scheme: `/apps/global/:chatId/:appName/dist/*`. The chatId is in the
+// path purely for session and cookie scoping — global apps resolve only
+// against `${DESK_HOME}/.apps/`. The bridge's `chatId` still binds
+// `chats.write` capability to the calling chat.
+
+async function resolveGlobalAppDist(
+  storage: StorageContext,
+  appName: string,
+): Promise<{ distDir: string }> {
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new NotFoundError(`Unknown app: ${appName}`);
+  }
+  const appsRoot = path.join(storage.home, ".apps");
+  const distDir = path.join(appsRoot, `${appName}.app`, "dist");
+  let real: string;
+  try {
+    real = await realpath(distDir);
+  } catch {
+    throw new NotFoundError(`Built-in app dist not found: ${appName}.app/dist`);
+  }
+  const appsRootReal = await realpath(appsRoot).catch(() => appsRoot);
+  if (!real.startsWith(appsRootReal + path.sep) && real !== appsRootReal) {
+    throw new NotFoundError(`Built-in app dist not found: ${appName}.app/dist`);
+  }
+  return { distDir: real };
+}
+
+export async function issueGlobalAppSession(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  chatId: string,
+  appName: string,
+): Promise<IssueResult> {
+  await ensureUserOwnsChat(pool, userId, chatId);
+  const ws = await workspaceSlugForChat(pool, chatId);
+  if (!ws) throw new NotFoundError(`Chat not found: ${chatId}`);
+  const { distDir } = await resolveGlobalAppDist(storage, appName);
+
+  const manifest = await readManifest(distDir);
+  const capabilities = sanitizeCapabilities(manifest?.capabilities);
+
+  const raw = randomBytes(APP_TOKEN_BYTES).toString("hex");
+  const token = APP_TOKEN_PREFIX + raw;
+  const expiresAt = new Date(Date.now() + APP_TOKEN_TTL_MS);
+  await queries.appSessions.issue(pool, {
+    id: generateId("appSession"),
+    userId,
+    scope: "global",
+    chatId,
+    // workspace_id is NOT NULL on the table; use the chat's workspace as a
+    // bookkeeping anchor. Resolution and serving are workspace-independent.
+    workspaceId: ws.workspaceId,
+    appName,
+    capabilities,
+    tokenHash: hashToken(token),
+    expiresAt,
+  });
+
+  const url = `/apps/global/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}/dist/?t=${encodeURIComponent(token)}`;
+  return {
+    token,
+    expiresAt: expiresAt.toISOString(),
+    url,
+    cookieName: globalCookieNameFor(chatId, appName),
+    bridgeKey: bridgeKeyFor(token),
+    capabilities,
+  };
+}
+
+async function verifyGlobalAppToken(
+  pool: Pool,
+  token: string,
+  expectedChatId: string,
+  expectedAppName: string,
+): Promise<VerifiedSession | null> {
+  const session = await queries.appSessions.verify(pool, hashToken(token));
+  if (!session) return null;
+  if (session.scope !== "global") return null;
+  if (session.chatId !== expectedChatId) return null;
+  if (session.appName !== expectedAppName) return null;
+  return {
+    userId: session.userId,
+    chatId: session.chatId,
+    appName: session.appName,
+    capabilities: session.capabilities,
+  };
+}
+
+/**
+ * Handler for `GET /apps/global/:chatId/:appName/dist/*`. Mirrors the chat
+ * scope's token/cookie/bridge flow, but resolves the app's dist directory
+ * against `${DESK_HOME}/.apps/` (Desk-shipped built-in apps), independent
+ * of any workspace.
+ */
+export async function handleStaticGlobalAppRequest(
+  pool: Pool,
+  storage: StorageContext,
+  segments: string[],
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  // Expect: ["apps", "global", chatId, appName, "dist", ...rest]
+  if (
+    segments.length < 5 ||
+    segments[0] !== "apps" ||
+    segments[1] !== "global" ||
+    segments[4] !== "dist"
+  ) {
+    return false;
+  }
+  const chatId = decodeURIComponent(segments[2]);
+  const appName = decodeURIComponent(segments[3]);
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new NotFoundError(`Unknown app: ${appName}`);
+  }
+
+  const tail = segments.slice(5).map((s) => decodeURIComponent(s)).join("/");
+
+  // Non-HTML assets served unprivileged (same rationale as the chat scope:
+  // sandboxed-iframe module-script loads from an opaque origin do not send
+  // cookies). Privileged operations route through the bridge. Skip the
+  // asset branch when the tail matches a fragment HTML entry point so the
+  // bridge-injection path is reached.
+  const globalEntry = matchEntryPoint(tail);
+  if (tail !== "" && !globalEntry && path.extname(tail).toLowerCase() !== ".html") {
+    const { distDir } = await resolveGlobalAppDist(storage, appName);
+    await serveAsset(distDir, tail, res);
+    return true;
+  }
+
+  const cookies = parseCookies(req);
+  const cookieName = globalCookieNameFor(chatId, appName);
+  const queryToken = url.searchParams.get("t");
+  const cookieToken = cookies[cookieName];
+
+  let session: VerifiedSession | null = null;
+  if (queryToken) {
+    session = await verifyGlobalAppToken(pool, queryToken, chatId, appName);
+    if (!session) throw new UnauthorizedError("Invalid app token");
+  } else if (cookieToken) {
+    session = await verifyGlobalAppToken(pool, cookieToken, chatId, appName);
+    if (!session) throw new UnauthorizedError("Invalid app token");
+  } else {
+    throw new UnauthorizedError("Missing app token");
+  }
+
+  const { distDir } = await resolveGlobalAppDist(storage, appName);
+  const cookiePath = `/apps/global/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}`;
+
+  if (queryToken) {
+    setAppCookie(res, cookieName, queryToken, cookiePath);
+    const incoming = new URL(req.url ?? "/", "http://localhost").pathname;
+    const trailingSlash = incoming.endsWith("/") ? "/" : "";
+    const cleanPath = `/${segments.join("/")}${trailingSlash}`;
+    res.writeHead(302, { Location: cleanPath });
+    res.end();
+    return true;
+  }
+
+  const entry = matchEntryPoint(tail);
+  if (entry) {
+    await serveIndex({
+      distDir,
+      subpath: entry.subpath,
+      bridge: {
+        chatId,
+        appName,
+        bridgeKey: bridgeKeyFor(cookieToken),
+        capabilities: session.capabilities,
+      },
+      res,
+    });
+    return true;
+  }
+  await serveAsset(distDir, tail, res);
+  return true;
+}
+
+/**
+ * Handler for `POST /apps/global/:chatId/:appName/issue`. Mints a global
+ * app session and returns the bootstrap URL to the parent SPA. Shares the
+ * same per-user `/issue` rate limit as chat/library scopes.
+ */
+export async function handleIssueGlobalAppSession(
+  pool: Pool,
+  storage: StorageContext,
+  userId: string,
+  chatId: string,
+  appName: string,
+): Promise<IssueResult> {
+  if (!APP_NAME_PATTERN.test(appName)) {
+    throw new ValidationError(`Invalid app name: ${appName}`);
+  }
+  if (!recordIssueAndCheck(userId)) {
+    throw new IssueRateLimitError();
+  }
+  return issueGlobalAppSession(pool, storage, userId, chatId, appName);
 }
 
 // ── Library scope (PR-E) ──────────────────────────────────────────────

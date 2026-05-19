@@ -1,0 +1,11 @@
+{
+  "name": "chat-forms",
+  "displayName": "chat-forms",
+  "description": "A Desk app with fragments for agents to ask the user structured questions via UI.",
+  "version": "0.1.0",
+  "capabilities": ["chats.write"],
+  "params": {},
+  "fragments": [
+    "yes-no"
+  ]
+}

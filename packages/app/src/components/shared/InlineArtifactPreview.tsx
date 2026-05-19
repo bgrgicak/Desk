@@ -14,6 +14,7 @@ const INLINE_PREVIEW_MAX_HEIGHT_VH = 60
 
 interface InlineArtifactPreviewProps {
   workspaceId?: string
+  chatId?: string
   path: string
   name: string
   mime?: string | null
@@ -37,26 +38,40 @@ export function inlineAppPreviewFor(
   path: string,
   name: string,
   mime?: string | null,
-): Parameters<typeof AppPreview>[0] | null {
+): ReturnType<typeof appAttachmentToPreview> {
   void name
   void mime
   return appAttachmentToPreview(path)
 }
 
-export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, openHref, actions, fallback }: InlineArtifactPreviewProps) {
+export function InlineArtifactPreview({ workspaceId, chatId, path, name, mime, params, onOpen, openHref, actions, fallback }: InlineArtifactPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
   const [htmlHeight, setHtmlHeight] = useState(280)
   const htmlIframeRef = useRef<HTMLIFrameElement | null>(null)
-  const appPreviewRef = useMemo(() => {
+  const appPreviewRef = useMemo((): Parameters<typeof AppPreview>[0] | null => {
     const base = inlineAppPreviewFor(path, name, mime)
     if (!base) return null
+    if (base.scope === 'global') {
+      // Global apps don't carry chatId in the path — it comes from the
+      // chat we're rendering inside. Without it the iframe can't issue a
+      // session, so fall back to the compact attachment row.
+      if (!chatId) return null
+      return {
+        scope: 'global',
+        chatId,
+        appName: base.appName,
+        ...(base.fragment ? { fragment: base.fragment } : {}),
+        ...(params ? { params } : {}),
+        variant: 'inline' as const,
+      }
+    }
     return {
       ...base,
       ...(base.scope === 'library' ? { workspaceId } : {}),
       ...(params ? { params } : {}),
       variant: 'inline' as const,
     }
-  }, [path, name, mime, params, workspaceId])
+  }, [path, name, mime, params, workspaceId, chatId])
   const guessedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
   const shouldTryPreview = !!workspaceId && canRenderInline(guessedKind)
   const shouldFetchFile = shouldTryPreview && guessedKind !== 'app'
@@ -162,6 +177,13 @@ export function InlineArtifactPreview({ workspaceId, path, name, mime, params, o
   }, [state])
 
   if (state.status === 'fallback') return <>{fallback}</>
+
+  // Fragments are sub-routes of an app meant to inline into the conversation
+  // as if they were native message content — no chrome, no header, no
+  // separate max-width. Skip the shell entirely.
+  if (state.status === 'ready' && state.kind === 'app' && appPreviewRef?.fragment) {
+    return <AppPreview {...appPreviewRef} />
+  }
 
   if (state.status === 'loading') {
     return (

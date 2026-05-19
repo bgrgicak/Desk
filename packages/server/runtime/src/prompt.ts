@@ -24,6 +24,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = path.resolve(here, "prompts");
 
+// Prompt files (.md under PROMPTS_DIR) are cached in-process; tsx watch only
+// reloads on .ts changes, so .md edits in dev land after the next .ts touch.
 const rawCache = new Map<string, string>();
 
 function readRaw(rel: string): string {
