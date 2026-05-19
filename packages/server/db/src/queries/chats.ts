@@ -126,9 +126,15 @@ export async function insert(
     );
   }
 
+  // Migration 0042 added `created_at` with an empty-string default
+  // because SQLite refuses non-constant DEFAULTs in ALTER TABLE ADD
+  // COLUMN. Stamp it explicitly here so new chats land with a real
+  // ISO timestamp instead of an empty string. (`updated_at` keeps
+  // its row-level default since that column predates the ADD COLUMN
+  // restriction — it lives in the original CREATE TABLE.)
   const { rows } = await db.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO chats (id, workspace_id, agent_id, title, goal, created_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      RETURNING *`,
     [data.id, data.workspaceId, data.agentId, data.title ?? "", goal ?? null],
   );

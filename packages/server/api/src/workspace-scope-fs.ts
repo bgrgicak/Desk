@@ -23,6 +23,15 @@ import {
  *
  * Kept separate from `workspace-scope.ts` because it adds an fs round-
  * trip the pure path validators don't need (and shouldn't pay).
+ *
+ * Note on TOCTOU: the realpath check happens here and the caller
+ * opens the file separately, so a symlink swap between the two could
+ * in theory let an attacker re-aim the path.  Acceptable because
+ * exploit requires write access to the workspace directory by
+ * another process on the same host — at which point isolation has
+ * already failed.  If we ever support workspace mounts that other
+ * users can write to, revisit by passing an O_NOFOLLOW file
+ * descriptor through to the open path.
  */
 export async function requireReadablePathForRoute(
   pool: Pool,

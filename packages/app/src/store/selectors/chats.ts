@@ -1,5 +1,20 @@
-import type { Chat as UiChat } from "@/data/ui-types";
+import type { Chat as UiChat, ChatGoalKind } from "@/data/ui-types";
+import { GOAL_KEYS } from "@agent-desk/shared";
 import type { ServerChat } from "../types";
+
+const VALID_CHAT_GOALS = new Set<string>(GOAL_KEYS);
+
+/**
+ * Narrow the server's free-form `goal` string to the
+ * client's `ChatGoalKind` union, falling back to `null` for
+ * unknown / missing values.  The server's ChatSchema currently
+ * accepts any string (the DB column has no enum constraint); the
+ * client only renders the known set.
+ */
+function narrowChatGoal(goal: string | undefined): ChatGoalKind | null {
+  if (!goal) return null;
+  return VALID_CHAT_GOALS.has(goal) ? (goal as ChatGoalKind) : null;
+}
 
 /**
  * Map a server Chat to the shape the existing React components
@@ -26,7 +41,7 @@ export function toUiChat(c: ServerChat): UiChat {
     failed: c.failed,
     workspaceId: c.workspaceId,
     agentId: c.agentId,
-    goal: c.goal ?? null,
+    goal: narrowChatGoal(c.goal),
     kind: c.kind,
   };
 }
