@@ -9,7 +9,8 @@ import {
   requireOwnedMessage,
   requireOwnedWorkspace,
 } from "../auth/ownership.js";
-import { parseBody, parseMultipart, sendJson } from "../http/request-helpers.js";
+import { parseBody, sendJson } from "../http/io.js";
+import { parseMultipart } from "../http/multipart.js";
 import { resolveWorkspaceId } from "../workspace-scope.js";
 import type { DispatchContext } from "./context.js";
 

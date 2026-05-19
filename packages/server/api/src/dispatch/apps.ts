@@ -8,11 +8,9 @@ import { handleAppStorageRequest } from "../routes/app-storage.js";
 import * as chatRoutes from "../routes/chats.js";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 import { verifySession } from "../auth/sessions.js";
-import {
-  requireBearerForApps,
-  requireReadablePathForRoute,
-  sendJson,
-} from "../http/request-helpers.js";
+import { sendJson } from "../http/io.js";
+import { requireBearerForApps } from "../auth/appBearer.js";
+import { requireReadablePathForRoute } from "../workspace-scope-fs.js";
 import type { DispatchContext } from "./context.js";
 
 const APP_MIME: Record<string, string> = {

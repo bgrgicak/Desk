@@ -6,7 +6,7 @@ import * as agentRoutes from "../routes/agents.js";
 import * as libraryRoutes from "../routes/library.js";
 import * as pinRoutes from "../routes/pins.js";
 import * as workspaceRoutes from "../routes/workspaces.js";
-import { parseBody, sendJson } from "../http/request-helpers.js";
+import { parseBody, sendJson } from "../http/io.js";
 import { requireOwnedAgent, requireOwnedWorkspace } from "../auth/ownership.js";
 import type { DispatchContext } from "./context.js";
 

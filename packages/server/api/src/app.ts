@@ -17,11 +17,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import { VaultStore } from "./vault/store.js";
 import { withModule } from "@agent-desk/shared/logger";
-import {
-  defaultBackupPath,
-  parseBody,
-  sendJson,
-} from "./http/request-helpers.js";
+import { defaultBackupPath, parseBody, sendJson } from "./http/io.js";
 import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
 import type { DispatchContext } from "./dispatch/context.js";
 import { dispatchSandbox } from "./dispatch/sandbox.js";

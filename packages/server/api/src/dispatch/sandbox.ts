@@ -6,7 +6,7 @@ import { requireOwnedChat } from "../auth/ownership.js";
 import * as chatRoutes from "../routes/chats.js";
 import * as searchRoutes from "../routes/search.js";
 import * as vaultRoutes from "../routes/vault.js";
-import { parseBody, sendJson } from "../http/request-helpers.js";
+import { parseBody, sendJson } from "../http/io.js";
 import { parseSearchKinds, parseSearchScope } from "../routes/search-params.js";
 import {
   findDuplicateScheduledSandboxTask,

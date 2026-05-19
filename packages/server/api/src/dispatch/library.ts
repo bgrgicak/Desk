@@ -1,12 +1,9 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { ConflictError, ValidationError } from "@agent-desk/shared";
 import * as libraryRoutes from "../routes/library.js";
-import {
-  parseBody,
-  parseMultipartFileStream,
-  requireReadablePathForRoute,
-  sendJson,
-} from "../http/request-helpers.js";
+import { parseBody, sendJson } from "../http/io.js";
+import { parseMultipartFileStream } from "../http/multipart.js";
+import { requireReadablePathForRoute } from "../workspace-scope-fs.js";
 import {
   requireLibraryPathInWorkspace,
   requireWorkspaceId,
