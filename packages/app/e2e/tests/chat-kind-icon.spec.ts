@@ -123,13 +123,16 @@ test("composer goal picker restores the chat's persisted goal", async ({
   await row.click();
 
   await expect(
-    loggedInPage.getByRole("button", { name: /New doc/ }).first(),
+    loggedInPage.getByRole("button", { name: /Document/ }).first(),
   ).toBeVisible();
 
-  await loggedInPage.getByRole("button", { name: /New doc/ }).first().click();
-  await loggedInPage.getByRole("button", { name: /^No goal$/ }).click();
+  await loggedInPage.getByRole("button", { name: /Document/ }).first().click();
+  await loggedInPage.getByRole("button", { name: /^Clear selection$/ }).click();
+  // After clearing the goal the picker label flips back to the default
+  // "Tools" trigger; the dropdown "Clear selection" entry is hidden again
+  // (only rendered when a goal is active).
   await expect(
-    loggedInPage.getByRole("button", { name: /^No goal$/ }).first(),
+    loggedInPage.getByRole("button", { name: /^Tools$/ }).first(),
   ).toBeVisible();
 
   await loggedInPage.locator("textarea").fill("hello");

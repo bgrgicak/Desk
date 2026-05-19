@@ -87,9 +87,12 @@ test("sending a message from the library item ConversationPanel creates a real s
   });
 
   // A new chat entry named after the file must appear in the sidebar — this
-  // confirms a real chat was created on the server (not just a mock).
+  // confirms a real chat was created on the server (not just a mock). The
+  // RoomSidebar is hidden in library-detail mode (AppShell collapses it
+  // when an item is open), so step out of the detail view first.
+  await loggedInPage.goto(`/w/${workspaceId}/pinned?chat=new`);
   await expect(
-    loggedInPage.getByRole("button", { name: filename }).first(),
+    loggedInPage.getByRole("link", { name: filename }).first(),
   ).toBeVisible({ timeout: 10_000 });
 
   // Verify the chat exists on the server with the message attached to the file.
