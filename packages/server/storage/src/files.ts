@@ -389,6 +389,49 @@ export async function pinLibraryFileToChat(
 
   const desiredName = path.basename(targetAbs);
 
+  // The same library target can be reachable through more than one visible
+  // path (for example after an app was saved/promoted under an alias). Treat
+  // the chat pin as a reference to the resolved target, not just to the
+  // requested basename, so pinning an alias does not create a second sidebar
+  // entry for the same app/file.
+  const existingNames = await fs.readdir(attDir).catch(() => [] as string[]);
+  for (const name of existingNames) {
+    const existingAbs = path.join(attDir, name);
+    const existingLink = await fs.readlink(existingAbs).catch(() => null);
+    if (existingLink === null) continue;
+    const resolvedExisting = path.isAbsolute(existingLink)
+      ? existingLink
+      : path.resolve(attDir, existingLink);
+    if (resolvedExisting !== targetAbs) continue;
+    const portableTarget = relativeSymlinkTarget(existingAbs, targetAbs);
+    if (existingLink !== portableTarget) {
+      await fs.unlink(existingAbs);
+      await fs.symlink(portableTarget, existingAbs);
+    }
+    const stat = await fs.stat(existingAbs).catch(() => null);
+    if (!stat) continue;
+    const relPath = path.relative(root, existingAbs).split(path.sep).join("/");
+    if (isAppDir) {
+      return {
+        path: relPath,
+        name,
+        mime: "application/vnd.desk.app+directory",
+        size: 0,
+        createdAt: stat.birthtime.toISOString(),
+        updatedAtMs: String(stat.mtimeMs),
+        isDir: true,
+      };
+    }
+    return {
+      path: relPath,
+      name,
+      mime: guessMime(name),
+      size: stat.size,
+      createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+    };
+  }
+
   const sameNameAbs = path.join(attDir, desiredName);
   const existingTarget = await fs.readlink(sameNameAbs).catch(() => null);
   if (existingTarget !== null) {
@@ -523,8 +566,9 @@ export async function saveChatAttachmentToLibrary(
  *
  * `artifactName` must be a basename ending in `.app`. The destination
  * defaults to the workspace root; pass `destSubpath` to land under a
- * library subfolder. Refuses to clobber an existing entry — collisions
- * use `uniqueDestPath` (e.g. `<name>.app/`, `<name>-1.app/`, …).
+ * library subfolder. If an app with the same path already exists, replace
+ * it instead of creating a suffixed duplicate. The previous copy goes to
+ * the same app-version trash used by the explicit replace flow.
  */
 export async function saveChatArtifactToLibrary(
   ctx: StorageContext,
@@ -544,7 +588,6 @@ export async function saveChatArtifactToLibrary(
   }
 
   const sub = validateLibrarySubpath(destSubpath);
-  const root = workspaceRootPath(ctx.home, slug);
   const artDir = chatArtifactsDir(ctx.home, slug, chatId);
   const srcAbs = path.join(artDir, artifactName);
 
@@ -559,25 +602,8 @@ export async function saveChatArtifactToLibrary(
     throw new ValidationError(`Not a directory: ${artifactName}`);
   }
 
-  const destDir = sub ? path.join(root, sub) : root;
-  await fs.mkdir(destDir, { recursive: true });
-  const destAbs = await uniqueDestPath(destDir, artifactName);
-
-  await fs.rename(srcAbs, destAbs);
-
-  const relPath = path.relative(root, destAbs).split(path.sep).join("/");
-  // The directory's stat doesn't fit `fileRefFromDisk` (which insists
-  // on a regular file). Build the FileRef inline.
-  const stat = await fs.stat(destAbs);
-  return {
-    path: relPath,
-    name: path.basename(destAbs),
-    mime: "application/vnd.desk.app+directory",
-    size: 0,
-    createdAt: stat.birthtime.toISOString(),
-    updatedAtMs: String(stat.mtimeMs),
-    isDir: true,
-  };
+  const targetPath = sub ? `${sub}/${artifactName}` : artifactName;
+  return replaceLibraryAppFromChat(ctx, slug, chatId, artifactName, targetPath);
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   useDeleteChatAttachmentMutation,
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
+  useGetWorkspacesQuery,
   usePatchChatMutation,
   usePostChatMessageMutation,
 } from '@/store/api'
@@ -321,6 +322,12 @@ export function ChatView({
       })
   }, [hasRealChatId, chat.id, deleteChatAttachment])
 
+  // Resolve the workspace filesystem path so the anchor-message preview
+  // below can rewrite sandbox paths in markdown the same way the main
+  // thread does. MessageBubble no longer subscribes on its own.
+  const { data: workspacesForBubble } = useGetWorkspacesQuery()
+  const workspacePathForAnchor = workspacesForBubble?.find(w => w.id === chat.workspaceId)?.path
+
   // Files actually parked in `.chats/{chatId}/`: user uploads + agent
   // artifact files/dirs. Uploads drive the Files-tab "In this chat" list;
   // artifact entries drive the Artifacts-tab "Chat files" section. Skipped
@@ -419,6 +426,7 @@ export function ChatView({
                 <MessageBubble
                   message={anchorMessage}
                   workspaceId={anchorMessage.chatId ? chat.workspaceId : undefined}
+                  workspacePath={anchorMessage.chatId ? workspacePathForAnchor : undefined}
                 />
               </div>
             ) : (

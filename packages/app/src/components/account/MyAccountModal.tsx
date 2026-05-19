@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
-import { Bell, Info, KeyRound, Sliders, User, X } from 'lucide-react'
+import { Bell, Info, Sliders, User, X } from 'lucide-react'
 import {
   useGetMeQuery,
   usePatchMeMutation,
@@ -26,7 +26,6 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
-import { SecretsSection } from '@/components/settings/SecretsSection'
 import { initialsOf } from '@/lib/initials'
 import { useAvatarUrl, saveAvatarUrl, deleteAvatarUrl, resizeToDataUrl } from '@/hooks/use-avatar'
 import {
@@ -39,13 +38,12 @@ import {
 
 // ── Nav ──────────────────────────────────────────────────────────────────────
 
-export type AccountSection = 'account' | 'notifications' | 'preferences' | 'secrets'
+export type AccountSection = 'account' | 'notifications' | 'preferences'
 
 const NAV: { id: AccountSection; label: string; icon: typeof User }[] = [
   { id: 'account',       label: 'My account',    icon: User     },
   { id: 'notifications', label: 'Notifications', icon: Bell     },
   { id: 'preferences',   label: 'Preferences',   icon: Sliders  },
-  { id: 'secrets',       label: 'Secrets',       icon: KeyRound },
 ]
 
 // ── User prefs (localStorage) ────────────────────────────────────────────────
@@ -644,11 +642,6 @@ export function MyAccountModal({
               {activeSection === 'account'       && <AccountSection_ />}
               {activeSection === 'notifications' && <NotificationsSection />}
               {activeSection === 'preferences'   && <PreferencesSection />}
-              {activeSection === 'secrets'       && (
-                <div className="flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
-                  <SecretsSection />
-                </div>
-              )}
             </motion.div>
           </div>
         </div>

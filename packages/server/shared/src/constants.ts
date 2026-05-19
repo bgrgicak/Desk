@@ -7,6 +7,8 @@ export const ID_PREFIXES = {
   sandboxSession: "sbs_",
   appSession: "aps_",
   pin: "pin_",
+  connectorConnection: "con_",
+  workspaceConnectorGrant: "wcg_",
 } as const;
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -14,6 +16,7 @@ export const MAX_MESSAGE_BYTES = 128 * 1024;
 export const DEFAULT_LIBRARY_PAGE_SIZE = 50;
 
 export const MESSAGE_ROLES = ["user", "agent", "system"] as const;
+export type MessageRole = (typeof MESSAGE_ROLES)[number];
 
 /** Kinds emitted by message.log_appended WS events. */
 export const MESSAGE_LOG_KINDS = ["stdout", "stderr", "event"] as const;
@@ -26,6 +29,7 @@ export const MESSAGE_LOG_KINDS = ["stdout", "stderr", "event"] as const;
 export const PROVIDER_KEY_VARS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
+  "OPENCODE_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
   "MISTRAL_API_KEY",
@@ -123,6 +127,30 @@ export const MANAGED_CONNECTIONS = {
     sandboxSetup: "github-askpass",
   },
 } as const satisfies Record<string, ManagedConnectionDefinition>;
+
+export const LOCAL_FILESYSTEM_CONNECTION_KIND = "local-filesystem" as const;
+export const LOCAL_FILESYSTEM_PROVIDER_ID = "local_filesystem" as const;
+export const LOCAL_FILESYSTEM_MOUNT_MARKER = ".desk-local-filesystem-mount.json" as const;
+export const LOCAL_FILESYSTEM_CAPABILITIES = [
+  "local_filesystem.read",
+  "local_filesystem.write",
+] as const;
+
+export type LocalFilesystemAccess = "read_only" | "read_write";
+
+export interface LocalFilesystemDirectoryConfig {
+  id: string;
+  hostPath: string;
+  homeName: string;
+  access: LocalFilesystemAccess;
+  description?: string;
+}
+
+export interface LocalFilesystemConnectionMetadata {
+  localFilesystem: {
+    directories: LocalFilesystemDirectoryConfig[];
+  };
+}
 
 export const MANAGED_CONNECTION_DEFINITIONS = Object.values(MANAGED_CONNECTIONS) as ManagedConnectionDefinition[];
 

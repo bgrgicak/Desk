@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   CONNECTION_ENV_VARS,
   MANAGED_CONNECTION_ENV_ALIASES,
+  LOCAL_FILESYSTEM_MOUNT_MARKER,
   managedConnectionDefinitions,
   PROVIDER_KEY_VARS,
   SANDBOX_CONNECTION_ENV_VARS,
@@ -26,7 +27,9 @@ import {
   type MountPlan,
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
-import { killRunProcessTreeByRunId } from "./driver.js";
+import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/docker");
 
 import type { WorkspaceKind } from "@agent-desk/shared";
 
@@ -101,7 +104,7 @@ const SANDBOX_READY_TIMEOUT_MS = 300_000;
  * decision; growing an existing sandbox is a follow-up (see
  * `packages/server/docs/plans/sandbox-autoscaling.md`).
  */
-const SANDBOX_RUNTIME_TAG = "tini-v1";
+const SANDBOX_RUNTIME_TAG = "opencode-serve-v1";
 
 function resourceProfileString(): string {
   return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
@@ -152,6 +155,14 @@ export function classifyResourceError(
   // a non-OOM signal kill that hits this path will at worst grow the
   // sandbox once before the user-visible failure surfaces.
   if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
+  // opencode-serve daemon mid-run failure: HTTP calls to a dead daemon
+  // surface as `fetch failed` / `ECONNREFUSED` in stderr, not as a
+  // child-process exit code. The driver probes the container's cgroup
+  // `memory.events.oom_kill` after a daemon-gone error and emits a
+  // marker line when the kernel actually OOM-killed it. That's the
+  // signal the auto-scaler needs to grow memory before retry instead
+  // of failing the user with no recovery.
+  if (s.includes("opencode-serve was oom-killed")) return "memory";
   return null;
 }
 
@@ -167,9 +178,22 @@ export function classifyResourceError(
  */
 const growthInFlight = new Map<string, Promise<GrowthResult>>();
 
+/**
+ * Per-workspace serial queue around `createOrReuse`. Two rapid chat
+ * sends to the same workspace hit `createOrReuse` within milliseconds
+ * of each other and otherwise race on inspect/create/remove — one call
+ * can remove the container the other is mid-polling, surfacing as
+ * "Sandbox entrypoint check: container … is no longer present" on
+ * what looks to the user like a brand-new chat. Chaining each call
+ * after the previous one for the same workspace eliminates the race;
+ * different workspaces remain independent.
+ */
+const createOrReuseInFlight = new Map<string, Promise<SandboxHandle>>();
+
 /** Test-only: clears the in-flight-growth lock and any related state. */
 export function _resetGrowthStateForTest(): void {
   growthInFlight.clear();
+  createOrReuseInFlight.clear();
 }
 
 export interface GrowthResult {
@@ -221,7 +245,7 @@ export async function growSandboxForResourceError(
       }
       const next = Math.min(info.pidsLimit * 2, SANDBOX_MAX_PIDS);
       const ok = await engine.update(containerName, { pidsLimit: next });
-      console.info(
+      log.info(
         `sandbox ${containerName} grew pids ${info.pidsLimit} → ${next} after resource failure (engine accepted=${ok})`,
       );
       return { grew: ok, dimension: "pids", pidsLimit: ok ? next : info.pidsLimit, memoryBytes: info.memoryBytes, atMax: false };
@@ -232,7 +256,7 @@ export async function growSandboxForResourceError(
     }
     const nextMem = Math.min(info.memoryBytes * 2, SANDBOX_MAX_MEMORY_BYTES);
     const ok = await engine.update(containerName, { memoryBytes: nextMem });
-    console.info(
+    log.info(
       `sandbox ${containerName} grew memory ${info.memoryBytes} → ${nextMem} after resource failure (engine accepted=${ok})`,
     );
     return { grew: ok, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: ok ? nextMem : info.memoryBytes, atMax: false };
@@ -261,7 +285,7 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
       process.stderr.write(`pull ${image}: ${line}\n`);
     });
   } catch (err) {
-    console.warn(
+    log.warn(
       `${image} image not found locally and pull failed (${(err as Error).message}). ` +
         "If this is a monorepo dev checkout, build the image from " +
         "packages/server/runtime/Dockerfile.sandbox.",
@@ -299,6 +323,46 @@ export async function createOrReuse(
   extraEnv?: Record<string, string>,
   workspaceKind: WorkspaceKind = "project",
 ): Promise<SandboxHandle> {
+  // Chain this call after any in-flight createOrReuse for the same
+  // workspace. Without this, a rapid second chat send finds the first
+  // call mid-`engine.create` / mid-`waitForEntrypointReady` and races
+  // its inspect/create/remove — the loser ends up exec'ing against a
+  // container the winner just removed, surfacing as the user-visible
+  // "container … is no longer present" failure. See PR #125's "known
+  // follow-up".
+  const containerName = `desk-sandbox-${workspaceId}`;
+  const prev = createOrReuseInFlight.get(containerName);
+  const work = (async () => {
+    if (prev) await prev.catch(() => {});
+    return createOrReuseImpl(
+      workspaceId,
+      workspaceSlug,
+      home,
+      providerKeys,
+      mountPlan,
+      extraEnv,
+      workspaceKind,
+    );
+  })();
+  createOrReuseInFlight.set(containerName, work);
+  try {
+    return await work;
+  } finally {
+    if (createOrReuseInFlight.get(containerName) === work) {
+      createOrReuseInFlight.delete(containerName);
+    }
+  }
+}
+
+async function createOrReuseImpl(
+  workspaceId: string,
+  workspaceSlug: string,
+  home?: string,
+  providerKeys?: Record<string, string>,
+  mountPlan?: MountPlan,
+  extraEnv?: Record<string, string>,
+  workspaceKind: WorkspaceKind = "project",
+): Promise<SandboxHandle> {
   const engine = await detectEngine();
   const containerName = `desk-sandbox-${workspaceId}`;
   const expectedResourceProfile = resourceProfileString();
@@ -321,27 +385,67 @@ export async function createOrReuse(
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    let containerAlreadyGone = false;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
-      await waitForEntrypointReady(engine, existing.id);
-      // Note: we never resize on plain reuse. Sandboxes start at the
-      // baseline and only grow when a run actually fails with a
-      // resource-shaped error — see `growSandboxForResourceError`. A
-      // re-use that *would* benefit from a larger sandbox surfaces that
-      // need by failing first, which is the correct signal.
-      return { containerId: existing.id, workspaceId };
+      try {
+        await waitForEntrypointReady(engine, existing.id);
+        // Note: we never resize on plain reuse. Sandboxes start at the
+        // baseline and only grow when a run actually fails with a
+        // resource-shaped error — see `growSandboxForResourceError`. A
+        // re-use that *would* benefit from a larger sandbox surfaces that
+        // need by failing first, which is the correct signal.
+        return { containerId: existing.id, workspaceId };
+      } catch (err) {
+        // The container can vanish between inspect() above and the first
+        // exec poll — reaper, drift recreate elsewhere, parallel fire's
+        // remove, or a manual rm. waitForEntrypointReady's fast-bail
+        // surfaces that as a "no longer present" error. Falling through
+        // to the create-fresh path below recovers in seconds rather than
+        // making every caller paper over the race with its own retry.
+        if (!/no longer present|no such (container|object)/i.test(
+          (err as Error).message ?? "",
+        )) {
+          throw err;
+        }
+        containerAlreadyGone = true;
+      }
     }
-    await engine.remove(containerName, true);
+    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
+    // confirmed the container is gone. Under a parallel fire, the name
+    // may already point at the winner's brand-new container — issuing
+    // `docker rm -f <name>` here would clobber it. The drift-recreate
+    // path still needs the remove because the existing container is
+    // alive but no longer matches our expected layout.
+    if (!containerAlreadyGone) {
+      await engine.remove(containerName, true);
+    }
   }
 
   // Pre-create every source dir and nested target mount point so the runtime
   // doesn't auto-create them as root and break subsequent non-root writes.
   for (const entry of plan) {
-    await fs.mkdir(entry.sourcePath, { recursive: true });
+    if (entry.ensureSource !== false) await fs.mkdir(entry.sourcePath, { recursive: true });
   }
   await ensureNestedMountTargets(plan);
 
   try {
+    // Egress policy. Default is "bridge" (full outbound) because the
+    // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
+    // opencode), GitHub for git operations, and tool registries.
+    // Operators running a paranoid deployment can set
+    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
+    // and any tooling that downloads from the network, but keeps the
+    // sandbox effective for purely-local workloads (file editing,
+    // text-only chats with a pre-cached model).
+    //
+    // A full domain-based allowlist would require a sidecar HTTP
+    // proxy (squid / mitmproxy in transparent mode) and is out of
+    // scope for v1; the two-option knob ("unrestricted" vs "none")
+    // covers the realistic deployment matrix.
+    const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
+    const network = egressMode === "none" ? "none" : "bridge";
+
     const containerId = await engine.create({
       name: containerName,
       image: sandboxImage(workspaceKind),
@@ -358,16 +462,25 @@ export async function createOrReuse(
         [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
-      network: "bridge",
+      network,
       // host-gateway lets the in-sandbox `desk` CLI reach the host-side
       // desk-server REST API as `host.docker.internal`. Without it the
       // bridge default has no DNS name for the host, so the agent has no
-      // route back to /sandbox/messages.
-      extraHosts: ["host.docker.internal:host-gateway"],
+      // route back to /sandbox/messages. `--network none` drops this
+      // capability; an operator who picks "none" accepts losing in-
+      // sandbox host callbacks.
+      extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
       pidsLimit: SANDBOX_BASELINE_PIDS,
       memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
+      // Publish the in-container `opencode serve` port to a host-auto-
+      // assigned port on 127.0.0.1. The driver reads the assigned port
+      // back via `engine.port()` and uses it to reach the per-sandbox
+      // opencode daemon over HTTP/SSE. Bumping SANDBOX_RUNTIME_TAG ensures
+      // pre-existing containers without this publish fail the drift check
+      // and get recreated once on first use.
+      ports: [{ containerPort: OPENCODE_SERVE_CONTAINER_PORT, hostIp: "127.0.0.1" }],
       // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
       // children. The sandbox CMD is `sleep infinity`, which never reaps,
       // so without this every npx/esbuild/playwright child that exits
@@ -405,8 +518,12 @@ export async function createOrReuse(
   }
 }
 
-async function waitForEntrypointReady(engine: Engine, containerId: string): Promise<void> {
-  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
+export async function waitForEntrypointReady(
+  engine: Engine,
+  containerId: string,
+  timeoutMs: number = SANDBOX_READY_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let lastStderr = "";
   while (Date.now() < deadline) {
     const handle = await engine.exec({
@@ -419,11 +536,23 @@ async function waitForEntrypointReady(engine: Engine, containerId: string): Prom
     const exitCode = await handle.wait();
     if (exitCode === 0) return;
     lastStderr = Buffer.concat(stderr).toString("utf8");
+    // If the container has been removed underneath us (drift recreate,
+    // idle sweep, parallel fire's createOrReuse race, manual rm -f),
+    // every subsequent `docker exec` will fail with "No such container"
+    // until the 5-minute deadline. Bail immediately so the caller's
+    // single-shot re-acquire-and-retry path (see driver.ts:329-359) can
+    // rebuild the sandbox in seconds rather than freezing the chat for
+    // five minutes. The string we throw must match `isContainerGoneError`.
+    if (/no such (container|object)/i.test(lastStderr)) {
+      throw new Error(
+        `Sandbox entrypoint check: container ${containerId} is no longer present: ${lastStderr.trim()}`,
+      );
+    }
     await delay(250);
   }
 
   throw new Error(
-    `Sandbox entrypoint did not become ready within ${SANDBOX_READY_TIMEOUT_MS}ms${lastStderr ? `: ${lastStderr}` : ""}`,
+    `Sandbox entrypoint did not become ready within ${timeoutMs}ms${lastStderr ? `: ${lastStderr}` : ""}`,
   );
 }
 
@@ -434,8 +563,47 @@ async function ensureNestedMountTargets(plan: MountPlan): Promise<void> {
       if (parent.category !== "workspace" || parent.mode !== "rw") continue;
       const rel = path.posix.relative(parent.targetPath, entry.targetPath);
       if (!rel || rel.startsWith("..") || path.posix.isAbsolute(rel)) continue;
-      await fs.mkdir(path.join(parent.sourcePath, rel), { recursive: true });
+      const target = path.join(parent.sourcePath, rel);
+      await ensureNestedMountTarget(target, entry.mountPointId);
     }
+  }
+}
+
+async function ensureNestedMountTarget(target: string, mountPointId?: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(target);
+    if (!stat.isDirectory()) throw new Error(`${target} already exists and is not a directory`);
+    if (mountPointId) {
+      const markerPath = path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER);
+      const marker = await readLocalFilesystemMountMarker(markerPath);
+      if (!marker) {
+        const entries = await fs.readdir(target);
+        if (entries.length > 0) throw new Error(`${target} already exists and is not an empty local filesystem mount placeholder`);
+      }
+    }
+  } catch (err) {
+    if (!(err && typeof err === "object" && "code" in err && err.code === "ENOENT")) throw err;
+    await fs.mkdir(target, { recursive: true });
+  }
+
+  if (mountPointId) {
+    await fs.writeFile(
+      path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER),
+      JSON.stringify({ mountId: mountPointId }, null, 2),
+    );
+  }
+}
+
+async function readLocalFilesystemMountMarker(markerPath: string): Promise<{ mountId?: string } | null> {
+  try {
+    const raw = await fs.readFile(markerPath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && typeof (parsed as { mountId?: unknown }).mountId === "string"
+      ? parsed as { mountId?: string }
+      : null;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return null;
+    return null;
   }
 }
 
@@ -518,9 +686,17 @@ export function providerKeyEnv(
   return out;
 }
 
+/**
+ * Per-run env vars sourced from Desk's connector resolver but not exposed
+ * through Settings' generic /me/providers surface. Empty for now —
+ * connectors that need ad-hoc minted tokens can append here.
+ */
+const TOOL_CONNECTION_ENV_VARS: readonly string[] = [] as const;
+
 const MANAGED_CONNECTION_ENV_NAMES = new Set<string>([
   ...CONNECTION_ENV_VARS,
   ...MANAGED_CONNECTION_ENV_ALIASES,
+  ...TOOL_CONNECTION_ENV_VARS,
 ]);
 
 function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void {
@@ -535,7 +711,7 @@ function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
   if (!keys) return out;
   const source: Record<string, string | undefined> = keys;
-  for (const name of SANDBOX_CONNECTION_ENV_VARS) {
+  for (const name of [...SANDBOX_CONNECTION_ENV_VARS, ...TOOL_CONNECTION_ENV_VARS]) {
     const v = source[name];
     if (v && v.length > 0) out.push(`${name}=${v}`);
   }
@@ -547,8 +723,14 @@ function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
  *
  * A long-lived sandbox may have inherited legacy host env at container create
  * time. When the caller supplies the current vault-backed key map, explicitly
- * clear any allowed connection env var that is absent so deleted/disabled
- * connections cannot leak back in from the warm container environment.
+ * clear any allowed persisted connection env var that is absent so deleted/
+ * disabled connections cannot leak back in from the warm container environment.
+ *
+ * Tool-only credentials are minted per run and are never written into the
+ * container's create-time environment. When they cannot be resolved, omit
+ * them rather than emitting an empty value; that lets callers and tools
+ * distinguish "no token was minted" from a deliberately blanked persisted
+ * secret.
  */
 export function providerKeyExecEnv(
   keys?: Record<string, string>,
@@ -572,6 +754,23 @@ export function providerKeyExecEnv(
     }
   }
   return out;
+}
+
+/**
+ * Names of every persisted connection env var the user can manage in
+ * Settings, plus the managed-connection aliases that mirror them. Daemon
+ * env builders prepend these as empty strings so a `docker exec -e KEY=`
+ * launching opencode-serve overrides anything the container inherited at
+ * create time. Without this, a key the user disabled in Settings stays
+ * visible to the warm daemon via the container's birth env and opencode
+ * exposes models for the "disabled" provider.
+ */
+export function connectionEnvNames(): string[] {
+  const names = new Set<string>(CONNECTION_ENV_VARS);
+  for (const definition of managedConnectionDefinitions()) {
+    for (const alias of definition.envAliases ?? []) names.add(alias);
+  }
+  return [...names];
 }
 
 /**
@@ -688,115 +887,73 @@ export async function reapIdleSandboxes(
     try {
       await engine.remove(c.name, true);
       removed.push(c.name);
-      console.info(`reaped idle sandbox ${c.name}`);
+      log.info(`reaped idle sandbox ${c.name}`);
     } catch (err) {
-      console.warn(`failed to reap ${c.name}:`, (err as Error).message);
+      log.warn({ container: c.name, err: (err as Error).message }, "failed to reap");
     }
   }
   return removed;
 }
 
 /**
- * Pre-fire sweep: kill any OpenCode setsid wrapper inside `containerId`
- * whose pidfile path is NOT in `expectedPidFiles`. Returns the number of
- * trees that were SIGKILL'd.
+ * Soft idle tier: kill the `opencode serve` daemon inside sandbox
+ * containers whose workspace has been quiet for `minAgeMs`, but leave
+ * the container itself running. Saves ~400 MB of warm-daemon RSS per
+ * sandbox without paying the full container cold-start on the next
+ * message — the next `ensureOpencodeServer` re-spawns the daemon in
+ * ~2-5 s against a still-warm container.
  *
- * Why this exists: every leak scenario we've observed reduces to the same
- * shape — a previous run's process group survived past `cleanupRunProcessTree`
- * (engine.exec failure, OOM-killed sibling holding the wrapper hostage,
- * pidfile overwritten by a re-fire of the same runId, server restart that
- * raced the boot-time kill, etc.). The pidfile-based cleanup can no longer
- * find these trees because either the pidfile is gone or it now points at a
- * different fire. Walking the container's actual process table sidesteps all
- * of that: any `setsid --wait sh -c ... /tmp/desk-runs/<runId>.pid ...`
- * wrapper whose pidfile we're not actively driving is by definition a leak.
+ * Same `recentlyActiveWorkspaceIds` shape as `reapIdleSandboxes` so
+ * the scheduler can reuse the existing active-workspace query.
+ * Default 10 min — quiet enough to avoid killing daemons between
+ * back-to-back chats but tight enough that long-idle workspaces
+ * release the daemon's memory promptly.
  *
- * `expectedPidFiles` is the source of truth for "do not touch": pass the
- * pidfile path of every run this server is currently driving in this
- * container. Anything else is fair game for SIGKILL. The check uses whole-
- * token matching (with leading/trailing spaces around each path) so a
- * pidfile substring can't accidentally protect an unrelated wrapper.
- *
- * Best-effort. Engine errors, missing `/proc`, ps failures, and partial
- * kills all degrade to "reaped 0" — a regression here must never block a
- * legitimate fire. The new fire will still proceed and hit memory pressure;
- * the operator will see that, not a mysterious deadlock.
+ * Returns the names of containers whose daemon was killed.
  */
-export async function reapStaleSandboxTrees(
-  engine: Engine,
-  containerId: string,
-  expectedPidFiles: ReadonlyArray<string>,
-): Promise<{ reaped: number }> {
-  // Wrap in spaces so case patterns can match whole tokens via `*" <path> "*`.
-  const expectedEnv = ` ${expectedPidFiles.join(" ")} `;
-  // Scan /proc/*/cmdline directly rather than filtering ps by `comm == setsid`.
-  // The wrapper is `setsid --wait sh -c '... pidfile ...' opencode ...`, and
-  // setsid only stays in argv[0] if it forked — which only happens when the
-  // calling shell is itself a process-group leader. Both cases show up in prod
-  // (the runtime's outer `exec setsid` forks; a re-fire shell that's
-  // backgrounded does not) and both must be caught here. Reading
-  // /proc/<pid>/cmdline matches "cmdline starts with setsid" no matter what
-  // /comm reports after a subsequent exec.
-  const script = [
-    "set -u",
-    "REAPED=0",
-    "for pid_dir in /proc/[0-9]*; do",
-    "  pid=${pid_dir#/proc/}",
-    '  [ -r "$pid_dir/cmdline" ] || continue',
-    '  cmdline=$(tr "\\0" " " < "$pid_dir/cmdline" 2>/dev/null)',
-    // Must start with "setsid " and reference a desk-runs pidfile somewhere.
-    '  case "$cmdline" in',
-    '    "setsid "*"/tmp/desk-runs/"*) ;;',
-    "    *) continue ;;",
-    "  esac",
-    '  pidfile=""',
-    "  for tok in $cmdline; do",
-    '    case "$tok" in',
-    "      /tmp/desk-runs/*.pid) pidfile=$tok; break ;;",
-    "    esac",
-    "  done",
-    '  [ -z "$pidfile" ] && continue',
-    // Whole-token match against the expected set. Skip wrappers we're driving.
-    '  case "$EXPECTED_PIDFILES" in',
-    '    *" $pidfile "*) continue ;;',
-    "  esac",
-    // Kill three targets to cover both the forked-parent case (setsid waits
-    // on a child in a different pgid) and the non-forked case (setsid
-    // exec'd directly, so $pid IS the leader after its setsid() call):
-    //   1. child's pgid — kills opencode + its in-pgid descendants
-    //   2. $pid as a pgid — kills the chain when setsid didn't fork
-    //   3. $pid directly — kills the waiting setsid parent when it did fork
-    '  child=$(ps -o pid= --ppid "$pid" 2>/dev/null | head -1 | tr -d " ")',
-    // NOTE: dash's builtin kill rejects `--` as "Illegal number" — so we
-    // must NOT use `kill -KILL -- "-$pgid"`. The signal-then-PID order
-    // (`kill -KILL "-$pgid"`) is unambiguous because `-KILL` is a known
-    // signal flag and `-N` is then parsed as a negative-pid argument.
-    '  case "$child" in',
-    "    \"\"|*[!0-9]*) ;;",
-    '    *) kill -KILL "-$child" 2>/dev/null ;;',
-    "  esac",
-    '  kill -KILL "-$pid" 2>/dev/null',
-    '  kill -KILL "$pid" 2>/dev/null',
-    "  REAPED=$((REAPED+1))",
-    "done",
-    'echo "REAPED=$REAPED"',
-  ].join("\n");
+export async function softReapIdleDaemons(
+  recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  minAgeMs: number = 10 * 60 * 1000,
+): Promise<string[]> {
+  const killed: string[] = [];
+  let engine: Engine;
   try {
-    const handle = await engine.exec({
-      containerId,
-      cmd: ["sh", "-c", script],
-      env: [`EXPECTED_PIDFILES=${expectedEnv}`],
-    });
-    const stdoutChunks: Buffer[] = [];
-    handle.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-    const exitCode = await handle.wait();
-    if (exitCode !== 0) return { reaped: 0 };
-    const out = Buffer.concat(stdoutChunks).toString("utf8");
-    const match = out.match(/REAPED=(\d+)/);
-    return { reaped: match ? parseInt(match[1], 10) : 0 };
+    engine = await detectEngine();
   } catch {
-    return { reaped: 0 };
+    return killed;
   }
+  let containers: Array<{ id: string; name: string }>;
+  try {
+    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
+  } catch {
+    return killed;
+  }
+  const { killAnyOpencodeServeInContainer, invalidateOpencodeServerCache } = await import(
+    "./opencodeServer.js"
+  );
+  const now = Date.now();
+  for (const c of containers) {
+    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
+    const workspaceId = c.name.slice("desk-sandbox-".length);
+    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
+    if (growthInFlight.has(c.name)) continue;
+    // Don't touch a brand-new container whose first message hasn't
+    // bumped any DB row yet — same race window as the hard reap.
+    try {
+      const info = await engine.inspect(c.name);
+      if (!info) continue;
+      if (info.createdAt) {
+        const age = now - new Date(info.createdAt).getTime();
+        if (Number.isFinite(age) && age < minAgeMs) continue;
+      }
+      await killAnyOpencodeServeInContainer(engine, info.id);
+      invalidateOpencodeServerCache(info.id);
+      killed.push(c.name);
+    } catch (err) {
+      log.warn({ container: c.name, err: (err as Error).message }, "soft-reap failed");
+    }
+  }
+  return killed;
 }
 
 /** Stops a sandbox container. Idempotent. */
@@ -835,29 +992,28 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
 }
 
 /**
- * Kill opencode process trees left running in sandbox containers by a prior
- * desk-server. Called once at startup, before `recoverOrphanedRuns` requeues
- * the rows that owned those processes.
+ * Kill `opencode serve` daemons left running in workspace sandboxes by a
+ * prior desk-server. Called once at startup, before `recoverOrphanedRuns`
+ * requeues the rows that owned those processes.
  *
- * Why this matters: when a desk-server dies (tsx-watch reload, hard crash),
- * the in-container opencode that was mid-run survives because the runtime's
- * post-`wait()` cleanup uses `skipIfLeaderAlive` to keep dev-time restarts
- * from killing valid runs. The output stream is gone, but the process keeps
- * holding `~/.local/share/opencode/opencode.db`. If the next desk-server
- * requeues the same message and fires a *new* opencode in the same sandbox,
- * the two contend on the SQLite DB — the second hits "Failed to run the
- * query 'PRAGMA journal_mode = WAL'" and the run fails.
+ * Why this matters: when a desk-server dies (tsx-watch reload, hard
+ * crash), the in-container opencode daemon survives because nothing
+ * inside the container knows the host process is gone. Its open SQLite
+ * file (`~/.local/share/opencode/opencode.db`) is exclusive — the next
+ * desk-server's first `opencode serve` spawn would fail to open it
+ * (`SQLITE_BUSY`) and the chat would error out. Killing the orphaned
+ * daemon ensures the new server starts fresh.
  *
- * Caller supplies the (workspaceId → runIds) map so this module stays
- * DB-agnostic, same pattern as `reapIdleSandboxes`. Returns one entry per
- * runId we attempted, with `killed=true` if a process group was signalled.
+ * Per-workspace, best-effort. Engine errors degrade to "didn't kill" —
+ * a re-fire will surface the SQLite contention if anything actually
+ * leaked through.
  */
-export async function killClaimedRunsInContainers(
-  runsByWorkspace: ReadonlyMap<string, ReadonlyArray<string>>,
+export async function killOpencodeDaemonsForOrphans(
+  workspaceIds: ReadonlyArray<string>,
   engineOverride?: Engine,
-): Promise<Array<{ workspaceId: string; runId: string; killed: boolean }>> {
-  const results: Array<{ workspaceId: string; runId: string; killed: boolean }> = [];
-  if (runsByWorkspace.size === 0) return results;
+): Promise<{ workspaceId: string; killed: boolean }[]> {
+  const results: { workspaceId: string; killed: boolean }[] = [];
+  if (workspaceIds.length === 0) return results;
   let engine: Engine;
   if (engineOverride) {
     engine = engineOverride;
@@ -865,44 +1021,23 @@ export async function killClaimedRunsInContainers(
     try {
       engine = await detectEngine();
     } catch {
-      return results;
+      return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
     }
   }
-  // Run one workspace at a time but parallel within a workspace: kills in
-  // the same container all hit the same docker exec endpoint, but different
-  // workspaces are independent docker exec targets, and cleanupRunProcessTree
-  // has a TERM→3s→KILL grace period per pidfile. Serial across all orphans
-  // would be O(N × 3s); per-workspace parallel keeps startup near 3 s no
-  // matter how many runs were stranded.
-  const perWorkspace = Array.from(runsByWorkspace, ([workspaceId, runIds]) =>
+  const { stopOpencodeServer } = await import("./opencodeServer.js");
+  const perWorkspace = workspaceIds.map((workspaceId) =>
     (async () => {
       const containerName = `desk-sandbox-${workspaceId}`;
-      let containerExists = false;
       try {
-        containerExists = (await engine.inspect(containerName)) !== null;
+        const info = await engine.inspect(containerName);
+        if (!info) return { workspaceId, killed: false };
+        await stopOpencodeServer(engine, info.id);
+        return { workspaceId, killed: true };
       } catch {
-        containerExists = false;
+        return { workspaceId, killed: false };
       }
-      if (!containerExists) {
-        // No container means no surviving opencode for this workspace; the
-        // re-fire builds a fresh sandbox and there's nothing to contend with.
-        return runIds.map((runId) => ({ workspaceId, runId, killed: false }));
-      }
-      const killed = await Promise.all(
-        runIds.map(async (runId) => {
-          try {
-            return await killRunProcessTreeByRunId(engine, containerName, runId);
-          } catch {
-            // Engine errors here are best-effort — recoverOrphanedRuns will
-            // still requeue, and worst case the user sees a transient PRAGMA
-            // failure on the re-fire. Logged at the caller.
-            return false;
-          }
-        }),
-      );
-      return runIds.map((runId, i) => ({ workspaceId, runId, killed: killed[i] }));
     })(),
   );
-  for (const ws of await Promise.all(perWorkspace)) results.push(...ws);
+  for (const r of await Promise.all(perWorkspace)) results.push(r);
   return results;
 }

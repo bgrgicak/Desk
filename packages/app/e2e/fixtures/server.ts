@@ -88,13 +88,9 @@ export async function startDeskServer(
     // does in production.
     DESK_DB_PATH: dbPath,
     DESK_HOME: home,
-    // The encryption module falls back to a key file when DESK_SECRET_KEY
-    // is unset. Pin its path inside DESK_HOME so the /me/providers PUT
-    // (which encrypts keys) actually works under e2e even without the
-    // dev-launcher's .env writeback.
-    DESK_SECRET_KEY_PATH: path.join(home, "secret.key"),
     DESK_SEED_USERNAME: opts.username ?? "e2e",
     DESK_SEED_PASSWORD: opts.password ?? "e2e",
+    DESK_AUTO_LOGIN: "off",
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.
     DESK_SANDBOX_DRIVER: "fake",
@@ -113,6 +109,12 @@ export async function startDeskServer(
     // Auto-setup and unlock the per-user vault on boot so e2e tests can
     // read and write provider keys without going through the vault UI flow.
     DESK_VAULT_PASSWORD: "e2e-vault-password",
+    DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
+    // The e2e suite logs in for every spec, which makes the per-IP
+    // auth.login rate-limit (10/min by default) fire and 429 later
+    // tests. Disable rate limiting in the test fixture — production
+    // never sets this.
+    DESK_RATE_LIMIT_DISABLED: "1",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {

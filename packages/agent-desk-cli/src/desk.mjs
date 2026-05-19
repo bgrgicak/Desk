@@ -5,7 +5,7 @@
  * Subcommands:
  *   desk start  (default) — ensure ~/Desk/, run migrations, start
  *                            desk-server (and Vite, in monorepo dev only).
- *   desk init             — bootstrap (~/Desk/, secret key) without starting.
+ *   desk init             — bootstrap (~/Desk/, vault password) without starting.
  *   desk version          — print package.json version.
  *
  * Two run modes — auto-detected at boot:
@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -97,43 +97,30 @@ async function ensureDeskHome() {
 }
 
 /**
- * Where the secret key lives.
- *   - Monorepo dev: repo-root .env (existing behaviour, dev.sh shares it).
- *   - Published install: ~/Desk/.secret-key (file mode 0600).
+ * Where the auto-unlock vault password lives.
+ *   - Monorepo dev: repo-root .env (dev.sh shares it).
+ *   - Published install: ~/Desk/.env.
  *
- * Returns the in-memory key. Generates one on first call.
+ * Returns the password. Generates one on first call.
  */
-async function ensureSecretKey({ monorepoRoot, deskHome }) {
-  if (monorepoRoot) {
-    const envFile = path.join(monorepoRoot, ".env");
-    let existing = "";
-    if (fs.existsSync(envFile)) {
-      existing = await fsp.readFile(envFile, "utf-8");
-      const m = existing.match(/^DESK_SECRET_KEY=(.+)$/m);
-      if (m) return m[1].trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
-    }
-    const { randomBytes } = await import("node:crypto");
-    const key = randomBytes(32).toString("base64");
-    log(`Generating DESK_SECRET_KEY → ${envFile}`);
-    let body = existing;
-    if (body.length > 0 && !body.endsWith("\n")) body += "\n";
-    body += `DESK_SECRET_KEY=${key}\n`;
-    await fsp.writeFile(envFile, body);
-    return key;
-  }
-
-  const keyFile = path.join(deskHome, "Desk", ".secret-key");
-  if (fs.existsSync(keyFile)) {
-    const raw = await fsp.readFile(keyFile, "utf-8");
-    const trimmed = raw.trim();
-    if (trimmed.length > 0) return trimmed;
+async function ensureVaultPassword({ monorepoRoot, deskHome }) {
+  const envFile = monorepoRoot ? path.join(monorepoRoot, ".env") : path.join(deskHome, "Desk", ".env");
+  let existing = "";
+  if (fs.existsSync(envFile)) {
+    existing = await fsp.readFile(envFile, "utf-8");
+    const m = existing.match(/^DESK_VAULT_PASSWORD=(.+)$/m);
+    if (m) return m[1].trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
   }
   const { randomBytes } = await import("node:crypto");
-  const key = randomBytes(32).toString("base64");
-  log(`Generating DESK_SECRET_KEY → ${keyFile}`);
-  await fsp.mkdir(path.dirname(keyFile), { recursive: true });
-  await fsp.writeFile(keyFile, key + "\n", { mode: 0o600 });
-  return key;
+  const password = randomBytes(32).toString("base64");
+  log(`Generating DESK_VAULT_PASSWORD → ${envFile}`);
+  await fsp.mkdir(path.dirname(envFile), { recursive: true });
+  let body = existing;
+  if (body.length > 0 && !body.endsWith("\n")) body += "\n";
+  body += `DESK_VAULT_PASSWORD=${password}\n`;
+  await fsp.writeFile(envFile, body, { mode: 0o600 });
+  await fsp.chmod(envFile, 0o600);
+  return password;
 }
 
 function spawnInherit(cmd, args, { env, cwd }) {
@@ -159,7 +146,7 @@ function attachStopHandlers(...children) {
 async function cmdInit() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureDeskHome();
-  await ensureSecretKey({ monorepoRoot, deskHome: home });
+  await ensureVaultPassword({ monorepoRoot, deskHome: home });
   log(`Desk home: ${path.join(home, "Desk")}`);
   log("Init complete. Run `desk start` to launch the server.");
 }
@@ -167,17 +154,17 @@ async function cmdInit() {
 async function cmdStart() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureDeskHome();
-  const secret = await ensureSecretKey({ monorepoRoot, deskHome: home });
+  const vaultPassword = await ensureVaultPassword({ monorepoRoot, deskHome: home });
 
   if (monorepoRoot) {
-    return cmdStartDev({ monorepoRoot, home, secret });
+    return cmdStartDev({ monorepoRoot, home, vaultPassword });
   }
-  return cmdStartPublished({ home, secret });
+  return cmdStartPublished({ home, vaultPassword });
 }
 
-async function cmdStartDev({ monorepoRoot, home, secret }) {
+async function cmdStartDev({ monorepoRoot, home, vaultPassword }) {
   const env = {
-    DESK_SECRET_KEY: secret,
+    DESK_VAULT_PASSWORD: vaultPassword,
     DESK_HOME: home,
     PORT: String(PORT),
     DESK_APP_PORT: String(APP_PORT),
@@ -201,7 +188,7 @@ async function cmdStartDev({ monorepoRoot, home, secret }) {
   attachStopHandlers(server, vite);
 }
 
-async function cmdStartPublished({ home, secret }) {
+async function cmdStartPublished({ home, vaultPassword }) {
   const apiEntry = resolvePublishedApiEntry();
   if (!apiEntry) {
     process.stderr.write(
@@ -218,7 +205,7 @@ async function cmdStartPublished({ home, secret }) {
   }
 
   const env = {
-    DESK_SECRET_KEY: secret,
+    DESK_VAULT_PASSWORD: vaultPassword,
     DESK_HOME: home,
     PORT: String(PORT),
     DESK_API_URL: `http://127.0.0.1:${PORT}`,
@@ -236,6 +223,165 @@ async function cmdStartPublished({ home, secret }) {
 async function cmdVersion() {
   const pkg = JSON.parse(await fsp.readFile(path.join(PKG_ROOT, "package.json"), "utf-8"));
   process.stdout.write(`${pkg.version}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// desk service — install / uninstall / start / stop / status
+// ---------------------------------------------------------------------------
+
+const LAUNCHD_LABEL = "com.agentdesk.desk";
+const LAUNCHD_PLIST_PATH = path.join(
+  os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`,
+);
+const SYSTEMD_UNIT_DIR = path.join(os.homedir(), ".config", "systemd", "user");
+const SYSTEMD_UNIT_NAME = "desk.service";
+const SYSTEMD_UNIT_PATH = path.join(SYSTEMD_UNIT_DIR, SYSTEMD_UNIT_NAME);
+const WIN_TASK_NAME = "AgentDeskServer";
+
+function launchdPlist(nodeBin, deskBin, home) {
+  const deskHome = path.join(home, "Desk");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${nodeBin}</string>
+        <string>${deskBin}</string>
+        <string>start</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>DESK_HOME</key><string>${home}</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>${path.join(deskHome, "logs", "desk.log")}</string>
+    <key>StandardErrorPath</key><string>${path.join(deskHome, "logs", "desk.error.log")}</string>
+    <key>ThrottleInterval</key><integer>10</integer>
+</dict>
+</plist>
+`;
+}
+
+function systemdUnit(nodeBin, deskBin, home) {
+  return `[Unit]
+Description=Desk personal AI assistant server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodeBin} ${deskBin} start
+Restart=on-failure
+RestartSec=10
+Environment=DESK_HOME=${home}
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+async function installService() {
+  const home = await ensureDeskHome();
+  const nodeBin = process.execPath;
+  const deskBin = path.resolve(__dirname, "desk.mjs");
+  await fsp.mkdir(path.join(home, "Desk", "logs"), { recursive: true });
+
+  if (process.platform === "darwin") {
+    await fsp.mkdir(path.dirname(LAUNCHD_PLIST_PATH), { recursive: true });
+    await fsp.writeFile(LAUNCHD_PLIST_PATH, launchdPlist(nodeBin, deskBin, home));
+    log(`Wrote ${LAUNCHD_PLIST_PATH}`);
+    const { status } = spawnSync("launchctl", ["load", "-w", LAUNCHD_PLIST_PATH], { stdio: "inherit" });
+    if (status !== 0) { process.stderr.write("launchctl load failed\n"); process.exit(1); }
+    log("Service installed and started.");
+  } else if (process.platform === "linux") {
+    await fsp.mkdir(SYSTEMD_UNIT_DIR, { recursive: true });
+    await fsp.writeFile(SYSTEMD_UNIT_PATH, systemdUnit(nodeBin, deskBin, home));
+    log(`Wrote ${SYSTEMD_UNIT_PATH}`);
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+    spawnSync("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT_NAME], { stdio: "inherit" });
+    log("Service installed and started.");
+  } else if (process.platform === "win32") {
+    const cmd = `schtasks /Create /F /TN "${WIN_TASK_NAME}" /TR "${nodeBin} ${deskBin} start" /SC ONLOGON /RL LIMITED`;
+    const { status } = spawnSync("cmd", ["/C", cmd], { stdio: "inherit" });
+    if (status !== 0) process.exit(1);
+    log(`Task Scheduler task "${WIN_TASK_NAME}" created.`);
+  } else {
+    process.stderr.write(`desk service install: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+async function uninstallService() {
+  if (process.platform === "darwin") {
+    if (fs.existsSync(LAUNCHD_PLIST_PATH)) {
+      spawnSync("launchctl", ["unload", "-w", LAUNCHD_PLIST_PATH], { stdio: "inherit" });
+      await fsp.rm(LAUNCHD_PLIST_PATH);
+      log("Service removed.");
+    } else {
+      log("Service is not installed.");
+    }
+  } else if (process.platform === "linux") {
+    if (fs.existsSync(SYSTEMD_UNIT_PATH)) {
+      spawnSync("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT_NAME], { stdio: "inherit" });
+      await fsp.rm(SYSTEMD_UNIT_PATH);
+      spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+      log("Service removed.");
+    } else {
+      log("Service is not installed.");
+    }
+  } else if (process.platform === "win32") {
+    spawnSync("schtasks", ["/Delete", "/F", "/TN", WIN_TASK_NAME], { stdio: "inherit" });
+    log("Task removed.");
+  } else {
+    process.stderr.write(`desk service uninstall: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+function serviceControl(action) {
+  if (process.platform === "darwin") {
+    const cmds = {
+      start: ["launchctl", ["load", "-w", LAUNCHD_PLIST_PATH]],
+      stop: ["launchctl", ["unload", LAUNCHD_PLIST_PATH]],
+      status: ["launchctl", ["list", LAUNCHD_LABEL]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else if (process.platform === "linux") {
+    const cmds = {
+      start: ["systemctl", ["--user", "start", SYSTEMD_UNIT_NAME]],
+      stop: ["systemctl", ["--user", "stop", SYSTEMD_UNIT_NAME]],
+      status: ["systemctl", ["--user", "status", SYSTEMD_UNIT_NAME]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else if (process.platform === "win32") {
+    const cmds = {
+      start: ["schtasks", ["/Run", "/TN", WIN_TASK_NAME]],
+      stop: ["schtasks", ["/End", "/TN", WIN_TASK_NAME]],
+      status: ["schtasks", ["/Query", "/TN", WIN_TASK_NAME]],
+    };
+    const c = cmds[action];
+    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+    spawnSync(c[0], c[1], { stdio: "inherit" });
+  } else {
+    process.stderr.write(`desk service: unsupported platform ${process.platform}\n`);
+    process.exit(1);
+  }
+}
+
+async function cmdService(action) {
+  if (!action) {
+    process.stderr.write("Usage: desk service install|uninstall|start|stop|status\n");
+    process.exit(2);
+  }
+  if (action === "install") return installService();
+  if (action === "uninstall") return uninstallService();
+  if (action === "start" || action === "stop" || action === "status") return serviceControl(action);
+  process.stderr.write(`Unknown service action: ${action}\nUsage: desk service install|uninstall|start|stop|status\n`);
+  process.exit(2);
 }
 
 function ensureNodeVersion() {
@@ -257,6 +403,7 @@ async function main() {
   switch (sub) {
     case "start": return cmdStart();
     case "init": return cmdInit();
+    case "service": return cmdService(process.argv[3]);
     case "version":
     case "--version":
     case "-v":
@@ -265,10 +412,12 @@ async function main() {
     case "--help":
     case "-h":
       process.stdout.write(
-        "Usage: desk [start|init|version]\n" +
-        "  start    boot desk-server (and Vite in monorepo dev) (default)\n" +
-        "  init     create ~/Desk + DESK_SECRET_KEY without starting\n" +
-        "  version  print version\n",
+        "Usage: desk [start|init|service|version]\n" +
+        "  start                          boot desk-server (default)\n" +
+        "  init                           create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
+        "  service install|uninstall      register/unregister Desk as a system service\n" +
+        "  service start|stop|status      control the installed system service\n" +
+        "  version                        print version\n",
       );
       return;
     default:

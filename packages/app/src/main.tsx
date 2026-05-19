@@ -6,15 +6,24 @@ import './index.css'
 import App from './App.tsx'
 import { store } from './store/store'
 import { ensureSession } from './auth/session'
-import { wsConnect } from './store/ws/middleware'
+import { setupServiceWorker } from './lib/service-worker'
+import { installPerfReporter } from './lib/perf-reporter'
 
 async function boot(): Promise<void> {
-  const token = await ensureSession()
+  // ensureSession populates the session token (cookie/storage) so
+  // subsequent fetch calls authenticate.  WS connection is deferred
+  // to `MustChangeGate` in App.tsx — kicking it off here would race
+  // the must-change-password check (the WS upgrade refuses gated
+  // users with HTTP 403, which browsers surface as close code 1006;
+  // the WS reconnect loop would then back-off-and-retry while the
+  // user is stuck on the password-change screen).
+  await ensureSession()
 
-  // Connect the WS middleware once we actually have a token. With no
-  // token `ensureSession()` returns null and we render the LoginScreen
-  // instead — re-trying the WS would just 1008-close.
-  if (token) store.dispatch(wsConnect())
+  // Start observing long tasks before the React tree mounts so the very
+  // first render — historically the slowest — is captured too. The
+  // reporter is a no-op in browsers without PerformanceObserver longtask
+  // support (e.g. older Safari).
+  installPerfReporter(store)
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
@@ -26,17 +35,10 @@ async function boot(): Promise<void> {
     </StrictMode>,
   )
 
-  // Register the service worker only in built bundles — in `vite dev` the
-  // SW would intercept module URLs and break HMR. Wrap in try/catch
-  // because Safari throws on `serviceWorker.register` for insecure origins
-  // even when the property exists.
-  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-    try {
-      await navigator.serviceWorker.register('/sw.js')
-    } catch {
-      /* registration failed (insecure origin, blocked, etc.) — app works without it */
-    }
-  }
+  // Production-only — registers /sw.js, hooks up update detection, and
+  // surfaces a Reload toast when a new build is waiting. Dev keeps SW off
+  // so HMR module URLs aren't intercepted.
+  setupServiceWorker()
 }
 
 void boot()

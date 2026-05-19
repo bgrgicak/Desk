@@ -1,6 +1,8 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("api/routes/agents");
 
 export async function listAgents(pool: Pool, userId: string) {
   return queries.agents.listByUser(pool, userId);
@@ -24,14 +26,49 @@ export async function getAgent(pool: Pool, id: string) {
   return agent;
 }
 
+export interface PatchAgentResult {
+  agent: Awaited<ReturnType<typeof queries.agents.updateMeta>>;
+  /**
+   * True when `data.model` was provided and differs from the stored value.
+   * The route handler uses this to decide whether to restart the per-
+   * workspace opencode-serve daemons: opencode-serve caches each agent
+   * file's `model:` field at startup, so a Desk-side model change does
+   * NOT propagate to a running daemon until it's restarted, even though
+   * we rewrite the agent file each turn. Clearing sessions alone is not
+   * enough — a freshly-created session in the same daemon still inherits
+   * the cached agent config.
+   */
+  modelChanged: boolean;
+}
+
 export async function patchAgent(
   pool: Pool,
   id: string,
   data: { name?: string; model?: string },
-) {
+): Promise<PatchAgentResult> {
+  const before = data.model !== undefined ? await queries.agents.findById(pool, id) : null;
   const agent = await queries.agents.updateMeta(pool, id, data);
   if (!agent) throw new NotFoundError(`Agent not found: ${id}`);
-  return agent;
+
+  const modelChanged = data.model !== undefined && !!before && before.model !== data.model;
+
+  // Switching the agent's model invalidates every opencode-serve session
+  // bound to this agent: the daemon binds providerID/modelID to the
+  // session at creation time and ignores per-message overrides, so
+  // existing chats keep using the old model until their session is
+  // recreated. Forget the session ids here so the next turn in those
+  // chats creates a fresh session bound to the new model.
+  if (modelChanged) {
+    const cleared = await queries.chats.clearOpencodeSessionsForAgent(pool, id);
+    if (cleared.length > 0) {
+      log.info(
+        `agent ${id} model changed (${before!.model} → ${data.model}); ` +
+        `cleared opencode session id from ${cleared.length} chat(s)`,
+      );
+    }
+  }
+
+  return { agent, modelChanged };
 }
 
 /**

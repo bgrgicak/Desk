@@ -1,0 +1,25 @@
+# CODEOWNERS — see https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Pattern is: <path glob> <space-separated GitHub handles or @org/team>.
+# The repo currently has a single maintainer; expand as the team grows.
+
+* @bgrgicak
+
+# CI configuration is high-blast-radius — require an explicit review
+# from the maintainer even when other reviewers exist.
+/.github/workflows/   @bgrgicak
+
+# Security-sensitive surfaces — credentials, auth, sandbox isolation.
+/packages/server/api/src/auth/        @bgrgicak
+/packages/server/api/src/vault/       @bgrgicak
+/packages/server/api/src/connectors/  @bgrgicak
+/packages/server/api/src/routes/auth.ts   @bgrgicak
+/packages/server/api/src/routes/vault.ts  @bgrgicak
+/packages/server/runtime/src/docker.ts    @bgrgicak
+/packages/server/runtime/src/engine.ts    @bgrgicak
+/packages/server/runtime/src/mounts.ts    @bgrgicak
+
+# Plan / contribution docs.
+/CONTRIBUTING.md   @bgrgicak
+/AGENTS.md         @bgrgicak
+/roadmap.md        @bgrgicak

@@ -20,7 +20,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, resetSecretKeyCache } from "@agent-desk/db";
+import { runMigrations, seedIfEmpty } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -74,9 +74,6 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-sources-home-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
-  process.env.DESK_SECRET_KEY_PATH = path.join(home, "secret.key");
-  resetSecretKeyCache();
-
   // Per-test fake — never touch the developer's real ~/.codex/auth.json.
   codexAuthPath = path.join(home, "codex-auth.json");
   process.env.DESK_CODEX_AUTH_PATH = codexAuthPath;

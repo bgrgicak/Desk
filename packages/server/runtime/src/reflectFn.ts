@@ -224,7 +224,14 @@ async function callReflection(
     providerKeys: input.providerKeys,
     extraEnv: input.extraEnv,
     onLog: (event) => {
-      if (event.kind === "stdout") stdout += `${event.payload}\n`;
+      // The runtime emits per-turn output as `kind: "event"` (translated
+      // SSE events from opencode-serve, each a JSON line like
+      // `{"type":"text","part":{"text":"…"}}`). Legacy `kind: "stdout"`
+      // entries are still accepted for the fake driver and any future
+      // raw-output path.
+      if (event.kind === "stdout" || event.kind === "event") {
+        stdout += `${event.payload}\n`;
+      }
       if (event.kind === "stderr") stderr += `${event.payload}\n`;
     },
   });

@@ -31,25 +31,24 @@ if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ] || [ ! -x "${REPO_ROOT}/node_m
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
-# 2. Ensure DESK_SECRET_KEY is persisted in the repo .env (gitignored).
-#    The DB encryption module prefers DESK_SECRET_KEY over its on-disk
-#    fallback at $DESK_HOME/secret.key, so pinning it here keeps the
-#    user_settings.provider_keys_encrypted blob decryptable across
-#    host reinstalls and ~/Desk wipes.
+# 2. Ensure DESK_VAULT_PASSWORD is persisted in the repo .env (gitignored).
+#    The server uses it to auto-create and auto-unlock the per-user KDBX
+#    vault on boot; users do not currently have a manual database/vault
+#    unlock flow during setup.
 ENV_FILE="${REPO_ROOT}/.env"
-desk_secret_key=""
+desk_vault_password=""
 if [ -f "$ENV_FILE" ]; then
-  desk_secret_key="$(grep -E '^DESK_SECRET_KEY=' "$ENV_FILE" 2>/dev/null | tail -n1 \
-    | sed -E 's/^DESK_SECRET_KEY=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
+  desk_vault_password="$(grep -E '^DESK_VAULT_PASSWORD=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | sed -E 's/^DESK_VAULT_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
 fi
-if [ -z "$desk_secret_key" ]; then
-  echo "==> Generating DESK_SECRET_KEY (32 bytes, base64) → ${ENV_FILE}"
-  desk_secret_key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+if [ -z "$desk_vault_password" ]; then
+  echo "==> Generating DESK_VAULT_PASSWORD → ${ENV_FILE}"
+  desk_vault_password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
   touch "$ENV_FILE"
   if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then
     printf '\n' >> "$ENV_FILE"
   fi
-  printf 'DESK_SECRET_KEY=%s\n' "$desk_secret_key" >> "$ENV_FILE"
+  printf 'DESK_VAULT_PASSWORD=%s\n' "$desk_vault_password" >> "$ENV_FILE"
 fi
 
 # 3. Ensure ~/Desk/ exists. desk-server's main.ts mkdirs the rest of the

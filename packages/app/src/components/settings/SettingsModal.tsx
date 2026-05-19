@@ -45,6 +45,10 @@ import {
   useGetModelsQuery,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetConnectorConnectionsQuery,
+  useCreateConnectorConnectionMutation,
+  usePatchConnectorConnectionMutation,
+  useDeleteConnectorConnectionMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
   useGetLocalSourcesQuery,
@@ -52,9 +56,13 @@ import {
   useGetMeQuery,
   type ModelRef,
 } from '@/store/api'
-import type { ServerAgent } from '@/store/types'
+import type { ConnectorConnection as ServerConnectorConnection, ServerAgent } from '@/store/types'
 import {
   CONNECTION_CATALOG,
+  CONNECTOR_PROVIDER_BY_KIND,
+  DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND,
+  DEFAULT_SCOPES_BY_CONNECTOR_KIND,
+  allowsMultipleConnections,
   isLocalSourceKind,
   managedConnectionDefinitionForKind,
   providerKeyEntries,
@@ -64,6 +72,7 @@ import {
 } from '@/data/connections'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import type { ManagedConnectionDefinition } from '@agent-desk/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@agent-desk/shared'
 
 interface LocalSourceState {
   kind: string
@@ -71,6 +80,34 @@ interface LocalSourceState {
   enabled: boolean
   reason?: string
   detail?: Record<string, string | number | boolean>
+}
+
+type LocalFilesystemDirectoryForm = {
+  id: string
+  hostPath: string
+  access: 'read_only' | 'read_write'
+  description: string
+}
+
+function localFilesystemDirectoriesFromMetadata(metadata: Record<string, unknown> | undefined): LocalFilesystemDirectoryForm[] {
+  const root = metadata?.localFilesystem
+  const dirs = root && typeof root === 'object' && !Array.isArray(root)
+    ? (root as { directories?: unknown }).directories
+    : undefined
+  if (!Array.isArray(dirs)) return []
+  return dirs.map((raw, index) => {
+    const entry = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+    return {
+      id: typeof entry.id === 'string' ? entry.id : `dir_${index + 1}`,
+      hostPath: typeof entry.hostPath === 'string' ? entry.hostPath : '',
+      access: entry.access === 'read_only' ? 'read_only' : 'read_write',
+      description: typeof entry.description === 'string' ? entry.description : '',
+    }
+  })
+}
+
+function defaultLocalDirectory(): LocalFilesystemDirectoryForm {
+  return { id: `dir_${Date.now()}`, hostPath: '', access: 'read_write', description: '' }
 }
 
 type ProviderMetaEntry = {
@@ -154,6 +191,7 @@ function isFunctionalKind(
   localSources: Record<string, LocalSourceState>,
 ): boolean {
   if (isLocalSourceKind(kind)) return localSources[kind]?.available === true
+  if (CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined) return true
   return providerKeyForKind(kind) !== undefined
 }
 
@@ -165,6 +203,7 @@ function isFunctionalKind(
 function deriveConnections(
   providerKeys: Record<string, string | null>,
   providerMeta: Record<string, { name?: string; enabled?: boolean }>,
+  connectorConnections: ServerConnectorConnection[],
   localSources: Record<string, LocalSourceState>,
 ): Connection[] {
   const out: Connection[] = []
@@ -180,6 +219,18 @@ function deriveConnections(
         // providersMeta and is honored server-side when forwarding keys
         // to the sandbox.
         enabled: entry?.enabled !== false,
+      })
+    }
+  }
+  for (const [kind, providerId] of Object.entries(CONNECTOR_PROVIDER_BY_KIND) as [ConnectionKind, string][]) {
+    for (const connection of connectorConnections.filter(c => c.providerId === providerId)) {
+      const catalogMeta = CONNECTION_CATALOG[kind]
+      out.push({
+        id: connection.id,
+        kind,
+        name: connection.displayName || catalogMeta.name,
+        enabled: connection.status === 'active' && connection.hasCredentials,
+        externalAccountId: connection.externalAccountId,
       })
     }
   }
@@ -315,7 +366,7 @@ function TokenConnectionForm({
   dirty: boolean
   busy: boolean
   onChange: (value: string) => void
-  onSave: () => void
+  onSave: () => void | Promise<void>
 }) {
   return (
     <>
@@ -337,6 +388,7 @@ function TokenConnectionForm({
           />
           {envKey && (
             <Button
+              type="button"
               size="sm"
               className="w-full sm:w-auto"
               disabled={!dirty || busy}
@@ -653,6 +705,7 @@ function AgentDetail({
   const [name, setName] = useState(existing?.name ?? '')
   const [model, setModel] = useState(initialModel)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerPortalContainer, setModelPickerPortalContainer] = useState<HTMLElement | null>(null)
 
   const canSave = name.trim().length > 0 && model.trim().length > 0
   const handleSave = () => {
@@ -668,7 +721,7 @@ function AgentDetail({
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   return (
-    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+    <div ref={setModelPickerPortalContainer} className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
       <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
         <Field label="Name">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
@@ -692,10 +745,20 @@ function AgentDetail({
                 <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
+            <PopoverContent
+              container={modelPickerPortalContainer ?? undefined}
+              className="p-0 w-[var(--radix-popover-trigger-width)] overflow-hidden"
+              align="start"
+              onEscapeKeyDown={() => {
+                // cmdk swallows Escape via preventDefault, which would
+                // stop Radix's auto-dismiss of this Popover. We force-
+                // close here instead so the outer Dialog stays open.
+                setModelPickerOpen(false)
+              }}
+            >
               <Command>
                 <CommandInput placeholder="Search models…" />
-                <CommandList>
+                <CommandList className="overscroll-contain">
                   <CommandEmpty>No models found.</CommandEmpty>
                   {[...modelIndex.entries()].map(([prov, models]) => (
                     <CommandGroup key={prov} heading={providerLabel(prov)}>
@@ -775,14 +838,16 @@ type ConnectionsFocus =
   | null
 
 function ConnectionsList({
-  connections, statusFilter, search,
-  onOpen, onPickNew, onDelete, onToggleEnabled,
+  connections, availableKinds, statusFilter, search,
+  onOpen, onPickNew, onPickKind, onDelete, onToggleEnabled,
 }: {
   connections: Connection[]
+  availableKinds: ConnectionKind[]
   statusFilter: StatusFilter
   search: string
   onOpen: (id: string) => void
   onPickNew: () => void
+  onPickKind: (kind: ConnectionKind) => void
   onDelete: (id: string) => void
   onToggleEnabled: (id: string) => void
 }) {
@@ -794,8 +859,13 @@ function ConnectionsList({
     .filter(c => !q
       || c.name.toLowerCase().includes(q)
       || CONNECTION_CATALOG[c.kind].name.toLowerCase().includes(q))
+  const available = availableKinds.filter(kind => {
+    const meta = CONNECTION_CATALOG[kind]
+    return !q || meta.name.toLowerCase().includes(q) || meta.description.toLowerCase().includes(q)
+  })
+  const visibleAvailable = statusFilter === 'all' ? available : []
 
-  if (connections.length === 0) {
+  if (connections.length === 0 && visibleAvailable.length === 0) {
     return (
       <EmptyState
         title="No connections yet"
@@ -808,7 +878,7 @@ function ConnectionsList({
       />
     )
   }
-  if (filtered.length === 0) {
+  if (filtered.length === 0 && visibleAvailable.length === 0) {
     return <EmptyState title="No matches" body={q ? `No connections match “${q}”.` : 'No connections in this filter.'} />
   }
 
@@ -832,7 +902,9 @@ function ConnectionsList({
             <ConnectionGlyph kind={c.kind} size="lg" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{c.name}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground truncate">{meta.description}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground truncate">
+                {c.externalAccountId ? `${c.externalAccountId} · ${meta.description}` : meta.description}
+              </p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <Button
@@ -865,6 +937,40 @@ function ConnectionsList({
           </motion.div>
         )
       })}
+      {visibleAvailable.length > 0 && (
+        <div className={cn('min-w-0', filtered.length > 0 && 'pt-4')}>
+          {filtered.length > 0 && (
+            <p className="pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Available</p>
+          )}
+          {visibleAvailable.map((kind, i) => {
+            const meta = CONNECTION_CATALOG[kind]
+            const hasExistingKind = connections.some(c => c.kind === kind)
+            return (
+              <motion.div
+                key={`available-${kind}`}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: (filtered.length + i) * 0.02, duration: 0.15, ease: 'easeOut' }}
+                className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
+              >
+                <ConnectionGlyph kind={kind} size="lg" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{meta.name}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground truncate">{meta.description}</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => onPickKind(kind)}
+                >
+                  {hasExistingKind ? 'Connect another' : 'Connect'}
+                </Button>
+              </motion.div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -895,11 +1001,12 @@ function ConnectionsPicker({
           {entries.map(([kind, meta], i) => {
             const functional = isFunctionalKind(kind, localSources)
             const alreadyAdded = configuredKinds.has(kind)
-            const disabled = !functional || alreadyAdded
+            const allowsMultiple = CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined
+            const disabled = !functional || (alreadyAdded && !allowsMultiple)
             const localKind = isLocalSourceKind(kind)
             const badge = !functional
               ? (localKind ? 'Not detected' : 'Coming soon')
-              : alreadyAdded
+              : alreadyAdded && !allowsMultiple
                 ? 'Added'
                 : (localKind ? 'Detected' : null)
             return (
@@ -939,21 +1046,24 @@ function ConnectionsPicker({
 }
 
 function ConnectionDetail({
-  connections, focus, providerKeys, providerMeta, localSource, busySaveKey, busySaveMeta, busyLocalSource,
-  onSave, onCancel, onDelete, onSaveProviderKey, onToggleLocalSource,
+  connections, connectorConnections, focus, providerKeys, providerMeta, localSource, busySaveKey, busySaveMeta, busyGenericConnector, busyLocalSource,
+  onSave, onCancel, onDelete, onSaveProviderKey, onSaveGenericConnector, onToggleLocalSource,
 }: {
   connections: Connection[]
+  connectorConnections: ServerConnectorConnection[]
   focus: Extract<ConnectionsFocus, { mode: 'new' } | { mode: 'edit' }>
   providerKeys: Record<string, string | null>
   providerMeta: Record<string, ProviderMetaEntry>
   localSource: LocalSourceState | undefined
   busySaveKey: boolean
   busySaveMeta: boolean
+  busyGenericConnector: boolean
   busyLocalSource: boolean
-  onSave: (c: Connection) => void
+  onSave: (c: Connection) => Promise<boolean>
   onCancel: () => void
   onDelete: (id: string) => void
-  onSaveProviderKey: (envKey: string, value: string) => void
+  onSaveProviderKey: (envKey: string, value: string) => Promise<boolean>
+  onSaveGenericConnector: (input: { id?: string; kind: ConnectionKind; displayName: string; externalAccountId?: string; credentials?: Record<string, unknown>; metadata?: Record<string, unknown> }) => void
   onToggleLocalSource: (kind: string, enabled: boolean) => void
 }) {
   const existing = focus.mode === 'edit' ? connections.find(c => c.id === focus.id) : undefined
@@ -962,14 +1072,25 @@ function ConnectionDetail({
 
   const providerEnvKey = providerKeyForKind(kind)
   const connectionDefinition = managedConnectionDefinitionForKind(kind)
+  const connectorProviderId = CONNECTOR_PROVIDER_BY_KIND[kind]
+  const connectorConnection = connectorProviderId && focus.mode === 'edit'
+    ? connectorConnections.find(c => c.id === focus.id)
+    : undefined
   const persistedKey = providerEnvKey ? providerKeys[providerEnvKey] ?? '' : ''
   const persistedName = providerEnvKey ? providerMeta[providerEnvKey]?.name ?? '' : ''
+  const persistedExternalAccountId = connectorConnection?.externalAccountId ?? ''
 
   // For API-key/token backed connections, the secret field is the persisted masked echo on first
   // load. The user has to type a fresh value to overwrite it.
   const [name, setName]       = useState(existing?.name ?? (persistedName || catalogMeta.name))
   const [apiKey, setApiKey]   = useState(persistedKey ?? '')
   const [apiKeyDirty, setApiKeyDirty] = useState(false)
+  const [externalAccountId, setExternalAccountId] = useState(persistedExternalAccountId)
+  const isLocalFilesystem = kind === LOCAL_FILESYSTEM_CONNECTION_KIND
+  const [localDirectories, setLocalDirectories] = useState<LocalFilesystemDirectoryForm[]>(() => {
+    const existingDirs = localFilesystemDirectoriesFromMetadata(connectorConnection?.metadata)
+    return existingDirs.length > 0 ? existingDirs : [defaultLocalDirectory()]
+  })
 
   // Backfill the masked key once /me/providers resolves.
   useEffect(() => {
@@ -984,19 +1105,79 @@ function ConnectionDetail({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistedName])
 
-  const handleSave = () => {
-    onSave({
+  useEffect(() => {
+    if (!isLocalFilesystem) return
+    const existingDirs = localFilesystemDirectoriesFromMetadata(connectorConnection?.metadata)
+    setLocalDirectories(existingDirs.length > 0 ? existingDirs : [defaultLocalDirectory()])
+  }, [connectorConnection?.metadata, isLocalFilesystem])
+
+  const handleSave = async () => {
+    if (isLocalFilesystem) {
+      const directories = localDirectories.map((directory, index) => ({
+        id: directory.id || `dir_${index + 1}`,
+        hostPath: directory.hostPath.trim(),
+        access: directory.access,
+        description: directory.description.trim() || undefined,
+      }))
+      const invalid = directories.find(directory => !directory.hostPath)
+      if (invalid) {
+        toast.error('Directory path is required')
+        return
+      }
+      onSaveGenericConnector({
+        id: connectorConnection?.id,
+        kind,
+        displayName: catalogMeta.name,
+        metadata: { localFilesystem: { directories } },
+      })
+      return
+    }
+    if (connectorProviderId) {
+      let credentials: Record<string, unknown> | undefined
+      {
+        const trimmedCredentials = apiKey.trim()
+        if (focus.mode === 'new' && !trimmedCredentials) {
+          toast.error('Credentials are required', {
+            description: `Paste the ${catalogMeta.name} OAuth token JSON before adding this connection.`,
+          })
+          return
+        }
+        if (apiKeyDirty && trimmedCredentials) {
+          try {
+            credentials = JSON.parse(trimmedCredentials) as Record<string, unknown>
+          } catch {
+            credentials = { token: trimmedCredentials }
+          }
+        }
+      }
+      onSaveGenericConnector({
+        id: connectorConnection?.id,
+        kind,
+        displayName: name.trim() || catalogMeta.name,
+        externalAccountId: externalAccountId.trim() || undefined,
+        credentials,
+      })
+      return
+    }
+    if (providerEnvKey && apiKeyDirty) {
+      const savedKey = await onSaveProviderKey(providerEnvKey, apiKey.trim())
+      if (!savedKey) return
+      setApiKeyDirty(false)
+    }
+
+    const savedMeta = await onSave({
       id: existing?.id ?? `conn-${kind}-${Date.now()}`,
       kind,
       name: name.trim() || catalogMeta.name,
       enabled: existing?.enabled ?? true,
     })
+    if (!savedMeta) return
   }
 
-  const handleSaveKey = () => {
+  const handleSaveKey = async () => {
     if (!providerEnvKey || !apiKeyDirty) return
-    onSaveProviderKey(providerEnvKey, apiKey.trim())
-    setApiKeyDirty(false)
+    const saved = await onSaveProviderKey(providerEnvKey, apiKey.trim())
+    if (saved) setApiKeyDirty(false)
   }
 
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -1087,19 +1268,105 @@ function ConnectionDetail({
             </div>
           </div>
 
-        <Field label="Display name" help="Optional custom label shown in the connections list.">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
-        </Field>
+        {!isLocalFilesystem && (
+          <Field label="Display name" help="Optional custom label shown in the connections list.">
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder={catalogMeta.name} />
+          </Field>
+        )}
 
-        <TokenConnectionForm
-          definition={connectionDefinition}
-          envKey={providerEnvKey}
-          value={apiKey}
-          dirty={apiKeyDirty}
-          busy={busySaveKey}
-          onChange={(value) => { setApiKey(value); setApiKeyDirty(true) }}
-          onSave={handleSaveKey}
-        />
+        {isLocalFilesystem && (
+          <Field
+            label="Mounted directories"
+            help="Add the server-local folders this workspace can use. Desk mounts each one into the sandbox automatically."
+          >
+            <div className="space-y-3">
+              {localDirectories.map((directory, index) => (
+                <div key={directory.id} className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-muted-foreground">Directory {index + 1}</p>
+                    {localDirectories.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-destructive hover:text-destructive"
+                        onClick={() => setLocalDirectories((dirs) => dirs.filter((d) => d.id !== directory.id))}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid gap-3">
+                    <Field label="Server path" help="Absolute path on the Desk server.">
+                      <Input
+                        value={directory.hostPath}
+                        onChange={e => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, hostPath: e.target.value } : d))}
+                        placeholder="/Users/you/Projects/client"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Access" help="Read-write is the default; choose read-only for reference folders.">
+                    <div className="flex flex-wrap gap-2">
+                      {(['read_write', 'read_only'] as const).map(access => (
+                        <Button
+                          key={access}
+                          type="button"
+                          size="sm"
+                          variant={directory.access === access ? 'default' : 'outline'}
+                          onClick={() => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, access } : d))}
+                        >
+                          {access === 'read_write' ? 'Read-write' : 'Read-only'}
+                        </Button>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field label="Description" help="Helps the agent understand when to use this folder. Optional, but recommended.">
+                    <Textarea
+                      value={directory.description}
+                      onChange={e => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, description: e.target.value } : d))}
+                      placeholder="What can the agent find here?"
+                      className="min-h-20"
+                    />
+                  </Field>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => setLocalDirectories((dirs) => [...dirs, defaultLocalDirectory()])}>
+                <Plus className="h-3.5 w-3.5" />Add directory
+              </Button>
+            </div>
+          </Field>
+        )}
+
+        {connectorProviderId && !isLocalFilesystem && (
+          <Field label="Account email or ID" help="Used to distinguish multiple accounts for the same connector.">
+            <Input value={externalAccountId} onChange={e => setExternalAccountId(e.target.value)} placeholder="name@example.com" />
+          </Field>
+        )}
+
+        {connectorProviderId && !isLocalFilesystem ? (
+          <Field
+            label="Credentials"
+            help="Paste OAuth token JSON; Desk stores it encrypted server-side and never echoes it back."
+          >
+            <Textarea
+              value={apiKey}
+              onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
+              data-testid={`connector-credentials-${connectorProviderId}`}
+              placeholder={'{\n  "token": "..."\n}'}
+              className="min-h-24 min-w-0 flex-1 font-mono text-xs"
+            />
+          </Field>
+        ) : !isLocalFilesystem ? (
+          <TokenConnectionForm
+            definition={connectionDefinition}
+            envKey={providerEnvKey}
+            value={apiKey}
+            dirty={apiKeyDirty}
+            busy={busySaveKey}
+            onChange={(value) => { setApiKey(value); setApiKeyDirty(true) }}
+            onSave={handleSaveKey}
+          />
+        ) : null}
       </div>
 
       <div
@@ -1140,9 +1407,17 @@ function ConnectionDetail({
           )}
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:justify-end">
-          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta}>Cancel</Button>
-          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={busySaveMeta}>
-            {focus.mode === 'new' ? (busySaveMeta ? 'Adding…' : 'Add connection') : (busySaveMeta ? 'Saving…' : 'Save')}
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busySaveMeta || busySaveKey}>Cancel</Button>
+          <Button
+            type="button"
+            size="sm"
+            className="flex-1 sm:flex-none"
+            onClick={handleSave}
+            disabled={busySaveMeta || busySaveKey || busyGenericConnector || Boolean(connectorProviderId && !isLocalFilesystem && focus.mode === 'new' && !apiKey.trim())}
+          >
+            {focus.mode === 'new'
+              ? ((busySaveMeta || busySaveKey || busyGenericConnector) ? 'Adding…' : 'Add connection')
+              : ((busySaveMeta || busySaveKey || busyGenericConnector) ? 'Saving…' : 'Save')}
           </Button>
         </div>
       </div>
@@ -1310,7 +1585,9 @@ export function SettingsModal({
 
   // ── Agents state ──────────────────────────────────────────────────────────
   const { data: serverAgents } = useGetAgentsQuery()
-  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(workspace.id)
+  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(workspace.id, {
+    skip: !open || workspace.id === '__loading__',
+  })
   const { data: models } = useGetModelsQuery()
   const [createAgent, { isLoading: creatingAgent }] = useCreateAgentMutation()
   const [patchAgent, { isLoading: patchingAgent }]  = usePatchAgentMutation()
@@ -1389,11 +1666,14 @@ export function SettingsModal({
   }
 
   // ── Connections state ─────────────────────────────────────────────────────
-  // The connection list is derived from /me/providers — token-backed
-  // entries appear once their secret is saved. Other catalog kinds stay
-  // disabled in the picker until a backend lands.
+  // The connection list merges legacy API-key providers, generic
+  // multi-account connector rows, and host-detected local sources.
   const { data: providerKeys } = useGetProviderKeysQuery()
   const [putProviderKeys, { isLoading: savingKey }] = usePutProviderKeysMutation()
+  const { data: connectorConnectionsData } = useGetConnectorConnectionsQuery()
+  const [createConnectorConnection, { isLoading: creatingConnectorConnection }] = useCreateConnectorConnectionMutation()
+  const [patchConnectorConnection, { isLoading: patchingConnectorConnection }] = usePatchConnectorConnectionMutation()
+  const [deleteConnectorConnection] = useDeleteConnectorConnectionMutation()
   const { data: providersMeta } = useGetProvidersMetaQuery()
   const [putProvidersMeta, { isLoading: savingMeta }] = usePutProvidersMetaMutation()
   const { data: localSourcesData } = useGetLocalSourcesQuery()
@@ -1401,18 +1681,26 @@ export function SettingsModal({
 
   const providerKeysMap = providerKeys ?? {}
   const providersMetaMap = providersMeta ?? {}
+  const connectorConnections = connectorConnectionsData ?? []
+  const savingGenericConnector = creatingConnectorConnection || patchingConnectorConnection
   const localSourcesByKind = useMemo<Record<string, LocalSourceState>>(() => {
     const map: Record<string, LocalSourceState> = {}
     for (const s of localSourcesData?.sources ?? []) map[s.kind] = s as LocalSourceState
     return map
   }, [localSourcesData])
   const connections = useMemo(
-    () => deriveConnections(providerKeysMap, providersMetaMap, localSourcesByKind),
-    [providerKeysMap, providersMetaMap, localSourcesByKind],
+    () => deriveConnections(providerKeysMap, providersMetaMap, connectorConnections, localSourcesByKind),
+    [providerKeysMap, providersMetaMap, connectorConnections, localSourcesByKind],
   )
   const configuredKinds = useMemo(
     () => new Set(connections.map(c => c.kind)),
     [connections],
+  )
+  const availableConnectionKinds = useMemo(
+    () => (Object.keys(CONNECTION_CATALOG) as ConnectionKind[]).filter(kind => (
+      isFunctionalKind(kind, localSourcesByKind) && (!configuredKinds.has(kind) || allowsMultipleConnections(kind))
+    )),
+    [configuredKinds, localSourcesByKind],
   )
 
   // The "enabled" flag is server state for every kind: API-key kinds
@@ -1441,10 +1729,10 @@ export function SettingsModal({
         await putLocalSource({ kind: conn.kind, enabled: true }).unwrap()
       } catch (err) {
         toast.error(`Could not enable ${CONNECTION_CATALOG[conn.kind].name}`, { description: describeApiError(err) })
-        return
+        return false
       }
       setConnectionsFocus(null)
-      return
+      return true
     }
     // Persist the display name to /me/providers/meta if this is a
     // functional (API-key-backed) connection kind.
@@ -1458,15 +1746,26 @@ export function SettingsModal({
         await putProvidersMeta({ [envKey]: { name: metaName } }).unwrap()
       } catch (err) {
         toast.error('Could not save connection name', { description: describeApiError(err) })
-        return
+        return false
       }
     }
     setConnectionsFocus(null)
+    return true
   }
 
   const handleDeleteConnection = async (id: string) => {
     const conn = connections.find(c => c.id === id)
     if (!conn) { setConnectionsFocus(null); return }
+    if (CONNECTOR_PROVIDER_BY_KIND[conn.kind]) {
+      try {
+        await deleteConnectorConnection(id).unwrap()
+      } catch (err) {
+        toast.error('Could not remove connection', { description: describeApiError(err) })
+        return
+      }
+      setConnectionsFocus(null)
+      return
+    }
     if (isLocalSourceKind(conn.kind)) {
       try {
         await putLocalSource({ kind: conn.kind, enabled: false }).unwrap()
@@ -1502,6 +1801,16 @@ export function SettingsModal({
   const handleToggleConnectionEnabled = (id: string) => {
     const conn = connections.find(c => c.id === id)
     if (!conn) return
+    if (CONNECTOR_PROVIDER_BY_KIND[conn.kind]) {
+      const next = !conn.enabled
+      void patchConnectorConnection({ id, patch: { status: next ? 'active' : 'disabled' } })
+        .unwrap()
+        .catch((err) => toast.error(
+          next ? 'Could not enable connection' : 'Could not disable connection',
+          { description: describeApiError(err) },
+        ))
+      return
+    }
     if (isLocalSourceKind(conn.kind)) {
       const next = !(localSourcesByKind[conn.kind]?.enabled === true)
       void putLocalSource({ kind: conn.kind, enabled: next })
@@ -1526,8 +1835,51 @@ export function SettingsModal({
   const handleSaveProviderKey = async (envKey: string, value: string) => {
     try {
       await putProviderKeys({ [envKey]: value }).unwrap()
+      return true
     } catch (err) {
       toast.error('Could not save provider key', { description: describeApiError(err) })
+      return false
+    }
+  }
+
+  const handleSaveGenericConnector = async (input: {
+    id?: string
+    kind: ConnectionKind
+    displayName: string
+    externalAccountId?: string
+    credentials?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }) => {
+    const providerId = CONNECTOR_PROVIDER_BY_KIND[input.kind]
+    if (!providerId) return
+    try {
+      if (input.id) {
+        await patchConnectorConnection({
+          id: input.id,
+          patch: {
+            displayName: input.displayName,
+            externalAccountId: input.externalAccountId,
+            metadata: input.metadata,
+            credentials: input.credentials,
+            status: 'active',
+          },
+        }).unwrap()
+      } else {
+        await createConnectorConnection({
+          providerId,
+          displayName: input.displayName,
+          externalAccountId: input.externalAccountId,
+          scopes: DEFAULT_SCOPES_BY_CONNECTOR_KIND[input.kind] ?? [],
+          capabilities: DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND[input.kind] ?? [],
+          metadata: { connectorKind: input.kind, ...(input.metadata ?? {}) },
+          credentials: input.credentials,
+          status: 'active',
+          isDefault: true,
+        }).unwrap()
+      }
+      setConnectionsFocus(null)
+    } catch (err) {
+      toast.error('Could not save connection', { description: describeApiError(err) })
     }
   }
 
@@ -1757,6 +2109,7 @@ export function SettingsModal({
               ) : activeSection === 'connections' && (connectionsFocus?.mode === 'new' || connectionsFocus?.mode === 'edit') ? (
                 <ConnectionDetail
                   connections={connectionsView}
+                  connectorConnections={connectorConnections}
                   focus={connectionsFocus}
                   providerKeys={providerKeysMap}
                   providerMeta={providersMetaMap}
@@ -1768,11 +2121,13 @@ export function SettingsModal({
                   })()}
                   busySaveKey={savingKey}
                   busySaveMeta={savingMeta}
+                  busyGenericConnector={savingGenericConnector}
                   busyLocalSource={savingLocalSource}
                   onSave={handleSaveConnection}
                   onCancel={() => setConnectionsFocus(null)}
                   onDelete={handleDeleteConnection}
                   onSaveProviderKey={handleSaveProviderKey}
+                  onSaveGenericConnector={handleSaveGenericConnector}
                   onToggleLocalSource={handleToggleLocalSource}
                 />
               ) : (
@@ -1819,10 +2174,12 @@ export function SettingsModal({
                       </div>
                       <ConnectionsList
                         connections={connectionsView}
+                        availableKinds={availableConnectionKinds}
                         statusFilter={connectionsStatusFilter}
                         search={connectionsSearch}
                         onOpen={(id) => setConnectionsFocusAndReset({ mode: 'edit', id })}
                         onPickNew={() => setConnectionsFocusAndReset({ mode: 'picker' })}
+                        onPickKind={(kind) => setConnectionsFocusAndReset({ mode: 'new', kind })}
                         onDelete={handleDeleteConnection}
                         onToggleEnabled={handleToggleConnectionEnabled}
                       />

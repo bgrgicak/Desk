@@ -87,6 +87,23 @@ describe("listLibrary", () => {
     expect(folderPaths).toContain("Work/Plans");
   });
 
+  it("projects connected local filesystem directories into the library listing", async () => {
+    const source = path.join(ctx.home, ".tmp", "connected-projects-source");
+    await fs.mkdir(path.join(source, "Desk", "packages"), { recursive: true });
+    await fs.writeFile(path.join(source, "Desk", "package.json"), "{}");
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug, {
+      virtualMounts: [{ homeName: "Projects", sourcePath: source }],
+    });
+
+    const itemPaths = items.map((i) => i.path);
+    const folderPaths = folders.map((f) => f.path);
+    expect(folderPaths).toContain("Projects");
+    expect(folderPaths).toContain("Projects/Desk");
+    expect(folderPaths).toContain("Projects/Desk/packages");
+    expect(itemPaths).toContain("Projects/Desk/package.json");
+  });
+
   it("returns the full tree when no limit is given, even if a subtree dominates mtime", async () => {
     // Simulate the node_modules problem: a freshly-written subtree whose mtimes
     // sort above an older root file. Without a limit, the older root file must
@@ -137,6 +154,39 @@ describe("listLibrary", () => {
     expect(itemPaths).not.toContain("node_modules/@scope/pkg/inner/payload.txt");
 
     expect(itemPaths).toContain("node_modules/loose-link");
+  });
+
+  it("collapses each .app directory into a single library item", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.mkdir(path.join(root, "single-entry.app", "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "single-entry.app", "dist", "index.html"), "<main>app</main>");
+
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
+    const appItems = items.filter((i) => i.path === "single-entry.app");
+
+    expect(appItems).toHaveLength(1);
+    expect(appItems[0]).toMatchObject({
+      name: "single-entry.app",
+      mime: "application/vnd.desk.app+directory",
+      isDir: true,
+    });
+    expect(items.map((i) => i.path)).not.toContain("single-entry.app/dist/index.html");
+    expect(folders.map((f) => f.path)).not.toContain("single-entry.app");
+  });
+
+  it("deduplicates symlinks that point at an already-listed app directory", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.mkdir(path.join(root, "dedupe-target.app", "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "dedupe-target.app", "dist", "index.html"), "<main>app</main>");
+    await fs.symlink("dedupe-target.app", path.join(root, "dedupe-alias.app"));
+
+    const { items } = await listLibrary(ctx, ctx.workspaceSlug);
+    const appItems = items.filter(
+      (i) => i.path === "dedupe-target.app" || i.path === "dedupe-alias.app",
+    );
+
+    expect(appItems).toHaveLength(1);
+    expect(appItems[0].path).toBe("dedupe-target.app");
   });
 
   it("paginates by mtime cursor", async () => {

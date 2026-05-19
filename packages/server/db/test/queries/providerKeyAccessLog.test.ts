@@ -1,18 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { type Pool } from "../../src/pool.js";
 import { generateId } from "@agent-desk/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as providerKeyAccessLog from "../../src/queries/providerKeyAccessLog.js";
 import * as users from "../../src/queries/users.js";
-import { resetSecretKeyCache } from "../../src/encryption.js";
 import { hashPassword } from "../../src/passwords.js";
 
 let pool: Pool;
-let keyDir: string;
-let prevEnv: string | undefined;
 
 beforeAll(async () => {
   pool = await setupTestDb();
@@ -20,20 +14,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestDb(pool);
-});
-
-beforeEach(() => {
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-pkal-"));
-  prevEnv = process.env.DESK_SECRET_KEY_PATH;
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
-  resetSecretKeyCache();
-});
-
-afterEach(() => {
-  if (prevEnv === undefined) delete process.env.DESK_SECRET_KEY_PATH;
-  else process.env.DESK_SECRET_KEY_PATH = prevEnv;
-  resetSecretKeyCache();
-  fs.rmSync(keyDir, { recursive: true, force: true });
 });
 
 async function makeUser(username: string): Promise<string> {
@@ -109,5 +89,34 @@ describe("providerKeyAccessLog queries", () => {
     await pool.query("DELETE FROM users WHERE id = ?", [userId]);
     const log = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
     expect(log).toHaveLength(0);
+  });
+
+  it("pruneKeyAccessLog removes only rows older than the cutoff", async () => {
+    const userId = await makeUser("pkal-user8");
+    // Two fresh rows + one row deliberately back-dated past the cutoff.
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh1");
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh2");
+    const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
+    await pool.query(
+      `INSERT INTO provider_key_access_log (user_id, action, providers, reason, created_at)
+       VALUES (?, 'read', ?, 'sandbox_run:stale', ?)`,
+      [userId, JSON.stringify(["OPENAI_API_KEY"]), oldDate],
+    );
+    const before = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
+    expect(before).toHaveLength(3);
+
+    const removed = await providerKeyAccessLog.pruneKeyAccessLog(pool, 90);
+    expect(removed).toBe(1);
+
+    const after = await providerKeyAccessLog.getKeyAccessLog(pool, userId);
+    expect(after).toHaveLength(2);
+    expect(after.every((e) => e.reason !== "sandbox_run:stale")).toBe(true);
+  });
+
+  it("pruneKeyAccessLog returns 0 when nothing is past the cutoff", async () => {
+    const userId = await makeUser("pkal-user9");
+    await providerKeyAccessLog.logKeyAccess(pool, userId, "read", ["OPENAI_API_KEY"], "sandbox_run:fresh");
+    const removed = await providerKeyAccessLog.pruneKeyAccessLog(pool, 90);
+    expect(removed).toBe(0);
   });
 });

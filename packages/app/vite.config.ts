@@ -3,6 +3,34 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import fs from 'fs'
+
+// Read the app's version once at config time so it can be inlined into
+// both the React bundle (via `define`) and the service worker (via the
+// post-build plugin below). The SW uses it as a cache key + the page
+// uses it to decide if there is a real update waiting.
+const APP_VERSION = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'),
+).version as string
+
+// The public/sw.js source ships with a literal `__APP_VERSION__`
+// placeholder. After Vite copies it into dist/ we rewrite that token to
+// the real version — the cache name keys off it, so each released
+// version gets its own cache and the previous one is dropped on
+// activate. Build-only: dev never serves the SW (see main.tsx).
+function injectServiceWorkerVersion() {
+  return {
+    name: 'inject-sw-version',
+    apply: 'build' as const,
+    closeBundle() {
+      const swPath = path.resolve(__dirname, 'dist/sw.js')
+      if (!fs.existsSync(swPath)) return
+      const original = fs.readFileSync(swPath, 'utf8')
+      const updated = original.replace(/__APP_VERSION__/g, APP_VERSION)
+      if (updated !== original) fs.writeFileSync(swPath, updated)
+    },
+  }
+}
 
 // In dev, everything flows through the Vite port (5173 by default, or
 // whatever DESK_APP_PORT is set to — e2e uses that to pick an isolated
@@ -50,7 +78,10 @@ const proxy = {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), injectServiceWorkerVersion()],
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

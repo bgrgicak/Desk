@@ -136,3 +136,191 @@ only an explicit logout does.
 - Audit log for vault reads (mirror of `provider_key_access_log`).
 - Per-workspace ACLs (currently every workspace under the user can
   read every secret in that user's vault).
+
+---
+
+## HTTP-layer controls
+
+### Default security headers
+
+Every response carries (`api/src/app.ts → setSecurityHeaders`):
+
+| Header | Value | Why |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | Blocks MIME-sniffing on JSON/text payloads |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Keeps full URLs (which carry vault/route IDs) out of cross-origin Referer headers |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=(), usb=(), payment=(), magnetometer=(), gyroscope=(), accelerometer=()` | Deny powerful APIs by default |
+| `X-Frame-Options` | `DENY` (except `/apps/*`) | Blocks embedding outside the deliberate iframe surface |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` when `X-Forwarded-Proto: https` | Only set when a reverse proxy indicates TLS — HTTP-only dev/local deployments unaffected |
+
+`Content-Security-Policy` is intentionally not set yet — the SPA's
+inline assets and `/apps/*` iframe origin each need their own policy.
+A focused follow-up will land it.
+
+### Rate limiting (`api/src/auth/rateLimit.ts`)
+
+In-memory sliding-window limiter applied to the high-risk endpoints.
+Per-IP buckets fall back to a per-user bucket where relevant.
+
+| Endpoint | Bucket | Limit |
+|---|---|---|
+| `POST /auth/login` | per-IP | 10 / minute |
+| `POST /auth/signup` | per-IP | 5 / minute |
+| `POST /vault/unlock` | per-IP **and** per-user | 10 / min (IP), 20 / 5 min (user) |
+| `POST /me/password` | per-user | 10 / 5 min |
+
+When over budget the server returns `429` with the standard `{code,
+message}` shape plus a `Retry-After` header (seconds). Tests and one-off
+scripts can disable the limiter entirely with `DESK_RATE_LIMIT_DISABLED=1`
+(used by the e2e fixture; production never sets it).
+
+### WebSocket Origin allowlist
+
+The `/ws` upgrade handler validates the `Origin` header (CSWSH
+mitigation, `api/src/app.ts → isWsOriginAllowed`).
+
+- Any `http(s)://localhost` / `http(s)://127.0.0.1` / `http://[::1]`
+  origin is accepted on any port — loopback can't legitimately serve
+  a remote attacker page from the victim's machine.
+- Additional production origins via `DESK_ALLOWED_ORIGINS`
+  (comma-separated list).
+- `DESK_ALLOWED_HOSTS` (same env var the Vite dev/preview server
+  reads, default `desk.test`) expands into `http://host` +
+  `https://host` allowlist entries so the bundled nginx fixture works
+  without configuring two parallel allowlists.
+- Missing `Origin` header is allowed (CLI tools, integration tests,
+  the Electron renderer when it doesn't emit one) — CSWSH applies
+  only to script-initiated upgrades from a browser tab.
+
+Origin check fires **before** token validation so the response can't
+be used to probe whether a token is valid from a cross-site context.
+
+### Vault password policy
+
+`POST /vault/setup` (`api/src/routes/vault.ts → enforceVaultPasswordPolicy`):
+
+- Min length 12 (NIST 800-63B favours length over composition).
+- Rejects the documented `DESK_SEED_PASSWORD` string verbatim so a
+  first-boot operator can't accidentally re-use it for the vault.
+
+Deliberately **not** enforced on `/vault/unlock` — that would lock out
+users who created a vault before this policy existed. The bar is "make
+weak passwords hard to set," not retroactive invalidation.
+
+### Signup gate
+
+`POST /auth/signup` is disabled by default. Operators opt in with
+`DESK_ENABLE_SIGNUP=1`; the unauthenticated `GET /auth/signup-status`
+lets the SPA decide whether to render the live link vs the "coming
+soon" placeholder. Single-user-per-host deployments leave it off.
+
+When enabled: username (3–32 chars `[a-zA-Z0-9_-]`), valid email,
+password ≥ 12 chars and ≠ the documented seed. Creates the user row,
+bootstraps a hub workspace (matching `main.ts` boot behaviour), sets
+up the per-user vault when `DESK_VAULT_PASSWORD` is set, returns a
+session token. Same rate-limit shape as `/auth/login`.
+
+### First-run seed-password flag
+
+The seed user gets `must_change_password = 1` when the install boots on
+the documented public `DESK_SEED_PASSWORD`. The flag clears on the next
+successful `POST /me/password` (or any login-time hash upgrade). `GET
+/me` surfaces it so the SPA can prompt for a change.
+
+Operators who supply their own `DESK_SEED_PASSWORD` skip the flag —
+they chose their own secret and don't need the prompt.
+
+### Audit-log retention
+
+`provider_key_access_log` rows older than `DESK_KEY_ACCESS_LOG_RETENTION_DAYS`
+(default 90) are pruned on boot and then on a daily cadence by the
+reaper in `api/src/main.ts`. Surfaced read-only at `GET
+/me/key-access-log` (user-scoped, paginated, ISO timestamps).
+
+### Misleading-log fix
+
+`api/src/main.ts` previously logged "auto-unlocked via DESK_SECRET_KEY"
+during vault auto-unlock. The variable actually read is
+`DESK_VAULT_PASSWORD` (a distinct env var from the AES-256 key for
+SQLite at-rest encryption). Fixed.
+
+---
+
+## Robustness / lifecycle
+
+### Health vs readiness probes
+
+| Endpoint | Returns | What's checked |
+|---|---|---|
+| `GET /health` | `{ok: true}` | Process is alive — no dependency probes |
+| `GET /ready` | `{ok, checks: {db, vault}}` (200 or 503) | DB `SELECT 1` + vault `status()` round-trip |
+
+Both unauthenticated so process supervisors (systemd, docker-compose
+healthcheck, k8s readinessProbe) can probe without a token.
+
+### Graceful shutdown
+
+`SIGINT` / `SIGTERM` triggers a bounded shutdown
+(`DESK_SHUTDOWN_GRACE_MS`, default 30000):
+
+- Re-entrancy guard so double-signal doesn't run cleanup twice.
+- Awaits `server.close()` (calls `closeIdleConnections()` first so
+  keep-alive sockets release immediately).
+- Watchdog timer force-exits if a hung request blocks the clean path
+  past the grace window.
+- `pool.end()` wrapped in try/catch — a DB-side shutdown error
+  doesn't hijack the exit.
+
+### Pre-migration DB snapshot
+
+Before `runMigrations()`, the SQLite DB is snapshotted to
+`${DESK_HOME}/backups/pre-migration-<ISO>.db` via `VACUUM INTO` (same
+code path as `/internal/backup`). Skipped on a truly-empty file (first
+boot). Retention bounded by `DESK_PRE_MIGRATION_BACKUP_KEEP` (default
+10), oldest pruned first.
+
+A backup failure is logged and the boot continues — losing the safety
+net is preferable to refusing to start.
+
+### Slow-query log
+
+The SQLite pool wraps every query and warns when elapsed time exceeds
+`DESK_SLOW_QUERY_MS` (default 50ms). Log line carries the prepared SQL
+text (normalised + truncated to 240 chars) and row count; bind values
+are never logged. Set to 0 to disable.
+
+---
+
+## Sandbox-side controls
+
+### Egress policy (`DESK_SANDBOX_NETWORK`)
+
+| Value | Behaviour |
+|---|---|
+| `bridge` (default) | Default Docker bridge network. Sandbox can reach AI provider APIs, GitHub, package registries — every URL the runtime needs. |
+| `none` | `--network none`. No outbound connectivity. Drops the `host.docker.internal:host-gateway` extra-host entry. The in-sandbox `desk` CLI gets a clear "DESK_API_URL is not set" error (rather than a TCP timeout) when invoked, because the runtime now omits `DESK_API_URL` in this mode. |
+
+`none` is the right pick for paranoid deployments running agent
+workloads that only need on-disk file editing + a pre-cached local
+model. AI API calls (Anthropic, OpenAI, OpenCode), sandbox callbacks
+to `host.docker.internal`, and any tool that downloads dependencies
+all break — those are the intended trade-offs.
+
+A real domain-level allowlist would need a sidecar HTTP proxy
+(squid/mitmproxy in transparent mode) and is out of scope for v1; the
+two-option knob covers the realistic deployment matrix today.
+
+### Reproducible-build sanity check
+
+The CI workflow builds `desk/sandbox:v1` twice on every run (same
+source, same `SOURCE_DATE_EPOCH`) and compares the resulting image
+digests. **Drift is advisory today**: a `::warning::` annotation
+shows up on the job summary instead of a hard failure. Promoting it
+to blocking waits on the Dockerfile being made deterministic — apt
+caches and `npm install` orderings currently leak ordering into the
+layer digest. Tracked in ADR-0006.
+
+Operators who depend on stable image digests (image-signing workflows,
+content-addressable deployments) should rebuild from a trusted source
+and compare against the previously-shipped digest until the
+Dockerfile is hardened.

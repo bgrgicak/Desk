@@ -56,12 +56,89 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build desk/sandbox:v1 image
+      - name: Set up QEMU for multi-arch
+        # Multi-arch buildx wants binfmt registrations so arm64 layers
+        # can be emulated on the amd64 runner.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build desk/sandbox:v1 image (multi-arch, loaded into local docker for tests)
         # The image bakes a baseline `agent` user at UID 2000. At runtime
         # desk-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
         # arg doesn't need tuning per-runner.
-        run: docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+        #
+        # Inject commit metadata via OCI labels so `docker inspect
+        # desk/sandbox:v1` on the runtime host can identify which commit
+        # produced the image. The Dockerfile sets the static labels
+        # (title, description, source, license); these three are the
+        # commit-specific ones CI knows.
+        #
+        # Buildx's --load only supports a single platform at a time, so
+        # we build the host arch (amd64) for the test/export path, and
+        # follow with a buildx build that targets both arches just to
+        # prove the Dockerfile is portable — output goes to the buildx
+        # cache, not loaded.
+        run: |
+          docker buildx build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.version=${{ github.ref_name }}" \
+            --load \
+            --platform linux/amd64 \
+            -t desk/sandbox:v1 .
+
+      - name: Verify desk/sandbox:v1 builds for arm64 too
+        # Multi-arch consumers (Apple Silicon contributors, arm cloud
+        # hosts) need the Dockerfile to keep working under emulation.
+        # This step's outputs aren't loaded into the local docker —
+        # we only need build success. Cached layers from the previous
+        # step keep this fast on consecutive builds.
+        run: |
+          docker buildx build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --platform linux/arm64 \
+            -t desk/sandbox:v1-arm64 .
+
+      - name: Smoke-test desk/sandbox:v1
+        # The image build can succeed while the entrypoint is broken
+        # (missing binary, bad PATH, busted /opt/desk-template/). Run
+        # the desk-agent binary that the sandbox is supposed to ship
+        # — if exit is non-zero the image isn't usable.
+        run: docker run --rm desk/sandbox:v1 desk-agent --help > /dev/null
+
+      - name: Reproducible-build sanity check
+        # Build the same Dockerfile a second time against the same
+        # source tree and assert the image digest is identical. Build
+        # non-determinism (timestamp ordering, dependency ordering,
+        # locale-sensitive output) shows up here long before it bites
+        # a security scan that depends on stable digests.
+        #
+        # SOURCE_DATE_EPOCH stabilises any tool that respects it.
+        # --build-arg + base-image pinning by SHA also help, but the
+        # main job is to surface drift visibly.
+        run: |
+          set -e
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          docker buildx build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --build-arg SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+            --load --platform linux/amd64 \
+            -t desk/sandbox:v1-repro .
+          ORIGINAL=$(docker image inspect desk/sandbox:v1 --format '{{.Id}}')
+          REBUILT=$(docker image inspect desk/sandbox:v1-repro --format '{{.Id}}')
+          echo "first build:  $ORIGINAL"
+          echo "second build: $REBUILT"
+          if [ "$ORIGINAL" != "$REBUILT" ]; then
+            echo "::warning::sandbox image digest changed between builds — non-determinism detected"
+            # Advisory: timestamps in apt-cache + npm install make
+            # bit-identical digests hard to reach with the current
+            # Dockerfile. Don't fail the build until the Dockerfile is
+            # made reproducible (Phase 6.18 second pass).
+          fi
 
       - name: Export desk/sandbox:v1 image
         run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
@@ -95,7 +172,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -103,6 +180,23 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Lint (eslint)
+        # Flat config at the repo root covers every workspace except
+        # packages/app/ (keeps its own React-specific config). Failing
+        # rules are unused-vars, eqeqeq, prefer-const and no-empty.
+        # no-console + no-explicit-any are warn-only while the
+        # structured logger conversion lands as a follow-up.
+        run: npm run lint
+
+      - name: Dead-code scan (knip, advisory)
+        # Knip surfaces unused files, exports, dependencies and binaries
+        # across the monorepo. Run with --no-exit-code so the job is
+        # advisory while the long-tail of intentional re-exports gets
+        # configured away; flip to blocking once Unused-files + Unused-
+        # dependencies are at zero. Config lives in /knip.json at the
+        # repo root.
+        run: npx knip --no-progress --no-exit-code
 
   vitest:
     name: Vitest (unit suite)
@@ -125,7 +219,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -159,7 +253,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -206,7 +300,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/desk-home"
           echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_SECRET_KEY_PATH=$RUNNER_TEMP/desk-home/secret.key" >> "$GITHUB_ENV"
+          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -248,6 +342,39 @@ jobs:
           path: packages/app/test-results/
           retention-days: 7
 
+  build-desktop-macos:
+    name: Build desktop app (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build:packages
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: packages/desktop
+
+      - name: Build desktop TypeScript
+        run: npm run build
+        working-directory: packages/desktop
+
+      - name: Package desktop app (macOS, directory only)
+        run: ./node_modules/.bin/electron-builder --mac --dir
+        working-directory: packages/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
   test:
     name: Test (host suite)
     runs-on: ubuntu-24.04
@@ -259,6 +386,7 @@ jobs:
       - vitest
       - vitest-integration
       - playwright
+      - build-desktop-macos
     if: ${{ always() }}
 
     steps:
@@ -270,6 +398,7 @@ jobs:
           VITEST_RESULT: ${{ needs.vitest.result }}
           VITEST_INTEGRATION_RESULT: ${{ needs.vitest-integration.result }}
           PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+          BUILD_DESKTOP_MACOS_RESULT: ${{ needs.build-desktop-macos.result }}
         run: |
           if [ "$PREPARE_SERVER_DIST_RESULT" != "success" ]; then
             echo "Prepare server build outputs did not pass: $PREPARE_SERVER_DIST_RESULT"
@@ -293,6 +422,10 @@ jobs:
           fi
           if [ "$PLAYWRIGHT_RESULT" != "success" ]; then
             echo "Playwright did not pass: $PLAYWRIGHT_RESULT"
+            exit 1
+          fi
+          if [ "$BUILD_DESKTOP_MACOS_RESULT" != "success" ]; then
+            echo "Build desktop macOS did not pass: $BUILD_DESKTOP_MACOS_RESULT"
             exit 1
           fi
           echo "All required CI jobs passed."

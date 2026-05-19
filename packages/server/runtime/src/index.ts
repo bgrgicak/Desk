@@ -9,7 +9,8 @@ export {
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,
-  killClaimedRunsInContainers,
+  softReapIdleDaemons,
+  killOpencodeDaemonsForOrphans,
   _resetGrowthStateForTest,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift, ResourceFailureKind, GrowthResult } from "./docker.js";
@@ -29,6 +30,7 @@ export {
   activeRunCount,
   containerBinds,
   buildDefaultMountPlan,
+  buildWorkspaceMountPlan,
   bindsFromPlan,
   SANDBOX_HOME,
 } from "./mounts.js";
@@ -48,8 +50,13 @@ export {
   DESK_GOAL_SKILL_PREFIX,
   goalSkillName,
 } from "./goalSkills.js";
-export { createDriver } from "./driver.js";
+export { createDriver, buildDaemonEnv, hasActiveRunForContainer, isContainerGoneError } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";
+export { refreshSandboxConnections } from "./connectionRefresh.js";
+export type {
+  RefreshSandboxConnectionsOpts,
+  RefreshSandboxConnectionsResult,
+} from "./connectionRefresh.js";
 export { execInSandbox } from "./sandboxExec.js";
 export type { ExecInSandboxOptions, ExecInSandboxResult } from "./sandboxExec.js";
 export { listModels, parseModelsOutput, SandboxExecError } from "./models.js";

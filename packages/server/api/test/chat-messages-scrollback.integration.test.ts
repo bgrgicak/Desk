@@ -496,6 +496,41 @@ describe("GET /chats/:id/messages — compact view", () => {
     expect(toolResult.content).toEqual({ type: "toolResult", toolName: "large", result: null });
   });
 
+  it("preserves structured model/provider error events in compact timeline payloads", async () => {
+    const errorChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: errorChatId,
+      workspaceId,
+      agentId,
+      title: "Compact structured error chat",
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: errorChatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "tool", part: { input: "hidden".repeat(1000) } } },
+          { kind: "event", event: { type: "error", error: { name: "UnknownError", data: { message: "Model not found: openai/gpt-5.5." } } } },
+        ],
+      },
+    });
+
+    const compact = await request("GET", `/chats/${errorChatId}/messages?view=compact`, token);
+    expect(compact.status).toBe(200);
+
+    const compactBody = compact.body as { items: Message[] };
+    expect(JSON.stringify(compactBody)).not.toContain("hiddenhiddenhidden");
+    const events = compactBody.items.find((m) => m.content.type === "events")!;
+    expect(events.content).toEqual({
+      type: "events",
+      log: [
+        { kind: "event", event: { type: "error", error: { name: "UnknownError", data: { message: "Model not found: openai/gpt-5.5." } } } },
+      ],
+    });
+  });
+
   it("timeline view keeps UI-critical rows and drops request-only rows", async () => {
     const timelineChatId = generateId("chat");
     await queries.chats.insert(pool, {

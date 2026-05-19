@@ -4,8 +4,8 @@ import {
   GOAL_KEYS,
   ValidationError,
   type Chat,
+  type ChatWithListMeta,
   type GoalKey,
-  type MessageKind,
 } from "@agent-desk/shared";
 
 function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
@@ -24,6 +24,9 @@ function rowToChat(row: Record<string, unknown>): Chat {
     agentId: row.agent_id,
     title: row.title,
     goal: row.goal ?? undefined,
+    // Pre-migration chats backfilled created_at from updated_at
+    // (see migration 0042); the column is NOT NULL going forward.
+    createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
     awaitingUser: !!row.awaiting_user,
@@ -31,17 +34,100 @@ function rowToChat(row: Record<string, unknown>): Chat {
   });
 }
 
-export interface ChatWithLastMessage extends Chat {
-  /** Kind that drives the chat-list icon when no chat goal is persisted. */
-  kind: MessageKind;
-  /**
-   * True when the chat's most recent `agent_turn` message is pending/running.
-   */
-  running: boolean;
-  /**
-   * True when the chat's most recent `agent_turn` message failed and can be retried.
-   */
-  failed: boolean;
+/**
+ * Server-side chat-list response row.  Same shape as
+ * `ChatWithListMeta` from `@agent-desk/shared`, but with the four
+ * sidebar-meta fields promoted from optional to required because the
+ * server query always populates them (the shared type leaves them
+ * optional so the WS `chat.updated` payload — which omits them — fits
+ * the same definition).
+ */
+export type ChatWithLastMessage = Chat & Required<Pick<ChatWithListMeta, "kind" | "running" | "failed" | "lastMessage">>;
+
+const LAST_MESSAGE_PREVIEW_LIMIT = 200;
+
+/**
+ * Correlated subquery that returns the *raw content JSON* of the
+ * chat's most recent visible user/agent message — either a plain
+ * `text` payload (user messages, and the rare direct agent text
+ * insertion) or the `events` log that wraps real agent_turn output.
+ * The JS layer (`previewFromContent`) extracts the human-readable
+ * text from whichever shape comes back.  Internal types
+ * (agent_turn, summary_request, summary, artifactRef, toolCall,
+ * toolResult, reflection_request) are filtered out so the preview
+ * shows what the user wrote/saw, not scheduler plumbing.
+ */
+function lastVisibleContentSubquerySql(): string {
+  return `(
+    SELECT m.content
+    FROM messages m
+    WHERE m.chat_id = c.id
+      AND m.role IN ('user', 'agent')
+      AND json_valid(m.content)
+      AND json_extract(m.content, '$.type') IN ('text', 'events')
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) AS last_content`;
+}
+
+function clampPreview(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > LAST_MESSAGE_PREVIEW_LIMIT
+    ? `${normalized.slice(0, LAST_MESSAGE_PREVIEW_LIMIT - 1).trimEnd()}…`
+    : normalized;
+}
+
+interface EventLogEntry {
+  kind?: string;
+  event?: { type?: string; part?: { text?: unknown } };
+}
+
+/**
+ * Exported so the JSON-walking logic that turns a server-side
+ * message row into the sidebar preview can be unit-tested directly
+ * against the discriminated union without round-tripping through
+ * SQLite.  Not part of the public queries surface — consumers
+ * should call `listWithLatestMessage` instead.
+ */
+export function previewFromContent(raw: unknown): string {
+  if (raw === null || raw === undefined) return "";
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Pre-JSON-content rows (or corrupt rows) — best-effort plain
+      // string preview.
+      return clampPreview(raw);
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return "";
+  const content = parsed as { type?: string; text?: unknown; log?: unknown };
+  if (content.type === "text" && typeof content.text === "string") {
+    return clampPreview(content.text);
+  }
+  if (content.type === "events" && Array.isArray(content.log)) {
+    // Concatenate every visible text part from the agent's event
+    // stream — same shape `runs-helpers.deriveTextFromLog` walks at
+    // run-completion time, but we don't dedupe against reasoning
+    // parts because that's a developer-mode concern and not worth
+    // the cycles on every chat-list refresh.
+    const parts: string[] = [];
+    for (const entry of content.log as EventLogEntry[]) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        entry.kind === "event" &&
+        entry.event?.type === "text" &&
+        typeof entry.event.part?.text === "string"
+      ) {
+        parts.push(entry.event.part.text);
+      }
+    }
+    return clampPreview(parts.join(""));
+  }
+  return "";
 }
 
 export async function listWithLatestMessage(
@@ -52,7 +138,8 @@ export async function listWithLatestMessage(
     `SELECT c.*,
             c.list_kind AS kind,
             c.list_running AS is_running,
-            c.list_failed AS is_failed
+            c.list_failed AS is_failed,
+            ${lastVisibleContentSubquerySql()}
       FROM chats c
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
@@ -61,9 +148,10 @@ export async function listWithLatestMessage(
   );
   return rows.map((r) => ({
     ...rowToChat(r),
-    kind: r.kind as MessageKind,
+    kind: r.kind as ChatWithLastMessage["kind"],
     running: !!r.is_running,
     failed: !!r.is_failed,
+    lastMessage: previewFromContent(r.last_content),
   }));
 }
 
@@ -91,9 +179,15 @@ export async function insert(
     );
   }
 
+  // Migration 0042 added `created_at` with an empty-string default
+  // because SQLite refuses non-constant DEFAULTs in ALTER TABLE ADD
+  // COLUMN. Stamp it explicitly here so new chats land with a real
+  // ISO timestamp instead of an empty string. (`updated_at` keeps
+  // its row-level default since that column predates the ADD COLUMN
+  // restriction — it lives in the original CREATE TABLE.)
   const { rows } = await db.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title, goal)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO chats (id, workspace_id, agent_id, title, goal, created_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
      RETURNING *`,
     [data.id, data.workspaceId, data.agentId, data.title ?? "", goal ?? null],
   );
@@ -142,6 +236,14 @@ export async function updateMeta(
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
+    // Atomically forget the opencode-serve session whenever the chat's
+    // agent changes. The session was bound to the old agent's
+    // providerID/modelID at creation time; opencode-serve ignores per-
+    // sendMessage overrides for those fields, so reusing the session
+    // would silently keep using the old model. Doing this in the same
+    // UPDATE removes the race where a concurrent run could read the
+    // new agent_id but still see the old session_id.
+    sets.push(`opencode_session_id = NULL`);
   }
   if (data.unread !== undefined) {
     sets.push(`unread = ?`);
@@ -179,4 +281,120 @@ export async function setAwaitingUser(
     [awaiting, id],
   );
   return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Returns the opencode-serve session id bound to this chat, if any.
+ * Each chat owns at most one session that turns are appended to. A null
+ * return means the chat hasn't had its first turn yet under the new
+ * runtime — the driver will create one and persist it via
+ * `setOpencodeSessionId`.
+ */
+export async function getOpencodeSessionId(
+  db: Pool,
+  id: string,
+): Promise<string | null> {
+  const { rows } = await db.query(
+    "SELECT opencode_session_id FROM chats WHERE id = ?",
+    [id],
+  );
+  if (rows.length === 0) return null;
+  const value = rows[0].opencode_session_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Writes (or clears) the opencode-serve session bound to a chat. We
+ * intentionally don't bump `updated_at` here — this is internal runtime
+ * metadata, not a user-visible event, and bumping the chat would shuffle
+ * the chat-list ordering on every turn.
+ */
+export async function setOpencodeSessionId(
+  db: Pool,
+  id: string,
+  sessionId: string | null,
+): Promise<void> {
+  await db.query(
+    "UPDATE chats SET opencode_session_id = ? WHERE id = ?",
+    [sessionId, id],
+  );
+}
+
+/**
+ * Clear the opencode-serve session id from every chat using a given agent.
+ * Used when the agent's model changes — the existing daemon session is
+ * bound to the prior model and won't honor the new one on subsequent
+ * turns. Forgetting the id makes the next turn create a fresh session
+ * with the current agent.model bound from the start.
+ *
+ * Returns the chat ids whose session was cleared so callers can
+ * best-effort delete them on the daemon side too.
+ */
+export async function clearOpencodeSessionsForAgent(
+  db: Pool,
+  agentId: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(
+    "SELECT id, opencode_session_id FROM chats WHERE agent_id = ? AND opencode_session_id IS NOT NULL",
+    [agentId],
+  );
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    await db.query(
+      "UPDATE chats SET opencode_session_id = NULL WHERE agent_id = ?",
+      [agentId],
+    );
+  }
+  return cleared;
+}
+
+/**
+ * Clear opencode-serve session ids for every chat owned by the user
+ * (optionally scoped to a single workspace). Used when a user-level
+ * connector or local source changes — the affected chats' sessions may
+ * still be bound to the old auth/provider, so we forget the ids and let
+ * the next turn create a fresh session against whatever is configured now.
+ *
+ * Returns the chat ids whose session was cleared.
+ */
+export async function clearOpencodeSessionsForUser(
+  db: Pool,
+  userId: string,
+  workspaceId?: string,
+): Promise<Array<{ chatId: string; previousSessionId: string }>> {
+  const baseSelect = `SELECT c.id, c.opencode_session_id
+       FROM chats c
+       JOIN workspaces w ON w.id = c.workspace_id
+      WHERE w.user_id = ?
+        AND c.opencode_session_id IS NOT NULL`;
+  const params: unknown[] = [userId];
+  let sql = baseSelect;
+  if (workspaceId) {
+    sql += " AND c.workspace_id = ?";
+    params.push(workspaceId);
+  }
+  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(sql, params);
+  const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
+  for (const row of rows) {
+    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+  }
+  if (cleared.length > 0) {
+    const updateSql = workspaceId
+      ? `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ? AND c.workspace_id = ?)`
+      : `UPDATE chats SET opencode_session_id = NULL
+          WHERE id IN (SELECT c.id FROM chats c
+                        JOIN workspaces w ON w.id = c.workspace_id
+                       WHERE w.user_id = ?)`;
+    const updateParams = workspaceId ? [userId, workspaceId] : [userId];
+    await db.query(updateSql, updateParams);
+  }
+  return cleared;
 }

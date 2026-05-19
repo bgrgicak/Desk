@@ -1,15 +1,16 @@
 import { type Pool } from "@agent-desk/db";
 import { networkInterfaces } from "node:os";
-import * as fsp from "node:fs/promises";
-import * as path from "node:path";
-import { workspaceRootPath } from "@agent-desk/storage";
 import { type WorkspaceKind } from "@agent-desk/shared";
 import type { SandboxHandle } from "./docker.js";
-import type { RunOptions, ExecResult, LogEvent } from "./driver.js";
+import type { ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
 import { mintToken, revokeToken } from "./sessions.js";
-import { projectMounts, teardownMounts, SANDBOX_HOME } from "./mounts.js";
+import { projectMounts, teardownMounts, type MountPlan } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
+import { restartOpencodeServer, invalidateOpencodeServerCache, ensureContainerXvfb } from "./opencodeServer.js";
+import { detectEngine } from "./engine.js";
+import { sandboxUser } from "./docker.js";
+import { SANDBOX_HOME } from "./mounts.js";
 
 export interface ExecRunOptions {
   runId: string;
@@ -26,21 +27,62 @@ export interface ExecRunOptions {
   workspaceKind?: WorkspaceKind;
   chatId?: string;
   agent: AgentFileInput;
-  /** Workspace-relative paths to forward to opencode as `--file` flags. */
+  /**
+   * Workspace-relative paths the user attached to this message. Folded
+   * into the opencode message as additional text parts so the model sees
+   * their content; see `driver.buildMessageParts`.
+   */
   attachments?: string[];
   /**
    * Base URL the in-sandbox `desk` CLI uses to reach desk-server. Falls back
    * to the sandbox-reachable host gateway when omitted.
    */
   apiUrl?: string;
-  /** Provider API keys forwarded into every exec so they're always current. */
+  /** Provider API keys forwarded into the opencode-serve daemon's env. */
   providerKeys?: Record<string, string>;
   /**
-   * Non-key env entries forwarded into every exec — currently used for the
-   * Codex/ChatGPT bridge (`OPENCODE_AUTH_CONTENT`).
+   * Non-key env entries — currently used for the Codex/ChatGPT bridge
+   * (`OPENCODE_AUTH_CONTENT`).
    */
   extraEnv?: Record<string, string>;
+  mountPlan?: MountPlan;
+  /**
+   * Existing opencode-serve session for this chat. Null/undefined on the
+   * chat's first turn under the new runtime — the runtime creates a
+   * session and surfaces its id back via `ExecResult.opencodeSessionId`
+   * for the caller (the scheduler) to persist on the chat row.
+   */
+  opencodeSessionId?: string | null;
   onLog: (event: LogEvent) => void;
+}
+
+/**
+ * Per-workspace serial queue for MCP-config writes + daemon restarts.
+ *
+ * Two `execRun` calls for the same workspace with different goals
+ * both have to (a) decide whether the workspace's `.opencode/opencode.json`
+ * needs changing, (b) write it if so, (c) trigger an opencode-serve
+ * restart. Without serialization, those steps interleave: both calls
+ * see the old config, both write, both restart. The second restart
+ * either no-ops (if the daemon already came back up) or fails with
+ * port-in-use.
+ *
+ * One promise chain per workspaceId; entries are pruned in `finally`
+ * when they're the tail. Cross-workspace work is independent.
+ */
+const mcpLocks = new Map<string, Promise<unknown>>();
+async function withMcpLock<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = mcpLocks.get(workspaceId);
+  const next = (prev ?? Promise.resolve()).then(fn, fn);
+  // The caller awaits `next` (rejection handled there). The tail promise
+  // stored in the map needs its own `.catch` or a failed `fn` becomes an
+  // unhandledRejection that crashes the process.
+  const tail = next.finally(() => {
+    if (mcpLocks.get(workspaceId) === tail) mcpLocks.delete(workspaceId);
+  });
+  tail.catch(() => {});
+  mcpLocks.set(workspaceId, tail);
+  return next;
 }
 
 function firstNonInternalIpv4(): string | null {
@@ -82,8 +124,11 @@ export async function execRun(
     workspaceId: opts.workspaceId,
   });
 
-  // Track the run + write a manifest for operator debugging.
-  const mounts = await projectMounts(handle, {
+  // Pre-create the workspace + attachments mount points on the host.
+  // projectMounts() does the fs.mkdir as a side effect; the returned
+  // MountSet is intentionally unused here — bind-mount wiring lives
+  // inside the engine and reads its own copy.
+  await projectMounts(handle, {
     home: opts.home,
     workspaceId: opts.workspaceId,
     workspaceSlug: opts.workspaceSlug,
@@ -94,49 +139,97 @@ export async function execRun(
   // Write the OpenCode agent definition file to the host workspace. It
   // lands inside the sandbox at ~/.opencode/agents/{agentId}.md via the
   // single-bind workspace mount. The per-chat artifact paths and any
-  // goal fragment are part of the rendered system prompt — no separate
-  // chatContext prefix on the user prompt.
+  // goal fragment are part of the rendered system prompt.
   await writeAgentFile(opts.home, opts.workspaceSlug, opts.agent);
-  // Lazy MCP: refresh the workspace-level opencode config so playwright is
-  // only present when the chat goal actually needs a browser. Without this,
-  // every run preloads firefox + playwright-mcp (~100 MB resident, hundreds
-  // of pids over a long-lived sandbox) even for pure conversation.
-  await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
-    enablePlaywright: chatNeedsBrowser(opts.agent.goal),
-  });
 
-  // Write the prompt to a file on the shared workspace mount instead of
-  // passing it via DESK_PROMPT. Large chat transcripts can exceed ARG_MAX
-  // (~1 MB on macOS) when packed into an execve environment block; a file
-  // reference dodges that limit entirely.
-  const wsRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
-  const promptHostPath = path.join(wsRoot, `.desk-prompt-${opts.runId}`);
-  const promptSandboxPath = `${SANDBOX_HOME}/.desk-prompt-${opts.runId}`;
-  await fsp.writeFile(promptHostPath, opts.prompt, "utf8");
+  // MCP config write + daemon-restart side-effects are serialized per
+  // workspace via `withMcpLock`. Two chats in the same workspace with
+  // different goals (one needs playwright, the other doesn't) used to
+  // race — each call read+wrote the workspace's `.opencode/opencode.json`
+  // and both decided to restart the daemon, racing on port-9105.
+  // Serializing inside the workspace keeps "current MCP state" coherent
+  // and the restart decision atomic. Cross-workspace concurrency is
+  // unaffected — each workspace has its own lock.
+  await withMcpLock(opts.workspaceId, async () => {
+    // Lazy MCP: refresh the workspace-level opencode config so
+    // playwright is only present when the chat goal actually needs a
+    // browser. If the config changed compared to the last write,
+    // restart the in-sandbox opencode-serve daemon so it picks up the
+    // new MCP set — the daemon loads its config at boot.
+    const mcpResult = await writeWorkspaceMcpConfig(opts.home, opts.workspaceSlug, {
+      enablePlaywright: chatNeedsBrowser(opts.agent.goal),
+    });
+
+    // Browser-goal chats need Xvfb; chat-goal chats don't, and Xvfb
+    // is expensive (~68 MB resident). Start it lazily whenever
+    // playwright is enabled — idempotent, so a no-op when already up.
+    // Order matters: Xvfb must exist *before* the daemon spawns its
+    // playwright MCP child.
+    if (process.env.DESK_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
+      try {
+        const engine = await detectEngine();
+        await ensureContainerXvfb(engine, handle.containerId).catch(() => {});
+      } catch {
+        // best-effort; playwright will fail loudly if it ends up
+        // needing a display that never came up.
+      }
+    }
+
+    // Skip the daemon-restart side-effect under the fake driver —
+    // there's no real container behind `handle.containerId`, so
+    // engine.inspect / engine.exec would fail and emit an unhandled
+    // rejection during test teardown.
+    if (process.env.DESK_SANDBOX_DRIVER !== "fake" && mcpResult?.changed) {
+      try {
+        const engine = await detectEngine();
+        await restartOpencodeServer(engine, {
+          containerId: handle.containerId,
+          cwd: SANDBOX_HOME,
+          user: await sandboxUser(engine),
+          env: {},
+        }).catch(() => invalidateOpencodeServerCache(handle.containerId));
+      } catch {
+        invalidateOpencodeServerCache(handle.containerId);
+      }
+    }
+  });
 
   try {
     const driver = createDriver();
     const result = await driver.execRun(handle.workspaceId, {
       runId: opts.runId,
       prompt: opts.prompt,
-      promptFile: promptSandboxPath,
       home: opts.home,
       workspaceSlug: opts.workspaceSlug,
       chatId: opts.chatId,
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      apiUrl: opts.apiUrl ?? defaultSandboxApiUrl(),
+      // When DESK_SANDBOX_NETWORK=none the host-gateway entry is
+      // dropped from the container, so `host.docker.internal` won't
+      // resolve. Suppressing DESK_API_URL in that mode means the
+      // in-sandbox `desk` CLI surfaces its existing "DESK_API_URL is
+      // not set" error immediately, not a TCP connection timeout.
+      apiUrl: process.env.DESK_SANDBOX_NETWORK === "none"
+        ? undefined
+        : (opts.apiUrl ?? defaultSandboxApiUrl()),
+      // Forward the agent's currently-saved model so the per-message
+      // `providerID/modelID` sent to opencode-serve reflects the user's
+      // live UI selection. Without this, the driver falls back to a
+      // default and the daemon ends up using whatever model it bound
+      // to the session at creation time — so changing the model in
+      // the UI never propagates to subsequent turns.
+      model: opts.agent.model,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
+      mountPlan: opts.mountPlan,
+      opencodeSessionId: opts.opencodeSessionId ?? null,
       onLog: opts.onLog,
     });
     return result;
   } finally {
-    // Always clean up
     await revokeToken(pool, session.id);
     await teardownMounts(handle, opts.runId);
-    await fsp.unlink(promptHostPath).catch(() => {});
   }
 }
 

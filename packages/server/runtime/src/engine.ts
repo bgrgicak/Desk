@@ -75,6 +75,25 @@ export interface RunSpec {
    * is reparented to PID 1.
    */
   init?: boolean;
+  /**
+   * Port publishes (`-p`). One entry per published container port. We
+   * always pin `hostIp` and leave `hostPort` undefined when we want the
+   * engine to auto-assign — the assigned port is then read back with
+   * `Engine.port()`. Auto-assignment keeps multiple sandboxes from
+   * fighting over a fixed host port.
+   */
+  ports?: PortPublish[];
+}
+
+export interface PortPublish {
+  /** Port the in-container process listens on. */
+  containerPort: number;
+  /** Defaults to `127.0.0.1`. We never bind to all interfaces. */
+  hostIp?: string;
+  /** When omitted, the engine auto-assigns a free port on `hostIp`. */
+  hostPort?: number;
+  /** Defaults to `tcp`. */
+  protocol?: "tcp" | "udp";
 }
 
 export interface ContainerInfo {
@@ -101,6 +120,13 @@ export interface ContainerInfo {
    * sweep can have its brand-new sandbox yanked out from under it.
    */
   createdAt?: string;
+  /**
+   * Container ports published to the host, normalized as
+   * `{containerPort}/{protocol}` → `[{hostIp, hostPort}]`. Empty when the
+   * container has no `-p` mappings. The shape mirrors what `docker inspect`
+   * returns under `NetworkSettings.Ports`, normalized across docker/nerdctl.
+   */
+  publishedPorts?: Record<string, Array<{ hostIp: string; hostPort: number }>>;
 }
 
 export interface ExecSpec {
@@ -108,7 +134,15 @@ export interface ExecSpec {
   cmd: string[];
   user?: string;
   env?: string[];
+  /** Working directory inside the container (`--workdir`). */
+  cwd?: string;
 }
+
+// Same shape as ExecSpec — semantic difference is the engine returns
+// once the engine CLI has handed off, not when the in-container process
+// exits. Kept as a type alias instead of an empty-extending interface
+// so the lint rule against zero-member interfaces stays happy.
+export type ExecDetachedSpec = ExecSpec;
 
 export interface ExecHandle {
   /** Demuxed stdout. Ends when the process exits. */
@@ -178,6 +212,25 @@ export interface Engine {
    * separate FDs already).
    */
   exec(spec: ExecSpec): Promise<ExecHandle>;
+  /**
+   * Detached exec. Starts an in-container process and resolves once the
+   * engine CLI has spawned it (typically subsecond). The process keeps
+   * running inside the container after this returns; callers needing to
+   * stop it should use `top()` + `exec(["kill", ...])` or recreate the
+   * container.
+   */
+  execDetached(spec: ExecDetachedSpec): Promise<void>;
+  /**
+   * Looks up the host-side binding for a published container port. Returns
+   * null if the container exists but the port isn't published (or the
+   * runtime hasn't allocated it yet). Wraps `docker port` / `nerdctl
+   * port`; the result is normalized across both.
+   */
+  port(
+    nameOrId: string,
+    containerPort: number,
+    protocol?: "tcp" | "udp",
+  ): Promise<{ hostIp: string; hostPort: number } | null>;
   /** PID + cmdline of every process in the container. */
   top(nameOrId: string): Promise<Array<{ pid: string; cmd: string }>>;
   isRootless(): Promise<boolean>;
@@ -292,6 +345,7 @@ class CliEngine implements Engine {
     const pidsLimit = typeof rawPids === "number" && rawPids > 0 ? rawPids : undefined;
     const rawMem = raw.HostConfig?.Memory;
     const memoryBytes = typeof rawMem === "number" && rawMem > 0 ? rawMem : undefined;
+    const publishedPorts = normalizePortBindings(raw);
     return {
       id: raw.Id,
       imageId,
@@ -302,6 +356,7 @@ class CliEngine implements Engine {
       pidsLimit,
       memoryBytes,
       createdAt: raw.Created,
+      publishedPorts,
     };
   }
 
@@ -323,6 +378,9 @@ class CliEngine implements Engine {
     }
     for (const b of spec.binds) {
       args.push("-v", `${b.source}:${b.target}:${b.mode}`);
+    }
+    for (const p of spec.ports ?? []) {
+      args.push("-p", formatPortPublish(p));
     }
     args.push(spec.image);
     // The image's CMD is what we want (sandbox image runs `sleep infinity`),
@@ -457,6 +515,7 @@ class CliEngine implements Engine {
     // makes the in-container process see EOF immediately and proceed.
     const args = ["exec"];
     if (spec.user) args.push("--user", spec.user);
+    if (spec.cwd) args.push("--workdir", spec.cwd);
     for (const e of spec.env ?? []) args.push("--env", e);
     args.push(spec.containerId, ...spec.cmd);
 
@@ -466,6 +525,35 @@ class CliEngine implements Engine {
     });
 
     return wrapExecChild(child);
+  }
+
+  async execDetached(spec: ExecDetachedSpec): Promise<void> {
+    // `-d` returns the engine CLI immediately once the in-container
+    // process is spawned. Used for daemons that should outlive this
+    // engine call (e.g. `opencode serve`).
+    const args = ["exec", "-d"];
+    if (spec.user) args.push("--user", spec.user);
+    if (spec.cwd) args.push("--workdir", spec.cwd);
+    for (const e of spec.env ?? []) args.push("--env", e);
+    args.push(spec.containerId, ...spec.cmd);
+    await this.run(args);
+  }
+
+  async port(
+    nameOrId: string,
+    containerPort: number,
+    protocol: "tcp" | "udp" = "tcp",
+  ): Promise<{ hostIp: string; hostPort: number } | null> {
+    // `docker port <id> <port>/<proto>` returns one line per binding,
+    // e.g. `127.0.0.1:34571`. nerdctl's CLI is identical.
+    const out = await this.runOrNull(
+      ["port", nameOrId, `${containerPort}/${protocol}`],
+      ["no such", "not found", "no public port", "error: no port"],
+    );
+    if (!out) return null;
+    const line = out.split("\n").map((l) => l.trim()).find(Boolean);
+    if (!line) return null;
+    return parsePortMapping(line);
   }
 
   async top(nameOrId: string): Promise<Array<{ pid: string; cmd: string }>> {
@@ -553,10 +641,88 @@ interface ContainerInspect {
   Image: string;
   Created?: string;
   Config?: { User?: string; Labels?: Record<string, string> };
-  HostConfig?: { Binds?: string[]; PidsLimit?: number; Memory?: number };
+  HostConfig?: {
+    Binds?: string[];
+    PidsLimit?: number;
+    Memory?: number;
+    PortBindings?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  };
   Mounts?: Array<{ Type?: string; Source?: string; Destination?: string; Mode?: string }>;
   State?: { Running?: boolean };
+  NetworkSettings?: {
+    Ports?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  };
 }
+
+/**
+ * Formats a `PortPublish` for the `-p` flag.
+ *
+ * Examples:
+ *   `{containerPort: 9105}` → `127.0.0.1::9105/tcp` (engine picks host port).
+ *   `{containerPort: 9105, hostPort: 12345}` → `127.0.0.1:12345:9105/tcp`.
+ *   `{containerPort: 9105, hostIp: "0.0.0.0"}` → `0.0.0.0::9105/tcp`.
+ */
+function formatPortPublish(p: PortPublish): string {
+  const proto = p.protocol ?? "tcp";
+  const hostIp = p.hostIp ?? "127.0.0.1";
+  const hostPort = p.hostPort === undefined ? "" : String(p.hostPort);
+  return `${hostIp}:${hostPort}:${p.containerPort}/${proto}`;
+}
+
+/**
+ * Parses one line of `docker port` output into `{hostIp, hostPort}`. Lines
+ * look like `127.0.0.1:34571` (IPv4) or `[::]:34571` (IPv6). We ignore the
+ * IPv6 form — we never bind to IPv6 — to avoid feeding `[::]` into a
+ * `fetch()`.
+ */
+function parsePortMapping(line: string): { hostIp: string; hostPort: number } | null {
+  // IPv4: 127.0.0.1:34571   IPv6: [::]:34571 or [::1]:34571
+  if (line.startsWith("[")) return null;
+  const colon = line.lastIndexOf(":");
+  if (colon <= 0) return null;
+  const hostIp = line.slice(0, colon);
+  const hostPort = Number(line.slice(colon + 1));
+  if (!Number.isFinite(hostPort) || hostPort <= 0) return null;
+  return { hostIp, hostPort };
+}
+
+/**
+ * Pulls the published-ports map out of the inspect JSON. Both docker and
+ * nerdctl fill in `NetworkSettings.Ports` for a *running* container with
+ * the live host-side bindings; `HostConfig.PortBindings` is the
+ * create-time request. The live view is what we actually want — that's
+ * the source of truth for "what host port did the engine assign me?".
+ * Falls back to PortBindings when NetworkSettings is empty (a container
+ * inspected immediately after create, before the daemon has wired up
+ * iptables, can have an empty NetworkSettings.Ports).
+ */
+function normalizePortBindings(
+  raw: ContainerInspect,
+): Record<string, Array<{ hostIp: string; hostPort: number }>> | undefined {
+  const live = raw.NetworkSettings?.Ports ?? {};
+  const requested = raw.HostConfig?.PortBindings ?? {};
+  const keys = new Set([...Object.keys(live), ...Object.keys(requested)]);
+  if (keys.size === 0) return undefined;
+  const out: Record<string, Array<{ hostIp: string; hostPort: number }>> = {};
+  for (const key of keys) {
+    const bindings = live[key]?.length ? live[key] : requested[key];
+    if (!bindings) continue;
+    const normalized: Array<{ hostIp: string; hostPort: number }> = [];
+    for (const b of bindings) {
+      const hostIp = b?.HostIp || "127.0.0.1";
+      const hostPort = Number(b?.HostPort ?? 0);
+      if (!Number.isFinite(hostPort) || hostPort <= 0) continue;
+      normalized.push({ hostIp, hostPort });
+    }
+    if (normalized.length > 0) out[key] = normalized;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export const _parsePortMappingForTest = parsePortMapping;
+export const _formatPortPublishForTest = formatPortPublish;
+export const _normalizePortBindingsForTest = (raw: unknown) =>
+  normalizePortBindings(raw as ContainerInspect);
 
 /** Cached engine selection so detection runs once per process. */
 let _engine: Engine | undefined;

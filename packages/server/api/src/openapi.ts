@@ -81,6 +81,67 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: {
             "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
             "401": { description: "Invalid credentials" },
+            "429": { description: "Too many attempts; see Retry-After header" },
+          },
+        },
+      },
+      "/auth/signup": {
+        post: {
+          summary: "Register a new user",
+          description: "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if DESK_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    username: { type: "string", description: "3–32 chars: letters, digits, underscore, dash" },
+                    email: { type: "string", format: "email" },
+                    password: { type: "string", description: "≥ 12 chars; must not equal the documented seed password" },
+                  },
+                  required: ["username", "email", "password"],
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
+            "400": { description: "Signup disabled or input invalid" },
+            "409": { description: "Username or email already taken" },
+            "429": { description: "Too many attempts; see Retry-After header" },
+          },
+        },
+      },
+      "/auth/signup-status": {
+        get: {
+          summary: "Is signup enabled on this server",
+          description: "Lets the SPA decide whether to render the Sign-up link on the login screen without a separate config endpoint. Unauthenticated.",
+          security: [],
+          responses: {
+            "200": {
+              description: "Signup gate state",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { enabled: { type: "boolean" } },
+                    required: ["enabled"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/auth/auto-login": {
+        post: {
+          summary: "Auto-login as the local Desk owner",
+          security: [],
+          responses: {
+            "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
+            "401": { description: "Auto-login disabled or no user available" },
           },
         },
       },
@@ -106,7 +167,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/me/providers": {
         get: {
           summary: "Get AI provider keys (masked)",
-          description: "Returns every known provider key name with its value masked to first 6 + last 4 chars, or null when unset. Keys are encrypted at rest in the DB.",
+          description: "Returns every known provider key name with its value masked to first 6 + last 4 chars, or null when unset. Keys are stored in the user's vault, not in SQLite.",
           responses: {
             "200": {
               description: "Masked provider keys",
@@ -151,6 +212,76 @@ export function generateOpenApiSpec(): OpenApiSpec {
             "200": { description: "Updated masked keys (same shape as GET)" },
             "400": { description: "Unknown provider name" },
           },
+        },
+      },
+      "/me/key-access-log": {
+        get: {
+          summary: "List provider-key audit log entries for the current user",
+          description: "Returns the audit log for every read, write and delete touching the user's provider keys (AI provider API keys and connector tokens like GITHUB_TOKEN). Entries are recorded by the server, never carry the key value itself, and are scoped to the calling user. Useful as the data source for a 'recent key access' panel in account settings.",
+          parameters: [
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              description: "Number of entries to return, newest first. 1–500, default 100.",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Audit log entries newest-first",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      entries: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string" },
+                            action: { type: "string", enum: ["read", "write", "delete"] },
+                            providers: { type: "array", items: { type: "string" } },
+                            reason: { type: ["string", "null"] },
+                            createdAt: { type: "string", format: "date-time" },
+                          },
+                          required: ["id", "action", "providers", "reason", "createdAt"],
+                        },
+                      },
+                    },
+                    required: ["entries"],
+                  },
+                },
+              },
+            },
+            "400": { description: "Invalid limit" },
+          },
+        },
+      },
+      "/me/connections": {
+        get: {
+          summary: "List connector connections owned by the current user",
+          parameters: [{ name: "providerId", in: "query", schema: { type: "string" } }],
+          responses: { "200": { description: "Connector connections" } },
+        },
+        post: {
+          summary: "Create a connector connection",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { providerId: { type: "string" }, displayName: { type: "string" }, externalAccountId: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } }, metadata: { type: "object", additionalProperties: true }, credentials: { type: "object", additionalProperties: true, description: "Encrypted at rest and never returned by list/get responses." }, status: { type: "string", enum: ["active", "disabled", "error", "revoked"] }, isDefault: { type: "boolean" } }, required: ["providerId", "displayName"] } } } },
+          responses: { "201": { description: "Created connector connection" }, "400": { description: "Invalid payload" } },
+        },
+      },
+      "/me/connections/{id}": {
+        patch: {
+          summary: "Update a connector connection",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { displayName: { type: "string" }, externalAccountId: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } }, metadata: { type: "object", additionalProperties: true }, credentials: { type: "object", nullable: true, additionalProperties: true, description: "Encrypted at rest and never returned by list/get responses. Null clears stored credentials." }, status: { type: "string", enum: ["active", "disabled", "error", "revoked"] }, isDefault: { type: "boolean" } } } } } },
+          responses: { "200": { description: "Updated connector connection" }, "404": { description: "Connection not found" } },
+        },
+        delete: {
+          summary: "Delete a connector connection",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "OK" }, "404": { description: "Connection not found" } },
         },
       },
       "/me/providers/local": {
@@ -233,6 +364,19 @@ export function generateOpenApiSpec(): OpenApiSpec {
             "400": { description: "Cannot delete the caller's last workspace" },
             "404": { description: "Workspace not found" },
           },
+        },
+      },
+      "/workspaces/{id}/connections": {
+        get: {
+          summary: "List connector grants for a workspace",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Workspace connector grants" } },
+        },
+        put: {
+          summary: "Replace connector grants for a workspace",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { grants: { type: "array", items: { type: "object", properties: { connectionId: { type: "string" }, providerId: { type: "string" }, grantedCapabilities: { type: "array", items: { type: "string" } }, isDefault: { type: "boolean" } }, required: ["connectionId", "providerId"] } } }, required: ["grants"] } } } },
+          responses: { "200": { description: "Workspace connector grants" }, "400": { description: "Invalid grant payload" }, "404": { description: "Workspace or connection not found" } },
         },
       },
       "/workspaces/{id}/agents": {

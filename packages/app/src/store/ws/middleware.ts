@@ -7,7 +7,175 @@ import { getSessionToken } from "@/auth/session";
 import type { AgentEvent, AgentLogEntry, ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
 import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
 
+/**
+ * Buffer for progress-log entries that arrived before their chat's
+ * `getChatMessages` cache was hydrated (or while the user is viewing
+ * a different chat). Flushed when the corresponding query fulfils, or
+ * trimmed by `rememberPendingProgress` when limits are exceeded.
+ *
+ * Without bounds, this Map grows for the lifetime of the tab whenever a
+ * background chat streams logs that no live subscriber consumes — visible
+ * as gradual memory + GC pressure that makes the whole app feel sluggish
+ * after long sessions.
+ */
 const pendingProgressLogByMessageId = new Map<string, AgentLogEntry[]>();
+const MAX_PENDING_ENTRIES_PER_MESSAGE = 500;
+const MAX_PENDING_MESSAGES = 100;
+
+function rememberPendingProgress(messageId: string, entries: AgentLogEntry[]): void {
+  if (entries.length === 0) return;
+  const existing = pendingProgressLogByMessageId.get(messageId) ?? [];
+  let merged = existing.concat(entries);
+  if (merged.length > MAX_PENDING_ENTRIES_PER_MESSAGE) {
+    merged = merged.slice(merged.length - MAX_PENDING_ENTRIES_PER_MESSAGE);
+  }
+  // Re-insert to bump LRU order (Map iteration is insertion-order).
+  pendingProgressLogByMessageId.delete(messageId);
+  pendingProgressLogByMessageId.set(messageId, merged);
+  while (pendingProgressLogByMessageId.size > MAX_PENDING_MESSAGES) {
+    const oldest = pendingProgressLogByMessageId.keys().next().value;
+    if (oldest === undefined) break;
+    pendingProgressLogByMessageId.delete(oldest);
+  }
+}
+
+/**
+ * Per-frame batch for high-frequency WS events. Streaming text deltas and
+ * progress-log lines can arrive dozens of times per second per active turn;
+ * each one previously dispatched its own Redux action and Immer-drafted the
+ * entire chat-messages cache. Coalescing into one flush per animation frame
+ * collapses that to a single dispatch per chat/message, which is the single
+ * biggest contributor to chat-window lag during agent runs.
+ */
+const pendingStreamingByMessageId = new Map<string, { chatId: string; delta: string }>();
+const pendingLogsByMessageId = new Map<string, AgentLogEntry[]>();
+let batchFlushHandle: number | null = null;
+let batchFlushTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleBatchFlush(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+): void {
+  if (batchFlushHandle !== null || batchFlushTimeout !== null) return;
+  const flush = () => {
+    batchFlushHandle = null;
+    if (batchFlushTimeout !== null) {
+      clearTimeout(batchFlushTimeout);
+      batchFlushTimeout = null;
+    }
+    flushBatchedEvents(dispatch, getState);
+  };
+  if (typeof requestAnimationFrame === "function") {
+    batchFlushHandle = requestAnimationFrame(flush);
+    // Backgrounded tabs throttle rAF heavily; a setTimeout fallback ensures
+    // updates still land within a reasonable window so a chat opened after
+    // returning to the tab doesn't lag a full frame-budget behind reality.
+    batchFlushTimeout = setTimeout(flush, 250);
+  } else {
+    batchFlushTimeout = setTimeout(flush, 0);
+  }
+}
+
+/**
+ * Drain the rAF batch synchronously. Exposed for tests that assert the
+ * effects of `message.streaming` / `message.log_appended` events without
+ * needing to drive `requestAnimationFrame` through jsdom.
+ */
+export function __flushWsBatchForTest(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+): void {
+  if (batchFlushHandle !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(batchFlushHandle);
+    batchFlushHandle = null;
+  }
+  if (batchFlushTimeout !== null) {
+    clearTimeout(batchFlushTimeout);
+    batchFlushTimeout = null;
+  }
+  flushBatchedEvents(dispatch, getState);
+}
+
+function flushBatchedEvents(
+  dispatch: (a: unknown) => unknown,
+  getState: () => unknown,
+): void {
+  if (pendingStreamingByMessageId.size > 0) {
+    const streaming = Array.from(pendingStreamingByMessageId.entries());
+    pendingStreamingByMessageId.clear();
+    const seenChats = new Set<string>();
+    for (const [messageId, { chatId, delta }] of streaming) {
+      if (!seenChats.has(chatId)) {
+        seenChats.add(chatId);
+        dispatch(markChatRunning(chatId));
+        patchChatFailedInCache(dispatch, chatId, false, getState);
+      }
+      patchPerChatMessageCaches(dispatch, chatId, (draft) => {
+        const m = draft.items.find((x) => x.id === messageId);
+        if (m && m.content.type === "text") {
+          m.content = { ...m.content, text: (m.content.text ?? "") + delta };
+        }
+      });
+    }
+  }
+
+  if (pendingLogsByMessageId.size > 0) {
+    const logs = Array.from(pendingLogsByMessageId.entries());
+    pendingLogsByMessageId.clear();
+    for (const [messageId, entries] of logs) {
+      applyProgressLogBatch(dispatch, getState, messageId, entries);
+    }
+  }
+}
+
+function isUserVisibleDiagnosticLine(line: string): boolean {
+  if (isStructuredToolPayloadLine(line)) return false;
+  return /\b(error|failed|failure|exception|traceback|not found|permission denied|unauthori[sz]ed|forbidden|invalid|cannot|can't)\b/i.test(line);
+}
+
+function isStructuredToolPayloadLine(line: string): boolean {
+  const trimmed = line
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\[[0-9;]*m/g, "")
+    .trimStart();
+  return /^(?:<|&lt;)(path|type|content|skill_content|system-reminder|env|available_skills)\b/i.test(trimmed)
+    || /(?:<|&lt;)\/path(?:>|&gt;)\s*(?:<|&lt;)type(?:>|\s|&gt;)/i.test(trimmed)
+    || /(?:<|&lt;)skill_content\b/i.test(trimmed);
+}
+
+function firstDiagnosticString(value: unknown): string | null {
+  if (typeof value === "string") return isUserVisibleDiagnosticLine(value) ? value : null;
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstDiagnosticString(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const preferredKeys = new Set(["message", "error", "details", "detail", "text", "reason", "data"]);
+  for (const key of preferredKeys) {
+    const found = firstDiagnosticString(record[key]);
+    if (found) return found;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (preferredKeys.has(key)) continue;
+    const found = firstDiagnosticString(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function eventHasUserVisibleDiagnostic(event: AgentEvent): boolean {
+  if (!isDiagnosticEventType(event.type)) return false;
+  return !!(firstDiagnosticString(event.part) ?? firstDiagnosticString(event) ?? isUserVisibleDiagnosticLine(event.type));
+}
+
+function isDiagnosticEventType(type: string): boolean {
+  return /\b(error|failed|failure|exception|traceback)\b/i.test(type);
+}
 
 function mergeProgressLog(msg: ServerMessage, existing?: AgentLogEntry[]): ServerMessage {
   const pending = pendingProgressLogByMessageId.get(msg.id) ?? [];
@@ -34,8 +202,14 @@ function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
             if (typeof text === "string") {
               log.push({ kind: "event", event: { type: "text", part: { text } } });
             }
+          } else if (eventHasUserVisibleDiagnostic(entry.event)) {
+            log.push(entry);
           }
         } else if (entry.kind === "unparsed" && !sawStructuredEvent) {
+          log.push(entry);
+        } else if (entry.kind === "unparsed" && isUserVisibleDiagnosticLine(entry.line)) {
+          log.push(entry);
+        } else if (entry.kind === "stderr" && isUserVisibleDiagnosticLine(entry.line)) {
           log.push(entry);
         }
       }
@@ -44,7 +218,14 @@ function compactTimelineMessage(msg: ServerMessage): ServerMessage | null {
     case "toolCall":
       return { ...msg, content: { type: "toolCall", toolName: msg.content.toolName, args: {} } };
     case "toolResult":
-      return { ...msg, content: { type: "toolResult", toolName: msg.content.toolName, result: null } };
+      return {
+        ...msg,
+        content: {
+          type: "toolResult",
+          toolName: msg.content.toolName,
+          result: firstDiagnosticString(msg.content.result) ?? null,
+        },
+      };
     default:
       return msg;
   }
@@ -162,6 +343,39 @@ function patchChatActivityInCache(
   }
 }
 
+function patchChatFailedInCache(
+  dispatch: (a: unknown) => unknown,
+  chatId: string,
+  failed: boolean,
+  getState?: () => unknown,
+): void {
+  const patchList = (draft: ServerChat[]) => {
+    const chat = draft.find((c) => c.id === chatId);
+    if (chat) chat.failed = failed;
+  };
+  const patchSingle = (draft: ServerChat) => {
+    if (draft.id === chatId) draft.failed = failed;
+  };
+
+  dispatch(api.util.updateQueryData("getChats", undefined, patchList));
+  dispatch(api.util.updateQueryData("getChat", chatId, patchSingle));
+
+  if (!getState) return;
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
+  if (!apiState?.queries) return;
+  for (const [key, entry] of Object.entries(apiState.queries)) {
+    if (!key.startsWith("getChats(")) continue;
+    const chats = entry?.data;
+    if (!Array.isArray(chats)) continue;
+    const chat = chats.find((c: ServerChat) => c.id === chatId);
+    if (!chat) continue;
+    dispatch(
+      api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patchList),
+    );
+  }
+}
+
 function messageMatchesFilter(msg: ServerMessage, filter: MessagesFilter, workspaceId?: string): boolean {
   if (filter.chatId && filter.chatId !== msg.chatId) return false;
   if (filter.workspaceId && workspaceId && filter.workspaceId !== workspaceId) return false;
@@ -236,22 +450,19 @@ export function logEntryFromWsPayload(payload: WsEvent & { type: "message.log_ap
   return { kind: "unparsed", line };
 }
 
-function patchProgressLogCaches(
+function applyProgressLogBatch(
   dispatch: (a: unknown) => unknown,
   getState: () => unknown,
-  event: WsEvent & { type: "message.log_appended" },
+  messageId: string,
+  entries: AgentLogEntry[],
 ): boolean {
-  let entry: AgentLogEntry;
-  try {
-    entry = logEntryFromWsPayload(event);
-  } catch {
-    entry = { kind: "unparsed", line: event.payload.line };
-  }
-
-  const messageId = event.payload.messageId;
+  if (entries.length === 0) return false;
   const state = getState() as Record<string, unknown>;
   const apiState = state[api.reducerPath] as { queries?: Record<string, { endpointName?: string; data?: ListMessagesResponse; originalArgs?: { chatId?: string; full?: boolean; before?: string } }> } | undefined;
-  if (!apiState?.queries) return false;
+  if (!apiState?.queries) {
+    rememberPendingProgress(messageId, entries);
+    return false;
+  }
 
   let patched = false;
   for (const [key, cacheEntry] of Object.entries(apiState.queries)) {
@@ -271,17 +482,29 @@ function patchProgressLogCaches(
     dispatch(api.util.updateQueryData("getChatMessages", args, (draft) => {
       const msg = draft.items.find((m) => m.id === messageId);
       if (!msg) return;
-      msg.progressLog = [...(msg.progressLog ?? []), entry];
+      msg.progressLog = [...(msg.progressLog ?? []), ...entries];
       patched = true;
     }));
   }
   if (!patched) {
-    pendingProgressLogByMessageId.set(messageId, [
-      ...(pendingProgressLogByMessageId.get(messageId) ?? []),
-      entry,
-    ]);
+    rememberPendingProgress(messageId, entries);
   }
   return patched;
+}
+
+function enqueueProgressLogEvent(
+  event: WsEvent & { type: "message.log_appended" },
+): void {
+  let entry: AgentLogEntry;
+  try {
+    entry = logEntryFromWsPayload(event);
+  } catch {
+    entry = { kind: "unparsed", line: event.payload.line };
+  }
+  const messageId = event.payload.messageId;
+  const existing = pendingLogsByMessageId.get(messageId);
+  if (existing) existing.push(entry);
+  else pendingLogsByMessageId.set(messageId, [entry]);
 }
 
 function mergePendingProgressIntoChatMessageCaches(
@@ -507,6 +730,13 @@ export const wsMiddleware: Middleware = (storeApi) => {
       }
     }
     if (api.endpoints.getChatMessages.matchFulfilled(action)) {
+      // Drain the rAF batch first so any log entries that arrived after the
+      // refetch was dispatched but before its fulfilment land in the cache
+      // directly, instead of bouncing through the pre-hydration buffer.
+      flushBatchedEvents(
+        storeApi.dispatch as (a: unknown) => unknown,
+        storeApi.getState as () => unknown,
+      );
       mergePendingProgressIntoChatMessageCaches(
         storeApi.dispatch as (a: unknown) => unknown,
         storeApi.getState as () => unknown,
@@ -600,6 +830,17 @@ export function applyEventToCache(
     case "message.appended":
     case "message.updated": {
       const rawMsg: ServerMessage = event.payload;
+      // Flush any in-flight streaming/log batches before applying the
+      // authoritative server snapshot. Without this, a pending delta could
+      // be appended *after* the final text lands, duplicating characters at
+      // the end of the message.
+      if (getState && (pendingStreamingByMessageId.has(rawMsg.id) || pendingLogsByMessageId.has(rawMsg.id))) {
+        // Discard pending text deltas for this message — the incoming
+        // payload's text is authoritative. Pending logs still flush so
+        // mergeProgressLog can see them via the cache's `existing` arg.
+        pendingStreamingByMessageId.delete(rawMsg.id);
+        flushBatchedEvents(dispatch, getState);
+      }
       const msg = mergeProgressLog(rawMsg);
       const timelineMsg = compactTimelineMessage(msg);
       dispatch(api.util.updateQueryData("getChatMessages", { chatId: msg.chatId, full: false }, (draft) => {
@@ -631,11 +872,14 @@ export function applyEventToCache(
       if (msg.content?.type === "agent_turn") {
         if (msg.state === "pending" || msg.state === "running") {
           dispatch(markChatRunning(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
         } else if (msg.state === "failed") {
           dispatch(markChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, true, getState);
         } else {
           dispatch(markChatIdle(msg.chatId));
           dispatch(clearChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
         }
       }
       // Non-internal messages update chat.unread and chat.updated_at on
@@ -654,6 +898,8 @@ export function applyEventToCache(
       if (event.type === "message.appended") {
         const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
+          dispatch(clearChatFailed(msg.chatId));
+          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
           patchChatActivityInCache(dispatch, msg.chatId, msg.createdAt, getState);
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
@@ -687,16 +933,17 @@ export function applyEventToCache(
       break;
     }
     case "message.streaming": {
+      if (!getState) break;
       const { chatId, messageId, delta } = event.payload;
-      patchPerChatMessageCaches(dispatch, chatId, (draft) => {
-        const m = draft.items.find((x) => x.id === messageId);
-        if (m && m.content.type === "text") {
-          m.content = {
-            ...m.content,
-            text: (m.content.text ?? "") + delta,
-          };
-        }
-      });
+      // Coalesce per-character deltas into one cache patch per animation
+      // frame. Without this, a single agent turn can dispatch hundreds of
+      // Redux actions per second — each one Immer-drafts the entire chat-
+      // messages cache and notifies every subscriber, which is the dominant
+      // cause of typing/scroll jank while a turn is in flight.
+      const pending = pendingStreamingByMessageId.get(messageId);
+      if (pending) pending.delta += delta;
+      else pendingStreamingByMessageId.set(messageId, { chatId, delta });
+      scheduleBatchFlush(dispatch, getState);
       break;
     }
     case "artifact.created": {
@@ -738,7 +985,9 @@ export function applyEventToCache(
       break;
     }
     case "message.log_appended": {
-      if (getState) patchProgressLogCaches(dispatch, getState, event);
+      if (!getState) break;
+      enqueueProgressLogEvent(event);
+      scheduleBatchFlush(dispatch, getState);
       break;
     }
   }

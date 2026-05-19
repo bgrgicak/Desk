@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { queries } from "@agent-desk/db";
-import { ConflictError, NotFoundError, type WsEvent } from "@agent-desk/shared";
+import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
   createLibraryFolder,
@@ -15,6 +15,7 @@ import {
   type StorageContext,
   type FileRef,
   type FolderRef,
+  type VirtualLibraryMount,
 } from "@agent-desk/storage";
 
 /**
@@ -27,17 +28,58 @@ async function resolveSlug(ctx: StorageContext, workspaceId: string): Promise<st
   return ws.path;
 }
 
+function normalizePinnedLibraryPath(rawPath: string): string {
+  const normalized = rawPath.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!normalized) throw new ValidationError("Missing 'path' in body");
+  return normalized;
+}
+
+function localFilesystemVirtualMounts(metadata: Record<string, unknown>): VirtualLibraryMount[] {
+  const parsed = metadata as Partial<LocalFilesystemConnectionMetadata>;
+  const directories = parsed.localFilesystem?.directories;
+  if (!Array.isArray(directories)) return [];
+  return directories
+    .filter((dir) => (
+      dir
+      && typeof dir.hostPath === "string"
+      && typeof dir.homeName === "string"
+    ))
+    .map((dir) => ({ homeName: dir.homeName, sourcePath: dir.hostPath }));
+}
+
+async function connectedLocalFilesystemMounts(
+  ctx: StorageContext,
+  userId: string,
+  workspaceId: string,
+): Promise<VirtualLibraryMount[]> {
+  const [connections, grants] = await Promise.all([
+    queries.connectors.listConnections(ctx.pool, userId, LOCAL_FILESYSTEM_PROVIDER_ID),
+    queries.connectors.listWorkspaceGrants(ctx.pool, workspaceId),
+  ]);
+  const localGrantIds = grants
+    .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
+    .map((grant) => grant.connectionId);
+  const active = connections.filter((connection) => connection.status === "active");
+  const selected = localGrantIds.length > 0
+    ? active.filter((connection) => localGrantIds.includes(connection.id))
+    : active;
+  return selected
+    .flatMap((connection) => localFilesystemVirtualMounts(connection.metadata));
+}
+
 export async function list(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   opts?: { cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean },
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
-  const [result, authors, pinnedPaths] = await Promise.all([
-    listLibrary(ctx, slug, opts),
+  const [virtualMounts, authors, pinnedPaths] = await Promise.all([
+    connectedLocalFilesystemMounts(ctx, userId, workspaceId),
     queries.libraryFileAuthors.listByWorkspace(ctx.pool, workspaceId),
     queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
   ]);
+  const result = await listLibrary(ctx, slug, { ...opts, virtualMounts });
   for (const item of result.items) {
     const author = authors.get(item.path);
     if (author) {
@@ -248,7 +290,14 @@ export async function pin(
   workspaceId: string,
   filePath: string,
 ): Promise<void> {
-  await queries.libraryPins.pin(ctx.pool, workspaceId, filePath);
+  const slug = await resolveSlug(ctx, workspaceId);
+  const normalizedPath = normalizePinnedLibraryPath(filePath);
+  // Validate the target and canonicalize path variants before writing the pin.
+  // Without this, callers can create stale duplicate pin rows such as
+  // `foo.app` and `foo.app/`, which makes the sidebar/list state drift from
+  // the actual library contents.
+  await statFile(ctx, slug, normalizedPath);
+  await queries.libraryPins.pin(ctx.pool, workspaceId, normalizedPath);
 }
 
 export async function unpin(
@@ -256,7 +305,8 @@ export async function unpin(
   workspaceId: string,
   filePath: string,
 ): Promise<void> {
-  await queries.libraryPins.unpin(ctx.pool, workspaceId, filePath);
+  const normalizedPath = normalizePinnedLibraryPath(filePath);
+  await queries.libraryPins.unpin(ctx.pool, workspaceId, normalizedPath);
 }
 
 export { readFile };

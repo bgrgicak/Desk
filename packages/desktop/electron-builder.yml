@@ -1,0 +1,71 @@
+appId: com.agentdesk.desk
+productName: Desk
+copyright: Copyright © 2024 Agent Desk
+
+directories:
+  buildResources: assets
+  output: dist-electron
+
+files:
+  - dist/**
+  - "!dist/**/*.map"
+
+extraResources:
+  # Staged by scripts/stage-server.mjs — contains every server workspace
+  # package + its transitive npm deps in a node_modules layout so the
+  # spawned desk-server can resolve @agent-desk/* and busboy/croner/etc.
+  - from: build-server
+    to: server
+    filter:
+      - "**/*"
+      - "!package-lock.json"
+  - from: ../app/dist
+    to: app/dist
+
+asar: true
+
+afterPack: scripts/after-pack.mjs
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.productivity
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  icon: assets/icons/icon.icns
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: assets/icons/icon.ico
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  category: Utility
+  icon: assets/icons/icon.png
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+
+dmg:
+  contents:
+    - x: 410
+      y: 150
+      type: link
+      path: /Applications
+    - x: 130
+      y: 150
+      type: file
+
+publish:
+  provider: github
+  releaseType: release

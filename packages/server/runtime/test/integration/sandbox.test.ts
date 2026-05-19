@@ -20,11 +20,11 @@ import {
   ensureImage,
   sandboxImage,
   sandboxUser,
-  reapStaleSandboxTrees,
 } from "../../src/docker.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { projectMounts, teardownMounts, SANDBOX_HOME } from "../../src/mounts.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
+import { ensureContainerXvfb } from "../../src/opencodeServer.js";
 import { rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
@@ -76,7 +76,7 @@ describeIf("sandbox integration", () => {
     // on SANDBOX_RUNTIME_TAG in docker.ts for why size is deliberately
     // excluded from the drift check.
     expect(info?.labels["agent-desk.sandbox-resource-profile"]).toBe(
-      "runtime=tini-v1,user=root+sudo",
+      "runtime=opencode-serve-v1,user=root+sudo",
     );
   });
 
@@ -217,6 +217,19 @@ describeIf("sandbox integration", () => {
   });
 
   it("lets the agent install Debian packages", async () => {
+    // `apt-get update` + install drives RAM well past the 512 MB baseline
+    // sandbox cap (apt's pkgcache plus dpkg's working set alone load
+    // ~150 MB, on top of whatever the reused container is already
+    // holding from prior tests in this file). In production the
+    // scheduler's `growSandboxForResourceError` doubles the cap on the
+    // first OOM and re-fires the run; this test runs `execInSandbox`
+    // directly so we pre-grow once to mimic the same headroom (1 GB
+    // matches the first growth step). Without this the test OOM'd as
+    // exit 137 on a warm machine.
+    const engine = await detectEngine();
+    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
+    await engine.update(handle.containerId, { memoryBytes: 1024 * 1024 * 1024 });
+
     const result = await execInSandbox(testWorkspaceId, testWorkspaceSlug, {
       argv: [
         "sh",
@@ -363,6 +376,12 @@ describeIf("sandbox integration", () => {
   it("ships browser automation tooling and a working display", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
+    // Xvfb is intentionally NOT pre-warmed in createOrReuse — the ~68 MB
+    // framebuffer would sit idle for every chat-goal sandbox. The host
+    // calls `ensureContainerXvfb` only when a browser-goal chat actually
+    // needs the display ([opencode.ts:167]). Mirror that here so the
+    // smoke test exercises the same path a real browser chat would.
+    await ensureContainerXvfb(engine, handle.containerId);
 
     const htmlPath = "/tmp/desk-playwright-smoke.html";
     const screenshotPath = "/tmp/desk-playwright-smoke.png";
@@ -440,173 +459,4 @@ NODE`,
     expect(info?.running).toBe(false);
   });
 
-  it("reapStaleSandboxTrees kills stale opencode-shaped wrappers in the sandbox", async () => {
-    // Reproduces the leak shape we hit in prod: a setsid wrapper whose
-    // /tmp/desk-runs/<msg>.pid was orphaned because a re-fire of the same
-    // runId overwrote the pidfile, or the runtime's finally{} cleanup
-    // silently failed. The sweep must identify wrappers not in the
-    // expected-pidfile set and SIGKILL them — without crashing if /proc
-    // or ps surface unexpected output.
-    const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
-    const engine = await detectEngine();
-
-    // Seed two wrappers that look exactly like a real opencode wrapper:
-    // setsid forks (parent waits, child runs sh which writes the pidfile
-    // and execs the long-running command). This shape matters because the
-    // sweep matches by `cmdline begins with "setsid "` — and setsid only
-    // STAYS as argv[0] in /proc when it forks, which only happens when
-    // its caller is a process-group leader.
-    //
-    // We achieve that here by running `exec setsid …` from a non-`&`
-    // backgrounded sh-c. The outer sh-c is itself the pgrp leader of the
-    // docker exec session, so `exec setsid` lets setsid inherit the
-    // leader role and fork on its `--wait` path. `&` would background the
-    // setsid as a child of a non-leader subshell, defeating the fork.
-    const stalePidFile = "/tmp/desk-runs/msg_stale_TEST.pid";
-    const liveActiveFile = "/tmp/desk-runs/msg_active_TEST.pid";
-    const seedWrapper = async (pidFile: string): Promise<void> => {
-      // Spawn each wrapper as a fully detached daemon inside the sandbox.
-      // The outer `setsid` (no --wait) forks once and exits immediately,
-      // breaking the parent-shell relationship so closing the docker exec
-      // session can't SIGHUP the daemon. The INNER `setsid --wait` is the
-      // shape we want to test — it forks because the daemonized middle sh
-      // is a process-group leader, so we end up with a parent setsid that
-      // matches the sweep's cmdline pattern plus a forked child running
-      // sleep 300 in its own pgid.
-      //
-      // </dev/null and 2>/dev/null severs stdin/stderr so the daemon
-      // doesn't keep the docker exec's IO open after we return.
-      const seed = await engine.exec({
-        containerId: handle.containerId,
-        cmd: [
-          "sh",
-          "-c",
-          `mkdir -p /tmp/desk-runs && ` +
-            `setsid sh -c 'exec setsid --wait sh -c "echo \\$\\$ > \\"\\$1\\"; shift; exec \\"\\$@\\"" sh ${pidFile} sleep 300' </dev/null >/dev/null 2>/dev/null &`,
-        ],
-      });
-      expect(await seed.wait()).toBe(0);
-    };
-    await seedWrapper(stalePidFile);
-    await seedWrapper(liveActiveFile);
-    // Give the daemonizing fork + child setsid + inner sh + exec sleep
-    // time to settle. 1s is generous on a fast box, comfortable on CI.
-    await new Promise((r) => setTimeout(r, 1000));
-
-    // Verify both wrappers are alive and have written their pidfiles.
-    const before = await engine.exec({
-      containerId: handle.containerId,
-      cmd: ["sh", "-c", "cat /tmp/desk-runs/msg_stale_TEST.pid /tmp/desk-runs/msg_active_TEST.pid"],
-    });
-    const beforeOut: Buffer[] = [];
-    before.stdout.on("data", (c: Buffer) => beforeOut.push(c));
-    expect(await before.wait()).toBe(0);
-    const [stalePid, activePid] = Buffer.concat(beforeOut)
-      .toString("utf8")
-      .trim()
-      .split(/\s+/)
-      .map((n) => parseInt(n, 10));
-    expect(stalePid).toBeGreaterThan(0);
-    expect(activePid).toBeGreaterThan(0);
-
-    // Diagnostic: confirm both setsid wrappers are detectable via /proc
-    // cmdline (which is what the sweep itself uses). Filtering by `comm`
-    // would miss wrappers whose setsid didn't fork — see the comment on
-    // the sweep script for why /proc/<pid>/cmdline is authoritative.
-    const diag = await engine.exec({
-      containerId: handle.containerId,
-      cmd: [
-        "sh",
-        "-c",
-        // Count /proc entries whose cmdline starts with "setsid " AND
-        // contains "/tmp/desk-runs/".
-        "n=0; for d in /proc/[0-9]*; do " +
-          "c=$(tr '\\0' ' ' < \"$d/cmdline\" 2>/dev/null); " +
-          "case \"$c\" in 'setsid '*'/tmp/desk-runs/'*) n=$((n+1));; esac; " +
-          "done; echo $n",
-      ],
-    });
-    const diagOut: Buffer[] = [];
-    diag.stdout.on("data", (c: Buffer) => diagOut.push(c));
-    await diag.wait();
-    const wrapperCount = parseInt(Buffer.concat(diagOut).toString("utf8").trim(), 10);
-    expect(wrapperCount).toBeGreaterThanOrEqual(2);
-
-    // Snapshot the parent setsids so we can verify they got killed too.
-    // The pidfile contains the FORKED child's pid; the wrapper's parent
-    // setsid is a separate PID that the sweep also targets.
-    const preSnapshot = await engine.exec({
-      containerId: handle.containerId,
-      cmd: [
-        "sh",
-        "-c",
-        // For each /proc cmdline that starts with "setsid " and refs
-        // /tmp/desk-runs/msg_(stale|active), print "<pid> <pidfile_path>".
-        "for d in /proc/[0-9]*; do " +
-          "c=$(tr '\\0' ' ' < \"$d/cmdline\" 2>/dev/null); " +
-          "case \"$c\" in 'setsid '*'/tmp/desk-runs/msg_'*'_TEST.pid'*) " +
-          "pid=${d#/proc/}; " +
-          "pf=$(echo \"$c\" | tr ' ' '\\n' | grep '/tmp/desk-runs/msg_.*_TEST.pid' | head -1); " +
-          "echo \"$pid $pf\";; " +
-          "esac; " +
-          "done",
-      ],
-    });
-    const preSnapOut: Buffer[] = [];
-    preSnapshot.stdout.on("data", (c: Buffer) => preSnapOut.push(c));
-    await preSnapshot.wait();
-    const parentByPidFile = new Map<string, number>();
-    for (const line of Buffer.concat(preSnapOut).toString("utf8").trim().split("\n").filter(Boolean)) {
-      const [pidStr, pf] = line.trim().split(/\s+/);
-      parentByPidFile.set(pf, parseInt(pidStr, 10));
-    }
-    expect(parentByPidFile.get(stalePidFile)).toBeGreaterThan(0);
-    expect(parentByPidFile.get(liveActiveFile)).toBeGreaterThan(0);
-
-    // Run the sweep with only the *active* pidfile in the expected set.
-    const result = await reapStaleSandboxTrees(engine, handle.containerId, [liveActiveFile]);
-    expect(result.reaped).toBe(1);
-
-    // Give the kernel a beat to reap killed processes.
-    await new Promise((r) => setTimeout(r, 300));
-
-    // Both the child (pidfile content) and the parent setsid for the stale
-    // tree must be gone; the active tree's child + parent must still be
-    // alive. Checking both ends catches partial-kill bugs that would
-    // otherwise look like a successful sweep (e.g. parent dies but the
-    // child pgid wasn't actually signalled).
-    const staleParent = parentByPidFile.get(stalePidFile)!;
-    const activeParent = parentByPidFile.get(liveActiveFile)!;
-    const after = await engine.exec({
-      containerId: handle.containerId,
-      cmd: [
-        "sh",
-        "-c",
-        [
-          `kill -0 ${stalePid} 2>/dev/null && echo stale_child_alive || echo stale_child_dead`,
-          `kill -0 ${staleParent} 2>/dev/null && echo stale_parent_alive || echo stale_parent_dead`,
-          `kill -0 ${activePid} 2>/dev/null && echo active_child_alive || echo active_child_dead`,
-          `kill -0 ${activeParent} 2>/dev/null && echo active_parent_alive || echo active_parent_dead`,
-        ].join("; "),
-      ],
-    });
-    const afterOut: Buffer[] = [];
-    after.stdout.on("data", (c: Buffer) => afterOut.push(c));
-    await after.wait();
-    const lines = Buffer.concat(afterOut).toString("utf8").trim();
-    expect(lines).toContain("stale_child_dead");
-    expect(lines).toContain("stale_parent_dead");
-    expect(lines).toContain("active_child_alive");
-    expect(lines).toContain("active_parent_alive");
-
-    // Cleanup the live wrapper so we don't leave processes around.
-    await engine.exec({
-      containerId: handle.containerId,
-      cmd: [
-        "sh",
-        "-c",
-        `kill -KILL -- "-${activePid}" 2>/dev/null; kill -KILL ${activeParent} 2>/dev/null; rm -f ${liveActiveFile}`,
-      ],
-    }).then((h) => h.wait());
-  });
 });

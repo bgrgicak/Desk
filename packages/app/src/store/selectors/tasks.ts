@@ -171,7 +171,10 @@ export function toUiTask(
     agentName: agent?.name ?? "Agent",
     status,
     statusText: statusTextFor(m),
-    assigneeId: m.assigneeId ?? agent?.id,
+    // The server has no `assigneeId` field — task assignment is just
+    // `agentId`.  Drop the dead alias (PATCH bodies that included it
+    // were silently no-op on the server) and use the row's agentId.
+    assigneeId: agent?.id,
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,

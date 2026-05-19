@@ -13,5 +13,6 @@ export const COMMANDS: Record<string, () => Promise<Command>> = {
   "find library": () => import("./commands/find-library.js"),
   "secret get": () => import("./commands/secret-get.js"),
   "secret list": () => import("./commands/secret-list.js"),
+  "task cancel": () => import("./commands/task-cancel.js"),
   "task schedule": () => import("./commands/task-schedule.js"),
 };

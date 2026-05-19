@@ -30,7 +30,7 @@ beforeAll(async () => {
 
   await runMigrations(pool);
   process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
+  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-multi-ws-"));
@@ -135,7 +135,7 @@ describe("multi-client WS sync", () => {
     // Login
     const loginRes = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     const token = (loginRes.body as { token: string }).token;
 

@@ -6,6 +6,7 @@
  * radius than localStorage for a local prototype.
  */
 const KEY = "desk.session.token";
+const AUTO_LOGIN_DISABLED_KEY = "desk.session.autologin.disabled";
 
 export function getSessionToken(): string | null {
   try {
@@ -18,6 +19,7 @@ export function getSessionToken(): string | null {
 export function setSessionToken(token: string): void {
   try {
     sessionStorage.setItem(KEY, token);
+    sessionStorage.removeItem(AUTO_LOGIN_DISABLED_KEY);
   } catch {
     /* private mode / quota — token is gone, caller will re-prompt */
   }
@@ -45,13 +47,40 @@ async function tokenStillAccepted(token: string): Promise<boolean> {
   }
 }
 
+function autoLoginEnabled(): boolean {
+  try {
+    if (sessionStorage.getItem(AUTO_LOGIN_DISABLED_KEY) === "1") return false;
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
+async function tryAutoLogin(): Promise<string | null> {
+  if (!autoLoginEnabled()) return null;
+
+  try {
+    const res = await fetch("/api/auth/auto-login", {
+      method: "POST",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { token?: unknown };
+    if (typeof body.token !== "string" || body.token.length === 0) return null;
+    setSessionToken(body.token);
+    return body.token;
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureSession(): Promise<string | null> {
   const existing = getSessionToken();
   if (existing && (await tokenStillAccepted(existing))) {
     return existing;
   }
   clearSessionToken();
-  return null;
+  return tryAutoLogin();
 }
 
 export async function logout(): Promise<void> {
@@ -64,5 +93,10 @@ export async function logout(): Promise<void> {
     }).catch(() => undefined);
   }
   clearSessionToken();
+  try {
+    sessionStorage.setItem(AUTO_LOGIN_DISABLED_KEY, "1");
+  } catch {
+    /* ignore */
+  }
   window.location.reload();
 }

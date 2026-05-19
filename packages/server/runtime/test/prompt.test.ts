@@ -347,6 +347,22 @@ describe("renderPromptBody", () => {
     expect(body).toContain("broaden the query before assuming they are mistaken");
   });
 
+  it("prefers app fragments over direct chat CRUD for natural app-use requests", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
+
+    expect(body).toContain("treat it primarily as an app-use request, not direct storage CRUD");
+    expect(body).toContain("Default to an app/fragment response, not an inline text response");
+    expect(body).toContain("create requests: the create/new fragment");
+    expect(body).toContain("read/view requests: the relevant detail/view fragment");
+    expect(body).toContain("list/search requests: the list/search fragment");
+    expect(body).toContain("edit requests: the editor fragment");
+    expect(body).toContain("look for a fragment whose `params_schema` can receive that\nidentifier or query");
+    expect(body).toContain("a generic fragment with empty params that merely\nopens the first record is not a complete match");
+    expect(body).toContain("If `attach-artifact` fails, report the failure instead of\nsilently replacing the fragment response");
+    expect(body).toContain("unless the user explicitly asks the agent to directly");
+    expect(body).toContain("create, edit, delete, import, export, migrate, or repair records");
+  });
+
   it("requires matching library items to be reused and attached immediately", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
@@ -562,4 +578,5 @@ describe("Desk reference skills", () => {
     expect(body).toContain("Storage contract");
     expect(body).toContain("getStorageClient()");
   });
+
 });

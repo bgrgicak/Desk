@@ -272,6 +272,43 @@ execRunFn: async (messageId, _a, _p, onLog) => {
     expect(content.body).toBe("# Chat Summary — Final\n\n## What we built\n\nA clean summary.");
   });
 
+  it("summary output reconstructs streamed text deltas from the final text part", async () => {
+    const mgr = createRunManager({
+      pool,
+execRunFn: async (messageId, _a, _p, onLog) => {
+        onLog({ runId: messageId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { id: "prt_plan", text: "I will inspect the chat first." } }) });
+        onLog({ runId: messageId, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "tool_use", part: { tool: "bash" } }) });
+        for (const [i, text] of [
+          "# Chat Summary — Streaming\n\n",
+          "## Active threads\n\n",
+          "### Summary bug\nThe summary body must not be truncated.\n\n",
+          "## Open threads / next steps\n\n",
+          "_None._",
+        ].entries()) {
+          onLog({ runId: messageId, seq: i + 2, kind: "stdout", payload: JSON.stringify({ type: "text", part: { id: "prt_final", text } }) });
+        }
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "summary_request" });
+    const result = await mgr.fireMessage(messageId);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    const content = child!.content as { type: string; body?: string };
+    expect(content.body).toBe([
+      "# Chat Summary — Streaming",
+      "",
+      "## Active threads",
+      "",
+      "### Summary bug",
+      "The summary body must not be truncated.",
+      "",
+      "## Open threads / next steps",
+      "",
+      "_None._",
+    ].join("\n"));
+  });
+
   it("is idempotent — second fire on same message is a no-op", async () => {
     const mgr = createRunManager({
       pool,
@@ -306,6 +343,52 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(messageId);
     const msg = await queries.messages.findById(pool, messageId);
     expect(msg?.state).toBe("failed");
+  });
+
+  it("re-fire of a previously failed message starts with a clean log", async () => {
+    // Regression: the "Try again" path (POST /chats/.../messages/{id}/run)
+    // resets state to pending and re-invokes fireMessage with the same
+    // runId. The log file is reused — when it was opened with flags:"a"
+    // the new attempt's events got appended to the prior failure's
+    // stderr, so the successful retry's child message contained both
+    // the old "Agent run failed before it could complete." line and the
+    // new tokens. Flags:"w" truncates at fire-start.
+    let firstCall = true;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_runId, _agentId, _prompt, onLog) => {
+        if (firstCall) {
+          firstCall = false;
+          await onLog({ runId: _runId, seq: 0, kind: "stderr", payload: "FIRST_RUN_STDERR_TOKEN" });
+          return { exitCode: 1 };
+        }
+        await onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "SECOND_RUN_STDOUT_TOKEN" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "fire then refire" });
+    await mgr.fireMessage(messageId);
+    const failed = await queries.messages.findById(pool, messageId);
+    expect(failed?.state).toBe("failed");
+
+    // Simulate /run: flip state back to pending and fire again.
+    await pool.query("UPDATE messages SET state = 'pending' WHERE id = ?", [messageId]);
+    await mgr.fireMessage(messageId);
+
+    const succeeded = await queries.messages.findById(pool, messageId);
+    expect(succeeded?.state).toBe("succeeded");
+
+    const logDir = path.join(
+      process.env.DESK_HOME!,
+      "desk",
+      ".chats",
+      chatId,
+      "logs",
+    );
+    const logBody = await fs.readFile(path.join(logDir, `${messageId}.log`), "utf-8").catch(() => "");
+    expect(logBody).toContain("SECOND_RUN_STDOUT_TOKEN");
+    expect(logBody).not.toContain("FIRST_RUN_STDERR_TOKEN");
   });
 
   it("thrown run setup errors are appended as stderr event messages", async () => {

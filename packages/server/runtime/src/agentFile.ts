@@ -42,7 +42,7 @@ export interface AgentFileInput {
    * Summary and reflection runs are internal. They get narrow prompts instead
    * of the full chat/task/artifact instruction set.
    */
-  runMode?: "chat" | "summary" | "reflection";
+  runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
   /**
    * DESK_HOME root, threaded through so the prompt renderer can read the
    * user `.memory/memory.md` index and the workspace `.memory/workspace.md`
@@ -62,6 +62,7 @@ export interface AgentFileInput {
    * Defaults to true.
    */
   includeGoalAutodetect?: boolean;
+  localFilesystemDirectories?: Array<{ path: string; access: "read_only" | "read_write"; description?: string }>;
 }
 
 /**
@@ -73,6 +74,35 @@ export function renderAgentFile(input: AgentFileInput): string {
     `description: ${input.agentName}`,
     `model: ${input.model}`,
     "mode: primary",
+    // Pre-authorize every tool. Desk runs opencode inside a per-workspace
+    // sandbox that already isolates the agent — there's no UI surface
+    // for a "do you allow this tool?" prompt mid-turn, so any tool that
+    // defaults to `ask` (bash, external_directory, doom_loop, …)
+    // silently stalls the chat. Trunk's `opencode run --format json`
+    // path passed `--dangerously-skip-permissions`; under the HTTP API
+    // this object-form agent-level field is the equivalent. The bare
+    // string form (`permission: allow`) is also schema-valid but
+    // opencode 1.14.50's parser treats it as a per-character array
+    // and rejects every char as not-PermissionActionConfig; the
+    // explicit per-tool object form is unambiguous and accepted.
+    "permission:",
+    "  read: allow",
+    "  edit: allow",
+    "  glob: allow",
+    "  grep: allow",
+    "  list: allow",
+    "  bash: allow",
+    "  task: allow",
+    "  external_directory: allow",
+    "  todowrite: allow",
+    "  question: allow",
+    "  webfetch: allow",
+    "  websearch: allow",
+    "  repo_clone: allow",
+    "  repo_overview: allow",
+    "  lsp: allow",
+    "  doom_loop: allow",
+    "  skill: allow",
     "---",
   ].join("\n");
 
@@ -87,6 +117,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     workspaceSlug: input.workspaceSlug,
     workspaceKind: input.workspaceKind ?? "project",
     includeGoalAutodetect: input.includeGoalAutodetect,
+    localFilesystemDirectories: input.localFilesystemDirectories,
   });
 
   return `${frontmatter}\n\n${body}\n`;
@@ -111,6 +142,58 @@ export async function writeAgentFile(
   const filePath = path.join(agentDir, `${input.agentId}.md`);
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");
+}
+
+/**
+ * Returns a sha256 of every agent file's `model:` line under
+ * `<workspace>/.opencode/agents/`. Feeding this hash into the
+ * opencode-serve daemon's env makes our env-digest cache in
+ * `ensureOpencodeServer` notice when an agent file's model changes
+ * since the last spawn, even when no provider env has changed —
+ * triggering a daemon restart so the daemon re-reads the agent files
+ * (it caches `model:` in memory at startup and ignores per-message
+ * `providerID`/`modelID` overrides for agent-bound sessions).
+ *
+ * Hashing only the `model:` lines keeps the digest stable across
+ * the per-turn prompt-body rewrites that don't actually need a
+ * daemon restart (memory index updates, timestamp tweaks, etc.).
+ * Empty agents dir or read errors return an empty string — the
+ * digest still feeds into env equality, so an empty-vs-non-empty
+ * transition still flips the digest correctly.
+ */
+export async function readAgentsModelDigest(
+  home: string,
+  workspaceSlug: string,
+): Promise<string> {
+  const agentDir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode", "agents");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(agentDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+  const files = entries.filter((n) => n.endsWith(".md")).sort();
+  if (files.length === 0) return "";
+
+  const { createHash } = await import("node:crypto");
+  const hash = createHash("sha256");
+  for (const name of files) {
+    let body = "";
+    try {
+      body = await fs.readFile(path.join(agentDir, name), "utf-8");
+    } catch {
+      continue;
+    }
+    // Pull only the `model:` line out of the frontmatter — that's the
+    // sole field whose change forces a daemon restart. Everything
+    // else (prompt body, permissions) takes effect on the next
+    // sendMessage without a restart.
+    const match = body.match(/^model:\s*(.+)$/m);
+    const model = match ? match[1].trim() : "";
+    hash.update(`${name}=${model}\n`);
+  }
+  return hash.digest("hex");
 }
 
 /**
@@ -149,7 +232,7 @@ export async function writeWorkspaceMcpConfig(
   home: string,
   workspaceSlug: string,
   opts: { enablePlaywright: boolean },
-): Promise<void> {
+): Promise<{ changed: boolean }> {
   // Always emit the playwright key. If we wrote `mcp: {}` and opencode merges
   // with the global `/etc/opencode/opencode.json`, an older image still
   // shipping playwright would survive the merge and start firefox anyway.
@@ -167,5 +250,15 @@ export async function writeWorkspaceMcpConfig(
   };
   const dir = path.join(workspaceRootPath(home, workspaceSlug), ".opencode");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const target = path.join(dir, "opencode.json");
+  const next = JSON.stringify(config, null, 2) + "\n";
+  let prev: string | null = null;
+  try {
+    prev = await fs.readFile(target, "utf-8");
+  } catch {
+    prev = null;
+  }
+  if (prev === next) return { changed: false };
+  await fs.writeFile(target, next, "utf-8");
+  return { changed: true };
 }

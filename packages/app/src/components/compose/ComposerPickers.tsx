@@ -112,6 +112,10 @@ const toolbarBtnClass = cn(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+export function isComposerDropdownDismissKey(event: Pick<KeyboardEvent, 'key'>): boolean {
+  return event.key === 'Escape'
+}
+
 export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickersProps>(function ComposerPickers(
   {
     workspaceId,

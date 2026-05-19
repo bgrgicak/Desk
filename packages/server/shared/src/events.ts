@@ -88,6 +88,27 @@ export const WorkspaceSyncedEventSchema = z.object({
   }),
 });
 
+/**
+ * Fired when a connector connection or local-source toggle changes
+ * server-side (added, updated, deleted, enabled, disabled). Lets the
+ * client refetch the connection list and surface a "sandbox refreshed"
+ * affordance — the server already restarts the affected sandbox
+ * daemons before this event fires, so the next message will see the
+ * new env.
+ */
+export const ConnectionChangedEventSchema = z.object({
+  type: z.literal("connection.changed"),
+  payload: z.object({
+    /** "connector" for /me/connections rows; "local_source" for local toggles. */
+    kind: z.enum(["connector", "local_source"]),
+    /** Provider id (e.g. "github", "OPENAI_API_KEY") or local-source kind ("codex"). */
+    providerId: z.string(),
+    op: z.enum(["created", "updated", "deleted", "enabled", "disabled"]),
+    /** When the change was scoped to a workspace (workspace grant). */
+    workspaceId: z.string().optional(),
+  }),
+});
+
 export const WsEventSchema = z.discriminatedUnion("type", [
   ChatUpdatedEventSchema,
   ChatDeletedEventSchema,
@@ -98,6 +119,7 @@ export const WsEventSchema = z.discriminatedUnion("type", [
   ArtifactCreatedEventSchema,
   LibraryChangedEventSchema,
   WorkspaceSyncedEventSchema,
+  ConnectionChangedEventSchema,
 ]);
 export type WsEvent = z.infer<typeof WsEventSchema>;
 

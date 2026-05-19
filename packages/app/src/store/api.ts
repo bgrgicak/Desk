@@ -6,6 +6,7 @@ import {
 import { getSessionToken } from "@/auth/session";
 import type {
   AttachmentRef,
+  ConnectorConnection,
   ListLibraryResponse,
   ListMessagesResponse,
   MessagesFilter,
@@ -16,6 +17,7 @@ import type {
   ServerUser,
   ServerWorkspace,
   ServerWorkspaceAgent,
+  WorkspaceConnectorGrant,
 } from "./types";
 
 const rawBaseQuery = fetchBaseQuery({
@@ -232,11 +234,11 @@ export const api = createApi({
     "LibraryFile",
     "ChatArtifact",
     "ProviderKeys",
+    "ConnectorConnections",
+    "WorkspaceConnectorGrants",
     "ProvidersMeta",
     "LocalSources",
     "Models",
-    "VaultStatus",
-    "Secrets",
   ],
   endpoints: (build) => ({
     // ── Me ────────────────────────────────────────────────────────────
@@ -277,7 +279,61 @@ export const api = createApi({
       }),
       transformResponse: (r: { providers: Record<string, string | null> }) =>
         r.providers,
-      invalidatesTags: ["ProviderKeys", "ProvidersMeta", "Models"],
+      invalidatesTags: ["ProviderKeys", "ProvidersMeta", "ConnectorConnections", "Models"],
+    }),
+    getConnectorConnections: build.query<
+      ConnectorConnection[],
+      { providerId?: string } | void
+    >({
+      query: (arg) => {
+        const providerId = arg?.providerId;
+        return providerId ? `/me/connections?providerId=${encodeURIComponent(providerId)}` : "/me/connections";
+      },
+      transformResponse: (r: { connections: ConnectorConnection[] }) => r.connections,
+      providesTags: ["ConnectorConnections"],
+    }),
+    createConnectorConnection: build.mutation<
+      ConnectorConnection,
+      {
+        providerId: string;
+        displayName: string;
+        externalAccountId?: string;
+        scopes?: string[];
+        capabilities?: string[];
+        metadata?: Record<string, unknown>;
+        credentials?: Record<string, unknown>;
+        status?: ConnectorConnection["status"];
+        isDefault?: boolean;
+      }
+    >({
+      query: (body) => ({ url: "/me/connections", method: "POST", body }),
+      transformResponse: (r: { connection: ConnectorConnection }) => r.connection,
+      invalidatesTags: ["ConnectorConnections", "ProviderKeys", "Models"],
+    }),
+    patchConnectorConnection: build.mutation<
+      ConnectorConnection,
+      { id: string; patch: Partial<Pick<ConnectorConnection, "displayName" | "externalAccountId" | "scopes" | "capabilities" | "metadata" | "status" | "isDefault">> & { credentials?: Record<string, unknown> | null } }
+    >({
+      query: ({ id, patch }) => ({ url: `/me/connections/${encodeURIComponent(id)}`, method: "PATCH", body: patch }),
+      transformResponse: (r: { connection: ConnectorConnection }) => r.connection,
+      invalidatesTags: ["ConnectorConnections", "WorkspaceConnectorGrants", "ProviderKeys", "Models"],
+    }),
+    deleteConnectorConnection: build.mutation<{ ok: true }, string>({
+      query: (id) => ({ url: `/me/connections/${encodeURIComponent(id)}`, method: "DELETE" }),
+      invalidatesTags: ["ConnectorConnections", "WorkspaceConnectorGrants", "ProviderKeys", "Models"],
+    }),
+    getWorkspaceConnectorGrants: build.query<WorkspaceConnectorGrant[], string>({
+      query: (workspaceId) => `/workspaces/${encodeURIComponent(workspaceId)}/connections`,
+      transformResponse: (r: { grants: WorkspaceConnectorGrant[] }) => r.grants,
+      providesTags: (_result, _err, workspaceId) => [{ type: "WorkspaceConnectorGrants", id: workspaceId }],
+    }),
+    putWorkspaceConnectorGrants: build.mutation<
+      WorkspaceConnectorGrant[],
+      { workspaceId: string; grants: Array<{ connectionId: string; providerId: string; grantedCapabilities?: string[]; isDefault?: boolean }> }
+    >({
+      query: ({ workspaceId, grants }) => ({ url: `/workspaces/${encodeURIComponent(workspaceId)}/connections`, method: "PUT", body: { grants } }),
+      transformResponse: (r: { grants: WorkspaceConnectorGrant[] }) => r.grants,
+      invalidatesTags: (_result, _err, arg) => [{ type: "WorkspaceConnectorGrants", id: arg.workspaceId }],
     }),
     getProvidersMeta: build.query<
       Record<string, { name?: string; enabled?: boolean }>,
@@ -339,59 +395,6 @@ export const api = createApi({
         body: { enabled },
       }),
       invalidatesTags: ["LocalSources", "Models"],
-    }),
-
-    // ── Vault + secrets ───────────────────────────────────────────────
-    // Per-user encrypted secrets vault (KDBX-backed). The SPA can:
-    //   - check status (locked? exists?)
-    //   - set up a new vault with a master password
-    //   - unlock (or fail with 401)
-    //   - lock
-    //   - list secrets (metadata only — no plaintext)
-    //   - create or overwrite an entry
-    // Plaintext reveal is intentionally not exposed: agents read secrets
-    // via /sandbox/secrets, never the SPA.
-    getVaultStatus: build.query<{ exists: boolean; locked: boolean }, void>({
-      query: () => "/vault/status",
-      providesTags: ["VaultStatus"],
-    }),
-    setupVault: build.mutation<{ ok: true }, { password: string }>({
-      query: (body) => ({ url: "/vault/setup", method: "POST", body }),
-      invalidatesTags: ["VaultStatus", "Secrets"],
-    }),
-    unlockVault: build.mutation<{ ok: true }, { password: string }>({
-      query: (body) => ({ url: "/vault/unlock", method: "POST", body }),
-      invalidatesTags: ["VaultStatus", "Secrets"],
-    }),
-    lockVault: build.mutation<{ ok: true }, void>({
-      query: () => ({ url: "/vault/lock", method: "POST", body: {} }),
-      invalidatesTags: ["VaultStatus", "Secrets"],
-    }),
-    getSecrets: build.query<
-      Array<{ title: string; username?: string; url?: string; hasNotes: boolean; fieldNames: string[]; updatedAt: string }>,
-      void
-    >({
-      query: () => "/secrets",
-      transformResponse: (r: { secrets: Array<{ title: string; username?: string; url?: string; hasNotes: boolean; fieldNames: string[]; updatedAt: string }> }) => r.secrets,
-      providesTags: ["Secrets"],
-    }),
-    createSecret: build.mutation<
-      { title: string },
-      { title: string; password: string; username?: string; url?: string; notes?: string; fields?: Record<string, string> }
-    >({
-      query: (body) => ({ url: "/secrets", method: "POST", body }),
-      invalidatesTags: ["Secrets"],
-    }),
-    updateSecret: build.mutation<
-      { title: string },
-      { title: string; password: string; username?: string; url?: string; notes?: string; fields?: Record<string, string> }
-    >({
-      query: (body) => ({
-        url: `/secrets/${encodeURIComponent(body.title)}`,
-        method: "PUT",
-        body,
-      }),
-      invalidatesTags: ["Secrets"],
     }),
 
     // ── Workspaces ────────────────────────────────────────────────────
@@ -1104,15 +1107,14 @@ export const {
   useChangePasswordMutation,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetConnectorConnectionsQuery,
+  useCreateConnectorConnectionMutation,
+  usePatchConnectorConnectionMutation,
+  useDeleteConnectorConnectionMutation,
+  useGetWorkspaceConnectorGrantsQuery,
+  usePutWorkspaceConnectorGrantsMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
-  useGetVaultStatusQuery,
-  useSetupVaultMutation,
-  useUnlockVaultMutation,
-  useLockVaultMutation,
-  useGetSecretsQuery,
-  useCreateSecretMutation,
-  useUpdateSecretMutation,
   useGetLocalSourcesQuery,
   usePutLocalSourceMutation,
   useGetWorkspacesQuery,

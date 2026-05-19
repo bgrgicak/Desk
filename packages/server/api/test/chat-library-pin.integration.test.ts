@@ -130,6 +130,13 @@ async function writeLibraryFile(slug: string, relPath: string, body: string): Pr
   return relPath.split(path.sep).join("/");
 }
 
+async function writeLibraryApp(slug: string, relPath: string): Promise<string> {
+  const abs = path.join(home, slug, relPath);
+  await fs.mkdir(abs, { recursive: true });
+  await fs.writeFile(path.join(abs, "desk.app.json"), JSON.stringify({ name: path.basename(relPath, ".app") }));
+  return relPath.split(path.sep).join("/");
+}
+
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-library-pin-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
@@ -208,6 +215,28 @@ describe("POST /chats/:id/library-refs", () => {
     const attDir = path.join(home, alpha.workspacePath, ".chats", chatId, "attachments");
     const entries = await fs.readdir(attDir);
     expect(entries.filter((n) => n.startsWith("report")).length).toBe(1);
+  });
+
+  it("surfaces pinned library apps as a single chat attachment", async () => {
+    const chatId = await createChat(alpha, "pin app");
+    const libRel = await writeLibraryApp(alpha.workspacePath, "demo.app");
+
+    const first = await request("POST", `/chats/${chatId}/library-refs`, alpha.token, { path: libRel });
+    const second = await request("POST", `/chats/${chatId}/library-refs`, alpha.token, { path: libRel });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+
+    const list = await request("GET", `/chats/${chatId}/attachments`, alpha.token);
+    expect(list.status).toBe(200);
+    const items = list.body as { path: string; name: string; kind: string; mime: string; isDir?: boolean }[];
+    const pinnedApps = items.filter((i) => i.name === "demo.app");
+    expect(pinnedApps).toHaveLength(1);
+    expect(pinnedApps[0]).toMatchObject({
+      path: `.chats/${chatId}/attachments/demo.app`,
+      kind: "attachment",
+      mime: "application/vnd.desk.app+directory",
+      isDir: true,
+    });
   });
 
   it("disambiguates basename collisions — same basename, different library targets", async () => {

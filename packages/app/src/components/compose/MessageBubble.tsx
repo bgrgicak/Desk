@@ -1,25 +1,34 @@
-import { useState, type MouseEvent, type ReactNode } from 'react'
+import { memo, useState, type MouseEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare, Copy, ThumbsUp, ThumbsDown, Check } from 'lucide-react'
 import { cn } from '@agent-desk/ui'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
-import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
+import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview, UnsupportedFileCard } from '@/components/shared/InlineArtifactPreview'
 import { TaskResultCard } from './TaskResultCard'
-import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
+import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPanelSlice'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
-import { isRegularMessageVisible } from './messageVisibility'
+import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
 
 interface MessageBubbleProps {
   message: ServerMessage
   workspaceId?: string
+  /**
+   * Filesystem path of the workspace, used to rewrite sandbox paths inside
+   * markdown links and tool output. Passed in by the parent — historically
+   * each bubble subscribed to `useGetWorkspacesQuery` itself, but with N
+   * bubbles in a long thread that fans out into N RTK Query subscribers
+   * notified on every workspace update. Look it up once at the thread
+   * level and pass it down.
+   */
+  workspacePath?: string
   isFirstInGroup?: boolean
   /** When false, this message is part of a group and a later message
    *  from the same sender follows shortly after — so the actions row
@@ -44,9 +53,10 @@ interface MessageBubbleProps {
   currentChatId?: string
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   workspaceId,
+  workspacePath,
   isFirstInGroup = true,
   isLastInGroup = true,
   isNew = false,
@@ -57,8 +67,6 @@ export function MessageBubble({
   developerMode = false,
   currentChatId,
 }: MessageBubbleProps) {
-  const { data: workspaces } = useGetWorkspacesQuery()
-  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
@@ -155,7 +163,7 @@ export function MessageBubble({
       )}
     </div>
   )
-}
+})
 
 // ── Agent-message actions ──────────────────────────────────────────────────
 //
@@ -497,8 +505,14 @@ function isDirectoryArtifact(mime?: string | null) {
   return mime === 'inode/directory'
 }
 
-function artifactRefHref(workspaceId: string | undefined, path: string, mime?: string | null, params?: Record<string, string>) {
+export function artifactRefHref(workspaceId: string | undefined, path: string, mime?: string | null, params?: Record<string, string>) {
   if (!workspaceId) return undefined
+  if (appAttachmentToPreview(path)) {
+    return buildPath(workspaceId, 'context', {
+      item: path,
+      artifactParams: params ? JSON.stringify(params) : null,
+    })
+  }
   return buildPath(workspaceId, 'context', {
     item: isDirectoryArtifact(mime) ? null : path,
     folder: isDirectoryArtifact(mime) ? path : null,
@@ -584,14 +598,6 @@ function AttachmentCard({
   onClick?: () => void
 }) {
   const appPreview = appAttachmentToPreview(attachment.path)
-  if (appPreview) {
-    return (
-      <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
-        <AppPreview {...appPreview} variant="inline" />
-      </div>
-    )
-  }
-
   const className =
     `inline-flex min-w-0 max-w-full items-center gap-2 ${attachmentAlignmentClass(align)} overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]`
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
@@ -610,7 +616,40 @@ function AttachmentCard({
       </div>
     </>
   )
-  const href = artifactRefHref(attachment.workspaceId ?? workspaceId, attachment.path, attachment.mime, attachment.params)
+  const effectiveWorkspaceId = attachment.workspaceId ?? workspaceId
+  const href = artifactRefHref(effectiveWorkspaceId, attachment.path, attachment.mime, attachment.params)
+  if (appPreview && effectiveWorkspaceId) {
+    return (
+      <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
+        <InlineArtifactPreview
+          workspaceId={effectiveWorkspaceId}
+          path={attachment.path}
+          name={attachment.name}
+          mime={attachment.mime}
+          params={attachment.params}
+          onOpen={onClick}
+          openHref={href}
+          fallback={href ? (
+            <a
+              href={href}
+              onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+              className={`${className} hover:bg-muted/40 transition-colors`}
+            >
+              {inner}
+            </a>
+          ) : !onClick ? <div className={className}>{inner}</div> : (
+            <button
+              type="button"
+              onClick={onClick}
+              className={`${className} hover:bg-muted/40 transition-colors`}
+            >
+              {inner}
+            </button>
+          )}
+        />
+      </div>
+    )
+  }
   if (href) {
     return (
       <a
@@ -674,22 +713,24 @@ function ToolResultChip({ toolName, result }: { toolName: string; result: unknow
   )
 }
 
-function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
+export type EventDisplayChunk =
+  | { kind: 'text'; text: string }
+  | { kind: 'events'; entries: AgentLogEntry[] }
+  | { kind: 'stderr'; lines: string[] }
+  | { kind: 'diagnostic'; lines: string[] }
+  | { kind: 'activity'; events: AgentEvent[] }
+
+export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean): EventDisplayChunk[] {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
-  type Chunk =
-    | { kind: 'text'; text: string }
-    | { kind: 'events'; entries: AgentLogEntry[] }
-    | { kind: 'stderr'; lines: string[] }
-    | { kind: 'activity'; events: AgentEvent[] }
-
   const TOOL_EVENT_TYPES = new Set([
     'tool_use', 'tool-call', 'tool_call', 'tool-result', 'tool_result',
   ])
 
-  const chunks: Chunk[] = []
+  const chunks: EventDisplayChunk[] = []
   let sawEvent = false
+  const hiddenReasoningTextIds = reasoningPartIds(log)
 
   const appendText = (s: string) => {
     const last = chunks[chunks.length - 1]
@@ -700,6 +741,11 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
     const last = chunks[chunks.length - 1]
     if (last && last.kind === 'stderr') last.lines.push(line)
     else chunks.push({ kind: 'stderr', lines: [line] })
+  }
+  const appendDiagnostic = (line: string) => {
+    const last = chunks[chunks.length - 1]
+    if (last && last.kind === 'diagnostic') last.lines.push(line)
+    else chunks.push({ kind: 'diagnostic', lines: [line] })
   }
   const appendEvent = (entry: AgentLogEntry) => {
     const last = chunks[chunks.length - 1]
@@ -716,23 +762,30 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
     if (entry.kind === 'event') {
       sawEvent = true
       if (entry.event.type === 'text') {
+        const id = eventPartId(entry.event)
+        if (id && hiddenReasoningTextIds.has(id)) continue
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
       } else if (developerMode) {
-        appendEvent(entry)
+        const diagnostic = userVisibleDiagnosticTextForEvent(entry.event)
+        if (diagnostic) appendStderr(diagnostic)
+        else appendEvent(entry)
       } else if (TOOL_EVENT_TYPES.has(entry.event.type)) {
         // Normal mode: surface a compact "what the agent did" line so
         // tool activity isn't invisible (raw payloads stay dev-only).
         appendActivity(entry.event)
       }
     } else if (entry.kind === 'stderr') {
-      if (developerMode) appendStderr(entry.line)
+      if (developerMode) {
+        if (isStructuredToolPayloadLine(entry.line) || !isUserVisibleDiagnosticLine(entry.line)) appendDiagnostic(entry.line)
+        else appendStderr(entry.line)
+      }
     } else if (entry.kind === 'unparsed') {
       if (developerMode && sawEvent) {
         // Once a structured event stream exists, raw stdout is diagnostic log
-        // material rather than assistant prose. Keep it in dev mode so malformed
-        // tool/error lines are not silently dropped.
-        appendStderr(entry.line)
+        // material rather than assistant prose. Keep it in dev mode, but don't
+        // style ordinary tool/stdout payloads as errors.
+        appendDiagnostic(entry.line)
       } else if (!sawEvent) {
         // Unparsed stdout from drivers that don't emit JSON events (fake
         // driver, plain-text tests) — treat as text-like output.
@@ -740,6 +793,27 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
       }
     }
   }
+
+  return chunks
+}
+
+function reasoningPartIds(log: AgentLogEntry[]): Set<string> {
+  const ids = new Set<string>()
+  for (const entry of log) {
+    if (entry.kind !== 'event' || entry.event.type !== 'reasoning') continue
+    const id = eventPartId(entry.event)
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+function eventPartId(event: AgentEvent): string | undefined {
+  const id = event.part?.id
+  return typeof id === 'string' ? id : undefined
+}
+
+function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: AgentLogEntry[]; developerMode: boolean; workspacePath?: string; workspaceId?: string }) {
+  const chunks = eventDisplayChunks(log, developerMode)
 
   return (
     <div className="space-y-2">
@@ -754,6 +828,7 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
         if (c.kind === 'activity') {
           return <ActivityList key={i} events={c.events} workspacePath={workspacePath} />
         }
+        if (c.kind === 'diagnostic') return <DiagnosticBlock key={i} lines={c.lines} />
         return <StderrBlock key={i} lines={c.lines} />
       })}
     </div>
@@ -817,6 +892,7 @@ function EventGroup({ entries, workspacePath }: { entries: AgentLogEntry[]; work
 
 function StderrBlock({ lines }: { lines: string[] }) {
   const [open, setOpen] = useState(false)
+  const preview = lines[0]?.trim()
   return (
     <div className="rounded-md border border-destructive/30 bg-destructive/5 text-xs">
       <button
@@ -825,11 +901,38 @@ function StderrBlock({ lines }: { lines: string[] }) {
         className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 transition-colors"
       >
         <AlertTriangle className="h-3 w-3" />
-        <span className="font-medium">{lines.length} diagnostic/error line{lines.length === 1 ? '' : 's'}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {preview || `${lines.length} diagnostic/error line${lines.length === 1 ? '' : 's'}`}
+        </span>
         <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
         <pre className="px-2.5 pb-2 pt-0 text-[11px] leading-snug whitespace-pre-wrap break-words font-mono">
+          {lines.join('\n')}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function DiagnosticBlock({ lines }: { lines: string[] }) {
+  const [open, setOpen] = useState(false)
+  const preview = lines[0]?.trim()
+  return (
+    <div className="rounded-md border border-border bg-muted/20 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left text-muted-foreground hover:bg-muted/40 transition-colors"
+      >
+        <Wrench className="h-3 w-3" />
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {preview || `${lines.length} diagnostic line${lines.length === 1 ? '' : 's'}`}
+        </span>
+        <ChevronRight className={`h-3 w-3 ml-auto transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <pre className="px-2.5 pb-2 pt-0 text-[11px] leading-snug whitespace-pre-wrap break-words font-mono text-muted-foreground">
           {lines.join('\n')}
         </pre>
       )}

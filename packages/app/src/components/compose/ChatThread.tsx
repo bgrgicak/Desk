@@ -4,8 +4,8 @@ import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
-import { isMessageVisible } from './messageVisibility'
-import { useGetChatMessagesQuery } from '@/store/api'
+import { firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
+import { useGetChatMessagesQuery, useGetWorkspacesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
 
@@ -31,6 +31,22 @@ export function findFailedAgentTurn(items: ServerMessage[]): ServerMessage | nul
   return null
 }
 
+export function findFailedOrDiagnosticAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const turn = items[i]
+    if (turn.content.type !== 'agent_turn') continue
+    if (turn.state === 'failed') return turn
+    if (turn.state !== 'succeeded') return null
+
+    const later = items.slice(i + 1)
+    const producedVisibleMessage = later.some(m => isMessageVisible(m, false))
+    if (producedVisibleMessage) return null
+
+    return failureDetailForAgentTurn(items, turn) ? turn : null
+  }
+  return null
+}
+
 export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const m = items[i]
@@ -39,6 +55,96 @@ export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | nul
     }
   }
   return null
+}
+
+export function failureDetailForAgentTurn(items: ServerMessage[], failedTurn: ServerMessage | null): string | null {
+  if (!failedTurn) return null
+  const diagnostics: string[] = []
+  collectDiagnostics(failedTurn.progressLog, diagnostics)
+
+  const failedTurnIndex = items.findIndex(m => m.id === failedTurn.id)
+  if (failedTurnIndex >= 0) {
+    for (const m of items.slice(failedTurnIndex + 1)) {
+      if (m.content.type === 'agent_turn') break
+      if (m.role === 'agent') collectMessageDiagnostics(m, diagnostics)
+    }
+  }
+
+  return chooseFailureDetail(diagnostics)
+}
+
+export function isFailedRunDiagnosticMessage(message: ServerMessage, items: ServerMessage[], failedTurn: ServerMessage | null): boolean {
+  if (!failedTurn || message.role !== 'agent') return false
+  if (message.content.type !== 'text' || !isUserVisibleDiagnosticLine(message.content.text)) return false
+
+  const failedTurnIndex = items.findIndex(m => m.id === failedTurn.id)
+  const messageIndex = items.findIndex(m => m.id === message.id)
+  if (failedTurnIndex < 0 || messageIndex <= failedTurnIndex) return false
+
+  for (const m of items.slice(failedTurnIndex + 1, messageIndex)) {
+    if (m.content.type === 'agent_turn') return false
+  }
+  return true
+}
+
+function collectMessageDiagnostics(message: ServerMessage, diagnostics: string[]): void {
+  if (message.content.type === 'events') {
+    collectDiagnostics(message.content.log, diagnostics)
+    return
+  }
+  if (message.content.type === 'text' && isUserVisibleDiagnosticLine(message.content.text)) {
+    for (const line of splitDiagnosticLines(message.content.text)) {
+      if (isUserVisibleDiagnosticLine(line)) diagnostics.push(line)
+    }
+    return
+  }
+  if (message.content.type === 'toolResult') {
+    const diagnostic = firstUserVisibleDiagnosticString(message.content.result)
+    if (diagnostic) diagnostics.push(diagnostic)
+  }
+}
+
+function collectDiagnostics(log: AgentLogEntry[] | undefined, diagnostics: string[]): void {
+  if (!log?.length) return
+  const stderrFallbacks: string[] = []
+  const matchedBefore = diagnostics.length
+  for (const entry of log) {
+    let raw: string | null = null
+    if (entry.kind === 'event') {
+      raw = userVisibleDiagnosticTextForEvent(entry.event)
+    } else if (isUserVisibleDiagnosticLine(entry.line)) {
+      raw = entry.line
+    } else if (entry.kind === 'stderr' && !isStructuredToolPayloadLine(entry.line)) {
+      stderrFallbacks.push(entry.line)
+    }
+    if (!raw) continue
+    for (const line of splitDiagnosticLines(raw)) {
+      if (line) diagnostics.push(line)
+    }
+  }
+  if (diagnostics.length > matchedBefore) return
+  for (const raw of stderrFallbacks) {
+    for (const line of splitDiagnosticLines(raw)) {
+      if (line) diagnostics.push(line)
+    }
+  }
+}
+
+function splitDiagnosticLines(raw: string): string[] {
+  return raw
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+}
+
+function chooseFailureDetail(diagnostics: string[]): string | null {
+  const unique = Array.from(new Set(diagnostics))
+  const specific = unique.find(line => !/unexpected error,? check log file/i.test(line)) ?? unique[0]
+  if (!specific) return null
+  return specific.length > 220 ? `${specific.slice(0, 217)}…` : specific
 }
 
 /**
@@ -58,6 +164,7 @@ export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerM
     let sawHiddenToolOutput = false
     for (const later of items.slice(i + 1)) {
       if (isMessageVisible(later, false)) return false
+      if (messageHasUserVisibleDiagnostic(later)) return false
       if (
         later.role === 'agent' &&
         (later.content.type === 'toolCall' || later.content.type === 'toolResult' || later.content.type === 'events')
@@ -69,6 +176,12 @@ export function shouldShowToolOnlyRunFallback(items: ServerMessage[], developerM
   }
 
   return false
+}
+
+function messageHasUserVisibleDiagnostic(message: ServerMessage): boolean {
+  const diagnostics: string[] = []
+  collectMessageDiagnostics(message, diagnostics)
+  return diagnostics.length > 0
 }
 
 export function chatMessagesQueryKey(chatId: string, developerMode: boolean): string {
@@ -117,11 +230,32 @@ export function liveDeveloperProgressMessage(
   }
 }
 
+/**
+ * Build a transient assistant message from the streaming text the model
+ * has produced so far. Rendered as a regular MessageBubble while the
+ * turn is in flight so the user sees the answer growing word-by-word
+ * (the same way a finalized message bubble looks) instead of a generic
+ * "Thinking…" status indicator. Returns null when no text has streamed
+ * yet, in which case the caller should keep showing the status text.
+ */
+export function liveAssistantTextMessage(
+  activeAgentTurn: ServerMessage | null,
+): ServerMessage | null {
+  // Do not render in-flight text deltas as a regular assistant bubble.
+  // opencode can briefly stream reasoning content as a `text` delta before a
+  // later part update classifies the same part as `reasoning`; rendering here
+  // makes private reasoning flash in the normal chat until the tool/reasoning
+  // event catches up. Finalized messages are still rendered from persisted text
+  // after the full log can be filtered safely.
+  void activeAgentTurn
+  return null
+}
+
 function isLiveDeveloperProgressEntry(entry: AgentLogEntry): boolean {
   if (entry.kind === 'stderr') return true
   if (entry.kind !== 'event') return false
   const type = entry.event.type
-  return type !== 'text' && type !== 'reasoning' && type !== 'step_start' && type !== 'step_finish'
+  return type !== 'text' && type !== 'step_start' && type !== 'step_finish'
 }
 
 const TOOL_PROGRESS_LABELS: Record<string, string> = {
@@ -151,10 +285,7 @@ const GENERIC_TOOL_PROGRESS_LABELS: Record<string, string> = {
 function progressTextForEvent(event: AgentEvent): string | null {
   if (event.type === 'text') return null
   if (event.type === 'step_start' || event.type === 'step_finish') return null
-  if (event.type === 'reasoning') {
-    const text = pickProgressString(event.part, 'text') ?? pickProgressString(event.part, 'content')
-    return text ? trimProgress(text) : 'Thinking'
-  }
+  if (event.type === 'reasoning') return null
   if (event.type === 'tool_use') {
     return progressTextForToolEvent(event) ?? GENERIC_TOOL_PROGRESS_LABELS.tool_use
   }
@@ -207,11 +338,6 @@ function pickProgressString(obj: unknown, key: string): string | undefined {
   if (!obj || typeof obj !== 'object') return undefined
   const v = (obj as Record<string, unknown>)[key]
   return typeof v === 'string' ? v : undefined
-}
-
-function trimProgress(text: string): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > 120 ? line.slice(0, 120) + '…' : line
 }
 
 /**
@@ -325,6 +451,27 @@ export function ChatThread({
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  // Per-id stable ref callback. The naïve inline `ref={el => ...}` form
+  // creates a new function identity on every render, so React calls the
+  // callback with null and then the same element again on every re-render
+  // of the parent — at N messages this is one of the dominant per-render
+  // costs once a thread gets long. Memoizing per id keeps the callback
+  // identity stable so React skips the spurious null/element pair.
+  const messageRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
+  const getMessageRefCallback = (id: string) => {
+    let cb = messageRefCallbacks.current.get(id)
+    if (!cb) {
+      cb = (el: HTMLDivElement | null) => {
+        if (el) messageRefs.current.set(id, el)
+        else {
+          messageRefs.current.delete(id)
+          messageRefCallbacks.current.delete(id)
+        }
+      }
+      messageRefCallbacks.current.set(id, cb)
+    }
+    return cb
+  }
   /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
   const isAtBottomRef = useRef(true)
   /** When loading older messages, stores the scroll-height before prepend so
@@ -334,6 +481,13 @@ export function ChatThread({
   const allItems = activeData?.items ?? []
   const prevCursor = activeData?.prevCursor
   const isInitialLoading = !skipQuery && !activeData && !isError
+
+  // Resolve the workspace's filesystem path once for the whole thread so
+  // every MessageBubble doesn't have to subscribe to the workspaces cache
+  // individually. With N messages, the per-bubble subscription used to
+  // fan out into N RTK Query notifications on every workspace update.
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
 
   const activeAgentTurn = useMemo(
     () => findActiveAgentTurn(allItems),
@@ -353,14 +507,25 @@ export function ChatThread({
     [activeAgentTurn, developerMode],
   )
 
-  // Detect the most recent failed agent turn (if any) to show an inline
-  // error banner. Only show it when there is no newer pending/running turn
-  // (which would mean a retry is already in progress).
+  const liveAssistantText = useMemo(
+    () => liveAssistantTextMessage(activeAgentTurn),
+    [activeAgentTurn],
+  )
+
+  // Detect the most recent failed turn, or a visually silent turn that only
+  // produced hidden diagnostics, to show an inline error banner instead of the
+  // generic tool-only completion fallback.
   const failedAgentTurn = useMemo(() => {
     if (isTyping) return null
-    return findFailedAgentTurn(allItems)
+    return findFailedOrDiagnosticAgentTurn(allItems)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeData, isTyping])
+
+  const failedAgentTurnDetail = useMemo(
+    () => failureDetailForAgentTurn(allItems, failedAgentTurn),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeData, failedAgentTurn],
+  )
 
   const showToolOnlyFallback = useMemo(
     () => !isTyping && !failedAgentTurn && shouldShowToolOnlyRunFallback(allItems, developerMode),
@@ -370,11 +535,14 @@ export function ChatThread({
 
   const messages: ServerMessage[] = useMemo(
     () => {
-      const visible = allItems.filter(m => isMessageVisible(m, developerMode))
+      const visible = allItems.filter(m => {
+        if (!isMessageVisible(m, developerMode)) return false
+        return developerMode || !isFailedRunDiagnosticMessage(m, allItems, failedAgentTurn)
+      })
       return filterMessage ? visible.filter(filterMessage) : visible
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeData, developerMode, filterMessage],
+    [activeData, developerMode, filterMessage, failedAgentTurn],
   )
 
   const lastAssistantId = useMemo(() => {
@@ -584,15 +752,13 @@ export function ChatThread({
               key={msg.id}
               className="min-w-0 max-w-full"
               data-message-id={msg.id}
-              ref={(el) => {
-                if (el) messageRefs.current.set(msg.id, el)
-                else messageRefs.current.delete(msg.id)
-              }}
+              ref={getMessageRefCallback(msg.id)}
             >
               <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}
+                  workspacePath={workspacePath}
                   currentChatId={chatId}
                   agentName={agentName}
                   isFirstInGroup={isFirstInGroup}
@@ -622,6 +788,7 @@ export function ChatThread({
               <MessageBubble
                 message={liveDeveloperMessage}
                 workspaceId={workspaceId}
+                workspacePath={workspacePath}
                 agentName={agentName}
                 isFirstInGroup
                 onAttachmentClick={onAttachmentClick}
@@ -630,7 +797,21 @@ export function ChatThread({
               />
             </div>
           )}
-          {isTyping && (
+          {liveAssistantText && (
+            <div className={resolvedStatusClassName}>
+              <MessageBubble
+                message={liveAssistantText}
+                workspaceId={workspaceId}
+                workspacePath={workspacePath}
+                agentName={agentName}
+                isFirstInGroup
+                onAttachmentClick={onAttachmentClick}
+                agentHeaderClassName={agentHeaderClassName}
+                developerMode={false}
+              />
+            </div>
+          )}
+          {isTyping && !liveAssistantText && (
             <div className={resolvedStatusClassName}>
               <StatusIndicator text={statusText} isTyping={isTyping} />
             </div>
@@ -640,6 +821,7 @@ export function ChatThread({
               <FailedRunBanner
                 chatId={failedAgentTurn.chatId}
                 messageId={failedAgentTurn.id}
+                failureDetail={failedAgentTurnDetail}
                 isNew={showNewBadge}
               />
             </div>

@@ -271,8 +271,8 @@ if `currentPassword` does not match.
 ### GET /me/providers
 
 Returns every known connection credential name with its value either masked
-(first 6 + last 4 characters) or `null` when unset. Keys are encrypted
-at rest in the user's vault-backed connection store. The current known set
+(first 6 + last 4 characters) or `null` when unset. Keys live in the user's
+KDBX vault, not in SQLite. The current known set
 includes AI provider API keys and sandbox tool tokens such as `GITHUB_TOKEN`.
 
 ### PUT /me/providers

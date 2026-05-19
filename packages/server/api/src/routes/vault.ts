@@ -9,6 +9,7 @@ import {
   type VaultStore,
   VaultPasswordError,
 } from "../vault/store.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 
 /**
  * Vault-and-secrets HTTP handlers. All vault state lives in the in-process
@@ -29,6 +30,7 @@ export async function setup(
   body: { password?: unknown },
 ): Promise<{ ok: true }> {
   const password = requirePassword(body);
+  enforceVaultPasswordPolicy(password);
   const status = await vault.status(userId);
   if (status.exists) {
     throw new ConflictError("Vault already exists");
@@ -126,6 +128,15 @@ function requirePassword(body: { password?: unknown }): string {
     throw new ValidationError("Missing password");
   }
   return body.password;
+}
+
+// Policy for *new* vault passwords only (POST /vault/setup).  Shared
+// with /me/password and /auth/signup via passwordPolicy.ts — see
+// the helper there for the threat model.  We can't enforce it on
+// /vault/unlock without locking out users whose vault predates the
+// policy.
+export function enforceVaultPasswordPolicy(password: string): void {
+  enforcePasswordPolicy(password);
 }
 
 function parseSecret(body: unknown): SecretEntry {
