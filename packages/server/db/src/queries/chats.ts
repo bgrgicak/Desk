@@ -4,8 +4,8 @@ import {
   GOAL_KEYS,
   ValidationError,
   type Chat,
+  type ChatWithListMeta,
   type GoalKey,
-  type MessageKind,
 } from "@agent-desk/shared";
 
 function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
@@ -34,26 +34,15 @@ function rowToChat(row: Record<string, unknown>): Chat {
   });
 }
 
-export interface ChatWithLastMessage extends Chat {
-  /** Kind that drives the chat-list icon when no chat goal is persisted. */
-  kind: MessageKind;
-  /**
-   * True when the chat's most recent `agent_turn` message is pending/running.
-   */
-  running: boolean;
-  /**
-   * True when the chat's most recent `agent_turn` message failed and can be retried.
-   */
-  failed: boolean;
-  /**
-   * Short preview of the chat's most recent visible message (user-typed
-   * text or agent reply). Empty string when the chat has no visible
-   * messages yet, or when the latest one isn't a text payload (artifact
-   * refs, tool results, etc.). Trimmed and collapsed; truncated at 200
-   * UTF-16 code units so the sidebar can render a stable single-line.
-   */
-  lastMessage: string;
-}
+/**
+ * Server-side chat-list response row.  Same shape as
+ * `ChatWithListMeta` from `@agent-desk/shared`, but with the four
+ * sidebar-meta fields promoted from optional to required because the
+ * server query always populates them (the shared type leaves them
+ * optional so the WS `chat.updated` payload — which omits them — fits
+ * the same definition).
+ */
+export type ChatWithLastMessage = Chat & Required<Pick<ChatWithListMeta, "kind" | "running" | "failed" | "lastMessage">>;
 
 const LAST_MESSAGE_PREVIEW_LIMIT = 200;
 
@@ -106,7 +95,7 @@ export async function listWithLatestMessage(
   );
   return rows.map((r) => ({
     ...rowToChat(r),
-    kind: r.kind as MessageKind,
+    kind: r.kind as ChatWithLastMessage["kind"],
     running: !!r.is_running,
     failed: !!r.is_failed,
     lastMessage: previewFromRaw(r.last_text),

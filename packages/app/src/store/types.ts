@@ -1,4 +1,4 @@
-import type { GoalKey } from "@agent-desk/shared";
+import type { ChatWithListMeta } from "@agent-desk/shared";
 
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
@@ -107,43 +107,16 @@ export interface WorkspaceConnectorGrant {
   updatedAt: string;
 }
 
-export interface ServerChat {
-  id: string;
-  workspaceId: string;
-  agentId: string;
-  title: string;
-  goal?: GoalKey;
-  createdAt: string;
-  updatedAt: string;
-  awaitingUser: boolean;
-  unread: boolean;
-  /**
-   * Drives the chat-list icon (fallback signal). Newest user-action
-   * message kind (`task` / `task_run`), with `'chat'` as the fallback.
-   * `summary` is auto-emitted on every chat turn and is treated as a
-   * fallback. Only populated by /chats list responses.
-   */
-  kind?: "chat" | "task" | "task_run";
-  /**
-   * True when the chat's most recent `agent_turn` message is in `pending`
-   * or `running` state. Only populated by /chats list responses (maintained
-   * on the chat row so sidebar loads do not scan messages). WS `chat.updated`
-   * events omit this.
-   */
-  running?: boolean;
-  /**
-   * True when the chat's most recent `agent_turn` failed and can be retried.
-   * Only populated by /chats list responses; WS message events refine it live.
-   */
-  failed?: boolean;
-  /**
-   * Short preview of the chat's most recent visible text message. Only
-   * populated by /chats list responses; WS `chat.updated` events omit it
-   * (the next list refetch picks up the new preview). Empty string when
-   * the chat has no visible text messages yet.
-   */
-  lastMessage?: string;
-}
+/**
+ * Server chat type — re-exported from `@agent-desk/shared` so both
+ * sides of the API agree on the shape by definition (the same Zod
+ * schema is parsed on the server and inferred here).  The list-meta
+ * fields (kind / running / failed / lastMessage) are optional in the
+ * shared type because the WS `chat.updated` payload omits them — the
+ * server's `GET /chats` response sets them, the sidebar refetch on
+ * list invalidation picks up the new preview.
+ */
+export type ServerChat = ChatWithListMeta;
 
 export interface AttachmentRef {
   path: string;
