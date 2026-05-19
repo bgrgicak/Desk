@@ -5,6 +5,8 @@ import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@
 import { issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
 import { createHub } from "./workspaces.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/routes/auth");
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -113,24 +115,49 @@ export async function handleSignup(
     throw new ValidationError("Password must differ from the default seed password");
   }
 
+  // Single non-specific 409 for both username and email collisions. A
+  // distinct message would be a user/email enumeration oracle for
+  // anyone who can reach /auth/signup (rate-limited but observable).
+  // The SPA shows the generic message and asks the user to try a
+  // different combination.
   const existingByUsername = await queries.users.findByUsername(ctx.pool, username);
-  if (existingByUsername) throw new ConflictError("Username is already taken");
-  const existingByEmail = await queries.users.findByEmail(ctx.pool, email);
-  if (existingByEmail) throw new ConflictError("Email is already in use");
+  const existingByEmail = existingByUsername ? null : await queries.users.findByEmail(ctx.pool, email);
+  if (existingByUsername || existingByEmail) {
+    throw new ConflictError("Account could not be created with the supplied credentials");
+  }
 
   const id = generateId("user");
   const passwordHash = await hashPassword(password);
   await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
 
+  // Mint the session first — that and the user row are the two pieces
+  // the client absolutely needs to recover. If session issuance
+  // throws (DB hiccup, exhausted entropy, …) we roll back the user
+  // insert so a retry isn't blocked by a 409.
+  let token: string;
+  try {
+    token = await issueSession(ctx.pool, id);
+  } catch (err) {
+    try {
+      await ctx.pool.query("DELETE FROM users WHERE id = ?", [id]);
+    } catch (rollbackErr) {
+      log.warn(
+        { id, username, err: (rollbackErr as Error).message },
+        "signup: failed to roll back user row after issueSession failure",
+      );
+    }
+    throw err;
+  }
+
   // Mirror the post-boot bootstrap that existing users get in main.ts —
   // a new signup needs a hub workspace immediately, otherwise the SPA
   // lands on "No workspaces" right after the redirect. Best-effort: a
-  // hub-creation failure should not undo the account.
+  // hub-creation failure should not undo the account; the next /me
+  // hits the workspace-create path through the normal SPA flow.
   try {
     await createHub(ctx.pool, ctx.home, id, username);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(`signup: hub-creation failed for ${username}: ${(err as Error).message}`);
+    log.warn({ username, err: (err as Error).message }, "signup: hub-creation failed");
   }
 
   // If the server is in auto-unlock mode (DESK_VAULT_PASSWORD set), the
@@ -143,12 +170,10 @@ export async function handleSignup(
     try {
       await ctx.vault.setup(id, vaultPassword);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`signup: vault auto-setup failed for ${username}: ${(err as Error).message}`);
+      log.warn({ username, err: (err as Error).message }, "signup: vault auto-setup failed");
     }
   }
 
-  const token = await issueSession(ctx.pool, id);
   return { token };
 }
 

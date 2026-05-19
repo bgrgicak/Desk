@@ -1,6 +1,8 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
 import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/routes/agents");
 
 export async function listAgents(pool: Pool, userId: string) {
   return queries.agents.listByUser(pool, userId);
@@ -59,8 +61,7 @@ export async function patchAgent(
   if (modelChanged) {
     const cleared = await queries.chats.clearOpencodeSessionsForAgent(pool, id);
     if (cleared.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(
+      log.info(
         `agent ${id} model changed (${before!.model} → ${data.model}); ` +
         `cleared opencode session id from ${cleared.length} chat(s)`,
       );

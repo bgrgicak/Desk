@@ -28,6 +28,8 @@ import {
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
 import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("runtime/docker");
 
 import type { WorkspaceKind } from "@agent-desk/shared";
 
@@ -230,7 +232,7 @@ export async function growSandboxForResourceError(
       }
       const next = Math.min(info.pidsLimit * 2, SANDBOX_MAX_PIDS);
       const ok = await engine.update(containerName, { pidsLimit: next });
-      console.info(
+      log.info(
         `sandbox ${containerName} grew pids ${info.pidsLimit} → ${next} after resource failure (engine accepted=${ok})`,
       );
       return { grew: ok, dimension: "pids", pidsLimit: ok ? next : info.pidsLimit, memoryBytes: info.memoryBytes, atMax: false };
@@ -241,7 +243,7 @@ export async function growSandboxForResourceError(
     }
     const nextMem = Math.min(info.memoryBytes * 2, SANDBOX_MAX_MEMORY_BYTES);
     const ok = await engine.update(containerName, { memoryBytes: nextMem });
-    console.info(
+    log.info(
       `sandbox ${containerName} grew memory ${info.memoryBytes} → ${nextMem} after resource failure (engine accepted=${ok})`,
     );
     return { grew: ok, dimension: "memory", pidsLimit: info.pidsLimit, memoryBytes: ok ? nextMem : info.memoryBytes, atMax: false };
@@ -270,7 +272,7 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
       process.stderr.write(`pull ${image}: ${line}\n`);
     });
   } catch (err) {
-    console.warn(
+    log.warn(
       `${image} image not found locally and pull failed (${(err as Error).message}). ` +
         "If this is a monorepo dev checkout, build the image from " +
         "packages/server/runtime/Dockerfile.sandbox.",
@@ -774,9 +776,9 @@ export async function reapIdleSandboxes(
     try {
       await engine.remove(c.name, true);
       removed.push(c.name);
-      console.info(`reaped idle sandbox ${c.name}`);
+      log.info(`reaped idle sandbox ${c.name}`);
     } catch (err) {
-      console.warn(`failed to reap ${c.name}:`, (err as Error).message);
+      log.warn({ container: c.name, err: (err as Error).message }, "failed to reap");
     }
   }
   return removed;
@@ -837,7 +839,7 @@ export async function softReapIdleDaemons(
       invalidateOpencodeServerCache(info.id);
       killed.push(c.name);
     } catch (err) {
-      console.warn(`soft-reap failed for ${c.name}:`, (err as Error).message);
+      log.warn({ container: c.name, err: (err as Error).message }, "soft-reap failed");
     }
   }
   return killed;

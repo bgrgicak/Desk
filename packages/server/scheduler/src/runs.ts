@@ -37,6 +37,8 @@ import {
   type ReflectFn,
   type WorkspaceReflectionInput,
 } from "./reflection.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("scheduler/runs");
 
 export interface RunManagerOptions {
   pool: Pool;
@@ -943,13 +945,13 @@ export function createRunManager(opts: RunManagerOptions) {
           if (!growth.grew) {
             // Already at the maximum — no point retrying. Fall through to
             // finalise as failed; the user does see the failure in this case.
-            console.warn(
+            log.warn(
               `runId=${runId}: ${failure} pressure but sandbox already at maximum; surfacing failure`,
             );
             break;
           }
           attempt++;
-          console.info(
+          log.info(
             `runId=${runId}: ${failure} resource failure on attempt ${attempt - 1}, ` +
               `grew sandbox (pids=${growth.pidsLimit}, memory=${growth.memoryBytes}); retrying`,
           );
@@ -1020,8 +1022,7 @@ export function createRunManager(opts: RunManagerOptions) {
       emit({ type: "workspace.synced", payload: { workspaceId } });
       return { fired: true, childIds: [] };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(`fireMessage ${messageId} failed:`, err);
+      log.error({ messageId, err }, "fireMessage failed");
       for (const line of errorLogLines(err)) {
         await onLog({ runId, seq: 0, kind: "stderr", payload: line });
       }
@@ -1132,7 +1133,7 @@ export function createRunManager(opts: RunManagerOptions) {
         inFlight++;
         return fireMessage(row.id)
           .catch((err: unknown) => {
-            console.error(`fireMessage ${row.id} failed:`, err);
+            log.error({ messageId: row.id, err }, "fireMessage failed");
           })
           .finally(() => {
             inFlight--;
@@ -1194,7 +1195,7 @@ export function createRunManager(opts: RunManagerOptions) {
   function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
     const timer = setInterval(() => {
       void sweepIdleSandboxes().catch((err) => {
-        console.warn("idle sandbox sweep failed:", err);
+        log.warn("idle sandbox sweep failed:", err);
       });
     }, intervalMs);
     timer.unref();
@@ -1226,7 +1227,7 @@ export function createRunManager(opts: RunManagerOptions) {
   function startSoftIdleDaemonSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
     const timer = setInterval(() => {
       void sweepIdleDaemons().catch((err) => {
-        console.warn("soft daemon sweep failed:", err);
+        log.warn("soft daemon sweep failed:", err);
       });
     }, intervalMs);
     timer.unref();

@@ -1,6 +1,7 @@
 {
   "name": "desk",
   "private": true,
+  "type": "module",
   "workspaces": [
     "packages/server/*",
     "packages/app",

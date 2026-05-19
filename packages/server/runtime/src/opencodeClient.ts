@@ -9,6 +9,8 @@
  */
 
 import { readOpencodeSseEvents, type OpencodeSseEvent } from "./opencodeEvents.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("runtime/opencodeClient");
 
 export interface OpencodeSessionInfo {
   id: string;
@@ -237,8 +239,7 @@ export class OpencodeClient {
             fn(evt);
           } catch (err) {
             // A bad subscriber shouldn't kill the multiplexer.
-            // eslint-disable-next-line no-console
-            console.warn("opencodeClient: subscriber threw", err);
+            log.warn({ err }, "opencodeClient: subscriber threw");
           }
         }
       }
@@ -261,8 +262,7 @@ export class OpencodeClient {
         try {
           fn(endError);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("opencodeClient: stream-end listener threw", err);
+          log.warn({ err }, "opencodeClient: stream-end listener threw");
         }
       }
     }

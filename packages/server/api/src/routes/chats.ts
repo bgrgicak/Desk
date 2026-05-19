@@ -31,6 +31,8 @@ import {
   type SummaryVersion,
   type StorageContext,
 } from "@agent-desk/storage";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/routes/chats");
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const APP_DIR_MIME = "application/vnd.desk.app+directory";
@@ -820,8 +822,7 @@ export async function runMessage(
   // Fire-and-forget. The full agent run continues on the message itself for
   // non-task rows and on a task_run child for task rows.
   ops.fireMessage(messageId, { manual: true }).catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error(`runMessage fireMessage failed for ${messageId}:`, err);
+    log.error(`runMessage fireMessage failed for ${messageId}:`, err);
   });
 
   return rowToReturn;

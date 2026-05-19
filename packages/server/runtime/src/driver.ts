@@ -39,6 +39,8 @@ import {
   invalidateOpencodeServerCache,
   type OpencodeServerInstance,
 } from "./opencodeServer.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("runtime/driver");
 
 export interface RunOptions {
   runId: string;
@@ -367,9 +369,9 @@ function createRealDriver(): SandboxDriver {
         if (!opts.sandboxToken) return;
         await writeSandboxTokenFile(engine, handle.containerId, user, opts.sandboxToken).catch(
           (err) => {
-            console.warn(
-              `runtime: failed to write sandbox token file (runId=${opts.runId}):`,
-              (err as Error)?.message ?? err,
+            log.warn(
+              { runId: opts.runId, err: (err as Error)?.message ?? String(err) },
+              "runtime: failed to write sandbox token file",
             );
           },
         );
@@ -589,9 +591,9 @@ function createRealDriver(): SandboxDriver {
           } catch (err) {
             // Best-effort — losing tool-card synthesis shouldn't fail
             // the run.
-            console.warn(
-              `runtime: listSessionMessages failed (runId=${opts.runId}):`,
-              (err as Error)?.message ?? err,
+            log.warn(
+              { runId: opts.runId, err: (err as Error)?.message ?? String(err) },
+              "runtime: listSessionMessages failed",
             );
           }
         }

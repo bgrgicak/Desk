@@ -113,9 +113,11 @@ describe("isWsOriginAllowed unit", () => {
   it("returns true for any loopback origin regardless of port", () => {
     expect(isWsOriginAllowed("http://localhost:5173", allowed)).toBe(true);
     expect(isWsOriginAllowed("http://127.0.0.1:5179", allowed)).toBe(true);
+    expect(isWsOriginAllowed("http://127.0.0.2:35138", allowed)).toBe(true); // 127.0.0.0/8
     expect(isWsOriginAllowed("http://localhost:35138", allowed)).toBe(true);
     expect(isWsOriginAllowed("https://localhost", allowed)).toBe(true);
     expect(isWsOriginAllowed("http://[::1]:8000", allowed)).toBe(true);
+    expect(isWsOriginAllowed("http://[::ffff:127.0.0.1]:8000", allowed)).toBe(true);
   });
 
   it("returns false for an unknown non-loopback origin", () => {

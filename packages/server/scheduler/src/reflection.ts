@@ -7,6 +7,8 @@ import { queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 import { resolveLocalSourceEnv } from "@agent-desk/runtime";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("scheduler/reflection");
 
 /**
  * Memory-system Phase 5 — daily reflection.
@@ -289,7 +291,7 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
 export interface DailyReflectionScheduleOptions extends RunDailyReflectionOptions {
   /** Cron expression. Defaults to `0 3 * * *` per spec (03:00 server time daily). */
   cron?: string;
-  /** Logger hook. Defaults to console.error on failures. */
+  /** Logger hook. Defaults to log.error on failures. */
   onError?: (err: unknown) => void;
 }
 
@@ -421,8 +423,7 @@ export function startDailyReflection(opts: DailyReflectionScheduleOptions): Cron
       await runDailyReflection(opts);
     } catch (err) {
       if (opts.onError) opts.onError(err);
-      // eslint-disable-next-line no-console
-      else console.error("daily reflection job failed:", err);
+      else log.error({ err }, "daily reflection job failed");
     }
   });
   return job;

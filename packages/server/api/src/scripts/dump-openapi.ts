@@ -6,9 +6,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { generateOpenApiSpec } from "../openapi.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/scripts/dump-openapi");
 
 const spec = generateOpenApiSpec();
 const outPath = path.resolve(import.meta.dirname, "../../../docs/openapi.json");
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, JSON.stringify(spec, null, 2) + "\n");
-console.log(`Written to ${outPath}`);
+log.info(`Written to ${outPath}`);

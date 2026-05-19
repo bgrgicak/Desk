@@ -1,6 +1,6 @@
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { UnauthorizedError } from "@agent-desk/shared";
+import { ForbiddenError, UnauthorizedError } from "@agent-desk/shared";
 import { verifySession } from "./sessions.js";
 
 /**
@@ -90,4 +90,65 @@ export async function requireAuth(
   }
 
   return userId;
+}
+
+/**
+ * Endpoints the SPA still needs to call while the user is on the
+ * documented public seed credential. Anything not in this set is
+ * blocked with 403 until the user changes their password via POST
+ * /me/password.
+ *
+ * The set is intentionally narrow: enough to render the password-
+ * change UI (GET /me, GET /workspaces) and to log out / change the
+ * password / probe the auth-status surface. Every other route is
+ * blocked.
+ */
+const MUST_CHANGE_PW_ALLOWED: ReadonlyArray<{ method: string; path: string | RegExp }> = [
+  { method: "POST", path: "/auth/logout" },
+  { method: "POST", path: "/me/password" },
+  { method: "GET", path: "/me" },
+  { method: "GET", path: "/auth/signup-status" },
+  { method: "GET", path: "/health" },
+  { method: "GET", path: "/ready" },
+  { method: "GET", path: "/openapi.json" },
+];
+
+function isAllowedWhileMustChange(method: string, url: string): boolean {
+  for (const entry of MUST_CHANGE_PW_ALLOWED) {
+    if (entry.method !== method) continue;
+    if (typeof entry.path === "string") {
+      if (entry.path === url) return true;
+    } else if (entry.path.test(url)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * If the user's `must_change_password` flag is set, refuse every
+ * state-changing endpoint until they call POST /me/password. The
+ * allowlist above covers what the SPA needs to render the prompt and
+ * the password-change form.
+ *
+ * Called from the request dispatcher in app.ts after requireAuth has
+ * resolved the userId. Returns nothing on success; throws
+ * ForbiddenError with a specific code on rejection so the SPA can
+ * recognise the state and redirect to the change-password screen.
+ */
+export async function enforceMustChangePassword(
+  pool: Pool,
+  userId: string,
+  method: string,
+  url: string,
+): Promise<void> {
+  if (!userId) return; // unauthenticated path
+  if (isAllowedWhileMustChange(method, url)) return;
+  const user = await queries.users.findById(pool, userId);
+  if (!user) return; // request will 401 downstream anyway
+  if (user.mustChangePassword) {
+    throw new ForbiddenError(
+      "Password change required before this endpoint can be used",
+    );
+  }
 }

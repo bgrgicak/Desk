@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { createPool } from "../pool.js";
 import { runMigrations } from "../migrate.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("db/bin/migrate");
 
 const pool = createPool();
 try {
   await runMigrations(pool);
-  console.log("Migrations applied successfully.");
+  log.info("Migrations applied successfully.");
 } catch (err) {
-  console.error("Migration failed:", err);
+  log.error({ err }, "Migration failed");
   process.exit(1);
 } finally {
   await pool.end();

@@ -12,6 +12,8 @@ import {
 } from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
 import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/routes/workspaces");
 
 const DEFAULT_AGENT_NAME = "Desk";
 const DEFAULT_AGENT_MODEL = "opencode/big-pickle";
@@ -153,8 +155,7 @@ export async function ensureHubsForAllUsers(pool: Pool, home: string): Promise<v
     try {
       await createHub(pool, home, row.id, row.username);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(
+      log.error(
         `ensureHubsForAllUsers: failed to create hub for user ${row.id} (${row.username}): ${(err as Error).message}`,
       );
     }

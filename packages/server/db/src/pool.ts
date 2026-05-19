@@ -1,5 +1,13 @@
 import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { withModule, type Logger } from "@agent-desk/shared";
+let slowQueryLogger: Logger = withModule("db/pool");
+
+/** Test-only: replace the slow-query logger with one whose destination
+ * is observable. Pass `null` to restore the default. */
+export function _setSlowQueryLoggerForTest(logger: Logger | null): void {
+  slowQueryLogger = logger ?? withModule("db/pool");
+}
 
 export interface PoolConfig {
   /**
@@ -29,22 +37,36 @@ interface QueryResult<T> {
 }
 
 /**
- * Threshold (ms) above which a query is logged as slow. Re-read per
- * call so tests can override mid-run via process.env. Zero or NaN
- * disables logging entirely; the default is 50ms which surfaces the
- * tail of queries worth a closer look without flooding normal traffic.
+ * Threshold (ms) above which a query is logged as slow. Cached at
+ * first read since execQuery is on the hot path and per-call
+ * `process.env` lookups add non-trivial cost. Zero or NaN disables
+ * logging entirely; the default is 50ms which surfaces the tail of
+ * queries worth a closer look without flooding normal traffic.
  *
  * Logged shape: a single line with the elapsed time, row count and
  * the (sanitized) SQL — the SQL is the prepared statement text, with
  * normalised whitespace, never the bind values, so user content never
  * leaks into the log. PII redaction is the job of the values; the SQL
  * itself is fixed text.
+ *
+ * Tests that need to flip the env mid-process call
+ * `resetSlowQueryThresholdCache()` so the next query re-reads.
  */
-function slowQueryThresholdMs(): number {
+let slowQueryThresholdMsCache: number | undefined;
+function resolveSlowQueryThresholdMs(): number {
   const raw = process.env.DESK_SLOW_QUERY_MS;
   if (raw === undefined) return 50;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function slowQueryThresholdMs(): number {
+  if (slowQueryThresholdMsCache === undefined) {
+    slowQueryThresholdMsCache = resolveSlowQueryThresholdMs();
+  }
+  return slowQueryThresholdMsCache;
+}
+export function resetSlowQueryThresholdCache(): void {
+  slowQueryThresholdMsCache = undefined;
 }
 
 function logSlowQuery(elapsedMs: number, sql: string, rowCount: number): void {
@@ -52,8 +74,7 @@ function logSlowQuery(elapsedMs: number, sql: string, rowCount: number): void {
   // grep-able. Truncated at 240 chars to avoid blowing up the log line
   // for unusually long generated SQL (search index rebuilds, etc.).
   const compact = sql.replace(/\s+/g, " ").trim().slice(0, 240);
-  // eslint-disable-next-line no-console
-  console.warn(`slow query: ${elapsedMs}ms rows=${rowCount} sql=${compact}`);
+  slowQueryLogger.warn(`slow query: ${elapsedMs}ms rows=${rowCount} sql=${compact}`);
 }
 
 function execQuery<T>(

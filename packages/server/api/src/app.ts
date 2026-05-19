@@ -16,7 +16,7 @@ import {
   type StorageContext,
 } from "@agent-desk/storage";
 import type { createRunManager } from "@agent-desk/scheduler";
-import { requireAuth, recordClientTimezone } from "./auth/middleware.js";
+import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
 import { authenticateSandboxToken } from "./auth/sandboxToken.js";
 import { verifySession } from "./auth/sessions.js";
@@ -44,6 +44,8 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
+import { withModule } from "@agent-desk/shared";
+const log = withModule("api/app");
 
 async function sandboxSessionRunsScheduledTask(pool: Pool, runId: string | undefined): Promise<boolean> {
   if (!runId) return false;
@@ -221,7 +223,14 @@ export function getAllowedWsOrigins(env: NodeJS.ProcessEnv = process.env): Set<s
 
 const ALLOWED_WS_ORIGINS = getAllowedWsOrigins();
 
-const LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+// Loopback origin matcher. Covers:
+// - localhost
+// - 127.0.0.0/8 (any 127.* host)
+// - [::1]              (IPv6 loopback, bracketed)
+// - [::ffff:127.x.x.x] (IPv4-mapped IPv6 loopback that some browsers
+//                       and Node versions report)
+const LOOPBACK_ORIGIN_PATTERN =
+  /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\]|\[::ffff:127(?:\.\d{1,3}){3}\])(:\d+)?$/;
 
 export function isWsOriginAllowed(
   origin: string | undefined,
@@ -480,10 +489,9 @@ export function createApp(opts: AppOptions): Server {
     try {
       await queries.chats.clearOpencodeSessionsForUser(pool, userId, workspaceId);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `clearOpencodeSessionsForUser failed (userId=${userId} workspaceId=${workspaceId ?? "*"}):`,
-        (err as Error).message ?? err,
+      log.warn(
+        { userId, workspaceId: workspaceId ?? "*", err: (err as Error).message ?? String(err) },
+        "clearOpencodeSessionsForUser failed",
       );
     }
     // Fire-and-forget. refreshSandboxConnections also calls
@@ -492,10 +500,9 @@ export function createApp(opts: AppOptions): Server {
     // unsafe to skip on either path.
     if (opts.refreshSandboxConnections) {
       void opts.refreshSandboxConnections(userId, workspaceId).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `refreshSandboxConnections failed (userId=${userId} workspaceId=${workspaceId ?? "*"}):`,
-          (err as Error).message ?? err,
+        log.warn(
+          { userId, workspaceId: workspaceId ?? "*", err: (err as Error).message ?? String(err) },
+          "refreshSandboxConnections failed",
         );
       });
     }
@@ -539,11 +546,13 @@ export function createApp(opts: AppOptions): Server {
           checks.db = "fail";
           allOk = false;
         }
-        // Vault subsystem readiness — the store always exists, but we
-        // can still ask it for status on a dummy user to confirm the
-        // file backend is reachable.
+        // Vault filesystem reachability — confirm the per-user KDBX
+        // directory is readable. status() for an arbitrary userId
+        // exercises the fs.access path inside VaultStore without
+        // requiring an actual user to exist; the response is the
+        // exists/locked tuple either way.
         try {
-          await vault.status("system");
+          await vault.status("readiness-probe-user");
           checks.vault = "ok";
         } catch {
           checks.vault = "fail";
@@ -600,6 +609,14 @@ export function createApp(opts: AppOptions): Server {
           }
         }
         userId = await requireAuth(pool, path, appsTokenHeader);
+        // First-run safety: if the user is still on the documented
+        // seed credential refuse every endpoint outside a small
+        // allowlist (see middleware.ts MUST_CHANGE_PW_ALLOWED). The
+        // SPA reads user.mustChangePassword from GET /me and routes
+        // to the password-change screen; this guard ensures other
+        // endpoints don't accept writes from a user who's still on
+        // the public default.
+        await enforceMustChangePassword(pool, userId, method, path);
       } catch (err) {
         if (err instanceof DeskError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
@@ -614,8 +631,7 @@ export function createApp(opts: AppOptions): Server {
       // non-fatal — never block a real request because the timezone write
       // hiccuped.
       recordClientTimezone(pool, userId, req.headers["x-client-timezone"]).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("recordClientTimezone failed:", err);
+        log.warn({ err }, "recordClientTimezone failed");
       });
 
       const segments = path.split("/").filter(Boolean);
@@ -636,7 +652,7 @@ export function createApp(opts: AppOptions): Server {
       } else if (err instanceof DeskError) {
         sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
       } else {
-        console.error("Unhandled error:", err);
+        log.error({ err }, "Unhandled error");
         sendJson(res, 500, { code: "INTERNAL", message: "Internal server error" });
       }
     }
@@ -741,7 +757,7 @@ export function createApp(opts: AppOptions): Server {
       removeConnection(userId, ws);
     });
     })().catch((err) => {
-      console.error("WebSocket upgrade failed:", err);
+      log.error("WebSocket upgrade failed:", err);
       try { socket.destroy(); } catch { /* ignore */ }
     });
   });
@@ -1297,6 +1313,21 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
     if (path === "/auth/auto-login" && method === "POST") {
+      // Auto-login mints a bearer for the seed user without credentials,
+      // so the call must originate from loopback. A request that reaches
+      // the API from a remote address either means the operator put
+      // desk-server on a public interface deliberately or a reverse-proxy
+      // forwarded it — both should fall back to the manual LoginScreen
+      // rather than minting a free token. DESK_TRUST_PROXY=1 disables
+      // the loopback check so an operator who really wants public auto-
+      // login can opt in explicitly.
+      const remote = req.socket?.remoteAddress ?? "";
+      const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+      if (!isLoopback && process.env.DESK_TRUST_PROXY !== "1") {
+        sendJson(res, 403, { code: "FORBIDDEN", message: "Auto-login restricted to loopback" });
+        return;
+      }
+      if (denyOverLimit(res, "auth.autoLogin", getClientIp(req))) return;
       const result = await authRoutes.handleAutoLogin(pool);
       sendJson(res, 200, result);
       return;
@@ -1720,10 +1751,9 @@ export function createApp(opts: AppOptions): Server {
         // Docker round-trip, and a transient engine hiccup must not
         // turn a successful agent update into a 500.
         void opts.refreshSandboxConnections(userId).catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `refreshSandboxConnections after agent ${segments[1]} model change failed:`,
-            (err as Error)?.message ?? err,
+          log.warn(
+            { agentId: segments[1], err: (err as Error)?.message ?? String(err) },
+            "refreshSandboxConnections after agent model change failed",
           );
         });
       }
@@ -1823,8 +1853,7 @@ export function createApp(opts: AppOptions): Server {
       const sendKind = (body as { kind?: string }).kind;
       if (!sendKind || sendKind === "chat") {
         await runManager.preemptStalledChatRun(segments[1]).catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.error(`preempt for chat ${segments[1]} failed:`, err);
+          log.error({ chatId: segments[1], err }, "preempt for chat failed");
         });
       }
 
@@ -1840,8 +1869,7 @@ export function createApp(opts: AppOptions): Server {
       // Default chat path: fire the pending trigger message and schedule
       // a summary refresh for this chat.
       runManager.fireMessage(triggerId).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`fireMessage for trigger ${triggerId} failed:`, err);
+        log.error(`fireMessage for trigger ${triggerId} failed:`, err);
       });
       runManager.scheduleSummary(segments[1]).catch(() => {});
 
@@ -1854,8 +1882,7 @@ export function createApp(opts: AppOptions): Server {
       const result = await chatRoutes.createThread(pool, segments[1], segments[3], body, emitEvent, { actorUserId: userId, userId });
 
       runManager.fireMessage(result.triggerId).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
+        log.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
       });
       runManager.scheduleSummary(result.threadChat.id).catch(() => {});
 

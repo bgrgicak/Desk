@@ -10,6 +10,12 @@ import type { IncomingMessage } from "node:http";
  * documented behaviour: an attacker who can already crash desk-server
  * has bigger problems than a bypassable rate limit, and operators who
  * use this expect the simple semantics.
+ *
+ * Memory safety: a periodic sweep evicts keys whose newest stamp is
+ * older than the bucket's window. Without it, an attacker spraying
+ * random IPs / users could grow the Map without bound. The sweep runs
+ * on a `setInterval` (unref'd) that's started at module load and is
+ * cheap — it iterates buckets, filters stamps, and deletes empty keys.
  */
 export interface RateLimitConfig {
   /** Window length in ms. */
@@ -67,6 +73,51 @@ export function consumeRateLimit(name: string, key: string, now: number = Date.n
   return { allowed: true, retryAfterMs: 0 };
 }
 
+/**
+ * Sweep evicts keys whose newest stamp is older than the bucket's
+ * window. Bounds Map growth — without this an attacker spraying random
+ * keys (e.g. spoofed X-Forwarded-For when DESK_TRUST_PROXY=1) could
+ * grow the limiter state without bound.
+ *
+ * Exported so tests can run it deterministically without waiting for
+ * the interval.
+ */
+export function sweepRateLimitState(now: number = Date.now()): void {
+  for (const bucket of buckets.values()) {
+    const cutoff = now - bucket.config.windowMs;
+    for (const [key, stamps] of bucket.hits) {
+      // The newest stamp is the last element (stamps are appended in
+      // chronological order). If even that is past the cutoff every
+      // stamp is stale; drop the whole key.
+      if (stamps.length === 0 || stamps[stamps.length - 1] <= cutoff) {
+        bucket.hits.delete(key);
+      } else if (stamps[0] <= cutoff) {
+        // Trim the leading stale stamps but keep the key.
+        bucket.hits.set(key, stamps.filter((t) => t > cutoff));
+      }
+    }
+  }
+}
+
+const SWEEP_INTERVAL_MS = 60_000;
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Starts the periodic sweep timer if not already running. Called once
+ * at module load; idempotent. Tests can call stop/start to take control. */
+export function startRateLimitSweeper(): void {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(() => sweepRateLimitState(), SWEEP_INTERVAL_MS);
+  sweepTimer.unref?.();
+}
+
+/** Stops the periodic sweeper. For tests + graceful shutdown. */
+export function stopRateLimitSweeper(): void {
+  if (sweepTimer) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
+  }
+}
+
 /** Test helper. Drops the in-memory state for one or every bucket. */
 export function clearRateLimits(name?: string): void {
   if (name) {
@@ -77,19 +128,34 @@ export function clearRateLimits(name?: string): void {
 }
 
 /**
- * Extracts a client IP suitable for keying a per-IP rate limit. Trusts
- * `X-Forwarded-For` because Desk typically sits behind the user's own
- * reverse proxy (caddy / nginx / Vite dev proxy / Electron's localhost
- * loopback). When no XFF is present, the socket's remote address is
- * returned. Empty string is returned as a sentinel — callers can opt
- * to skip rate-limiting or treat it as a single shared key.
+ * Returns the client IP used as the per-IP key in the limiter buckets.
+ *
+ * X-Forwarded-For is honoured *only* when DESK_TRUST_PROXY=1 is set.
+ * Without it, an attacker who can reach the API directly (or who can
+ * tunnel into a loopback port through a misconfigured Docker
+ * publication) could trivially bypass the per-IP cap by sending a
+ * fresh fake XFF on every request. Operators who deploy desk-server
+ * behind nginx/caddy/Vite-preview set the env var; the default loopback
+ * configuration uses req.socket.remoteAddress and ignores XFF entirely.
+ *
+ * When DESK_TRUST_PROXY=1, the first segment of XFF is used (RFC 7239:
+ * "client IP" comes first; the rest is the proxy chain). DESK doesn't
+ * support a configurable hop count — operators with multi-hop chains
+ * need to terminate XFF at the outermost trusted proxy.
+ *
+ * Empty string is returned as a sentinel when neither source produces
+ * an address; callers' rate-limit decision then treats every such
+ * caller as one shared bucket entry (intentional — never bypass the
+ * limit on missing IP).
  */
 export function getClientIp(req: IncomingMessage): string {
-  const xff = req.headers["x-forwarded-for"];
-  const xffStr = Array.isArray(xff) ? xff[0] : xff;
-  if (xffStr) {
-    const first = xffStr.split(",")[0]?.trim();
-    if (first) return first;
+  if (process.env.DESK_TRUST_PROXY === "1") {
+    const xff = req.headers["x-forwarded-for"];
+    const xffStr = Array.isArray(xff) ? xff[0] : xff;
+    if (xffStr) {
+      const first = xffStr.split(",")[0]?.trim();
+      if (first) return first;
+    }
   }
   return req.socket?.remoteAddress ?? "";
 }
@@ -98,6 +164,9 @@ export function getClientIp(req: IncomingMessage): string {
 
 defineRateLimit("auth.login", { windowMs: 60_000, max: 10 });        // 10/min/IP
 defineRateLimit("auth.signup", { windowMs: 60_000, max: 5 });        // 5/min/IP — abuse cap when DESK_ENABLE_SIGNUP is on
+defineRateLimit("auth.autoLogin", { windowMs: 60_000, max: 10 });    // 10/min/IP — auto-login when DESK_AUTO_LOGIN is on
 defineRateLimit("vault.unlock.ip", { windowMs: 60_000, max: 10 });   // 10/min/IP
 defineRateLimit("vault.unlock.user", { windowMs: 300_000, max: 20 }); // 20/5min/user
 defineRateLimit("me.password", { windowMs: 300_000, max: 10 });      // 10/5min/user
+
+startRateLimitSweeper();
