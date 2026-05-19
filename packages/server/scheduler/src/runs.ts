@@ -37,6 +37,29 @@ import {
   type ReflectFn,
   type WorkspaceReflectionInput,
 } from "./reflection.js";
+import {
+  buildOutputContent,
+  CHAT_SUMMARY_PROMPT,
+  computeNextRun,
+  deriveSummaryTextFromLog,
+  deriveTextFromLog,
+  envPositiveInt,
+  errorLogLines,
+  formatMessageForPrompt,
+  isNonEmpty,
+  isUnscheduledTask,
+  MAX_CONTEXT_BYTES,
+  messageTextForPrompt,
+  modelLimitsFromRef,
+  normalizeModelLimits,
+  outputContentTypeFor,
+  readLogEntries,
+  reflectionOutcomeText,
+  shouldIncludeInPromptContext,
+  summarizeMessagePreview,
+  summaryTriggerBudget,
+  type SummaryModelTokenLimits,
+} from "./runs-helpers.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("scheduler/runs");
 
@@ -67,12 +90,6 @@ export interface RunManagerOptions {
   home?: string;
   /** Test hook for model metadata used by the adaptive summary trigger. */
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
-}
-
-interface SummaryModelTokenLimits {
-  contextWindow: number;
-  inputLimit?: number;
-  outputLimit?: number;
 }
 
 /**
@@ -164,10 +181,6 @@ export function resolveModelForRun(
   return { runtimeModel: model, providerKeys, reason: null };
 }
 
-function isNonEmpty(v: string | undefined): boolean {
-  return typeof v === "string" && v.length > 0;
-}
-
 /**
  * @deprecated Kept for backwards-compatibility with existing tests
  * that import the old name. New code should use `resolveModelForRun`.
@@ -184,12 +197,6 @@ export function resolveOpenAiBillingSource(
 export interface FireMessageOptions {
   /** Manual task fires create a run now without consuming the task's schedule. */
   manual?: boolean;
-}
-
-function computeNextRun(cronExpr: string): string {
-  const next = new Cron(cronExpr).nextRun();
-  if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
-  return next.toISOString();
 }
 
 export function createRunManager(opts: RunManagerOptions) {
@@ -219,207 +226,6 @@ export function createRunManager(opts: RunManagerOptions) {
     await fsp.mkdir(dir, { recursive: true });
     return dir;
   }
-
-  /**
-   * Parses a per-message log file (`{kind}\t{payload}\n` per onLog call)
-   * into the tagged AgentLogEntry stream used by `events`-content
-   * messages. Each payload may itself contain embedded newlines (a single
-   * stdout write can cover multiple JSON events), so we split inside
-   * each payload before parsing.
-   */
-  async function readLogEntries(p: string): Promise<AgentLogEntry[]> {
-    let buf: string;
-    try {
-      buf = await fsp.readFile(p, "utf8");
-    } catch {
-      return [];
-    }
-    const entries: AgentLogEntry[] = [];
-    for (const rawLine of buf.split("\n")) {
-      if (!rawLine) continue;
-      const tab = rawLine.indexOf("\t");
-      if (tab <= 0) continue;
-      const kind = rawLine.slice(0, tab);
-      const payload = rawLine.slice(tab + 1);
-      for (const line of payload.split("\n")) {
-        if (line === "") continue;
-        if (kind === "stderr") {
-          entries.push({ kind: "stderr", line });
-          continue;
-        }
-        // stdout / event: attempt to parse as JSON and validate.
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          entries.push({ kind: "unparsed", line });
-          continue;
-        }
-        const validated = AgentEventSchema.safeParse(parsed);
-        if (validated.success) {
-          entries.push({ kind: "event", event: validated.data });
-        } else {
-          entries.push({ kind: "unparsed", line });
-        }
-      }
-    }
-    return entries;
-  }
-
-  /** Concatenates text from `text`-type agent events; falls back to any
-   * `unparsed` lines so plain-string test drivers still produce output. */
-  function deriveTextFromLog(entries: AgentLogEntry[]): string {
-    const parts: string[] = [];
-    let sawEvent = false;
-    const hiddenReasoningTextIds = reasoningPartIds(entries);
-    for (const e of entries) {
-      if (e.kind === "event") {
-        sawEvent = true;
-        if (e.event.type === "text") {
-          const id = eventPartId(e.event);
-          if (id && hiddenReasoningTextIds.has(id)) continue;
-          const t = e.event.part?.text;
-          if (typeof t === "string") parts.push(t);
-        }
-      }
-    }
-    if (sawEvent) return parts.join("").trim();
-    // No structured events — fall back to unparsed stdout lines.
-    return entries
-      .filter((e) => e.kind === "unparsed")
-      .map((e) => (e as { line: string }).line)
-      .join("\n")
-      .trim();
-  }
-
-  /**
-   * Summaries should be a clean final markdown body. If the model used tools, keep
-   * the final text part instead of concatenating planning chatter with the final
-   * answer. Current opencode streams that final part as many text deltas, so
-   * reconstruct chunks that share a part/message id.
-   */
-  function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
-    let sawEvent = false;
-    let currentPartKey: string | null = null;
-    let currentPartText = "";
-    const hiddenReasoningTextIds = reasoningPartIds(entries);
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e.kind !== "event") continue;
-      sawEvent = true;
-      if (e.event.type === "text") {
-        const id = eventPartId(e.event);
-        if (id && hiddenReasoningTextIds.has(id)) continue;
-        const t = e.event.part?.text;
-        if (typeof t !== "string" || !t.trim()) continue;
-        const messageId = typeof e.event.part?.messageID === "string" ? e.event.part.messageID : undefined;
-        // Deltas from the same assistant text part carry the same part id. Older
-        // run-format fixtures sometimes omit ids, so make those individual parts
-        // to preserve the old "last text event wins" behavior after tool use.
-        const partKey = id ?? messageId ?? `event:${i}`;
-        if (partKey !== currentPartKey) {
-          currentPartKey = partKey;
-          currentPartText = t;
-        } else if (t.startsWith(currentPartText)) {
-          // A consolidated `message.part.updated` snapshot for a part may arrive
-          // after deltas. Replace accumulated chunks with the full snapshot rather
-          // than duplicating the response.
-          currentPartText = t;
-        } else {
-          currentPartText += t;
-        }
-      }
-    }
-    if (currentPartText) return currentPartText.trim();
-    if (sawEvent) return "";
-    return entries
-      .filter((e) => e.kind === "unparsed")
-      .map((e) => (e as { line: string }).line)
-      .join("\n")
-      .trim();
-  }
-
-  function reasoningPartIds(entries: AgentLogEntry[]): Set<string> {
-    const ids = new Set<string>();
-    for (const e of entries) {
-      if (e.kind !== "event" || e.event.type !== "reasoning") continue;
-      const id = eventPartId(e.event);
-      if (id) ids.add(id);
-    }
-    return ids;
-  }
-
-  function eventPartId(event: AgentEvent): string | undefined {
-    const id = event.part?.id;
-    return typeof id === "string" ? id : undefined;
-  }
-
-  const CHAT_SUMMARY_PROMPT = [
-    "Refresh this chat's running summary.",
-    "Return only the final markdown body; do not create files, write artifacts, or attach artifacts.",
-    "Use the chat-summary format described in the agent instructions.",
-  ].join("\n");
-
-  function messageTextForPrompt(message: Message): string | null {
-    const content = message.content;
-    switch (content.type) {
-      case "text":
-        return content.text;
-      case "artifactRef":
-        return `Attached artifact: ${content.name ?? content.path} (${content.path})`;
-      case "summary":
-        return content.body;
-      case "events":
-        return deriveTextFromLog(content.log) || null;
-      default:
-        return null;
-    }
-  }
-
-  function formatMessageForPrompt(message: Message): { role: string; text: string } | null {
-    const text = messageTextForPrompt(message);
-    const attachmentText = (message.attachments ?? [])
-      .map((attachment) => `${attachment.name ?? path.basename(attachment.path)} (${attachment.path})`)
-      .join(", ");
-    const body = [text, attachmentText ? `Attachments: ${attachmentText}` : ""]
-      .filter((part): part is string => Boolean(part && part.trim()))
-      .join("\n");
-    if (!body.trim()) return null;
-    const role = message.content.type === "summary"
-      ? "Summary"
-      : message.role === "user"
-        ? "User"
-        : message.role === "agent"
-          ? "Agent"
-          : "System";
-    return {
-      role,
-      text: body.trim(),
-    };
-  }
-
-  function shouldIncludeInPromptContext(message: Message, taskRunParentIds: Set<string> = new Set()): boolean {
-    const type = message.content.type;
-    if (type === "agent_turn" || type === "summary_request" || type === "reflection_request") return false;
-    // Scheduled task definitions and their run children are operational records,
-    // not conversational turns. If included as normal Agent/User transcript text,
-    // a later agent run can misread an old task as a fresh instruction and
-    // schedule it again.
-    if (message.kind === "task" || message.kind === "task_run") return false;
-    // Task run output is stored as a normal agent chat child under the task_run
-    // row, so exclude those children too.
-    if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
-    if (message.state === "pending" || message.state === "running") return false;
-    return message.role === "user" || message.role === "agent" || type === "summary";
-  }
-
-  // Maximum UTF-8 bytes the transcript context may occupy before being
-  // trimmed. The full prompt (context + task) must fit inside the
-  // container's ARG_MAX (2 097 152 bytes on Linux). We reserve ~500 KB for
-  // the task text, wrapper headers, and other env vars, leaving 1.5 MB for
-  // the context. Oldest entries are dropped first so the most recent
-  // messages are always preserved.
-  const MAX_CONTEXT_BYTES = 1_500_000;
 
   async function buildChatTranscriptContext(
     currentMessage: Message,
@@ -515,33 +321,6 @@ export function createRunManager(opts: RunManagerOptions) {
 
 
 
-  function outputContentTypeFor(msg: Message): "summary" | "text" {
-    if (msg.kind === "summary") return "summary";
-    const c = msg.content as { type?: string };
-    return c?.type === "summary_request" ? "summary" : "text";
-  }
-
-  function buildOutputContent(
-    kind: "summary" | "text",
-    entries: AgentLogEntry[],
-  ): Message["content"] | null {
-    if (kind === "summary") {
-      const body = deriveSummaryTextFromLog(entries);
-      if (!body) return null;
-      return { type: "summary", body };
-    }
-    if (entries.length === 0) return null;
-    return { type: "events", log: entries };
-  }
-
-  function errorLogLines(err: unknown): string[] {
-    const message = err instanceof Error ? err.message : String(err);
-    return [
-      "Agent run failed before it could complete.",
-      message,
-    ].filter((line) => line.trim().length > 0);
-  }
-
   async function fireReflectionTask(
     msg: Message,
     workspaceId: string,
@@ -577,29 +356,6 @@ export function createRunManager(opts: RunManagerOptions) {
       reflectWorkspace: opts.reflectWorkspace ?? productionReflectWorkspace,
       reflectOnEmptyActivity: manual,
     });
-  }
-
-  // Convert the reflection journal into a brief task-run log entry. The prompt
-  // (`reflection-workspace.md`) is the source of truth for output shape — it
-  // asks the model for at most 3 plain bullets. We strip headings/leading
-  // bullet markers, drop blanks, and keep the first few lines verbatim so a
-  // bad model run is visible (and fixable in the prompt) instead of silently
-  // sanitised here.
-  function reflectionOutcomeText(journal: string | null): string {
-    if (journal === null) return "- No activity.";
-    if (journal.trim().length === 0) return "- Empty reflection.";
-
-    const bullets: string[] = [];
-    for (const rawLine of journal.split(/\r?\n/)) {
-      const line = rawLine
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/^[-*]\s+/, "")
-        .trim();
-      if (!line) continue;
-      bullets.push(`- ${line}`);
-      if (bullets.length >= 3) break;
-    }
-    return bullets.length > 0 ? bullets.join("\n") : "- Empty reflection.";
   }
 
   async function logReflectionOutcome(runId: string, journal: string | null, onLog: (evt: LogEvent) => void | Promise<void>): Promise<void> {
@@ -1064,14 +820,6 @@ export function createRunManager(opts: RunManagerOptions) {
    * and clear execute_at. Failed one-shot runs clear the missed occurrence but
    * keep the parent task pending so an error does not count as completion.
    */
-  function isUnscheduledTask(task: Message): boolean {
-    // Unscheduled tasks are kanban cards first and execution prompts second.
-    // A completed agent run is history on a task_run child; it must not
-    // silently move the parent card out of Todo/Active regardless of who
-    // authored the parent task.
-    return task.kind === "task" && !task.executeAt && !task.cron;
-  }
-
   async function afterTaskRun(
     task: Message,
     terminal: "succeeded" | "failed" | "cancelled",
@@ -1317,37 +1065,6 @@ export function createRunManager(opts: RunManagerOptions) {
     return summarizeMessagePreview(content.text);
   }
 
-  function summarizeMessagePreview(text: string): string | undefined {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    if (!normalized) return undefined;
-    return normalized.length > 96 ? `${normalized.slice(0, 95).trimEnd()}…` : normalized;
-  }
-
-  function envPositiveInt(name: string): number | null {
-    const fromEnv = Number.parseInt(
-      process.env[name] ?? "",
-      10,
-    );
-    return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : null;
-  }
-
-  function summaryTriggerFraction(): number {
-    const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
-    return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.15;
-  }
-
-  function summaryTriggerBudget(limits: SummaryModelTokenLimits): number {
-    const explicit = envPositiveInt("DESK_SUMMARY_TRIGGER_TOKENS");
-    if (explicit !== null) return explicit;
-
-    const min = envPositiveInt("DESK_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
-    const max = envPositiveInt("DESK_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
-    const effectiveInputWindow = limits.inputLimit ?? limits.contextWindow;
-    const fractional = Math.floor(effectiveInputWindow * summaryTriggerFraction());
-    const safeUpperBound = Math.floor(effectiveInputWindow * 0.6);
-    return Math.max(1, Math.min(Math.max(fractional, min), max, safeUpperBound));
-  }
-
   async function chatAgentModel(chatId: string): Promise<string> {
     const { rows } = await pool.query(
       `SELECT c.agent_id AS chat_agent_id
@@ -1358,33 +1075,6 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId as string);
     return agent?.model ?? "opencode/big-pickle";
-  }
-
-  function normalizeModelLimits(value: number | SummaryModelTokenLimits | null): SummaryModelTokenLimits | null {
-    if (typeof value === "number") {
-      return Number.isFinite(value) && value > 0 ? { contextWindow: value } : null;
-    }
-    if (value === null) return null;
-    if (!Number.isFinite(value.contextWindow) || value.contextWindow <= 0) return null;
-    return {
-      contextWindow: value.contextWindow,
-      ...(value.inputLimit !== undefined && Number.isFinite(value.inputLimit) && value.inputLimit > 0 ? { inputLimit: value.inputLimit } : {}),
-      ...(value.outputLimit !== undefined && Number.isFinite(value.outputLimit) && value.outputLimit > 0 ? { outputLimit: value.outputLimit } : {}),
-    };
-  }
-
-  function modelLimitsFromRef(model: {
-    id: string;
-    provider: string;
-    contextWindow?: number;
-    inputLimit?: number;
-    outputLimit?: number;
-  }): SummaryModelTokenLimits | null {
-    return normalizeModelLimits({
-      contextWindow: model.contextWindow ?? model.inputLimit ?? 0,
-      ...(model.inputLimit !== undefined ? { inputLimit: model.inputLimit } : {}),
-      ...(model.outputLimit !== undefined ? { outputLimit: model.outputLimit } : {}),
-    });
   }
 
   async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
