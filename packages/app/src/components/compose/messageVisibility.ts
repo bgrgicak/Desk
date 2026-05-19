@@ -33,12 +33,32 @@ function eventsHasUserText(log: AgentLogEntry[]): boolean {
   return false
 }
 
+const TOOL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'tool_use',
+  'tool-call',
+  'tool_call',
+  'tool-result',
+  'tool_result',
+])
+
+/** True when the log contains a real tool action — used to surface a
+ *  compact "what the agent did" activity line in normal mode (stderr-
+ *  only / reasoning-only logs stay developer-only). */
+export function eventsHasToolActivity(log: AgentLogEntry[]): boolean {
+  for (const entry of log) {
+    if (entry.kind === 'event' && TOOL_EVENT_TYPES.has(entry.event.type)) return true
+  }
+  return false
+}
+
 export function isRegularMessageVisible(m: ServerMessage): boolean {
   if (m.kind === 'task_run') return false
   if (m.content.type === 'summary') return false
   if (HIDDEN_FROM_STREAM.has(m.content.type)) return false
   if (TOOL_CONTENT_TYPES.has(m.content.type)) return false
-  if (m.content.type === 'events') return eventsHasUserText(m.content.log)
+  if (m.content.type === 'events') {
+    return eventsHasUserText(m.content.log) || eventsHasToolActivity(m.content.log)
+  }
   return true
 }
 

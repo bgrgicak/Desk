@@ -1,4 +1,4 @@
-import { ChevronsUp, ArrowUp, Minus, ArrowDown } from 'lucide-react'
+import { ChevronsUp, ArrowUp, Minus, ArrowDown, MessageCircle, MessageCircleQuestion, CircleDot, CheckCircle2, CalendarClock } from 'lucide-react'
 import type { Task } from '@/data/ui-types'
 
 export type Priority = NonNullable<Task['priority']>
@@ -6,14 +6,25 @@ export type Priority = NonNullable<Task['priority']>
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<Task['status'], { label: string; bg: string; text: string; dot: string }> = {
-  todo:      { label: 'To do',     bg: 'bg-slate-100',    text: 'text-slate-600',    dot: 'bg-slate-400'    },
-  active:    { label: 'Active',    bg: 'bg-blue-100',     text: 'text-blue-700',     dot: 'bg-blue-500'     },
-  complete:  { label: 'Complete',  bg: 'bg-emerald-100',  text: 'text-emerald-700',  dot: 'bg-emerald-500'  },
-  scheduled: { label: 'Scheduled', bg: 'bg-amber-100',    text: 'text-amber-700',    dot: 'bg-amber-500'    },
+  todo:        { label: 'To do',       bg: 'bg-slate-100',   text: 'text-slate-600',  dot: 'bg-slate-400'   },
+  active:      { label: 'Active',      bg: 'bg-blue-100',    text: 'text-blue-700',   dot: 'bg-blue-500'    },
+  needs_input: { label: 'Needs input', bg: 'bg-amber-100',   text: 'text-amber-700',  dot: 'bg-amber-500'   },
+  complete:    { label: 'Done',        bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+  scheduled:   { label: 'Scheduled',   bg: 'bg-violet-100',  text: 'text-violet-700', dot: 'bg-violet-500'  },
 }
 
 export const STATUS_LABELS: Record<Task['status'], string> = {
-  todo: 'To do', active: 'Active', complete: 'Complete', scheduled: 'Scheduled',
+  todo: 'To do', active: 'Active', needs_input: 'Needs input', complete: 'Done', scheduled: 'Scheduled',
+}
+
+/** The per-status dot colour (Tailwind bg-* class), shared with the
+ *  Tasks tab pills so a tab's dot matches its status badge. */
+export const STATUS_DOT: Record<Task['status'], string> = {
+  todo: STATUS_CONFIG.todo.dot,
+  active: STATUS_CONFIG.active.dot,
+  needs_input: STATUS_CONFIG.needs_input.dot,
+  complete: STATUS_CONFIG.complete.dot,
+  scheduled: STATUS_CONFIG.scheduled.dot,
 }
 
 export function StatusBadge({ status, small }: { status: Task['status']; small?: boolean }) {
@@ -26,6 +37,59 @@ export function StatusBadge({ status, small }: { status: Task['status']; small?:
     }`}>
       <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dot}`} />
       {label}
+    </span>
+  )
+}
+
+// ── Redesigned task-card pills (Figma 568-7586 / 580-9462) ────────────────────
+// The card shows up to two pills on the right: an optional "N unread"
+// pill (unread agent replies), then the single status pill — which is
+// "Needs input" *in place of* the normal state when the task is
+// awaiting the user, else blue "Open" / violet "Scheduled" / green
+// "Done". Open and Needs input are never shown together.
+
+function Pill({
+  icon: Icon,
+  label,
+  className,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  className: string
+}) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${className}`}>
+      <Icon className="h-3 w-3 shrink-0" />
+      {label}
+    </span>
+  )
+}
+
+export function TaskPills({
+  status,
+  unreadCount = 0,
+}: {
+  status: Task['status']
+  unreadCount?: number
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      {unreadCount > 0 && (
+        <Pill
+          icon={MessageCircle}
+          label={`${unreadCount} unread`}
+          className="border border-border bg-background text-foreground"
+        />
+      )}
+      {status === 'complete' ? (
+        <Pill icon={CheckCircle2} label="Done" className="bg-emerald-100 text-emerald-700" />
+      ) : status === 'needs_input' ? (
+        <Pill icon={MessageCircleQuestion} label="Needs input" className="bg-amber-100 text-amber-700" />
+      ) : status === 'scheduled' ? (
+        <Pill icon={CalendarClock} label="Scheduled" className="bg-violet-100 text-violet-700" />
+      ) : (
+        <Pill icon={CircleDot} label="Open" className="bg-blue-500 text-white" />
+      )}
     </span>
   )
 }

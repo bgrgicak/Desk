@@ -3,12 +3,14 @@ import { setupListeners } from "@reduxjs/toolkit/query";
 import { api } from "./api";
 import uiReducer from "./slices/uiSlice";
 import derivedReducer from "./slices/derivedSlice";
+import previewPanelReducer from "./slices/previewPanelSlice";
 import { wsMiddleware } from "./ws/middleware";
 
 export const store = configureStore({
   reducer: {
     ui: uiReducer,
     derived: derivedReducer,
+    previewPanel: previewPanelReducer,
     [api.reducerPath]: api.reducer,
   },
   middleware: (getDefault) =>

@@ -1,6 +1,17 @@
 import type { ContextItem, Folder } from "@/data/ui-types";
 import type { ServerAgent, ServerFile, ServerFolder } from "../types";
 
+/**
+ * A library entry targeted by a move-to-folder action. Shared by the
+ * Library list (bulk + single, files & folders) and the file-detail
+ * view (single file) so both drive the same `MoveToFolderDialog`.
+ */
+export type MoveTarget = {
+  path: string;
+  name: string;
+  kind: "item" | "folder";
+};
+
 export function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

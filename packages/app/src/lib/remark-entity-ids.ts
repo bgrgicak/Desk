@@ -1,14 +1,17 @@
 import { visit, SKIP } from 'unist-util-visit'
 import type { Root, Text, Link, InlineCode, Parent } from 'mdast'
 
-export type InlineEntityKind = 'chat' | 'workspace'
+export type InlineEntityKind = 'chat' | 'workspace' | 'task' | 'artifact' | 'file'
 
-const ENTITY_ID_RE = /(?<![A-Za-z0-9_-])(?:(cht|wks)_[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])/g
-const ENTITY_ID_ONLY_RE = /^(?:cht|wks)_[A-Za-z0-9_-]+$/
+const ENTITY_ID_RE = /(?<![A-Za-z0-9_-])(?:(cht|wks|tsk|art|fil)_[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])/g
+const ENTITY_ID_ONLY_RE = /^(?:cht|wks|tsk|art|fil)_[A-Za-z0-9_-]+$/
 
 function entityKind(id: string): InlineEntityKind | null {
   if (id.startsWith('cht_')) return 'chat'
   if (id.startsWith('wks_')) return 'workspace'
+  if (id.startsWith('tsk_')) return 'task'
+  if (id.startsWith('art_')) return 'artifact'
+  if (id.startsWith('fil_')) return 'file'
   return null
 }
 
