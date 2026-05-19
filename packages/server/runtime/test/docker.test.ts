@@ -5,6 +5,7 @@ import {
   killOpencodeDaemonsForOrphans,
   providerKeyEnv,
   providerKeyExecEnv,
+  waitForEntrypointReady,
 } from "../src/docker.js";
 import type { Engine, ExecHandle, ExecSpec, ContainerInfo } from "../src/engine.js";
 
@@ -220,5 +221,103 @@ describe("killOpencodeDaemonsForOrphans", () => {
     const allScripts = execCalls.map((c) => c.cmd.join(" ")).join("\n");
     expect(allScripts).toContain("opencode serve");
     expect(allScripts).toContain("opencode-serve.pid");
+  });
+});
+
+describe("waitForEntrypointReady", () => {
+  // Drive the container-gone fast-bail path. A live repro showed that
+  // when the sandbox container is removed mid-poll (drift recreate,
+  // reaper, parallel rm -f), every `docker exec` returns exit 1 with
+  // stderr "No such container: <id>". Without this fast bail, the loop
+  // hangs for the full 5 minutes before reporting a timeout — that's
+  // the wedge users were seeing in cht_*.
+
+  function engineWithExec(handler: (cmd: string[]) => { code: number; stderr?: string }): Engine {
+    return {
+      name: "docker",
+      inspect: async () => null,
+      imageId: async () => null,
+      imagePull: async () => {},
+      create: async () => "",
+      start: async () => {},
+      stop: async () => {},
+      update: async () => true,
+      remove: async () => {},
+      list: async () => [],
+      exec: async (spec: ExecSpec) => {
+        const { code, stderr: stderrText } = handler(spec.cmd);
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        // Defer the writes through setImmediate to mimic real-process
+        // ordering, but make wait() block on it so the caller sees the
+        // stderr chunk before reading the exit code.
+        const drained = new Promise<void>((resolve) => {
+          setImmediate(() => {
+            if (stderrText) stderr.write(stderrText);
+            stdout.end();
+            stderr.end();
+            resolve();
+          });
+        });
+        return {
+          stdout,
+          stderr,
+          wait: async () => {
+            await drained;
+            return code;
+          },
+          cancel: async () => {},
+        } as ExecHandle;
+      },
+      execDetached: async () => {},
+      port: async () => null,
+      top: async () => [],
+      isRootless: async () => false,
+    };
+  }
+
+  it("returns once the entrypoint marker exists", async () => {
+    const engine = engineWithExec(() => ({ code: 0 }));
+    await expect(waitForEntrypointReady(engine, "id-ok", 5_000)).resolves.toBeUndefined();
+  });
+
+  it("bails immediately when stderr says the container is gone", async () => {
+    let calls = 0;
+    const engine = engineWithExec(() => {
+      calls++;
+      return {
+        code: 1,
+        stderr: "Error response from daemon: No such container: 4118b44d870701f0",
+      };
+    });
+    const start = Date.now();
+    await expect(waitForEntrypointReady(engine, "4118b44d", 60_000)).rejects.toThrow(
+      /no longer present/i,
+    );
+    const elapsed = Date.now() - start;
+    // Bail on the first poll — well under the 60s test ceiling.
+    expect(elapsed).toBeLessThan(2_000);
+    expect(calls).toBe(1);
+  });
+
+  it("keeps polling on non-container-gone errors until ready", async () => {
+    let calls = 0;
+    const engine = engineWithExec(() => {
+      calls++;
+      // First two polls: marker missing (entrypoint script still
+      // running). Third poll: marker present.
+      return calls < 3 ? { code: 1, stderr: "" } : { code: 0 };
+    });
+    await expect(waitForEntrypointReady(engine, "id-warming-up", 5_000)).resolves.toBeUndefined();
+    expect(calls).toBe(3);
+  });
+
+  it("throws the timeout error if neither ready nor gone within budget", async () => {
+    const engine = engineWithExec(() => ({ code: 1, stderr: "permission denied" }));
+    const start = Date.now();
+    await expect(waitForEntrypointReady(engine, "id-stuck", 800)).rejects.toThrow(
+      /did not become ready/i,
+    );
+    expect(Date.now() - start).toBeGreaterThanOrEqual(800);
   });
 });

@@ -127,13 +127,39 @@ export function installWsUpgradeHandler(server: Server, pool: Pool): void {
 
       addConnection(userId, ws);
 
+      // Keepalive ping. Browser WebSocket auto-responds to PING frames
+      // with PONG (RFC 6455 §5.5.2), so server-initiated pings are
+      // enough to keep the connection above proxy idle timeouts. Live
+      // repro confirmed nginx (default proxy_read_timeout=60s) drops an
+      // idle WS at exactly t=60s; 25s leaves a comfortable margin under
+      // any reasonable upstream timeout. The interval is unref()d so
+      // it doesn't block process shutdown.
+      // `DESK_WS_PING_INTERVAL_MS` overrides the default — tests use a
+      // much shorter value so they don't sit through 25 s per assertion.
+      const wsPingIntervalMs = Math.max(
+        100,
+        parseInt(process.env.DESK_WS_PING_INTERVAL_MS ?? "25000", 10),
+      );
+      const pingFrame = Buffer.from([0x89, 0x00]); // FIN + ping opcode, zero-length payload
+      const pingTimer = setInterval(() => {
+        if (ws.readyState !== 1) return;
+        try {
+          socket.write(pingFrame);
+        } catch {
+          // socket already dead — close handler will clean up the registry
+        }
+      }, wsPingIntervalMs);
+      pingTimer.unref();
+
       socket.on("close", () => {
         ws.readyState = 3; // CLOSED
+        clearInterval(pingTimer);
         removeConnection(userId, ws);
       });
 
       socket.on("error", () => {
         ws.readyState = 3;
+        clearInterval(pingTimer);
         removeConnection(userId, ws);
       });
     })().catch((err) => {

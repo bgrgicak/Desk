@@ -257,3 +257,68 @@ describe("WebSocket upgrade — Origin allowlist (CSWSH mitigation)", () => {
     expect(isWsOriginAllowed("http://desk.test")).toBe(true);
   });
 });
+
+describe("WebSocket keepalive — server PING frames", () => {
+  // Live repro confirmed nginx (default proxy_read_timeout=60s) drops an
+  // idle WS at exactly t=60s. Browser WebSocket API doesn't expose
+  // sending pings from JS but auto-responds to inbound pings, so the
+  // server-driven heartbeat is the durable fix. This test reads raw
+  // bytes off the socket to verify ping frames (opcode 0x9) actually
+  // arrive — without it, a regression that silently dropped the timer
+  // would only show up as another round of "chats fail after a while"
+  // reports.
+  //
+  // Stands up a dedicated app with DESK_WS_PING_INTERVAL_MS=200 so the
+  // assertion finishes in well under a second rather than waiting 25 s
+  // for the production cadence.
+  let pingServer: http.Server;
+  let pingPort: number;
+  let pingUserId: string;
+  beforeAll(async () => {
+    process.env.DESK_WS_PING_INTERVAL_MS = "200";
+    pingUserId = generateId("user");
+    await queries.users.insert(pool, {
+      id: pingUserId,
+      username: "ws-ping-test",
+      passwordHash: "$2b$10$placeholder",
+      email: "ws-ping@example.com",
+    });
+    pingServer = createApp({
+      pool,
+      storage: { pool, home },
+      runManager: createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) }),
+      broadcastUserId: pingUserId,
+    });
+    await new Promise<void>((resolve) => pingServer.listen(0, "127.0.0.1", resolve));
+    pingPort = (pingServer.address() as net.AddressInfo).port;
+  });
+  afterAll(() => {
+    delete process.env.DESK_WS_PING_INTERVAL_MS;
+    if (pingServer) pingServer.unref();
+  });
+
+  it("emits PING frames on the configured interval to keep the connection alive", async () => {
+    const token = await issueSession(pool, pingUserId);
+    const { socket } = await rawUpgrade(pingPort, `/ws?token=${token}`, "http://localhost:5173");
+    try {
+      const pingCount = await new Promise<number>((resolve, reject) => {
+        let pings = 0;
+        const timer = setTimeout(() => resolve(pings), 1500);
+        socket.on("data", (chunk: Buffer) => {
+          // First byte of a ping frame: FIN(1) + RSV(0) + opcode 0x9 = 0x89
+          for (const b of chunk) if (b === 0x89) pings++;
+          if (pings >= 3) {
+            clearTimeout(timer);
+            resolve(pings);
+          }
+        });
+        socket.on("error", reject);
+      });
+      // With a 200 ms interval and a 1.5 s window we expect ~7 pings;
+      // ≥ 3 confirms the timer is firing repeatedly (not just once).
+      expect(pingCount).toBeGreaterThanOrEqual(3);
+    } finally {
+      socket.destroy();
+    }
+  }, 5_000);
+});

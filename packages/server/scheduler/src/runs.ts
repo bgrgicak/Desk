@@ -282,6 +282,30 @@ export function createRunManager(opts: RunManagerOptions) {
    * or another fire is already in flight (the task lock declined us).
    */
   async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
+    try {
+      return await fireMessageImpl(messageId, fireOptions);
+    } catch (err) {
+      // The inner fireMessageImpl has its own big try/catch that
+      // routes most failures through finalizeExecution + a failed
+      // child message, so the UI sees them. This outer catch covers
+      // pre-claim failures (findById/claimPending throwing a DB
+      // error before the inner try/catch is entered): without it,
+      // the message would be stuck in `pending`/`running` forever
+      // and the user sees an HTTP 201 but no chat feedback. Mark it
+      // failed and emit so the FailedRunBanner ("Try again") renders.
+      log.error({ messageId, err }, "fireMessage outer failure — marking message failed");
+      try {
+        await queries.messages.finalizeExecution(pool, messageId, "failed");
+        const failed = await queries.messages.findById(pool, messageId);
+        if (failed) emit({ type: "message.updated", payload: failed });
+      } catch (fallbackErr) {
+        log.error({ messageId, fallbackErr }, "fireMessage failure-finalize also threw");
+      }
+      throw err;
+    }
+  }
+
+  async function fireMessageImpl(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
     const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
@@ -395,7 +419,14 @@ export function createRunManager(opts: RunManagerOptions) {
 
       const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
       logFile = path.join(logDir, `${runId}.log`);
-      logStream = fs.createWriteStream(logFile, { flags: "a" });
+      // `flags: "w"` so a manual re-fire of a previously-failed
+      // chat/summary message starts with a clean log instead of
+      // appending the prior failure's stderr to the new attempt's
+      // event stream. (Task fires use a fresh task_run child runId so
+      // their log is always brand-new; "w" is equivalent to "a" in
+      // that case.) The resource-retry path already truncates
+      // explicitly mid-fire; this matches that behaviour at the start.
+      logStream = fs.createWriteStream(logFile, { flags: "w" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {

@@ -31,6 +31,13 @@ let runManager: ReturnType<typeof createRunManager>;
 let dbPath: string;
 
 beforeAll(async () => {
+  // Every userRequest() in this suite does a fresh /auth/login, and the
+  // auth.login bucket is capped at 10/min/IP. The test fires well over
+  // that, so the run hits 401 from the rate limiter rather than the
+  // assertion-meaningful status. The escape hatch is the documented
+  // test affordance — production never sets it (see rateLimit.ts:56).
+  process.env.DESK_RATE_LIMIT_DISABLED = "1";
+
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
@@ -77,6 +84,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.DESK_RATE_LIMIT_DISABLED;
   await clearSessions(pool);
   clearConnections();
   server?.close();
