@@ -21,16 +21,16 @@ import {
   execRun as runtimeExecRun,
   classifyResourceError,
   growSandboxForResourceError,
-  reapIdleSandboxes,
-  softReapIdleDaemons,
   cancelRun as runtimeCancelRun,
-  estimateMessagesTokens,
-  listModels,
   productionReflectWorkspace,
   resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
 } from "@agent-desk/runtime";
+import * as sandboxSweep from "./runs-sandbox-sweep.js";
+import { createSummaryScheduler } from "./runs-summary.js";
+import { derivePromptInputs as derivePromptInputsExtern } from "./runs-prompt.js";
+import * as lifecycle from "./runs-lifecycle.js";
 import {
   runWorkspaceReflection,
   yesterdayDateLocal,
@@ -39,25 +39,14 @@ import {
 } from "./reflection.js";
 import {
   buildOutputContent,
-  CHAT_SUMMARY_PROMPT,
   computeNextRun,
   deriveSummaryTextFromLog,
-  deriveTextFromLog,
-  envPositiveInt,
   errorLogLines,
-  formatMessageForPrompt,
   isNonEmpty,
   isUnscheduledTask,
-  MAX_CONTEXT_BYTES,
-  messageTextForPrompt,
-  modelLimitsFromRef,
-  normalizeModelLimits,
   outputContentTypeFor,
   readLogEntries,
   reflectionOutcomeText,
-  shouldIncludeInPromptContext,
-  summarizeMessagePreview,
-  summaryTriggerBudget,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
 import { withModule } from "@agent-desk/shared/logger";
@@ -203,7 +192,6 @@ export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
   const home = opts.home ?? resolveDeskHome();
   const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
-  const modelContextCache = new Map<string, { expiresAt: number; values: Map<string, SummaryModelTokenLimits> }>();
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
@@ -227,99 +215,7 @@ export function createRunManager(opts: RunManagerOptions) {
     return dir;
   }
 
-  async function buildChatTranscriptContext(
-    currentMessage: Message,
-    currentUserMessageId?: string,
-  ): Promise<string> {
-    const items = await queries.messages.listAgentContextByChat(pool, currentMessage.chatId);
-    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
-    const entries = items
-      .filter((message) => message.id !== currentMessage.id && message.id !== currentUserMessageId)
-      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
-      .map(formatMessageForPrompt)
-      .filter((entry): entry is { role: string; text: string } => entry !== null);
-
-    // Trim from oldest → newest until the serialised context fits.
-    const sep = "\n\n---\n\n";
-    let bytes = 0;
-    let trimFrom = 0; // first index to keep
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const chunk = `${entries[i].role}:\n${entries[i].text}`;
-      bytes += Buffer.byteLength(chunk, "utf8") + (i < entries.length - 1 ? Buffer.byteLength(sep, "utf8") : 0);
-      if (bytes > MAX_CONTEXT_BYTES) {
-        trimFrom = i + 1;
-        break;
-      }
-    }
-    const kept = trimFrom > 0 ? entries.slice(trimFrom) : entries;
-    const parts = kept.map((entry) => `${entry.role}:\n${entry.text}`);
-    if (trimFrom > 0) {
-      parts.unshift(`System:\n[Earlier context omitted — transcript exceeded size limit. ${trimFrom} older message(s) not shown.]`);
-    }
-    return parts.join(sep);
-  }
-
-  async function withChatTranscriptContext(
-    currentMessage: Message,
-    prompt: string,
-    currentUserMessageId?: string,
-  ): Promise<string> {
-    const context = await buildChatTranscriptContext(currentMessage, currentUserMessageId);
-    if (!context) return prompt;
-    return [
-      "Chat transcript context (oldest to newest; newest summary, if any, is the compaction boundary):",
-      context,
-      "",
-      "Current task:",
-      prompt,
-    ].join("\n");
-  }
-
-  /**
-   * Returns the prompt the agent will receive plus any workspace-relative
-   * attachment paths to forward to opencode via `--file`. We don't inline
-   * paths into the prompt: opencode surfaces the file content directly,
-   * and the picker-side path may live anywhere in the workspace, not just
-   * `~/.chats/.../attachments/`.
-   */
-  async function derivePromptInputs(
-    msg: Message,
-  ): Promise<{ prompt: string; attachments?: string[] }> {
-    // Self-firing kinds (task / summary) carry the prompt directly on the
-    // message — no parent lookup needed.
-    if (msg.kind === "summary") {
-      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
-    }
-    if (msg.kind === "task") {
-      const c = msg.content as { type?: string; text?: string };
-      const text = c?.type === "text" && typeof c.text === "string" ? c.text : "";
-      const refs = msg.attachments ?? [];
-      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: await withChatTranscriptContext(msg, text), attachments };
-    }
-    if (msg.content.type === "reflection_request") {
-      return { prompt: "Run the daily workspace memory reflection." };
-    }
-    const c = msg.content as { type?: string; text?: string; body?: string; userMessageId?: string };
-    if (c?.type === "text" && typeof c.text === "string") {
-      return { prompt: await withChatTranscriptContext(msg, c.text) };
-    }
-    if (c?.type === "summary_request") {
-      return { prompt: await withChatTranscriptContext(msg, CHAT_SUMMARY_PROMPT) };
-    }
-    if (c?.type === "agent_turn" && typeof c.userMessageId === "string") {
-      const userMsg = await queries.messages.findById(pool, c.userMessageId);
-      const inner = userMsg?.content as { type?: string; text?: string } | undefined;
-      const text = inner?.type === "text" && typeof inner.text === "string" ? inner.text : "";
-      const refs = userMsg?.attachments ?? [];
-      const attachments = refs.length > 0 ? refs.map((a) => a.path) : undefined;
-      return { prompt: await withChatTranscriptContext(msg, text, c.userMessageId), attachments };
-    }
-    const fallback = JSON.stringify(msg.content);
-    return { prompt: await withChatTranscriptContext(msg, fallback) };
-  }
-
-
+  const derivePromptInputs = (msg: Message) => derivePromptInputsExtern(pool, msg);
 
   async function fireReflectionTask(
     msg: Message,
@@ -896,91 +792,13 @@ export function createRunManager(opts: RunManagerOptions) {
     return timer;
   }
 
-  /**
-   * Removes sandbox containers for workspaces that have had no
-   * `state='running'` rows and no message activity in the last
-   * `idleMs`. Next fire for that workspace builds a fresh container
-   * at the baseline 512 / 512 MB — so this also serves as the
-   * "scale back to baseline" mechanism, free of charge.
-   *
-   * One SQL query, one `docker ps`, then one `docker rm -f` per
-   * idle workspace. Cheap enough to live alongside the existing
-   * 60 s `pollTimer` without measurable cost.
-   */
-  /**
-   * Returns the set of workspace ids that should keep their sandbox
-   * alive: any workspace with a `state='running'` row, or any message
-   * whose `updated_at` is within `idleMs` of now. Exposed separately
-   * from `sweepIdleSandboxes` so tests can pin down the SQL-side
-   * decision directly without needing a real container engine.
-   */
-  async function getActiveWorkspaceIds(idleMs: number): Promise<Set<string>> {
-    const cutoff = new Date(Date.now() - idleMs).toISOString();
-    // Workspaces with *any* recent activity — running rows, just-fired
-    // pending rows, or just-edited rows — count as active and keep their
-    // sandbox. Joining through chats so we get workspace_id directly.
-    const { rows } = await pool.query<{ workspace_id: string }>(
-      `SELECT DISTINCT c.workspace_id
-       FROM messages m JOIN chats c ON c.id = m.chat_id
-       WHERE m.state = 'running'
-          OR m.updated_at >= ?`,
-      [cutoff],
-    );
-    return new Set(rows.map((r) => r.workspace_id));
-  }
-
-  async function sweepIdleSandboxes(
-    idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
-  ): Promise<string[]> {
-    const active = await getActiveWorkspaceIds(idleMs);
-    // Pass `idleMs` as the per-container minimum age so a brand-new
-    // container created in the window between the SQL query and the
-    // `docker ps` can't be reaped — the very next sweep will see its
-    // first message row and treat the workspace as active.
-    return reapIdleSandboxes(active, idleMs);
-  }
-
-  function startIdleSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
-    const timer = setInterval(() => {
-      void sweepIdleSandboxes().catch((err) => {
-        log.warn("idle sandbox sweep failed:", err);
-      });
-    }, intervalMs);
-    timer.unref();
-    return timer;
-  }
-
-  /**
-   * Soft-tier idle sweep: kill the opencode-serve daemon inside
-   * sandbox containers whose workspace has been quiet for
-   * `softIdleMs` (default 10 min), but keep the container running.
-   * Saves ~400 MB of warm-daemon RSS per sandbox; the next message
-   * pays only the ~2-5 s daemon respawn cost, not a full container
-   * cold-start.
-   *
-   * Distinct from `sweepIdleSandboxes`: that one nukes the container
-   * after a longer quiet window (default 30 min) and is the
-   * scale-back-to-baseline mechanism.
-   */
-  async function sweepIdleDaemons(
-    softIdleMs: number = parseInt(
-      process.env.DESK_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
-      10,
-    ),
-  ): Promise<string[]> {
-    const active = await getActiveWorkspaceIds(softIdleMs);
-    return softReapIdleDaemons(active, softIdleMs);
-  }
-
-  function startSoftIdleDaemonSweeper(intervalMs: number = 60_000): NodeJS.Timeout {
-    const timer = setInterval(() => {
-      void sweepIdleDaemons().catch((err) => {
-        log.warn("soft daemon sweep failed:", err);
-      });
-    }, intervalMs);
-    timer.unref();
-    return timer;
-  }
+  // Sandbox sweep functions live in runs-sandbox-sweep.ts. Bind them to
+  // the closure's pool so callers can use them without re-passing.
+  const getActiveWorkspaceIds = (idleMs: number) => sandboxSweep.getActiveWorkspaceIds(pool, idleMs);
+  const sweepIdleSandboxes = (idleMs?: number) => sandboxSweep.sweepIdleSandboxes(pool, idleMs);
+  const startIdleSweeper = (intervalMs?: number) => sandboxSweep.startIdleSweeper(pool, intervalMs);
+  const sweepIdleDaemons = (softIdleMs?: number) => sandboxSweep.sweepIdleDaemons(pool, softIdleMs);
+  const startSoftIdleDaemonSweeper = (intervalMs?: number) => sandboxSweep.startSoftIdleDaemonSweeper(pool, intervalMs);
   // Note: an earlier draft of this file shipped a stale-run watchdog that
   // cancelled any `state='running'` row whose `started_at` was older than
   // 30 minutes. That was the wrong shape of fix — a single task should be
@@ -1008,156 +826,19 @@ export function createRunManager(opts: RunManagerOptions) {
    * local models keep enough working context and frontier models do not wait
    * until chats become unwieldy. Env overrides remain available for ops.
    */
-  async function scheduleSummary(chatId: string): Promise<void> {
-    await cancelSummaryForChat(chatId);
-    const urgent = await isSummaryBudgetExceeded(chatId);
-    const summaryContext = await summaryRequestDisplayContext(chatId);
-    const executeAt = urgent
-      ? new Date().toISOString()
-      : new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    const messageId = generateId("message");
-    await queries.messages.insert(pool, {
-      id: messageId,
-      chatId,
-      role: "system",
-      content: {
-        type: "summary_request",
-        ...(summaryContext.chatTitle ? { chatTitle: summaryContext.chatTitle } : {}),
-        ...(summaryContext.messagePreview ? { messagePreview: summaryContext.messagePreview } : {}),
-      },
-      state: "pending",
-      kind: "summary",
-      title: summaryContext.title,
-      executeAt,
-    });
-  }
-
-  async function summaryRequestDisplayContext(chatId: string): Promise<{
-    chatTitle?: string;
-    messagePreview?: string;
-    title: string;
-  }> {
-    const chat = await queries.chats.findById(pool, chatId);
-    const chatTitle = chat?.title?.trim() || undefined;
-    const messagePreview = await latestUserMessagePreview(chatId);
-    const titleParts = [chatTitle, messagePreview].filter((part): part is string => !!part);
-    return {
-      chatTitle,
-      messagePreview,
-      title: titleParts.length > 0 ? `Summarize - ${titleParts.join(": ")}` : "Summarize chat",
-    };
-  }
-
-  async function latestUserMessagePreview(chatId: string): Promise<string | undefined> {
-    const { rows } = await pool.query(
-      `SELECT content FROM messages
-       WHERE chat_id = ?
-         AND role = 'user'
-         AND json_extract(content, '$.type') = 'text'
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1`,
-      [chatId],
-    );
-    if (rows.length === 0) return undefined;
-    const raw = rows[0].content;
-    const content = typeof raw === "string" ? JSON.parse(raw) as { text?: unknown } : raw as { text?: unknown };
-    if (typeof content.text !== "string") return undefined;
-    return summarizeMessagePreview(content.text);
-  }
-
-  async function chatAgentModel(chatId: string): Promise<string> {
-    const { rows } = await pool.query(
-      `SELECT c.agent_id AS chat_agent_id
-       FROM chats c
-       WHERE c.id = ?`,
-      [chatId],
-    );
-    const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
-    const agent = await queries.agents.findById(pool, agentId as string);
-    return agent?.model ?? "opencode/big-pickle";
-  }
-
-  async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
-    const fromEnv = envPositiveInt("DESK_SUMMARY_MODEL_CONTEXT_WINDOW");
-    if (fromEnv !== null) return { contextWindow: fromEnv };
-
-    if (opts.summaryModelContextWindowFn) {
-      const resolved = normalizeModelLimits(await opts.summaryModelContextWindowFn(chatId, modelId).catch(() => null));
-      if (resolved !== null) return resolved;
-    }
-
-    const { rows } = await pool.query(
-      `SELECT w.id AS workspace_id, w.path AS workspace_path, w.user_id AS user_id
-       FROM chats c
-       JOIN workspaces w ON w.id = c.workspace_id
-       WHERE c.id = ?`,
-      [chatId],
-    );
-    const row = rows[0];
-    const workspaceId = row?.workspace_id as string | undefined;
-    const workspaceSlug = row?.workspace_path as string | undefined;
-    if (workspaceId && workspaceSlug) {
-      const cacheKey = `${workspaceId}:${row?.user_id ?? ""}`;
-      const cached = modelContextCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        const value = cached.values.get(modelId);
-        if (value !== undefined) return value;
-      }
-      try {
-        const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
-        const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
-        const models = await listModels(workspaceId, workspaceSlug, {
-          providerKeys,
-          env: extraEnv,
-          timeoutMs: 5_000,
-        });
-        const values = new Map<string, SummaryModelTokenLimits>();
-        for (const model of models) {
-          const limits = modelLimitsFromRef(model);
-          if (limits !== null) values.set(model.id, limits);
-        }
-        modelContextCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, values });
-        const value = values.get(modelId);
-        if (value !== undefined) return value;
-      } catch {
-        // Model metadata is best-effort. Scheduling must never fail because the
-        // sandbox or provider key lookup is temporarily unavailable.
-      }
-    }
-
-    // Conservative fallback for unknown/local models when OpenCode metadata is
-    // unavailable: enough room for a useful transcript, much lower than old 60K.
-    return { contextWindow: 60_000 };
-  }
-
-  async function isSummaryBudgetExceeded(chatId: string): Promise<boolean> {
-    const items = await queries.messages.listAgentContextByChat(pool, chatId);
-    const taskRunParentIds = new Set(items.filter((message) => message.kind === "task_run").map((message) => message.id));
-    const tokenized = items
-      .filter((message) => shouldIncludeInPromptContext(message, taskRunParentIds))
-      .map((m) => {
-        const formatted = formatMessageForPrompt(m);
-        return formatted ? { role: formatted.role, text: formatted.text } : null;
-      })
-      .filter((m): m is { role: string; text: string } => m !== null);
-    const used = estimateMessagesTokens(tokenized);
-    const modelId = await chatAgentModel(chatId);
-    const limits = await summaryModelTokenLimits(chatId, modelId);
-    const budget = summaryTriggerBudget(limits);
-    return used >= budget;
-  }
-
-  async function cancelSummaryForChat(chatId: string): Promise<void> {
-    await pool.query(
-      `DELETE FROM messages WHERE chat_id = ? AND kind = 'summary' AND state = 'pending'`,
-      [chatId],
-    );
-  }
-
-  async function cancelSummary(chatId: string): Promise<void> {
-    await cancelSummaryForChat(chatId);
-  }
+  // Summary scheduling lives in runs-summary.ts. The factory owns the
+  // per-chat model-context cache; we just hold its bound methods here so
+  // the rest of the closure (and the public return surface) can call
+  // them under their old names.
+  const summaryScheduler = createSummaryScheduler({
+    pool,
+    resolveProviderKeys,
+    summaryModelContextWindowFn: opts.summaryModelContextWindowFn,
+    getDefaultAgentId,
+  });
+  const scheduleSummary = summaryScheduler.scheduleSummary;
+  const cancelSummary = summaryScheduler.cancelSummary;
+  const cancelSummaryForChat = summaryScheduler.cancelSummaryForChat;
 
   /** Cancels an in-flight exec: kills the opencode child if possible. */
   async function cancelRun(messageId: string): Promise<void> {
@@ -1248,64 +929,10 @@ export function createRunManager(opts: RunManagerOptions) {
     return { preempted: running.id };
   }
 
-  /** Pauses a pending scheduled message: transitions state to 'paused'. */
-  async function pauseMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state !== "pending") return msg;
-    const updated = await queries.messages.updateMessage(pool, messageId, { state: "paused" });
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Resumes a non-running message back to 'pending'. For cron tasks without
-   * an execute_at, computes the next run time. Source state can be paused,
-   * cancelled, succeeded, or failed; no-op only if already running or pending.
-   */
-  async function resumeMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state === "pending") return msg;
-    const patch: Parameters<typeof queries.messages.updateMessage>[2] = { state: "pending" };
-    if (msg.cron && !msg.executeAt) {
-      patch.executeAt = computeNextRun(msg.cron);
-    }
-    const updated = await queries.messages.updateMessage(pool, messageId, patch);
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Reconciles the execute_at/cron after a PATCH that mutates schedule without
-   * crossing a state boundary. For cron tasks, recomputes the next run time.
-   */
-  async function rescheduleMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    if (msg.state !== "pending") return msg;
-    if (msg.cron) {
-      const nextRun = computeNextRun(msg.cron);
-      const updated = await queries.messages.updateMessage(pool, messageId, { executeAt: nextRun });
-      if (updated) emit({ type: "message.updated", payload: updated });
-      return updated;
-    }
-    const updated = await queries.messages.findById(pool, messageId);
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
-
-  /**
-   * Cancels a pending scheduled message without deleting it: transitions state
-   * to 'cancelled' so the row stays visible in the chat timeline.
-   */
-  async function cancelScheduledMessage(messageId: string): Promise<Message | null> {
-    const msg = await queries.messages.findById(pool, messageId);
-    if (!msg) return null;
-    const updated = await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
-    if (updated) emit({ type: "message.updated", payload: updated });
-    return updated;
-  }
+  const pauseMessage = (messageId: string) => lifecycle.pauseMessage(pool, emit, messageId);
+  const resumeMessage = (messageId: string) => lifecycle.resumeMessage(pool, emit, messageId);
+  const rescheduleMessage = (messageId: string) => lifecycle.rescheduleMessage(pool, emit, messageId);
+  const cancelScheduledMessage = (messageId: string) => lifecycle.cancelScheduledMessage(pool, emit, messageId);
 
   return {
     fireMessage,
