@@ -294,7 +294,14 @@ export async function startTaskRun(
 }
 
 /**
- * Marks a running message as succeeded or failed.
+ * Marks a running message as succeeded / failed / cancelled.
+ *
+ * The `WHERE state IN ('pending','running')` guard prevents a stale
+ * `failed` finalize from racing past an earlier explicit `cancelled`
+ * write: when `preemptChatRun` aborts an in-flight turn, the prior
+ * fire's outer-catch in `fireMessage` still runs and would otherwise
+ * overwrite `cancelled` back to `failed`. Keep the explicit cancel
+ * intent visible to the UI.
  */
 export async function finalizeExecution(
   db: Pool,
@@ -307,6 +314,7 @@ export async function finalizeExecution(
          ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      WHERE id = ?
+       AND state IN ('pending', 'running')
      RETURNING *`,
     [terminalState, id],
   );

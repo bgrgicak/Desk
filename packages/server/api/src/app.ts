@@ -1422,15 +1422,17 @@ export function createApp(opts: AppOptions): Server {
         ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
         : await parseBody(req);
 
-      // If the previous agent_turn in this chat is hung (log file silent
-      // for the stale window), preempt it so the user's follow-up isn't
-      // racing a zombie opencode. Healthy runs — still emitting tokens,
-      // tool calls, or step events — are left alone. Scheduled task or
-      // summary sends never preempt: those are background work, not the
-      // chat-level conversation the user is actively interacting with.
+      // Preempt any in-flight chat agent_turn before firing the new one.
+      // opencode itself silently DROPS the new message's `parts` if you
+      // POST to a busy session (Runner.ensureRunning attaches to the
+      // existing run and ignores `work`), so its own clients always
+      // abort-before-send. We mirror that here: every user message
+      // gets its own turn, but only one runs at a time per chat.
+      // Scheduled task or summary sends are background work and never
+      // preempt — they aren't the conversation the user is in.
       const sendKind = (body as { kind?: string }).kind;
       if (!sendKind || sendKind === "chat") {
-        await runManager.preemptStalledChatRun(segments[1]).catch((err: unknown) => {
+        await runManager.preemptChatRun(segments[1]).catch((err: unknown) => {
           log.error({ chatId: segments[1], err }, "preempt for chat failed");
         });
       }

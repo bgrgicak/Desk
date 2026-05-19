@@ -332,6 +332,7 @@ export async function createOrReuse(
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    let containerAlreadyGone = false;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
       try {
@@ -354,10 +355,18 @@ export async function createOrReuse(
         )) {
           throw err;
         }
-        // Fall through.
+        containerAlreadyGone = true;
       }
     }
-    await engine.remove(containerName, true);
+    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
+    // confirmed the container is gone. Under a parallel fire, the name
+    // may already point at the winner's brand-new container — issuing
+    // `docker rm -f <name>` here would clobber it. The drift-recreate
+    // path still needs the remove because the existing container is
+    // alive but no longer matches our expected layout.
+    if (!containerAlreadyGone) {
+      await engine.remove(containerName, true);
+    }
   }
 
   // Pre-create every source dir and nested target mount point so the runtime

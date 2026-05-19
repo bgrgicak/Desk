@@ -608,3 +608,120 @@ describe("preemptStalledChatRun", () => {
   });
 });
 
+describe("preemptChatRun (always-preempt)", () => {
+  // The POST /chats/{id}/messages route hands this every send. The
+  // always-preempt semantics match opencode's own client pattern:
+  // overlapping sends on a single session would otherwise have their
+  // payloads silently dropped by the daemon. Every previous-run state
+  // (active log, silent log, no log at all) should be preempted —
+  // there's no "leave it alone" branch here.
+
+  async function makeWorkspaceWithChat(slug: string): Promise<{
+    workspaceId: string;
+    chatId: string;
+    workspaceSlug: string;
+  }> {
+    const workspaceId = generateId("workspace");
+    const newChatId = generateId("chat");
+    const { rows: userRows } = await pool.query("SELECT id FROM users LIMIT 1");
+    const userId = userRows[0].id as string;
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+      [workspaceId, userId, "preempt-always test", slug],
+    );
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [newChatId, workspaceId, agentId, "preempt-always chat"],
+    );
+    return { workspaceId, chatId: newChatId, workspaceSlug: slug };
+  }
+
+  async function insertRunningAgentTurn(chatId: string): Promise<string> {
+    const msgId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, started_at)
+       VALUES (?, ?, 'system', ?, 'running', 'chat',
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 seconds'))`,
+      [msgId, chatId, JSON.stringify({ type: "agent_turn", userMessageId: "msg_user" })],
+    );
+    return msgId;
+  }
+
+  it("preempts a run whose log file was just written (healthy in-flight)", async () => {
+    // The case the stale-only variant deliberately skips. Here we WANT
+    // to preempt: a new user send means the prior turn's reply is no
+    // longer wanted in its current form.
+    const rm = makeRunManager();
+    const slug = `preempt-always-active-${Date.now()}`;
+    const { chatId: cid, workspaceSlug } = await makeWorkspaceWithChat(slug);
+    const msgId = await insertRunningAgentTurn(cid);
+    const dir = path.join(home, workspaceSlug, ".chats", cid, "logs");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${msgId}.log`), "event\t{}\n", "utf8");
+
+    const result = await rm.preemptChatRun(cid);
+
+    expect(result).toEqual({ preempted: msgId });
+    expect((await queries.messages.findById(pool, msgId))?.state).toBe("cancelled");
+  });
+
+  it("preempts a run with no log file (still in cold-start)", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-always-coldstart-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+    const msgId = await insertRunningAgentTurn(cid);
+
+    const result = await rm.preemptChatRun(cid);
+
+    expect(result).toEqual({ preempted: msgId });
+    expect((await queries.messages.findById(pool, msgId))?.state).toBe("cancelled");
+  });
+
+  it("returns null when nothing is running on the chat", async () => {
+    const rm = makeRunManager();
+    const slug = `preempt-always-empty-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+
+    const result = await rm.preemptChatRun(cid);
+
+    expect(result).toBeNull();
+  });
+
+  it("ignores running rows that aren't kind='chat'", async () => {
+    // Same rule as the stale variant: scheduled task_runs have their
+    // own lifecycle; an interactive chat follow-up should not tear them
+    // down regardless of always-vs-stale semantics.
+    const rm = makeRunManager();
+    const slug = `preempt-always-task-${Date.now()}`;
+    const { chatId: cid } = await makeWorkspaceWithChat(slug);
+    const taskRunId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, kind, started_at)
+       VALUES (?, ?, 'system', ?, 'running', 'task_run',
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'))`,
+      [taskRunId, cid, JSON.stringify({ type: "text", text: "long task" })],
+    );
+
+    const result = await rm.preemptChatRun(cid);
+
+    expect(result).toBeNull();
+    expect((await queries.messages.findById(pool, taskRunId))?.state).toBe("running");
+  });
+
+  it("only preempts rows in the supplied chat, not other chats", async () => {
+    const rm = makeRunManager();
+    const slugA = `preempt-always-iso-a-${Date.now()}`;
+    const slugB = `preempt-always-iso-b-${Date.now()}`;
+    const { chatId: chatA } = await makeWorkspaceWithChat(slugA);
+    const { chatId: chatB } = await makeWorkspaceWithChat(slugB);
+    const msgA = await insertRunningAgentTurn(chatA);
+    const msgB = await insertRunningAgentTurn(chatB);
+
+    const result = await rm.preemptChatRun(chatA);
+
+    expect(result).toEqual({ preempted: msgA });
+    expect((await queries.messages.findById(pool, msgA))?.state).toBe("cancelled");
+    expect((await queries.messages.findById(pool, msgB))?.state).toBe("running");
+  });
+});
+
