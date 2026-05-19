@@ -405,11 +405,13 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Viewed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: false,
         },
         {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Other',
+          createdAt: '2099-01-01T00:00:00.000Z',
           updatedAt: '2099-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: false,
         },
@@ -447,6 +449,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -474,6 +477,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -501,6 +505,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
+          createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
           kind: 'chat', running: false, failed: true,
         },
@@ -536,7 +541,7 @@ describe('applyEventToCache', () => {
           queries: {
             'getChats({"workspaceId":"wks_1"})': {
               data: [
-                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', updatedAt: new Date().toISOString(), awaitingUser: false },
+                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), awaitingUser: false },
               ],
             },
           },
@@ -594,7 +599,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -619,7 +625,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -639,7 +646,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other', updatedAt: new Date().toISOString(),
+          title: 'Other', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')
@@ -660,7 +668,8 @@ describe('applyEventToCache', () => {
           type: 'chat.updated',
           payload: {
             id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-            title: 'Test', updatedAt: new Date().toISOString(),
+            title: 'Test', createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
             awaitingUser: false, unread: false,
           },
         }, 'cht_viewed')
@@ -679,7 +688,8 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other Chat', updatedAt: new Date().toISOString(),
+          title: 'Other Chat', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           awaitingUser: false, unread: true,
         },
       }, 'cht_viewed')

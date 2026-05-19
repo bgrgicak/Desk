@@ -66,11 +66,11 @@ export default tseslint.config(
       // soften to a warning for now so the long-tail doesn't gate this
       // landing. Promote to error once the cleanup catches up.
       '@typescript-eslint/no-explicit-any': 'warn',
-      // File-size guardrail. Warn at 1000 lines so the next monolith
-      // gets attention before it grows past saving (api/src/app.ts is
-      // the last known offender; see Phase 4 of the cleanup plan).
-      // Promote to 'error' once the route dispatcher has been split.
-      'max-lines': ['warn', { max: 1000, skipBlankLines: true, skipComments: true }],
+      // File-size guardrail. Hard error at 1000 lines (skipping blank
+      // lines and comments). Every server file now lives well under
+      // this; flipping it to 'error' prevents the next monolith from
+      // re-appearing. Test files are exempted (see overrides below).
+      'max-lines': ['error', { max: 1000, skipBlankLines: true, skipComments: true }],
     },
   },
   {

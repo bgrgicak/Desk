@@ -46,11 +46,13 @@ describe('postChatMessage cache activity', () => {
     await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
       {
         id: 'cht_buried', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Buried',
+        createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
         kind: 'chat', running: false, failed: false,
       },
       {
         id: 'cht_top', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Top',
+        createdAt: '2099-01-01T00:00:00.000Z',
         updatedAt: '2099-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
         kind: 'chat', running: false, failed: false,
       },
