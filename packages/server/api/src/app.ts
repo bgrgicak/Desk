@@ -4,9 +4,8 @@ import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:f
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, ValidationError, type PinKind, type WsEvent } from "@agent-desk/shared";
+import { DeskError, ValidationError, type WsEvent } from "@agent-desk/shared";
 import {
-  ReplaceLibraryAppConflictError,
   workspaceRootPath,
   type StorageContext,
 } from "@agent-desk/storage";
@@ -15,9 +14,7 @@ import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./
 import { requireInternal } from "./auth/internal.js";
 import { verifySession } from "./auth/sessions.js";
 import {
-  requireOwnedAgent,
   requireOwnedChat,
-  requireOwnedMessage,
   requireOwnedWorkspace,
 } from "./auth/ownership.js";
 import { errorToStatus } from "./errors.js";
@@ -25,10 +22,6 @@ import { broadcast } from "./ws/registry.js";
 import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
-import * as accountRoutes from "./routes/account.js";
-import * as workspaceRoutes from "./routes/workspaces.js";
-import * as pinRoutes from "./routes/pins.js";
-import * as agentRoutes from "./routes/agents.js";
 import * as chatRoutes from "./routes/chats.js";
 import * as libraryRoutes from "./routes/library.js";
 import * as messageRoutes from "./routes/messages.js";
@@ -39,7 +32,6 @@ import { withModule } from "@agent-desk/shared/logger";
 import {
   defaultBackupPath,
   parseBody,
-  parseMultipart,
   parseMultipartFileStream,
   requireBearerForApps,
   requireReadablePathForRoute,
@@ -50,6 +42,7 @@ import type { DispatchContext } from "./dispatch/context.js";
 import { dispatchSandbox } from "./dispatch/sandbox.js";
 import { dispatchAccount } from "./dispatch/account.js";
 import { dispatchWorkspaces } from "./dispatch/workspaces.js";
+import { dispatchChats } from "./dispatch/chats.js";
 const log = withModule("api/app");
 
 import * as appsRoutes from "./routes/apps.js";
@@ -514,301 +507,13 @@ export function createApp(opts: AppOptions): Server {
       if (handled) return;
     }
 
-    // Chat routes
-    if (path === "/chats" && method === "GET") {
-      const wsId = await resolveWorkspaceId(pool, userId, query);
-      const result = wsId ? await chatRoutes.listChats(pool, wsId) : [];
-      sendJson(res, 200, result);
-      return;
+    // Chat-resource routes — /chats/*, /chats/{id}/messages/*, attachment/
+    // library-bridge sub-routes.  See dispatch/chats.ts.
+    {
+      const handled = await dispatchChats(req, res, method, path, segments, userId, query, dispatchCtx);
+      if (handled) return;
     }
-    if (segments[0] === "chats" && segments.length === 2 && method === "GET") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const result = await chatRoutes.getChat(pool, segments[1]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (path === "/chats" && method === "POST") {
-      const body = await parseBody(req) as { workspaceId: string; agentId: string; title: string; goal?: string };
-      await requireOwnedWorkspace(pool, body.workspaceId, userId);
-      await requireOwnedAgent(pool, body.agentId, userId);
-      const result = await chatRoutes.createChat(pool, body);
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments.length === 2 && method === "PATCH") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = await parseBody(req) as { title?: string; goal?: string | null; agentId?: string; unread?: boolean };
-      if (body.agentId !== undefined) {
-        await requireOwnedAgent(pool, body.agentId, userId);
-      }
-      const result = await chatRoutes.patchChat(pool, segments[1], body);
-      emitEvent({ type: "chat.updated", payload: result });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments.length === 2 && method === "DELETE") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const result = await chatRoutes.deleteChat(
-        pool,
-        storage,
-        segments[1],
-        emitEvent,
-      );
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "GET") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const cursor = query.get("cursor") ?? undefined;
-      const before = query.get("before") ?? undefined;
-      const limitRaw = query.get("limit");
-      let limit: number | undefined;
-      if (limitRaw !== null && limitRaw !== "") {
-        const parsed = Number(limitRaw);
-        if (!Number.isInteger(parsed) || parsed <= 0) throw new ValidationError(`Invalid limit: ${limitRaw}`);
-        limit = Math.min(parsed, 200);
-      }
-      const viewRaw = query.get("view") ?? undefined;
-      if (viewRaw !== undefined && viewRaw !== "full" && viewRaw !== "compact" && viewRaw !== "timeline") {
-        throw new ValidationError(`Invalid view: ${viewRaw}`);
-      }
-      const result = await chatRoutes.listMessages(pool, segments[1], {
-        cursor,
-        before,
-        limit,
-        // Normal chat API reads should use the payload-trimmed timeline by
-        // default. Full hidden tool/event/summary payloads remain available to
-        // developer/debug callers that explicitly request `view=full`.
-        view: (viewRaw ?? "timeline") as "full" | "compact" | "timeline",
-      });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const ct = (req.headers["content-type"] ?? "").toLowerCase();
-      const body = ct.startsWith("multipart/form-data")
-        ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
-        : await parseBody(req);
 
-      // If the previous agent_turn in this chat is hung (log file silent
-      // for the stale window), preempt it so the user's follow-up isn't
-      // racing a zombie opencode. Healthy runs — still emitting tokens,
-      // tool calls, or step events — are left alone. Scheduled task or
-      // summary sends never preempt: those are background work, not the
-      // chat-level conversation the user is actively interacting with.
-      const sendKind = (body as { kind?: string }).kind;
-      if (!sendKind || sendKind === "chat") {
-        await runManager.preemptStalledChatRun(segments[1]).catch((err: unknown) => {
-          log.error({ chatId: segments[1], err }, "preempt for chat failed");
-        });
-      }
-
-      const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emitEvent, { actorUserId: userId });
-
-      // Self-firing kinds (task / summary): execute_at is computed at insert
-      // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
-      if (userMessage.kind && userMessage.kind !== "chat") {
-        sendJson(res, 201, userMessage);
-        return;
-      }
-
-      // Default chat path: fire the pending trigger message and schedule
-      // a summary refresh for this chat.
-      runManager.fireMessage(triggerId).catch((err) => {
-        log.error(`fireMessage for trigger ${triggerId} failed:`, err);
-      });
-      runManager.scheduleSummary(segments[1]).catch(() => {});
-
-      sendJson(res, 201, userMessage);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "thread" && segments.length === 5 && method === "POST") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req);
-      const result = await chatRoutes.createThread(pool, segments[1], segments[3], body, emitEvent, { actorUserId: userId, userId });
-
-      runManager.fireMessage(result.triggerId).catch((err) => {
-        log.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
-      });
-      runManager.scheduleSummary(result.threadChat.id).catch(() => {});
-
-      sendJson(res, 201, {
-        chat: result.threadChat,
-        message: result.threadStartMessage,
-        anchorMessage: result.anchorMessage,
-      });
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "PATCH") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const body = await parseBody(req) as { content?: unknown; state?: string; executeAt?: string | null; cron?: string | null; kind?: "chat" | "task" | "task_run" | "summary"; title?: string | null };
-      const result = await chatRoutes.patchMessage(pool, storage, segments[1], segments[3], body, emitEvent, runManager);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "run" && segments.length === 5 && method === "POST") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const result = await chatRoutes.runMessage(pool, segments[1], segments[3], runManager, emitEvent);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const result = await chatRoutes.getSummaryHistory(storage, segments[1], segments[3]);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments.length === 4 && method === "DELETE") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      await chatRoutes.deleteMessage(pool, storage, segments[1], segments[3]);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "logs" && segments.length === 5 && method === "GET") {
-      await requireOwnedMessage(pool, segments[1], segments[3], userId);
-      const { stream, contentType } = await chatRoutes.getMessageLogs(storage, segments[1], segments[3]);
-      res.writeHead(200, { "Content-Type": contentType });
-      stream.pipe(res);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "GET") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const showHidden = query.get("showHidden") === "true";
-      const includeArtifacts = query.get("includeArtifacts") === "true";
-      const result = await chatRoutes.listAttachments(storage, segments[1], {
-        showHidden,
-        includeArtifacts,
-      });
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "attachments" && segments.length === 3 && method === "DELETE") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const name = query.get("name") ?? "";
-      if (!name) throw new ValidationError("Missing 'name' query parameter");
-      const result = await chatRoutes.removeAttachment(storage, segments[1], name);
-      sendJson(res, 200, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "library-refs" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { path?: unknown };
-      const libraryPath = typeof body?.path === "string" ? body.path : "";
-      if (!libraryPath) {
-        throw new ValidationError("Missing 'path' in body");
-      }
-      const result = await chatRoutes.pinLibraryFile(
-        storage,
-        segments[1],
-        libraryPath,
-        emitEvent,
-      );
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "save-to-library" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
-      const attachmentName = typeof body?.name === "string" ? body.name : "";
-      if (!attachmentName) {
-        throw new ValidationError("Missing 'name' in body");
-      }
-      const destSubpath =
-        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
-          ? body.destSubpath
-          : undefined;
-      const result = await chatRoutes.saveAttachmentToLibrary(
-        storage,
-        segments[1],
-        attachmentName,
-        destSubpath,
-        emitEvent,
-      );
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "copy-library-app" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { path?: unknown };
-      const libraryPath = typeof body?.path === "string" ? body.path : "";
-      if (!libraryPath) throw new ValidationError("Missing 'path' in body");
-      const result = await chatRoutes.copyAppFromLibrary(
-        storage,
-        segments[1],
-        libraryPath,
-        emitEvent,
-      );
-      sendJson(res, 201, result);
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "replace-library-app" && segments.length === 3 && method === "POST") {
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = (await parseBody(req)) as {
-        name?: unknown;
-        targetPath?: unknown;
-        expectedSourceVersion?: unknown;
-      };
-      const artifactName = typeof body?.name === "string" ? body.name : "";
-      const targetPath = typeof body?.targetPath === "string" ? body.targetPath : "";
-      if (!artifactName) throw new ValidationError("Missing 'name' in body");
-      if (!targetPath) throw new ValidationError("Missing 'targetPath' in body");
-      const headerIfMatch = req.headers["if-match"];
-      const ifMatch = Array.isArray(headerIfMatch) ? headerIfMatch[0] : headerIfMatch;
-      const expectedSourceVersion =
-        typeof body?.expectedSourceVersion === "string"
-          ? body.expectedSourceVersion
-          : typeof ifMatch === "string" && ifMatch
-            ? ifMatch
-            : undefined;
-      try {
-        const result = await chatRoutes.replaceLibraryAppWithChatArtifact(
-          storage,
-          segments[1],
-          artifactName,
-          targetPath,
-          emitEvent,
-          { expectedSourceVersion },
-        );
-        sendJson(res, 200, result);
-      } catch (err) {
-        if (err instanceof ReplaceLibraryAppConflictError) {
-          sendJson(res, 409, {
-            code: "VERSION_CONFLICT",
-            message: err.message,
-            expected: err.expected,
-            actual: err.actual,
-          });
-          return;
-        }
-        throw err;
-      }
-      return;
-    }
-    if (segments[0] === "chats" && segments[2] === "save-artifact-to-library" && segments.length === 3 && method === "POST") {
-      // Promotes a `<name>.app/` chat artifact directory into the
-      // workspace library. Sibling of save-to-library which only
-      // handles single-file attachments. Issue #47, PR-E.
-      await requireOwnedChat(pool, segments[1], userId);
-      const body = (await parseBody(req)) as { name?: unknown; destSubpath?: unknown };
-      const artifactName = typeof body?.name === "string" ? body.name : "";
-      if (!artifactName) {
-        throw new ValidationError("Missing 'name' in body");
-      }
-      const destSubpath =
-        typeof body?.destSubpath === "string" && body.destSubpath.length > 0
-          ? body.destSubpath
-          : undefined;
-      const result = await chatRoutes.saveArtifactToLibrary(
-        storage,
-        segments[1],
-        artifactName,
-        destSubpath,
-        emitEvent,
-      );
-      sendJson(res, 201, result);
-      return;
-    }
 
     // Library routes. Because library files live at arbitrary nested paths
     // on the filesystem, we pass the workspace-relative path via ?path=...
