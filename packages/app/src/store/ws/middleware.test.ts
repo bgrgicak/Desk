@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { configureStore } from '@reduxjs/toolkit'
-import { applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
+import { __flushWsBatchForTest, applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
 import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed } from '../slices/derivedSlice'
 import { api } from '../api'
 
@@ -42,6 +42,7 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'bash' } }),
         },
       }, 'cht_1', store.getState)
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
       expect(entry.data?.items[0].progressLog).toEqual([
@@ -63,6 +64,10 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'read' } }),
         },
       }, 'cht_1', store.getState)
+      // Drain the rAF batch — without this the entry sits in the per-frame
+      // buffer and never reaches pendingProgressLogByMessageId, so the
+      // subsequent cache hydration has nothing to merge.
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
         items: [{
@@ -535,6 +540,9 @@ describe('applyEventToCache', () => {
         type: 'message.streaming',
         payload: { chatId: 'cht_failed', messageId: 'msg_agent', delta: 'hello' },
       }, null, store.getState)
+      // Streaming deltas are coalesced per animation frame to avoid Redux
+      // thrash. The flush helper drives that drain synchronously for tests.
+      __flushWsBatchForTest(dispatch, store.getState)
 
       expect(dispatched).toContainEqual(markChatRunning('cht_failed'))
       const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())

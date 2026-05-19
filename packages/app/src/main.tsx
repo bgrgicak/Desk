@@ -7,6 +7,7 @@ import App from './App.tsx'
 import { store } from './store/store'
 import { ensureSession } from './auth/session'
 import { setupServiceWorker } from './lib/service-worker'
+import { installPerfReporter } from './lib/perf-reporter'
 
 async function boot(): Promise<void> {
   // ensureSession populates the session token (cookie/storage) so
@@ -17,6 +18,12 @@ async function boot(): Promise<void> {
   // the WS reconnect loop would then back-off-and-retry while the
   // user is stuck on the password-change screen).
   await ensureSession()
+
+  // Start observing long tasks before the React tree mounts so the very
+  // first render — historically the slowest — is captured too. The
+  // reporter is a no-op in browsers without PerformanceObserver longtask
+  // support (e.g. older Safari).
+  installPerfReporter(store)
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

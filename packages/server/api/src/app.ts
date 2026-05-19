@@ -15,6 +15,7 @@ import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.j
 import * as messageRoutes from "./routes/messages.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
+import { recordClientPerf } from "./routes/client-perf.js";
 import { VaultStore } from "./vault/store.js";
 import { withModule } from "@agent-desk/shared/logger";
 import { defaultBackupPath, parseBody, sendJson } from "./http/io.js";
@@ -411,6 +412,15 @@ export function createApp(opts: AppOptions): Server {
     // Legacy /runs and /scheduled-jobs routes are gone — chat-scoped
     // execution state now lives on the messages table; use
     // GET /chats/{id}/messages and its PATCH/DELETE/logs sub-routes.
+
+    // Client-side perf telemetry: PerformanceObserver long-task batches
+    // posted from the SPA. Authenticated (userId from requireAuth above)
+    // so reports are attributable. The handler caps batch size internally
+    // to keep a misbehaving client from flooding the log pipeline.
+    if (path === "/client-perf" && method === "POST") {
+      await recordClientPerf(req, res, userId);
+      return;
+    }
 
     // Cross-chat message listing — read-only, AND-combined filters.
     // Powers the Runs page (scheduled/state filters) and Today / Inbox

@@ -152,6 +152,55 @@ describe("app route dispatch", () => {
     expect(res.status).toBe(401);
   });
 
+  it("POST /client-perf accepts a long-task batch and logs each entry", async () => {
+    await pool.query(
+      `INSERT INTO users (id, username, password_hash, email)
+            VALUES (?, ?, ?, ?)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, "client-perf-test", "$2b$10$placeholder", "client-perf@example.com"],
+    );
+    const server = await startServer();
+    const port = getServerPort(server);
+    const token = await issueSession(pool, userId);
+
+    const res = await request(port, "POST", "/client-perf", token, {
+      entries: [
+        { duration: 120.5, startTime: 1234.5, name: "self", chatId: "cht_1", streaming: true, url: "/w/ws_1/chat?chat=cht_1" },
+        { duration: 75, startTime: 5000, name: "self" },
+        // Malformed entries are dropped; the request as a whole still succeeds.
+        { duration: "nope", startTime: 0 },
+        { duration: -1, startTime: 0 },
+        null,
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { accepted: number }).accepted).toBe(2);
+  });
+
+  it("POST /client-perf rejects missing entries array with 400", async () => {
+    await pool.query(
+      `INSERT INTO users (id, username, password_hash, email)
+            VALUES (?, ?, ?, ?)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, "client-perf-bad-test", "$2b$10$placeholder", "client-perf-bad@example.com"],
+    );
+    const server = await startServer();
+    const port = getServerPort(server);
+    const token = await issueSession(pool, userId);
+
+    const res = await request(port, "POST", "/client-perf", token, { foo: 1 });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /client-perf requires auth", async () => {
+    const server = await startServer();
+    const port = getServerPort(server);
+
+    const res = await request(port, "POST", "/client-perf", undefined, { entries: [] });
+    expect(res.status).toBe(401);
+  });
+
   it("unknown route returns 404", async () => {
     // Re-seed in case a prior test deleted the user.
     await pool.query(

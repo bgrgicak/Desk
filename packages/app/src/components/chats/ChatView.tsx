@@ -38,6 +38,7 @@ import {
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
   useGetLibraryQuery,
+  useGetWorkspacesQuery,
   usePatchChatMutation,
   usePinChatLibraryRefMutation,
   usePostChatMessageMutation,
@@ -1063,6 +1064,11 @@ export function ChatView({
     chat.workspaceId ? { workspaceId: chat.workspaceId } : undefined,
     { skip: !chat.workspaceId },
   )
+  // Resolve the workspace filesystem path so the anchor-message preview
+  // below can rewrite sandbox paths in markdown the same way the main
+  // thread does. MessageBubble no longer subscribes on its own.
+  const { data: workspacesForBubble } = useGetWorkspacesQuery()
+  const workspacePathForAnchor = workspacesForBubble?.find(w => w.id === chat.workspaceId)?.path
   const libraryItems: ContextItem[] = chat.workspaceId
     ? (libraryResp?.items ?? []).map((f) => toContextItem(f, chat.workspaceId!))
     : []
@@ -1179,6 +1185,7 @@ export function ChatView({
                 <MessageBubble
                   message={anchorMessage}
                   workspaceId={anchorMessage.chatId ? chat.workspaceId : undefined}
+                  workspacePath={anchorMessage.chatId ? workspacePathForAnchor : undefined}
                 />
               </div>
             ) : (

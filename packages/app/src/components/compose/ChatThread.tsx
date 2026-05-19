@@ -5,7 +5,7 @@ import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
 import { firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
-import { useGetChatMessagesQuery } from '@/store/api'
+import { useGetChatMessagesQuery, useGetWorkspacesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
 
@@ -451,6 +451,27 @@ export function ChatThread({
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  // Per-id stable ref callback. The naïve inline `ref={el => ...}` form
+  // creates a new function identity on every render, so React calls the
+  // callback with null and then the same element again on every re-render
+  // of the parent — at N messages this is one of the dominant per-render
+  // costs once a thread gets long. Memoizing per id keeps the callback
+  // identity stable so React skips the spurious null/element pair.
+  const messageRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
+  const getMessageRefCallback = (id: string) => {
+    let cb = messageRefCallbacks.current.get(id)
+    if (!cb) {
+      cb = (el: HTMLDivElement | null) => {
+        if (el) messageRefs.current.set(id, el)
+        else {
+          messageRefs.current.delete(id)
+          messageRefCallbacks.current.delete(id)
+        }
+      }
+      messageRefCallbacks.current.set(id, cb)
+    }
+    return cb
+  }
   /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
   const isAtBottomRef = useRef(true)
   /** When loading older messages, stores the scroll-height before prepend so
@@ -460,6 +481,13 @@ export function ChatThread({
   const allItems = activeData?.items ?? []
   const prevCursor = activeData?.prevCursor
   const isInitialLoading = !skipQuery && !activeData && !isError
+
+  // Resolve the workspace's filesystem path once for the whole thread so
+  // every MessageBubble doesn't have to subscribe to the workspaces cache
+  // individually. With N messages, the per-bubble subscription used to
+  // fan out into N RTK Query notifications on every workspace update.
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
 
   const activeAgentTurn = useMemo(
     () => findActiveAgentTurn(allItems),
@@ -686,15 +714,13 @@ export function ChatThread({
               key={msg.id}
               className="min-w-0 max-w-full"
               data-message-id={msg.id}
-              ref={(el) => {
-                if (el) messageRefs.current.set(msg.id, el)
-                else messageRefs.current.delete(msg.id)
-              }}
+              ref={getMessageRefCallback(msg.id)}
             >
               <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}
+                  workspacePath={workspacePath}
                   currentChatId={chatId}
                   agentName={agentName}
                   isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
@@ -722,6 +748,7 @@ export function ChatThread({
               <MessageBubble
                 message={liveDeveloperMessage}
                 workspaceId={workspaceId}
+                workspacePath={workspacePath}
                 agentName={agentName}
                 isFirstInGroup
                 onAttachmentClick={onAttachmentClick}
@@ -735,6 +762,7 @@ export function ChatThread({
               <MessageBubble
                 message={liveAssistantText}
                 workspaceId={workspaceId}
+                workspacePath={workspacePath}
                 agentName={agentName}
                 isFirstInGroup
                 onAttachmentClick={onAttachmentClick}
