@@ -184,6 +184,10 @@ mitigation, `api/src/app.ts → isWsOriginAllowed`).
   a remote attacker page from the victim's machine.
 - Additional production origins via `DESK_ALLOWED_ORIGINS`
   (comma-separated list).
+- `DESK_ALLOWED_HOSTS` (same env var the Vite dev/preview server
+  reads, default `desk.test`) expands into `http://host` +
+  `https://host` allowlist entries so the bundled nginx fixture works
+  without configuring two parallel allowlists.
 - Missing `Origin` header is allowed (CLI tools, integration tests,
   the Electron renderer when it doesn't emit one) — CSWSH applies
   only to script-initiated upgrades from a browser tab.

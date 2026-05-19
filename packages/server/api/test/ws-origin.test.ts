@@ -132,6 +132,47 @@ describe("isWsOriginAllowed unit", () => {
   });
 });
 
+describe("getAllowedWsOrigins env parsing", () => {
+  it("returns DESK_ALLOWED_ORIGINS entries verbatim", async () => {
+    const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
+    const set = getAllowedWsOrigins({
+      DESK_ALLOWED_ORIGINS: "https://desk.example.com,https://other.example.com",
+      DESK_ALLOWED_HOSTS: "",
+    });
+    expect(set.has("https://desk.example.com")).toBe(true);
+    expect(set.has("https://other.example.com")).toBe(true);
+  });
+
+  it("expands DESK_ALLOWED_HOSTS into http+https origin variants", async () => {
+    // Without this, an operator with desk.test in /etc/hosts (the
+    // documented nginx fixture default) gets 403 on every WS upgrade
+    // because the browser sends Origin: https://desk.test which the
+    // Vite-side env var alone doesn't tell the API process about.
+    const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
+    const set = getAllowedWsOrigins({
+      DESK_ALLOWED_ORIGINS: "",
+      DESK_ALLOWED_HOSTS: "desk.test,desk.local",
+    });
+    expect(set.has("http://desk.test")).toBe(true);
+    expect(set.has("https://desk.test")).toBe(true);
+    expect(set.has("http://desk.local")).toBe(true);
+    expect(set.has("https://desk.local")).toBe(true);
+  });
+
+  it("defaults DESK_ALLOWED_HOSTS to desk.test when unset", async () => {
+    const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
+    const set = getAllowedWsOrigins({});
+    expect(set.has("https://desk.test")).toBe(true);
+    expect(set.has("http://desk.test")).toBe(true);
+  });
+
+  it("treats an explicitly empty DESK_ALLOWED_HOSTS as no hosts", async () => {
+    const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
+    const set = getAllowedWsOrigins({ DESK_ALLOWED_HOSTS: "" });
+    expect(set.has("https://desk.test")).toBe(false);
+  });
+});
+
 describe("isLoopbackAddress unit", () => {
   // Round-2 high-pri #5: the auto-login loopback check used to be a
   // hand-rolled equality on "127.0.0.1" / "::1" / "::ffff:127.0.0.1"
@@ -204,5 +245,15 @@ describe("WebSocket upgrade — Origin allowlist (CSWSH mitigation)", () => {
     socket.destroy();
     // Origin check runs before token check, so this is 403 not 401.
     expect(response).toContain("403 Forbidden");
+  });
+
+  it("accepts upgrade with Origin: https://desk.test (default DESK_ALLOWED_HOSTS)", async () => {
+    // Regression: user reported `wss://desk.test/ws … 403 Forbidden`
+    // when running behind the bundled nginx fixture, because the
+    // server-side allowlist used to only read DESK_ALLOWED_ORIGINS and
+    // ignored the Vite-shared DESK_ALLOWED_HOSTS entirely.
+    const { isWsOriginAllowed } = await import("../src/http/security-headers.js");
+    expect(isWsOriginAllowed("https://desk.test")).toBe(true);
+    expect(isWsOriginAllowed("http://desk.test")).toBe(true);
   });
 });

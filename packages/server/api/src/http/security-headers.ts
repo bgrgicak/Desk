@@ -69,13 +69,24 @@ export function setSecurityHeaders(req: IncomingMessage, res: ServerResponse, pa
  * internet set DESK_ALLOWED_ORIGINS to a comma-separated list of the
  * real origins; the env list is treated as exact additional matches
  * on top of the loopback rule.
+ *
+ * DESK_ALLOWED_HOSTS is also honored: it's the same env var the Vite
+ * dev/preview server uses to declare local hostnames (default
+ * `desk.test`, used by the bundled nginx fixture). Each host produces
+ * both http:// and https:// origin variants so operators don't have to
+ * keep two parallel allowlists for the same hostname.
  */
 export function getAllowedWsOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
   const fromEnv = (env.DESK_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  return new Set(fromEnv);
+  const fromHosts = (env.DESK_ALLOWED_HOSTS ?? "desk.test")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .flatMap((host) => [`http://${host}`, `https://${host}`]);
+  return new Set([...fromEnv, ...fromHosts]);
 }
 
 const ALLOWED_WS_ORIGINS = getAllowedWsOrigins();
