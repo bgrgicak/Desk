@@ -58,6 +58,40 @@ describe("chats queries", () => {
     expect(list.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("lastMessage prefers the agent's events output over an older user prompt", async () => {
+    // Real agent replies land as `type=events` with a `log` array,
+    // not `type=text`.  Without explicit handling for `events`, the
+    // sidebar would still preview the user's last typed prompt
+    // forever — what the reviewer flagged in PR #116.
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Events preview" });
+    // User prompt (older).
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: "How do tasks work?" },
+    });
+    // Agent's events-shaped reply with two visible text parts.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "text", part: { text: "Tasks are " } } },
+          { kind: "stderr", line: "noise that should not appear in the preview" },
+          { kind: "event", event: { type: "text", part: { text: "scheduled messages." } } },
+        ],
+      },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("Tasks are scheduled messages.");
+  });
+
   it("lastMessage previews the newest visible user/agent text message", async () => {
     const chatId = generateId("chat");
     await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Preview chat" });

@@ -7,6 +7,7 @@ function makeMessage(overrides: Partial<ServerMessage>): ServerMessage {
     id: 'msg_test',
     chatId: 'cht_test',
     role: 'user',
+    kind: 'chat',
     content: { type: 'text', text: 'hello' },
     createdAt: new Date().toISOString(),
     ...overrides,

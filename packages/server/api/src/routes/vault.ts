@@ -9,6 +9,7 @@ import {
   type VaultStore,
   VaultPasswordError,
 } from "../vault/store.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 
 /**
  * Vault-and-secrets HTTP handlers. All vault state lives in the in-process
@@ -129,29 +130,13 @@ function requirePassword(body: { password?: unknown }): string {
   return body.password;
 }
 
-// Policy for *new* vault passwords only (POST /vault/setup). We can't
-// enforce it on /vault/unlock without locking out users who created a
-// vault before the policy existed — the bar is "make weak passwords hard
-// to set," not "retroactively reject existing vaults."
-//
-// Min length 12 follows the NIST 800-63B guidance to favour length over
-// composition rules. The DESK_SEED_PASSWORD ("change-me-before-first-boot")
-// is rejected explicitly so a first-boot operator can't accidentally pin
-// their vault to a known-public default.
-const VAULT_PASSWORD_MIN_LENGTH = 12;
-const SEED_PASSWORD = "change-me-before-first-boot";
-
+// Policy for *new* vault passwords only (POST /vault/setup).  Shared
+// with /me/password and /auth/signup via passwordPolicy.ts — see
+// the helper there for the threat model.  We can't enforce it on
+// /vault/unlock without locking out users whose vault predates the
+// policy.
 export function enforceVaultPasswordPolicy(password: string): void {
-  if (password.length < VAULT_PASSWORD_MIN_LENGTH) {
-    throw new ValidationError(
-      `Vault password must be at least ${VAULT_PASSWORD_MIN_LENGTH} characters`,
-    );
-  }
-  if (password === SEED_PASSWORD) {
-    throw new ValidationError(
-      "Vault password must differ from the default seed password",
-    );
-  }
+  enforcePasswordPolicy(password);
 }
 
 function parseSecret(body: unknown): SecretEntry {

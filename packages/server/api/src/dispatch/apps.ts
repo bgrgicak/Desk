@@ -8,6 +8,7 @@ import { handleAppStorageRequest } from "../routes/app-storage.js";
 import * as chatRoutes from "../routes/chats.js";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 import { verifySession } from "../auth/sessions.js";
+import { enforceMustChangePassword } from "../auth/middleware.js";
 import { sendJson } from "../http/io.js";
 import { requireBearerForApps } from "../auth/appBearer.js";
 import { requireReadablePathForRoute } from "../workspace-scope-fs.js";
@@ -195,6 +196,14 @@ export async function dispatchApps(
       }
       appsUserId = resolvedId;
     }
+    // The global must-change-password middleware skips /apps/* so the
+    // static-app cookie path can serve dist files without re-running
+    // the gate on every chunk. We re-enforce here so a user still on
+    // the documented public seed credential cannot read app dist
+    // payloads (which can carry vendored chunks of the rest of the
+    // app surface).  enforceMustChangePassword throws DeskError
+    // (FORBIDDEN) on a gated user; the outer catch maps it to 403.
+    await enforceMustChangePassword(pool, appsUserId, method, "/apps");
     await requireOwnedWorkspace(pool, wsId, appsUserId);
 
     // segments: ['apps', wsId, ...appParts, 'dist', ...fileParts]

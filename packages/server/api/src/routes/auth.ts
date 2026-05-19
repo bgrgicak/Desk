@@ -5,6 +5,7 @@ import { withModule } from "@agent-desk/shared/logger";
 import { hashToken, issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
 import { createHub } from "./workspaces.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 const log = withModule("api/routes/auth");
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -71,8 +72,6 @@ export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,32}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const SEED_PASSWORD = "change-me-before-first-boot";
-const PASSWORD_MIN_LENGTH = 12;
 
 export interface SignupContext {
   pool: Pool;
@@ -101,14 +100,7 @@ export async function handleSignup(
   if (!EMAIL_PATTERN.test(email)) {
     throw new ValidationError("Email must be a valid address");
   }
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    throw new ValidationError(
-      `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
-    );
-  }
-  if (password === SEED_PASSWORD) {
-    throw new ValidationError("Password must differ from the default seed password");
-  }
+  enforcePasswordPolicy(password);
 
   // Single non-specific 409 for both username and email collisions. A
   // distinct message would be a user/email enumeration oracle for
@@ -130,7 +122,23 @@ export async function handleSignup(
 
   const id = generateId("user");
   const passwordHash = await hashPassword(password);
-  await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
+  // Race window: between the parallel findByUsername/findByEmail
+  // above and this insert, another concurrent signup with the same
+  // credentials could have committed.  Catch the UNIQUE-constraint
+  // error and map it to the same generic 409 the preflight emits —
+  // otherwise the SECOND request bubbles a 500 instead of a clean
+  // collision response.
+  try {
+    await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE constraint failed/i.test(msg)) {
+      throw new ConflictError(
+        "Account could not be created with the supplied credentials",
+      );
+    }
+    throw err;
+  }
 
   // Mint the session first — that and the user row are the two pieces
   // the client absolutely needs to recover. If session issuance

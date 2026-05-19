@@ -92,7 +92,7 @@ export function installWsUpgradeHandler(server: Server, pool: Pool): void {
         });
       });
     })().catch((err) => {
-      log.error("WebSocket upgrade failed:", err);
+      log.error({ err }, "WebSocket upgrade failed");
       try { socket.destroy(); } catch { /* ignore */ }
     });
   });

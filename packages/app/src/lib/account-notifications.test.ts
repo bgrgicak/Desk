@@ -19,6 +19,7 @@ function message(overrides: Partial<ServerMessage> = {}): ServerMessage {
     id: 'msg_1',
     chatId: 'cht_1',
     role: 'agent',
+    kind: 'chat',
     content: { type: 'text', text: 'hello' },
     createdAt: new Date().toISOString(),
     ...overrides,

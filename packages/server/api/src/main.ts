@@ -484,6 +484,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  log.error("desk-server fatal error:", err);
+  log.error({ err }, "desk-server fatal error");
   process.exit(1);
 });

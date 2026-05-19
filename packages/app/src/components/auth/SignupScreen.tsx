@@ -465,6 +465,40 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
       return
     }
     if (step === 1) {
+      // Persist the workspace details the user typed in step 1.  The
+      // server's `handleSignup` already created the user's hub; this
+      // call adds a *project* workspace with the chosen name/icon so
+      // the wizard's preview doesn't lie ("you created General" but
+      // no row landed).  A failure surfaces inline and lets the user
+      // retry — we don't advance to step 2 until the workspace is in.
+      const trimmedName = workspace.name.trim()
+      if (trimmedName) {
+        setIsSubmitting(true)
+        try {
+          const res = await fetch('/api/workspaces', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${getSessionToken()}`,
+            },
+            body: JSON.stringify({
+              name: trimmedName,
+              icon: workspace.emoji,
+              color: workspace.color,
+              description: workspace.description || undefined,
+            }),
+          })
+          if (!res.ok) {
+            setError(`Could not create workspace (${res.status}).`)
+            return
+          }
+        } catch (err) {
+          setError(extractApiError(err) ?? 'Network error while creating workspace.')
+          return
+        } finally {
+          setIsSubmitting(false)
+        }
+      }
       setStep(2)
       return
     }

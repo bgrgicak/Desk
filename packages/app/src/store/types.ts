@@ -1,4 +1,15 @@
-import type { Agent, ChatWithListMeta, Workspace } from "@agent-desk/shared";
+import type {
+  Agent,
+  AgentEvent as SharedAgentEvent,
+  AgentLogEntry as SharedAgentLogEntry,
+  ChatWithListMeta,
+  Message,
+  MessageContent as SharedMessageContent,
+  MessageRole as SharedMessageRole,
+  MessageState as SharedMessageState,
+  User,
+  Workspace,
+} from "@agent-desk/shared";
 
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
@@ -6,46 +17,25 @@ import type { Agent, ChatWithListMeta, Workspace } from "@agent-desk/shared";
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 
-export type MessageRole = "user" | "agent" | "system";
-export type MessageState =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "paused";
+// Re-export the shared envelope types so client code and server agree
+// by definition.  `MessageContent`, `MessageRole`, `MessageState`,
+// `AgentEvent` and `AgentLogEntry` all live in `@agent-desk/shared`
+// alongside their Zod schemas; the app used to carry parallel
+// definitions that drifted from the shared ones (e.g. the app's
+// `MessageContentTextSchema` lacked the optional `goal` field).
+export type MessageRole = SharedMessageRole;
+export type MessageState = SharedMessageState;
+export type AgentEvent = SharedAgentEvent;
+export type AgentLogEntry = SharedAgentLogEntry;
+export type MessageContent = SharedMessageContent;
 
-export interface AgentEvent {
-  type: string;
-  timestamp?: number;
-  sessionID?: string;
-  part?: Record<string, unknown>;
-  [k: string]: unknown;
-}
-
-export type AgentLogEntry =
-  | { kind: "event"; event: AgentEvent }
-  | { kind: "stderr"; line: string }
-  | { kind: "unparsed"; line: string };
-
-export type MessageContent =
-  | { type: "text"; text: string }
-  | { type: "toolCall"; toolName: string; args: Record<string, unknown> }
-  | { type: "toolResult"; toolName: string; result: unknown }
-  | { type: "artifactRef"; path: string; workspaceId?: string; name?: string; mime?: string; params?: Record<string, string> }
-  | { type: "events"; log: AgentLogEntry[] }
-  | { type: "summary"; body: string }
-  | { type: "summary_request"; chatTitle?: string; messagePreview?: string }
-  | { type: "reflection_request"; workspaceId: string }
-  | { type: "agent_turn"; userMessageId: string };
-
-export interface ServerUser {
-  id: string;
-  username: string;
-  email: string;
-  avatarPath?: string;
-  createdAt: string;
-}
+/**
+ * Server user type — re-exported from `@agent-desk/shared` so the
+ * `mustChangePassword` flag (and any future fields) flow through to
+ * the app without a parallel definition.  See UserSchema for the
+ * source of truth.
+ */
+export type ServerUser = User;
 
 /**
  * Server agent / workspace types — re-exported from
@@ -121,37 +111,20 @@ export interface AttachmentRef {
   params?: Record<string, string>;
 }
 
-export interface ServerMessage {
-  id: string;
-  chatId: string;
-  role: MessageRole;
-  content: MessageContent;
-  createdAt: string;
-  /** Files attached to this message (user uploads sent alongside the text). */
-  attachments?: AttachmentRef[];
-  /** Model that produced this message — stamped at insert time on agent rows. */
-  model?: string;
-  executeAt?: string;
-  cron?: string;
-  state?: MessageState;
-  parentId?: string;
-  agentId?: string;
-  assigneeId?: string;
-  startedAt?: string;
-  endedAt?: string;
-  updatedAt?: string;
-  /** Discriminates the message's surface — `chat` (default), `task`,
-   * `task_run` (execution record child of a task), or `summary`. */
-  kind?: "chat" | "task" | "task_run" | "summary";
-  /** Display name for tasks; null/missing for ordinary chat messages. */
-  title?: string | null;
+/**
+ * Server message envelope plus the one client-only augmentation
+ * (`progressLog`).  The base shape comes from the shared `Message`
+ * Zod schema — its inferred type is the exact union the server
+ * parses and the API returns.  `progressLog` is appended in the WS
+ * middleware on `message.delta` events while an agent_turn runs;
+ * the server never sends it, but every consumer that reads a
+ * message in the chat thread expects it on the same object so the
+ * augmentation rides here.
+ */
+export type ServerMessage = Message & {
   /** Live runtime/progress entries appended over WS while an agent_turn runs. */
   progressLog?: AgentLogEntry[];
-  /** When set, this message is the anchor of a thread; the referenced
-   * chat holds the thread transcript. UI surfaces an "open thread"
-   * action; the absence of this field exposes a "start thread" action. */
-  threadChatId?: string;
-}
+};
 
 export interface ServerFile {
   path: string;

@@ -47,34 +47,80 @@ export type ChatWithLastMessage = Chat & Required<Pick<ChatWithListMeta, "kind" 
 const LAST_MESSAGE_PREVIEW_LIMIT = 200;
 
 /**
- * Correlated subquery that produces the chat's most recent
- * user/agent text message's content. Used by `listWithLatestMessage`
- * so the sidebar's "last message" preview lands in the same single
- * indexed query as the rest of the chat-list cache.  Filters out
- * internal types (agent_turn, summary_request, summary, artifactRef)
- * so the preview shows what the user wrote/saw, not scheduler
- * plumbing.
+ * Correlated subquery that returns the *raw content JSON* of the
+ * chat's most recent visible user/agent message — either a plain
+ * `text` payload (user messages, and the rare direct agent text
+ * insertion) or the `events` log that wraps real agent_turn output.
+ * The JS layer (`previewFromContent`) extracts the human-readable
+ * text from whichever shape comes back.  Internal types
+ * (agent_turn, summary_request, summary, artifactRef, toolCall,
+ * toolResult, reflection_request) are filtered out so the preview
+ * shows what the user wrote/saw, not scheduler plumbing.
  */
-function lastTextSubquerySql(): string {
+function lastVisibleContentSubquerySql(): string {
   return `(
-    SELECT json_extract(m.content, '$.text')
+    SELECT m.content
     FROM messages m
     WHERE m.chat_id = c.id
       AND m.role IN ('user', 'agent')
       AND json_valid(m.content)
-      AND json_extract(m.content, '$.type') = 'text'
+      AND json_extract(m.content, '$.type') IN ('text', 'events')
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
-  ) AS last_text`;
+  ) AS last_content`;
 }
 
-function previewFromRaw(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  const normalized = raw.replace(/\s+/g, " ").trim();
+function clampPreview(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return "";
   return normalized.length > LAST_MESSAGE_PREVIEW_LIMIT
     ? `${normalized.slice(0, LAST_MESSAGE_PREVIEW_LIMIT - 1).trimEnd()}…`
     : normalized;
+}
+
+interface EventLogEntry {
+  kind?: string;
+  event?: { type?: string; part?: { text?: unknown } };
+}
+
+function previewFromContent(raw: unknown): string {
+  if (raw === null || raw === undefined) return "";
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Pre-JSON-content rows (or corrupt rows) — best-effort plain
+      // string preview.
+      return clampPreview(raw);
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return "";
+  const content = parsed as { type?: string; text?: unknown; log?: unknown };
+  if (content.type === "text" && typeof content.text === "string") {
+    return clampPreview(content.text);
+  }
+  if (content.type === "events" && Array.isArray(content.log)) {
+    // Concatenate every visible text part from the agent's event
+    // stream — same shape `runs-helpers.deriveTextFromLog` walks at
+    // run-completion time, but we don't dedupe against reasoning
+    // parts because that's a developer-mode concern and not worth
+    // the cycles on every chat-list refresh.
+    const parts: string[] = [];
+    for (const entry of content.log as EventLogEntry[]) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        entry.kind === "event" &&
+        entry.event?.type === "text" &&
+        typeof entry.event.part?.text === "string"
+      ) {
+        parts.push(entry.event.part.text);
+      }
+    }
+    return clampPreview(parts.join(""));
+  }
+  return "";
 }
 
 export async function listWithLatestMessage(
@@ -86,7 +132,7 @@ export async function listWithLatestMessage(
             c.list_kind AS kind,
             c.list_running AS is_running,
             c.list_failed AS is_failed,
-            ${lastTextSubquerySql()}
+            ${lastVisibleContentSubquerySql()}
       FROM chats c
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
@@ -98,7 +144,7 @@ export async function listWithLatestMessage(
     kind: r.kind as ChatWithLastMessage["kind"],
     running: !!r.is_running,
     failed: !!r.is_failed,
-    lastMessage: previewFromRaw(r.last_text),
+    lastMessage: previewFromContent(r.last_content),
   }));
 }
 

@@ -145,7 +145,7 @@ export async function dispatchChats(
     // Default chat path: fire the pending trigger message and schedule
     // a summary refresh for this chat.
     runManager.fireMessage(triggerId).catch((err) => {
-      log.error(`fireMessage for trigger ${triggerId} failed:`, err);
+      log.error({ err, triggerId }, "fireMessage for trigger failed");
     });
     runManager.scheduleSummary(segments[1]).catch(() => {});
 
@@ -158,7 +158,7 @@ export async function dispatchChats(
     const result = await chatRoutes.createThread(pool, segments[1], segments[3], body, emit, { actorUserId: userId, userId });
 
     runManager.fireMessage(result.triggerId).catch((err) => {
-      log.error(`fireMessage for thread trigger ${result.triggerId} failed:`, err);
+      log.error({ err, triggerId: result.triggerId }, "fireMessage for thread trigger failed");
     });
     runManager.scheduleSummary(result.threadChat.id).catch(() => {});
 

@@ -24,6 +24,9 @@ import {
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { SignupScreen } from '@/components/auth/SignupScreen'
+import { ForcedPasswordChangeScreen } from '@/components/auth/ForcedPasswordChangeScreen'
+import { useDispatch } from 'react-redux'
+import { wsConnect } from '@/store/ws/middleware'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
@@ -141,10 +144,58 @@ export default function App() {
   }
   return (
     <Routes>
-      <Route path="/w/:wsId/:view" element={<AppInner />} />
-      <Route path="*" element={<AppBoot />} />
+      <Route path="/w/:wsId/:view" element={<MustChangeGate><AppInner /></MustChangeGate>} />
+      <Route path="*" element={<MustChangeGate><AppBoot /></MustChangeGate>} />
     </Routes>
   )
+}
+
+/**
+ * Renders the forced-password-change screen while
+ * `me.mustChangePassword` is true; otherwise renders children
+ * unchanged.  Sits BETWEEN the authenticated-token check and the
+ * routed UI, because:
+ *
+ *  - The server's must-change middleware refuses GET /workspaces in
+ *    that state, so AppBoot's `useGetWorkspacesQuery` would 403 and
+ *    leave the user on a spinner forever.
+ *  - The flag itself comes from GET /me, which the server allows
+ *    while gated — we read it before any other data hook fires.
+ *  - getMe is invalidated by the change-password mutation, so on
+ *    success the flag flips and this gate falls through to the real
+ *    UI without a manual reload.
+ */
+function MustChangeGate({ children }: { children: React.ReactNode }) {
+  const dispatch = useDispatch()
+  const { data: me, isLoading } = useGetMeQuery()
+  const wsArmed = me && !me.mustChangePassword
+
+  // Open the WS only after we know the user isn't gated.  Connecting
+  // earlier would 403 at the upgrade (the server's
+  // enforceMustChangePassword check on /ws), which browsers surface
+  // as close code 1006; the WS middleware would then exponentially
+  // back off and retry indefinitely while the user sits on the
+  // password-change screen.  Once the password is changed, getMe
+  // refetches and wsArmed flips true, dispatching wsConnect for the
+  // first time.
+  useEffect(() => {
+    if (wsArmed) dispatch(wsConnect())
+  }, [dispatch, wsArmed])
+
+  if (isLoading) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+        </div>
+      </TooltipProvider>
+    )
+  }
+  if (me?.mustChangePassword) {
+    return <ForcedPasswordChangeScreen />
+  }
+  return <>{children}</>
 }
 
 // Landing route — waits for the workspace list, then redirects into the

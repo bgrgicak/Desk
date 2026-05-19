@@ -155,6 +155,52 @@ describe("must-change-password — HTTP gate", () => {
   });
 });
 
+describe("must-change-password — /apps/* surface gate (PR review high #3)", () => {
+  it("refuses POST /apps/chat/:cid/:appName/issue with 403 while gated", async () => {
+    // /apps/* bypasses the global must-change middleware so static
+    // dist serves don't re-run the gate per chunk, but
+    // requireBearerForApps re-enforces it for any branch that
+    // resolves the user's Bearer token (issue / DELETE / dist).
+    const res = await request("POST", "/apps/chat/cht_test/myapp/issue", {
+      token,
+      body: {},
+    });
+    expect(res.status).toBe(403);
+    expect((res.body as { code: string }).code).toBe("FORBIDDEN");
+  });
+
+  it("refuses DELETE /apps/library/:appName with 403 while gated", async () => {
+    const res = await request("DELETE", "/apps/library/myapp", { token });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("must-change-password — /me/password policy (PR review high #4)", () => {
+  it("rejects a new password shorter than the 12-char minimum", async () => {
+    const res = await request("POST", "/me/password", {
+      token,
+      body: { currentPassword: "wrong", newPassword: "short" },
+    });
+    // 400 here — the new-password policy check fires before the
+    // current-password verification.  Without this guard, the gate
+    // was defeatable by setting any throwaway value.
+    expect(res.status).toBe(400);
+    expect((res.body as { code: string }).code).toBe("VALIDATION");
+  });
+
+  it("rejects the documented seed password verbatim", async () => {
+    const res = await request("POST", "/me/password", {
+      token,
+      body: {
+        currentPassword: "wrong",
+        newPassword: "change-me-before-first-boot",
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as { message: string }).message).toMatch(/seed password/i);
+  });
+});
+
 describe("must-change-password — WS upgrade gate (round-2 critical #1)", () => {
   it("refuses the /ws upgrade with 403 while the flag is set", async () => {
     const { response, socket } = await rawWsUpgrade(`/ws?token=${token}`);

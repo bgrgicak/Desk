@@ -702,7 +702,7 @@ export async function runMessage(
   // Fire-and-forget. The full agent run continues on the message itself for
   // non-task rows and on a task_run child for task rows.
   ops.fireMessage(messageId, { manual: true }).catch((err) => {
-    log.error(`runMessage fireMessage failed for ${messageId}:`, err);
+    log.error({ err, messageId }, "runMessage fireMessage failed");
   });
 
   return rowToReturn;

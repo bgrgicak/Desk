@@ -52,7 +52,7 @@ export async function sweepIdleSandboxes(
 export function startIdleSweeper(pool: Pool, intervalMs: number = 60_000): NodeJS.Timeout {
   const timer = setInterval(() => {
     void sweepIdleSandboxes(pool).catch((err) => {
-      log.warn("idle sandbox sweep failed:", err);
+      log.warn({ err }, "idle sandbox sweep failed");
     });
   }, intervalMs);
   timer.unref();
@@ -85,7 +85,7 @@ export async function sweepIdleDaemons(
 export function startSoftIdleDaemonSweeper(pool: Pool, intervalMs: number = 60_000): NodeJS.Timeout {
   const timer = setInterval(() => {
     void sweepIdleDaemons(pool).catch((err) => {
-      log.warn("soft daemon sweep failed:", err);
+      log.warn({ err }, "soft daemon sweep failed");
     });
   }, intervalMs);
   timer.unref();

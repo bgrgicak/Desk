@@ -13,6 +13,7 @@ import { workspaceRootPath } from "@agent-desk/storage";
 import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
 import { deleteCredentials, readCredentials, writeCredentials } from "../connectors/credentialStore.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 
 type ProviderMetaEntry = {
   name?: string;
@@ -272,6 +273,14 @@ export async function changePassword(
   userId: string,
   data: { currentPassword: string; newPassword: string },
 ) {
+  // Enforce the same min-length + no-seed-reuse policy here as at
+  // signup and vault setup.  Without this the must-change-password
+  // gate is defeatable: a user could "change" to the documented
+  // seed value, clear must_change_password=1, and end up back at
+  // square one with a public-known credential.
+  enforcePasswordPolicy(
+    typeof data?.newPassword === "string" ? data.newPassword : "",
+  );
   await queries.users.setPassword(pool, userId, data.currentPassword, data.newPassword);
   return { ok: true };
 }

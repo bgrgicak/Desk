@@ -6,16 +6,17 @@ import './index.css'
 import App from './App.tsx'
 import { store } from './store/store'
 import { ensureSession } from './auth/session'
-import { wsConnect } from './store/ws/middleware'
 import { setupServiceWorker } from './lib/service-worker'
 
 async function boot(): Promise<void> {
-  const token = await ensureSession()
-
-  // Connect the WS middleware once we actually have a token. With no
-  // token `ensureSession()` returns null and we render the LoginScreen
-  // instead — re-trying the WS would just 1008-close.
-  if (token) store.dispatch(wsConnect())
+  // ensureSession populates the session token (cookie/storage) so
+  // subsequent fetch calls authenticate.  WS connection is deferred
+  // to `MustChangeGate` in App.tsx — kicking it off here would race
+  // the must-change-password check (the WS upgrade refuses gated
+  // users with HTTP 403, which browsers surface as close code 1006;
+  // the WS reconnect loop would then back-off-and-retry while the
+  // user is stuck on the password-change screen).
+  await ensureSession()
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

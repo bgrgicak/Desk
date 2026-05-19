@@ -18,6 +18,7 @@ function toServerMessage(m: GlobalChatMessage): ServerMessage {
     role: m.role,
     content: { type: 'text', text: m.content },
     createdAt: new Date(m.createdAt).toISOString(),
+    kind: 'chat',
   }
 }
 

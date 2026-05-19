@@ -336,6 +336,19 @@ export function createApp(opts: AppOptions): Server {
       requireInternal(req);
       const body = await parseBody(req) as { path?: string };
       const targetPath = body.path ?? defaultBackupPath(storage.home);
+      // VACUUM INTO takes the path as a literal SQL string. Single-
+      // quote escape covers the normal injection vectors, but a path
+      // containing newlines, NUL bytes or backslashes would sneak
+      // past the escape on certain SQLite versions. Reject those
+      // explicitly so VACUUM never runs with a path we didn't sanitise.
+      // eslint-disable-next-line no-control-regex -- intentional: rejecting NUL byte injection in path
+      if (/[\x00\n\r\\]/.test(targetPath)) {
+        sendJson(res, 400, {
+          code: "BAD_REQUEST",
+          message: "Backup path contains disallowed characters (newline, NUL, or backslash)",
+        });
+        return;
+      }
       const targetDir = pathDirname(targetPath);
       await fsMkdir(targetDir, { recursive: true });
       pool.exec(`VACUUM INTO '${targetPath.replace(/'/g, "''")}'`);
