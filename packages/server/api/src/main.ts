@@ -85,6 +85,7 @@ async function snapshotBeforeMigrations(
     // DESK_HOME containing newlines, NUL bytes or backslashes would
     // sneak past the escape on certain SQLite versions. Reject those
     // explicitly so the backup never runs with a path we didn't sanitise.
+    // eslint-disable-next-line no-control-regex -- intentional: rejecting NUL byte injection in path
     if (/[\u0000\n\r]/.test(target)) {
       log.warn({ target }, "pre-migration backup skipped: target path contains disallowed characters");
       return;

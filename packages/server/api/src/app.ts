@@ -1,17 +1,12 @@
 import { createReadStream } from "node:fs";
-import { type Readable } from "node:stream";
-import Busboy from "busboy";
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
-import { createHash } from "node:crypto";
 import { mkdir as fsMkdir, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
 import { type Pool } from "@agent-desk/db";
 import { queries } from "@agent-desk/db";
-import { DeskError, NotFoundError, UnauthorizedError, ValidationError, generateId, type Message, type PinKind, type WsEvent } from "@agent-desk/shared";
+import { DeskError, NotFoundError, ValidationError, generateId, type PinKind, type WsEvent } from "@agent-desk/shared";
 import {
-  chatArtifactsDir,
   ReplaceLibraryAppConflictError,
-  resolveHostPath,
   workspaceRootPath,
   type StorageContext,
 } from "@agent-desk/storage";
@@ -27,11 +22,12 @@ import {
   requireOwnedWorkspace,
 } from "./auth/ownership.js";
 import { errorToStatus } from "./errors.js";
-import { addConnection, removeConnection, broadcast } from "./ws/registry.js";
+import { broadcast } from "./ws/registry.js";
+import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as authRoutes from "./routes/auth.js";
-import { consumeRateLimit, getClientIp } from "./auth/rateLimit.js";
+import { getClientIp } from "./auth/rateLimit.js";
 import * as accountRoutes from "./routes/account.js";
 import * as localSourceRoutes from "./routes/localSources.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
@@ -45,79 +41,32 @@ import * as toolRoutes from "./routes/tools.js";
 import * as vaultRoutes from "./routes/vault.js";
 import { VaultStore } from "./vault/store.js";
 import { withModule } from "@agent-desk/shared/logger";
+import {
+  defaultBackupPath,
+  denyOverLimit,
+  parseBody,
+  parseMultipart,
+  parseMultipartFileStream,
+  requireBearerForApps,
+  requireReadablePathForRoute,
+  sendJson,
+} from "./http/request-helpers.js";
+import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
+import {
+  findDuplicateScheduledSandboxTask,
+  sandboxSessionRunsScheduledTask,
+} from "./routes/sandbox-task-helpers.js";
 const log = withModule("api/app");
 
-async function sandboxSessionRunsScheduledTask(pool: Pool, runId: string | undefined): Promise<boolean> {
-  if (!runId) return false;
-  const run = await queries.messages.findById(pool, runId);
-  if (run?.kind !== "task_run" || !run.parentId) return false;
-  const parent = await queries.messages.findById(pool, run.parentId);
-  return parent?.kind === "task" && (!!parent.executeAt || !!parent.cron);
-}
-
-async function findDuplicateScheduledSandboxTask(
-  pool: Pool,
-  args: { userId: string; chatId: string; title?: string; content: string; executeAt?: string; cron?: string },
-): Promise<Message | null> {
-  const existing = await queries.messages.listCrossChat(pool, {
-    userId: args.userId,
-    chatId: args.chatId,
-    kinds: ["task"],
-    scheduled: true,
-    limit: 200,
-  });
-  const sameTask = existing.items.find((message) => {
-    const sameTitle = (message.title ?? undefined) === args.title;
-    const sameContent = message.content.type === "text" && message.content.text === args.content;
-    const sameSchedule = args.cron
-      ? message.cron === args.cron
-      : (message.executeAt ?? undefined) === args.executeAt;
-    return sameTitle && sameContent && sameSchedule;
-  });
-  if (sameTask) return sameTask;
-
-  // Scheduled-task runs sometimes respond to their own cadence by scheduling the
-  // same task body again with a newly computed one-shot timestamp (for example,
-  // "tomorrow at 09:00" after today's test run). In that context the existing
-  // parent task is still the schedule owner, so treat an identical title/body as
-  // the same task even when the freshly supplied fire time differs.
-  return existing.items.find((message) => {
-    const sameTitle = (message.title ?? undefined) === args.title;
-    const sameContent = message.content.type === "text" && message.content.text === args.content;
-    return sameTitle && sameContent;
-  }) ?? null;
-}
 import * as appsRoutes from "./routes/apps.js";
 import { handleAppStorageRequest } from "./routes/app-storage.js";
 import {
   requireLibraryPathInWorkspace,
-  parseReadableChatArtifactPath,
-  requireReadablePathInWorkspace,
   requireWorkspaceId,
   resolveWorkspaceId,
 } from "./workspace-scope.js";
 
 type RunManager = ReturnType<typeof createRunManager>;
-
-const SEARCH_SCOPES = new Set(["all", "artifacts", "chats", "library", "files"]);
-const SEARCH_KINDS = new Set(["chat", "message", "summary", "library_file", "attachment", "artifact"]);
-type SearchScope = "artifacts" | "chats" | "library" | "files" | "all";
-type SearchKind = "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";
-
-function parseSearchScope(raw: string | null): SearchScope {
-  const scope = raw ?? "all";
-  if (!SEARCH_SCOPES.has(scope)) throw new ValidationError(`Invalid search scope: ${scope}`);
-  return scope as SearchScope;
-}
-
-function parseSearchKinds(raw: string | null): SearchKind[] | undefined {
-  if (!raw) return undefined;
-  const kinds = raw.split(",").map((kind) => kind.trim()).filter(Boolean);
-  for (const kind of kinds) {
-    if (!SEARCH_KINDS.has(kind)) throw new ValidationError(`Invalid search kind: ${kind}`);
-  }
-  return kinds as SearchKind[];
-}
 
 export interface AppOptions {
   pool: Pool;
@@ -141,198 +90,12 @@ export interface AppOptions {
   refreshSandboxConnections?: (userId: string, workspaceId?: string) => Promise<void>;
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const json = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(json) });
-  res.end(json);
-}
-
-/**
- * Consults a named rate-limit bucket and emits a 429 if the key is
- * over budget. Returns true when a response has been written and the
- * caller should early-return.
- *
- * The Retry-After header carries the time-to-recover in seconds, with
- * a floor of 1s so well-behaved clients don't busy-loop.
- */
-function denyOverLimit(res: ServerResponse, bucket: string, key: string): boolean {
-  if (!key) return false; // unknown client IP — don't block, log only
-  const decision = consumeRateLimit(bucket, key);
-  if (decision.allowed) return false;
-  const retryAfterSec = Math.max(1, Math.ceil(decision.retryAfterMs / 1000));
-  res.setHeader("Retry-After", String(retryAfterSec));
-  sendJson(res, 429, {
-    code: "RATE_LIMITED",
-    message: "Too many requests; slow down",
-  });
-  return true;
-}
-
 // Security headers + WS Origin allowlist live in ./http/security-headers
 // so this file isn't carrying ~100 lines of mostly-prose helpers.
 // Re-exported from app.ts so the existing test imports
 // (`import { isWsOriginAllowed } from "../src/app.js"`) keep working.
 import { getAllowedWsOrigins, isLoopbackAddress, isWsOriginAllowed, setSecurityHeaders } from "./http/security-headers.js";
 export { getAllowedWsOrigins, isLoopbackAddress, isWsOriginAllowed };
-
-/**
- * The /apps/* dispatcher's `issue` endpoint runs after requireAuth has
- * already let the path through (no global Bearer check on /apps/*). This
- * helper re-applies the Bearer check locally so the issue endpoint
- * cannot mint app-session tokens without a valid user session.
- */
-async function requireBearerForApps(pool: Pool, req: IncomingMessage): Promise<string> {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ")) {
-    throw new UnauthorizedError("Missing or invalid Authorization header");
-  }
-  const userId = await verifySession(pool, auth.slice(7));
-  if (!userId) {
-    throw new UnauthorizedError("Invalid or expired session token");
-  }
-  return userId;
-}
-
-async function requireReadablePathForRoute(
-  pool: Pool,
-  storage: StorageContext,
-  userId: string,
-  relPath: string,
-  workspaceId: string,
-): Promise<void> {
-  await requireReadablePathInWorkspace(pool, userId, relPath, workspaceId);
-  const artifact = parseReadableChatArtifactPath(relPath);
-  if (!artifact) return;
-
-  const { rows: chatRows } = await pool.query<{ workspace_id: string }>(
-    "SELECT workspace_id FROM chats WHERE id = ?",
-    [artifact.chatId],
-  );
-  if (chatRows[0]?.workspace_id !== workspaceId) {
-    throw new NotFoundError(`File not found: ${relPath}`);
-  }
-
-  const { rows } = await pool.query<{ path: string }>(
-    "SELECT path FROM workspaces WHERE id = ?",
-    [workspaceId],
-  );
-  const workspaceSlug = rows[0]?.path;
-  if (!workspaceSlug) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
-
-  const artifactRoot = chatArtifactsDir(storage.home, workspaceSlug, artifact.chatId);
-  const workspaceRoot = workspaceRootPath(storage.home, workspaceSlug);
-  const target = resolveHostPath(storage.home, workspaceSlug, relPath);
-  let realWorkspaceRoot: string;
-  let realRoot: string;
-  let realTarget: string;
-  try {
-    [realWorkspaceRoot, realRoot, realTarget] = await Promise.all([
-      fsRealpath(workspaceRoot),
-      fsRealpath(artifactRoot),
-      fsRealpath(target),
-    ]);
-  } catch {
-    throw new NotFoundError(`File not found: ${relPath}`);
-  }
-  if (realRoot !== realWorkspaceRoot && !realRoot.startsWith(realWorkspaceRoot + pathSep)) {
-    throw new NotFoundError(`File not found: ${relPath}`);
-  }
-  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + pathSep)) {
-    throw new NotFoundError(`File not found: ${relPath}`);
-  }
-}
-
-function readRawBody(req: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-
-async function parseBody(req: IncomingMessage): Promise<unknown> {
-  const raw = await readRawBody(req);
-  if (raw.length === 0) return {};
-  return JSON.parse(raw.toString());
-}
-
-/**
- * Default destination for `/internal/backup`. Lands next to the live DB
- * inside `$DESK_HOME/backups/` so file ownership matches the DB and the
- * directory is included in any host-level backup of the data root. Uses
- * UTC date so multi-region rsync targets don't fight over filenames.
- */
-function defaultBackupPath(deskHome: string): string {
-  const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-  return pathJoin(deskHome, "backups", `desk-${ts}.sqlite3`);
-}
-
-/**
- * Parses a multipart/form-data body using Node's built-in Fetch API.
- * Returns a FormData instance; callers pull out parts by field name.
- */
-async function parseMultipart(req: IncomingMessage): Promise<FormData> {
-  const contentType = req.headers["content-type"] ?? "";
-  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
-    throw new ValidationError("Expected multipart/form-data body");
-  }
-  const body = await readRawBody(req);
-  const r = new Request("http://localhost/", {
-    method: "POST",
-    headers: { "content-type": contentType },
-    body: new Blob([new Uint8Array(body)]),
-  });
-  try {
-    return await r.formData();
-  } catch {
-    throw new ValidationError("Malformed multipart body");
-  }
-}
-
-/**
- * Streaming multipart parser for single-file uploads. Text fields must
- * appear before the file part in the body (the client must append them
- * first). The returned stream is busboy's raw file stream — callers must
- * consume it fully so the underlying HTTP request drains.
- */
-function parseMultipartFileStream(req: IncomingMessage): Promise<{
-  name: string;
-  mime: string;
-  stream: Readable;
-  subpath?: string;
-}> {
-  const contentType = req.headers["content-type"] ?? "";
-  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
-    return Promise.reject(new ValidationError("Expected multipart/form-data body"));
-  }
-  return new Promise((resolve, reject) => {
-    const bb = Busboy({ headers: req.headers });
-    const fields: Record<string, string> = {};
-    let resolved = false;
-
-    bb.on("field", (fieldname, value) => { fields[fieldname] = value; });
-
-    bb.on("file", (fieldname, fileStream, info) => {
-      if (fieldname !== "file" || resolved) {
-        fileStream.resume();
-        return;
-      }
-      resolved = true;
-      const name = info.filename || fields["name"] || "upload";
-      const mime = info.mimeType || "application/octet-stream";
-      const subpath = fields["subpath"] && fields["subpath"] !== "" ? fields["subpath"] : undefined;
-      resolve({ name, mime, stream: fileStream, subpath });
-    });
-
-    bb.on("error", reject);
-    bb.on("close", () => {
-      if (!resolved) reject(new ValidationError("Missing 'file' part in multipart body"));
-    });
-
-    req.pipe(bb);
-  });
-}
 
 // Reserved for the upcoming route-table refactor (Phase 4) — the
 // dispatcher will move from a chain of `if`s into a Map<string,
@@ -569,127 +332,7 @@ export function createApp(opts: AppOptions): Server {
   // bare-bones WS implementation we don't need it (no protocol
   // extensions, no extensions buffer to forward), so name it _head to
   // satisfy no-unused-args while keeping the signature documented.
-  server.on("upgrade", (req, socket, _head) => {
-    void (async () => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    if (url.pathname !== "/ws") {
-      socket.destroy();
-      return;
-    }
-
-    // Origin allowlist (CSWSH mitigation). Reject before authenticating
-    // so a malicious page can't probe whether a token is valid.
-    const origin = req.headers.origin;
-    const originHeader = Array.isArray(origin) ? origin[0] : origin;
-    if (!isWsOriginAllowed(originHeader)) {
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-
-    // Authenticate via ?token= query param
-    const token = url.searchParams.get("token");
-    if (!token) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-
-    const userId = await verifySession(pool, token);
-    if (!userId) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-
-    // The HTTP request dispatcher refuses every endpoint outside a
-    // narrow allowlist while must_change_password is set; the WS
-    // upgrade gets the same treatment. A live WS connection
-    // broadcasts every workspace WsEvent — letting a user who's
-    // still on the public seed credential subscribe to those events
-    // would defeat the rest of the gate.
-    //
-    // Distinguish ForbiddenError (must-change gate) from other
-    // failures (transient DB issue, etc.) so a hiccup on findById
-    // doesn't false-positive into a 403 for a non-must-change user.
-    try {
-      await enforceMustChangePassword(pool, userId, "GET", "/ws");
-    } catch (err) {
-      if (err instanceof DeskError && err.code === "FORBIDDEN") {
-        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      } else {
-        log.warn({ err, userId }, "ws upgrade: must-change-password check threw");
-        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-      }
-      socket.destroy();
-      return;
-    }
-
-    // Perform the WebSocket handshake. The header may be a string or an
-    // array of strings; the RFC says take the first.
-    const rawKey = req.headers["sec-websocket-key"];
-    const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
-    if (!key) {
-      socket.destroy();
-      return;
-    }
-
-    // RFC 6455 §1.3: fixed magic GUID for the WebSocket handshake.
-    const WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    const acceptKey = createHash("sha1")
-      .update(key + WS_MAGIC_GUID)
-      .digest("base64");
-
-    socket.write(
-      "HTTP/1.1 101 Switching Protocols\r\n" +
-      "Upgrade: websocket\r\n" +
-      "Connection: Upgrade\r\n" +
-      `Sec-WebSocket-Accept: ${acceptKey}\r\n` +
-      "\r\n",
-    );
-
-    // Create a minimal WS-like object for the registry
-    const ws = {
-      readyState: 1,
-      send(data: string) {
-        // WebSocket text frame encoding
-        const payload = Buffer.from(data, "utf-8");
-        let header: Buffer;
-        if (payload.length < 126) {
-          header = Buffer.alloc(2);
-          header[0] = 0x81; // FIN + text opcode
-          header[1] = payload.length;
-        } else if (payload.length < 65536) {
-          header = Buffer.alloc(4);
-          header[0] = 0x81;
-          header[1] = 126;
-          header.writeUInt16BE(payload.length, 2);
-        } else {
-          header = Buffer.alloc(10);
-          header[0] = 0x81;
-          header[1] = 127;
-          header.writeBigUInt64BE(BigInt(payload.length), 2);
-        }
-        socket.write(Buffer.concat([header, payload]));
-      },
-    };
-
-    addConnection(userId, ws);
-
-    socket.on("close", () => {
-      ws.readyState = 3; // CLOSED
-      removeConnection(userId, ws);
-    });
-
-    socket.on("error", () => {
-      ws.readyState = 3;
-      removeConnection(userId, ws);
-    });
-    })().catch((err) => {
-      log.error("WebSocket upgrade failed:", err);
-      try { socket.destroy(); } catch { /* ignore */ }
-    });
-  });
+  installWsUpgradeHandler(server, pool);
 
   async function dispatch(method: string, params: RouteParams, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { segments, userId, query } = params;

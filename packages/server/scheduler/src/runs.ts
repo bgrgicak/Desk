@@ -1,14 +1,10 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { Cron } from "croner";
 import { type Pool } from "@agent-desk/db";
 import {
   generateId,
-  AgentEventSchema,
   GOAL_KEYS,
-  type AgentEvent,
-  type AgentLogEntry,
   type GoalKey,
   type Message,
   type WsEvent,
@@ -40,7 +36,6 @@ import {
 import {
   buildOutputContent,
   computeNextRun,
-  deriveSummaryTextFromLog,
   errorLogLines,
   isNonEmpty,
   isUnscheduledTask,

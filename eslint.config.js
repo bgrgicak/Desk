@@ -66,6 +66,11 @@ export default tseslint.config(
       // soften to a warning for now so the long-tail doesn't gate this
       // landing. Promote to error once the cleanup catches up.
       '@typescript-eslint/no-explicit-any': 'warn',
+      // File-size guardrail. Warn at 1000 lines so the next monolith
+      // gets attention before it grows past saving (api/src/app.ts is
+      // the last known offender; see Phase 4 of the cleanup plan).
+      // Promote to 'error' once the route dispatcher has been split.
+      'max-lines': ['warn', { max: 1000, skipBlankLines: true, skipComments: true }],
     },
   },
   {
@@ -85,6 +90,11 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       'no-console': 'off',
+      // Test files are allowed to grow longer — they accrete fixtures
+      // and assertions across many test cases.  Splitting them is
+      // valuable but never urgent the way a 1600-line route dispatcher
+      // is.
+      'max-lines': 'off',
     },
   },
 );
