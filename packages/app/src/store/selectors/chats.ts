@@ -10,8 +10,11 @@ const VALID_CHAT_GOALS = new Set<string>(GOAL_KEYS);
  * unknown / missing values.  The server's ChatSchema currently
  * accepts any string (the DB column has no enum constraint); the
  * client only renders the known set.
+ *
+ * Exported for direct unit testing — exhaustive coverage of the
+ * narrow + fallback paths sits alongside the helper.
  */
-function narrowChatGoal(goal: string | undefined): ChatGoalKind | null {
+export function narrowChatGoal(goal: string | undefined): ChatGoalKind | null {
   if (!goal) return null;
   return VALID_CHAT_GOALS.has(goal) ? (goal as ChatGoalKind) : null;
 }
