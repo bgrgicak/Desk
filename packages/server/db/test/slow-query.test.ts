@@ -38,7 +38,11 @@ describe("slow-query log", () => {
   it("emits a warn for queries above the configured threshold", async () => {
     process.env.DESK_SLOW_QUERY_MS = "1"; // trigger on anything but trivial
     resetSlowQueryThresholdCache();
-    const pool = new Pool(); // :memory:
+    // Explicit :memory: so the test stays isolated even when CI sets
+    // DESK_DB_PATH (the default fallback) — without this, two
+    // tests-in-the-same-process share a single SQLite file and the
+    // second CREATE TABLE trips a "table already exists" error.
+    const pool = new Pool({ path: ":memory:" });
     // Recursive CTE generating 200k rows + COUNT is deterministically
     // well over the 1ms threshold on every machine the test runs on,
     // unlike a sort-100-rows query which can finish in sub-millisecond
@@ -57,7 +61,7 @@ describe("slow-query log", () => {
   it("never emits when the threshold is 0", async () => {
     process.env.DESK_SLOW_QUERY_MS = "0";
     resetSlowQueryThresholdCache();
-    const pool = new Pool();
+    const pool = new Pool({ path: ":memory:" });
     pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
     await pool.query("SELECT * FROM t");
     expect(slowMessages()).toHaveLength(0);
@@ -67,7 +71,7 @@ describe("slow-query log", () => {
   it("never emits when the env var is unset and the query is fast", async () => {
     delete process.env.DESK_SLOW_QUERY_MS;
     resetSlowQueryThresholdCache();
-    const pool = new Pool();
+    const pool = new Pool({ path: ":memory:" });
     pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
     await pool.query("SELECT * FROM t");
     expect(slowMessages()).toHaveLength(0);
@@ -77,7 +81,7 @@ describe("slow-query log", () => {
   it("sanitizes the logged SQL — collapses whitespace, truncates", async () => {
     process.env.DESK_SLOW_QUERY_MS = "1";
     resetSlowQueryThresholdCache();
-    const pool = new Pool();
+    const pool = new Pool({ path: ":memory:" });
     // Same deterministic heavy query, parameterised so the bind-value
     // leakage assertion has something to look for.
     await pool.query(
