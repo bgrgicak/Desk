@@ -178,9 +178,22 @@ export function classifyResourceError(
  */
 const growthInFlight = new Map<string, Promise<GrowthResult>>();
 
+/**
+ * Per-workspace serial queue around `createOrReuse`. Two rapid chat
+ * sends to the same workspace hit `createOrReuse` within milliseconds
+ * of each other and otherwise race on inspect/create/remove — one call
+ * can remove the container the other is mid-polling, surfacing as
+ * "Sandbox entrypoint check: container … is no longer present" on
+ * what looks to the user like a brand-new chat. Chaining each call
+ * after the previous one for the same workspace eliminates the race;
+ * different workspaces remain independent.
+ */
+const createOrReuseInFlight = new Map<string, Promise<SandboxHandle>>();
+
 /** Test-only: clears the in-flight-growth lock and any related state. */
 export function _resetGrowthStateForTest(): void {
   growthInFlight.clear();
+  createOrReuseInFlight.clear();
 }
 
 export interface GrowthResult {
@@ -302,6 +315,46 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
  * first opencode invocation has the auth blob already wired up.
  */
 export async function createOrReuse(
+  workspaceId: string,
+  workspaceSlug: string,
+  home?: string,
+  providerKeys?: Record<string, string>,
+  mountPlan?: MountPlan,
+  extraEnv?: Record<string, string>,
+  workspaceKind: WorkspaceKind = "project",
+): Promise<SandboxHandle> {
+  // Chain this call after any in-flight createOrReuse for the same
+  // workspace. Without this, a rapid second chat send finds the first
+  // call mid-`engine.create` / mid-`waitForEntrypointReady` and races
+  // its inspect/create/remove — the loser ends up exec'ing against a
+  // container the winner just removed, surfacing as the user-visible
+  // "container … is no longer present" failure. See PR #125's "known
+  // follow-up".
+  const containerName = `desk-sandbox-${workspaceId}`;
+  const prev = createOrReuseInFlight.get(containerName);
+  const work = (async () => {
+    if (prev) await prev.catch(() => {});
+    return createOrReuseImpl(
+      workspaceId,
+      workspaceSlug,
+      home,
+      providerKeys,
+      mountPlan,
+      extraEnv,
+      workspaceKind,
+    );
+  })();
+  createOrReuseInFlight.set(containerName, work);
+  try {
+    return await work;
+  } finally {
+    if (createOrReuseInFlight.get(containerName) === work) {
+      createOrReuseInFlight.delete(containerName);
+    }
+  }
+}
+
+async function createOrReuseImpl(
   workspaceId: string,
   workspaceSlug: string,
   home?: string,

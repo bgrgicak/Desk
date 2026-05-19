@@ -18,10 +18,12 @@ import {
   classifyResourceError,
   growSandboxForResourceError,
   cancelRun as runtimeCancelRun,
+  isContainerGoneError,
   productionReflectWorkspace,
   resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
+  type SandboxHandle,
 } from "@agent-desk/runtime";
 import * as sandboxSweep from "./runs-sandbox-sweep.js";
 import { createSummaryScheduler } from "./runs-summary.js";
@@ -181,6 +183,24 @@ export function resolveOpenAiBillingSource(
 export interface FireMessageOptions {
   /** Manual task fires create a run now without consuming the task's schedule. */
   manual?: boolean;
+}
+
+/**
+ * True when the message row's current state is 'cancelled' — i.e. a
+ * preempt already wrote that state and any in-flight failure on this
+ * run is downstream noise that should not surface to the user as a
+ * "failed" banner.
+ */
+async function isAlreadyCancelled(pool: Pool, messageId: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE id = ?`,
+      [messageId],
+    );
+    return rows[0]?.state === "cancelled";
+  } catch {
+    return false;
+  }
 }
 
 export function createRunManager(opts: RunManagerOptions) {
@@ -564,37 +584,70 @@ export function createRunManager(opts: RunManagerOptions) {
           billing.runtimeModel === agentFileInput.model
             ? agentFileInput
             : { ...agentFileInput, model: billing.runtimeModel };
+        // Transparent container-gone retry: a reaper, manual `rm -f`, or
+        // some other rare race outside the per-workspace createOrReuse
+        // mutex can leave the sandbox container removed between
+        // acquisition and the first daemon exec. The driver already
+        // self-heals inside `runtimeExecRun`, but the scheduler-level
+        // `createOrReuse` call (used for mounts setup) is unguarded.
+        // Catch the "no such container" / "container … is not running"
+        // shape here and try once more with a clean log slate so the
+        // user just sees a tiny delay rather than a failure banner.
+        const MAX_CONTAINER_GONE_RETRIES = 2;
+        let containerGoneAttempts = 0;
         while (true) {
           if (opts.execRunFn) {
             result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput: runtimeAgentInput, attachments });
           } else {
-            const handle = process.env.DESK_SANDBOX_DRIVER === "fake"
-              ? { containerId: "fake-sandbox", workspaceId }
-              : await createOrReuse(
-                  workspaceId,
-                  workspaceSlug,
-                  home,
-                  billing.providerKeys,
-                  mountPlan,
-                  extraEnv,
-                  workspaceKind,
+            try {
+              const handle: SandboxHandle = process.env.DESK_SANDBOX_DRIVER === "fake"
+                ? { containerId: "fake-sandbox", workspaceId }
+                : await createOrReuse(
+                    workspaceId,
+                    workspaceSlug,
+                    home,
+                    billing.providerKeys,
+                    mountPlan,
+                    extraEnv,
+                    workspaceKind,
+                  );
+              result = await runtimeExecRun(pool, handle, {
+                runId,
+                prompt,
+                home,
+                workspaceId,
+                workspaceSlug,
+                workspaceKind,
+                chatId: msg.chatId,
+                agent: runtimeAgentInput,
+                attachments,
+                providerKeys: billing.providerKeys,
+                extraEnv,
+                mountPlan,
+                opencodeSessionId,
+                onLog: onLogWithStderrCapture,
+              });
+            } catch (err) {
+              const errMsg = (err as Error).message ?? String(err);
+              if (isContainerGoneError(errMsg) && containerGoneAttempts < MAX_CONTAINER_GONE_RETRIES) {
+                containerGoneAttempts++;
+                log.warn(
+                  { runId, attempt: containerGoneAttempts, err: errMsg },
+                  "sandbox container vanished during acquisition; retrying transparently",
                 );
-            result = await runtimeExecRun(pool, handle, {
-              runId,
-              prompt,
-              home,
-              workspaceId,
-              workspaceSlug,
-              workspaceKind,
-              chatId: msg.chatId,
-              agent: runtimeAgentInput,
-              attachments,
-              providerKeys: billing.providerKeys,
-              extraEnv,
-              mountPlan,
-              opencodeSessionId,
-              onLog: onLogWithStderrCapture,
-            });
+                // Reset the per-attempt log so the retry doesn't tail-mix
+                // with the failed acquisition's stderr.
+                await new Promise<void>((resolve) => {
+                  logStream!.once("close", resolve);
+                  logStream!.end();
+                });
+                await fs.promises.truncate(logFile!, 0);
+                logStream = fs.createWriteStream(logFile!, { flags: "a" });
+                stderrCapture = "";
+                continue;
+              }
+              throw err;
+            }
             // Persist the session id after every attempt (not just success):
             // a resource-retry inside the loop should reuse the same session
             // so the model's context across attempts stays consistent.
@@ -701,6 +754,29 @@ export function createRunManager(opts: RunManagerOptions) {
       return { fired: true, childIds: [] };
     } catch (err) {
       log.error({ messageId, err }, "fireMessage failed");
+      // If the run was preempted before the failure (the user's next
+      // send moved on; `preemptChatRun` already set state='cancelled'),
+      // the failure here is downstream noise — typically the
+      // preempting fire's createOrReuse drift-recreated the container
+      // under us. Don't surface it as a "failed" banner; the cancelled
+      // state is the user-facing outcome. Without this guard, a
+      // preempted turn shows up in the UI with "Agent run failed
+      // before it could complete" even though the user already moved
+      // on with a fresh turn.
+      const preempted = await isAlreadyCancelled(pool, runId);
+      if (preempted) {
+        if (logStream) {
+          await new Promise<void>((resolve) => {
+            logStream!.once("finish", resolve);
+            logStream!.end();
+          });
+        }
+        // finalizeExecution would WHERE-clause out anyway since state
+        // is already 'cancelled', but skip it explicitly so we don't
+        // spend the round-trip. Don't emit a child failure message —
+        // the cancelled state is its own UI affordance.
+        return { fired: true, childIds: [] };
+      }
       for (const line of errorLogLines(err)) {
         await onLog({ runId, seq: 0, kind: "stderr", payload: line });
       }
