@@ -483,10 +483,10 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   }
 
   // "Related artifacts" — the server has no explicit artifact-to-context
-  // relation yet. We hydrate against the library and filter by the ids
-  // the UI already tracks on the item; it's empty for server-backed
-  // items today. TODO(api-gap): replace with a first-class relation in
-  // matrix §4.2.5 once the server exposes it.
+  // relation yet (tracked as a roadmap feature; not a code gap).  We
+  // hydrate against the library and filter by the ids the UI already
+  // tracks on the item; the list is empty for server-backed items
+  // today.
   const { data: libraryResp } = useGetLibraryQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId },

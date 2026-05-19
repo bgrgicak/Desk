@@ -1,14 +1,21 @@
 /**
- * Client-derived shims for UI concepts the server can't represent yet.
+ * Client-derived state — counters, in-flight indicators, and the
+ * "current user / current chat" pointers that don't belong in any one
+ * RTK Query cache.
  *
- * Every piece of state here is either fed by the WS middleware (slice 12's
- * work) or derived from other RTK Query caches via selectors and matchers.
- * Nothing here persists — a reload clears the slice and the shims
- * re-hydrate from server events and fulfilled query results.
+ * Every field here is either fed by the WS middleware on a specific
+ * event (running/failed chat ids, wsKnownChatIds) or mirrored from a
+ * fulfilled query (currentUserId from getMe).  Nothing persists — a
+ * reload clears the slice and the values rehydrate from server events
+ * and fulfilled query results.
  *
- * TODO(api-gap): see feature-gap-matrix §4.2 — folders-as-entity,
- * notes-for-AI sidecars, artifact authorship, "1 update" pills, and the
- * compose status sequence all live here until the server exposes them.
+ * Roadmap-shaped feature placeholders that previously lived here as
+ * an api-gap comment block — folders-as-entity, notes-for-AI
+ * sidecars, artifact authorship, "1 update" pills, the compose status
+ * sequence — are documented in `roadmap.md` and tracked there.  They
+ * are independent features that land with their own DB/API/UI surface
+ * rather than client-side shims, so they no longer belong in this
+ * file's preamble.
  */
 
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
