@@ -46,15 +46,15 @@ function currentHeapMb(): number | undefined {
   return Math.round(mem.usedJSHeapSize / (1024 * 1024));
 }
 
-function scheduleFlush(store: Store<RootState>): void {
+function scheduleFlush(): void {
   if (flushTimer !== null) return;
   flushTimer = setTimeout(() => {
     flushTimer = null;
-    void flush(store);
+    void flush();
   }, FLUSH_INTERVAL_MS);
 }
 
-async function flush(store: Store<RootState>): Promise<void> {
+async function flush(): Promise<void> {
   if (buffer.length === 0) return;
   const entries = buffer;
   buffer = [];
@@ -128,7 +128,7 @@ export function installPerfReporter(store: Store<RootState>): () => void {
       }
     }
 
-    if (buffer.length > 0) scheduleFlush(store);
+    if (buffer.length > 0) scheduleFlush();
   });
 
   observer.observe({ type: "longtask", buffered: true });
@@ -137,7 +137,7 @@ export function installPerfReporter(store: Store<RootState>): () => void {
   // 5-second timer may not fire before the browser parks the tab.
   const visibilityHandler = () => {
     if (document.visibilityState === "hidden" && buffer.length > 0) {
-      void flush(store);
+      void flush();
     }
   };
   document.addEventListener("visibilitychange", visibilityHandler);
