@@ -56,7 +56,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build desk/sandbox:v1 image
+      - name: Set up QEMU for multi-arch
+        # Multi-arch buildx wants binfmt registrations so arm64 layers
+        # can be emulated on the amd64 runner.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build desk/sandbox:v1 image (multi-arch, loaded into local docker for tests)
         # The image bakes a baseline `agent` user at UID 2000. At runtime
         # desk-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
@@ -67,13 +75,33 @@ jobs:
         # produced the image. The Dockerfile sets the static labels
         # (title, description, source, license); these three are the
         # commit-specific ones CI knows.
+        #
+        # Buildx's --load only supports a single platform at a time, so
+        # we build the host arch (amd64) for the test/export path, and
+        # follow with a buildx build that targets both arches just to
+        # prove the Dockerfile is portable — output goes to the buildx
+        # cache, not loaded.
         run: |
-          docker build \
+          docker buildx build \
             -f packages/server/runtime/Dockerfile.sandbox \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --label "org.opencontainers.image.version=${{ github.ref_name }}" \
+            --load \
+            --platform linux/amd64 \
             -t desk/sandbox:v1 .
+
+      - name: Verify desk/sandbox:v1 builds for arm64 too
+        # Multi-arch consumers (Apple Silicon contributors, arm cloud
+        # hosts) need the Dockerfile to keep working under emulation.
+        # This step's outputs aren't loaded into the local docker —
+        # we only need build success. Cached layers from the previous
+        # step keep this fast on consecutive builds.
+        run: |
+          docker buildx build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --platform linux/arm64 \
+            -t desk/sandbox:v1-arm64 .
 
       - name: Smoke-test desk/sandbox:v1
         # The image build can succeed while the entrypoint is broken
@@ -81,6 +109,36 @@ jobs:
         # the desk-agent binary that the sandbox is supposed to ship
         # — if exit is non-zero the image isn't usable.
         run: docker run --rm desk/sandbox:v1 desk-agent --help > /dev/null
+
+      - name: Reproducible-build sanity check
+        # Build the same Dockerfile a second time against the same
+        # source tree and assert the image digest is identical. Build
+        # non-determinism (timestamp ordering, dependency ordering,
+        # locale-sensitive output) shows up here long before it bites
+        # a security scan that depends on stable digests.
+        #
+        # SOURCE_DATE_EPOCH stabilises any tool that respects it.
+        # --build-arg + base-image pinning by SHA also help, but the
+        # main job is to surface drift visibly.
+        run: |
+          set -e
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          docker buildx build \
+            -f packages/server/runtime/Dockerfile.sandbox \
+            --build-arg SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+            --load --platform linux/amd64 \
+            -t desk/sandbox:v1-repro .
+          ORIGINAL=$(docker image inspect desk/sandbox:v1 --format '{{.Id}}')
+          REBUILT=$(docker image inspect desk/sandbox:v1-repro --format '{{.Id}}')
+          echo "first build:  $ORIGINAL"
+          echo "second build: $REBUILT"
+          if [ "$ORIGINAL" != "$REBUILT" ]; then
+            echo "::warning::sandbox image digest changed between builds — non-determinism detected"
+            # Advisory: timestamps in apt-cache + npm install make
+            # bit-identical digests hard to reach with the current
+            # Dockerfile. Don't fail the build until the Dockerfile is
+            # made reproducible (Phase 6.18 second pass).
+          fi
 
       - name: Export desk/sandbox:v1 image
         run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
