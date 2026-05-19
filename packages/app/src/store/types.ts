@@ -113,6 +113,7 @@ export interface ServerChat {
   agentId: string;
   title: string;
   goal?: GoalKey;
+  createdAt: string;
   updatedAt: string;
   awaitingUser: boolean;
   unread: boolean;

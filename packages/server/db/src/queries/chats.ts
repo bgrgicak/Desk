@@ -24,6 +24,9 @@ function rowToChat(row: Record<string, unknown>): Chat {
     agentId: row.agent_id,
     title: row.title,
     goal: row.goal ?? undefined,
+    // Pre-migration chats backfilled created_at from updated_at
+    // (see migration 0042); the column is NOT NULL going forward.
+    createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
     awaitingUser: !!row.awaiting_user,

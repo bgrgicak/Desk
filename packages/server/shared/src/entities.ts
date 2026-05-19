@@ -83,6 +83,7 @@ export const ChatSchema = z.object({
   agentId: z.string(),
   title: z.string(),
   goal: z.string().optional(),
+  createdAt: z.string(),
   updatedAt: z.string(),
   awaitingUser: z.boolean(),
   unread: z.boolean(),

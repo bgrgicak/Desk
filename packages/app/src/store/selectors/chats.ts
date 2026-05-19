@@ -7,13 +7,12 @@ import type { ServerChat } from "../types";
  * a TODO — see matrix §4.
  */
 export function toUiChat(c: ServerChat): UiChat {
-  const updatedAt = new Date(c.updatedAt);
   return {
     id: c.id,
     title: c.title,
     lastMessage: "", // TODO(api-gap): derive from last message fetched per chat
-    updatedAt,
-    createdAt: updatedAt, // TODO(api-gap): server doesn't carry createdAt on chats
+    updatedAt: new Date(c.updatedAt),
+    createdAt: new Date(c.createdAt),
     artifactIds: [], // populated by slice 8
     messages: [], // populated by slice 4
     unread: c.unread,
