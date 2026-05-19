@@ -2,9 +2,11 @@ import type { Chat as UiChat } from "@/data/ui-types";
 import type { ServerChat } from "../types";
 
 /**
- * Map a server Chat to the shape the existing React components already
- * consume. Fields the server can't populate yet stay empty/undefined with
- * a TODO — see matrix §4.
+ * Map a server Chat to the shape the existing React components
+ * consume.  Date strings are parsed to Date objects, optional fields
+ * default to empty/false, and the chat-level `artifactIds` and
+ * `messages` collections are populated later by other slices (the
+ * server doesn't ship them on the chat resource).
  */
 export function toUiChat(c: ServerChat): UiChat {
   return {
