@@ -85,8 +85,38 @@ export function installWsUpgradeHandler(server: Server, pool: Pool): void {
 
       wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
         addConnection(userId, ws);
-        ws.on("close", () => removeConnection(userId, ws));
+
+        // Keepalive ping. Browser WebSocket auto-responds to ping
+        // frames with pong (RFC 6455 §5.5.2), and the `ws` library
+        // ignores incoming pongs without configuration — so a server-
+        // driven ping every 25 s is enough to keep the connection
+        // above proxy idle timeouts. Live repro confirmed nginx
+        // (default `proxy_read_timeout=60s`) drops an idle WS at
+        // exactly t=60s; 25 s leaves a comfortable margin under any
+        // reasonable upstream timeout. Cheap (~2 bytes per ping).
+        // The interval is `unref()`d so it doesn't block shutdown.
+        // `DESK_WS_PING_INTERVAL_MS` lets tests use a much shorter
+        // cadence so assertions don't have to wait 25 s of real time.
+        const wsPingIntervalMs = Math.max(
+          100,
+          parseInt(process.env.DESK_WS_PING_INTERVAL_MS ?? "25000", 10),
+        );
+        const pingTimer = setInterval(() => {
+          if (ws.readyState !== ws.OPEN) return;
+          try {
+            ws.ping();
+          } catch {
+            // socket already dead — close handler will clean up the registry
+          }
+        }, wsPingIntervalMs);
+        pingTimer.unref();
+
+        ws.on("close", () => {
+          clearInterval(pingTimer);
+          removeConnection(userId, ws);
+        });
         ws.on("error", (err: Error) => {
+          clearInterval(pingTimer);
           log.warn({ err, userId }, "ws connection error");
           removeConnection(userId, ws);
         });

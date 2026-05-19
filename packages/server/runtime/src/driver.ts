@@ -270,7 +270,20 @@ function createRealDriver(): SandboxDriver {
           opts.extraEnv,
         );
 
-      let handle = await acquireHandle();
+      // createOrReuse can throw with a container-gone error if the
+      // container is removed during its waitForEntrypointReady poll
+      // (reaper / drift recreate / parallel fire / rm -f). A single
+      // retry covers the race: the second pass sees the missing
+      // container and creates a fresh one. Persistent failures still
+      // bubble up.
+      let handle: Awaited<ReturnType<typeof acquireHandle>>;
+      try {
+        handle = await acquireHandle();
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        if (!isContainerGoneError(msg)) throw err;
+        handle = await acquireHandle();
+      }
 
       const user = await sandboxUser(engine);
 
@@ -965,9 +978,15 @@ const SANDBOX_TOKEN_PATH = "/tmp/desk-sandbox-token";
  *   stuck somewhere we can't bound). The upstream cache is already
  *   evicted; re-acquiring the container and retrying gives the next
  *   spawn a clean shot.
+ *
+ * The "No such container" / "No such object" forms are what Docker and
+ * nerdctl actually emit when an exec races a removal — the older
+ * `container X not found` form is rare in practice but kept for
+ * compatibility.
  */
 export function isContainerGoneError(message: string): boolean {
   return (
+    /no such (container|object)/i.test(message) ||
     /container .* (not found|is not running)/i.test(message) ||
     /ensure timed out after/i.test(message)
   );

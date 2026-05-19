@@ -397,6 +397,25 @@ describe("isContainerGoneError", () => {
     )).toBe(true);
   });
 
+  it("matches Docker's actual exec-against-missing-container stderr", () => {
+    // What `docker exec <gone> ...` actually emits. Without this the
+    // 5-minute waitForEntrypointReady wedge from a mid-fire container
+    // removal fails the run hard instead of triggering the driver's
+    // single-shot re-acquire + retry.
+    expect(isContainerGoneError(
+      "Error response from daemon: No such container: 4118b44d870701f0",
+    )).toBe(true);
+    // nerdctl form
+    expect(isContainerGoneError(
+      "no such object: abc123",
+    )).toBe(true);
+    // The full message bubbled up from waitForEntrypointReady
+    expect(isContainerGoneError(
+      "Sandbox entrypoint did not become ready within 300000ms: " +
+        "Error response from daemon: No such container: cd5de83f",
+    )).toBe(true);
+  });
+
   it("does not match unrelated errors", () => {
     expect(isContainerGoneError("ECONNREFUSED")).toBe(false);
     expect(isContainerGoneError("docker daemon not responding")).toBe(false);

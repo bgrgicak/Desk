@@ -332,17 +332,41 @@ export async function createOrReuse(
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    let containerAlreadyGone = false;
     if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
       if (!existing.running) await engine.start(containerName);
-      await waitForEntrypointReady(engine, existing.id);
-      // Note: we never resize on plain reuse. Sandboxes start at the
-      // baseline and only grow when a run actually fails with a
-      // resource-shaped error — see `growSandboxForResourceError`. A
-      // re-use that *would* benefit from a larger sandbox surfaces that
-      // need by failing first, which is the correct signal.
-      return { containerId: existing.id, workspaceId };
+      try {
+        await waitForEntrypointReady(engine, existing.id);
+        // Note: we never resize on plain reuse. Sandboxes start at the
+        // baseline and only grow when a run actually fails with a
+        // resource-shaped error — see `growSandboxForResourceError`. A
+        // re-use that *would* benefit from a larger sandbox surfaces that
+        // need by failing first, which is the correct signal.
+        return { containerId: existing.id, workspaceId };
+      } catch (err) {
+        // The container can vanish between inspect() above and the first
+        // exec poll — reaper, drift recreate elsewhere, parallel fire's
+        // remove, or a manual rm. waitForEntrypointReady's fast-bail
+        // surfaces that as a "no longer present" error. Falling through
+        // to the create-fresh path below recovers in seconds rather than
+        // making every caller paper over the race with its own retry.
+        if (!/no longer present|no such (container|object)/i.test(
+          (err as Error).message ?? "",
+        )) {
+          throw err;
+        }
+        containerAlreadyGone = true;
+      }
     }
-    await engine.remove(containerName, true);
+    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
+    // confirmed the container is gone. Under a parallel fire, the name
+    // may already point at the winner's brand-new container — issuing
+    // `docker rm -f <name>` here would clobber it. The drift-recreate
+    // path still needs the remove because the existing container is
+    // alive but no longer matches our expected layout.
+    if (!containerAlreadyGone) {
+      await engine.remove(containerName, true);
+    }
   }
 
   // Pre-create every source dir and nested target mount point so the runtime
@@ -441,8 +465,12 @@ export async function createOrReuse(
   }
 }
 
-async function waitForEntrypointReady(engine: Engine, containerId: string): Promise<void> {
-  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
+export async function waitForEntrypointReady(
+  engine: Engine,
+  containerId: string,
+  timeoutMs: number = SANDBOX_READY_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let lastStderr = "";
   while (Date.now() < deadline) {
     const handle = await engine.exec({
@@ -455,11 +483,23 @@ async function waitForEntrypointReady(engine: Engine, containerId: string): Prom
     const exitCode = await handle.wait();
     if (exitCode === 0) return;
     lastStderr = Buffer.concat(stderr).toString("utf8");
+    // If the container has been removed underneath us (drift recreate,
+    // idle sweep, parallel fire's createOrReuse race, manual rm -f),
+    // every subsequent `docker exec` will fail with "No such container"
+    // until the 5-minute deadline. Bail immediately so the caller's
+    // single-shot re-acquire-and-retry path (see driver.ts:329-359) can
+    // rebuild the sandbox in seconds rather than freezing the chat for
+    // five minutes. The string we throw must match `isContainerGoneError`.
+    if (/no such (container|object)/i.test(lastStderr)) {
+      throw new Error(
+        `Sandbox entrypoint check: container ${containerId} is no longer present: ${lastStderr.trim()}`,
+      );
+    }
     await delay(250);
   }
 
   throw new Error(
-    `Sandbox entrypoint did not become ready within ${SANDBOX_READY_TIMEOUT_MS}ms${lastStderr ? `: ${lastStderr}` : ""}`,
+    `Sandbox entrypoint did not become ready within ${timeoutMs}ms${lastStderr ? `: ${lastStderr}` : ""}`,
   );
 }
 

@@ -282,6 +282,30 @@ export function createRunManager(opts: RunManagerOptions) {
    * or another fire is already in flight (the task lock declined us).
    */
   async function fireMessage(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
+    try {
+      return await fireMessageImpl(messageId, fireOptions);
+    } catch (err) {
+      // The inner fireMessageImpl has its own big try/catch that
+      // routes most failures through finalizeExecution + a failed
+      // child message, so the UI sees them. This outer catch covers
+      // pre-claim failures (findById/claimPending throwing a DB
+      // error before the inner try/catch is entered): without it,
+      // the message would be stuck in `pending`/`running` forever
+      // and the user sees an HTTP 201 but no chat feedback. Mark it
+      // failed and emit so the FailedRunBanner ("Try again") renders.
+      log.error({ messageId, err }, "fireMessage outer failure — marking message failed");
+      try {
+        await queries.messages.finalizeExecution(pool, messageId, "failed");
+        const failed = await queries.messages.findById(pool, messageId);
+        if (failed) emit({ type: "message.updated", payload: failed });
+      } catch (fallbackErr) {
+        log.error({ messageId, fallbackErr }, "fireMessage failure-finalize also threw");
+      }
+      throw err;
+    }
+  }
+
+  async function fireMessageImpl(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
     const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
@@ -395,7 +419,14 @@ export function createRunManager(opts: RunManagerOptions) {
 
       const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
       logFile = path.join(logDir, `${runId}.log`);
-      logStream = fs.createWriteStream(logFile, { flags: "a" });
+      // `flags: "w"` so a manual re-fire of a previously-failed
+      // chat/summary message starts with a clean log instead of
+      // appending the prior failure's stderr to the new attempt's
+      // event stream. (Task fires use a fresh task_run child runId so
+      // their log is always brand-new; "w" is equivalent to "a" in
+      // that case.) The resource-retry path already truncates
+      // explicitly mid-fire; this matches that behaviour at the start.
+      logStream = fs.createWriteStream(logFile, { flags: "w" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
       const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
       if (userId && Object.keys(providerKeys).length > 0) {
@@ -844,37 +875,15 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
-   * If the chat's currently-running agent_turn has gone silent (no log
-   * activity for `staleAfterMs`), cancel it so a follow-up user message
-   * can be fired in its place. An active run — one whose opencode is
-   * still emitting events (tokens, tool calls, step boundaries) — is
-   * left untouched; a user follow-up sent while a healthy run is in
-   * flight will create a new agent_turn but won't interrupt the old one.
-   *
-   * The signal is *log mtime*, not wall-clock age of the row. Opencode
-   * writes to the per-message log file on every event via `onLog`, so a
-   * legitimately long-running step (large LLM stream, slow tool, chatty
-   * build) keeps the file growing and is never considered stalled. The
-   * file only stops growing when opencode is genuinely waiting on
-   * something that isn't coming back (deadlocked tool, dropped LLM
-   * connection, internal hang).
-   *
-   * Why this exists: the user noticed chats sitting in `state='running'`
-   * for very long stretches with no reply, and our previous behavior had
-   * no way to recover without a server restart. With this hook called
-   * from the POST /messages route, a follow-up like "Are you stuck?"
-   * unblocks the chat by preempting the hung run, while a follow-up to a
-   * healthy long task does nothing harmful.
+   * Find the chat's currently-running chat-kind agent_turn, if any.
+   * Returns `null` when there is nothing in flight. Filtered to
+   * `kind='chat'` so a scheduled `task_run` in the same chat doesn't
+   * get preempted by an interactive follow-up.
    */
-  async function preemptStalledChatRun(
-    chatId: string,
-    opts: { staleAfterMs?: number } = {},
-  ): Promise<{ preempted: string } | null> {
-    const staleAfterMs = opts.staleAfterMs
-      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
-    // Only consider 'chat'-kind agent_turn rows: scheduled task_runs in the
-    // same chat have their own lifecycle and shouldn't be interrupted by a
-    // chat follow-up.
+  async function findRunningChatTurn(chatId: string): Promise<
+    | { id: string; workspaceSlug: string; startedAt: string | null }
+    | null
+  > {
     const { rows } = await pool.query<{
       id: string;
       workspace_slug: string;
@@ -894,10 +903,62 @@ export function createRunManager(opts: RunManagerOptions) {
       [chatId],
     );
     if (rows.length === 0) return null;
-    const running = rows[0];
+    return {
+      id: rows[0].id,
+      workspaceSlug: rows[0].workspace_slug,
+      startedAt: rows[0].started_at,
+    };
+  }
+
+  /**
+   * Unconditionally cancel the chat's in-flight agent_turn so a new
+   * user send can fire cleanly. This matches opencode's own client
+   * pattern: opencode itself silently drops the new message's `parts`
+   * if you POST to a busy session, so its bundled TUI/CLI calls
+   * `session.abort(...)` before any new turn. We mirror that here.
+   *
+   * `POST /session/:id/abort` is safe to follow with a fresh send:
+   * opencode preserves session history/messages-on-disk and the new
+   * turn starts cleanly against an `Idle` session. The prior turn's
+   * partial assistant reply is kept on the row (the cancel path
+   * resolves with `Cancelled` after `lastAssistant` is captured).
+   *
+   * Returns the preempted run id, or `null` when nothing was running.
+   */
+  async function preemptChatRun(
+    chatId: string,
+  ): Promise<{ preempted: string } | null> {
+    const running = await findRunningChatTurn(chatId);
+    if (!running) return null;
+    await cancelRun(running.id);
+    return { preempted: running.id };
+  }
+
+  /**
+   * Older, stale-only variant. Kept for diagnostics / scripted recovery
+   * of zombie rows: only cancels when the log file has been silent for
+   * `staleAfterMs`, so a healthy long-running step is never killed by
+   * a periodic sweep. Not wired to the chat-send route any more — that
+   * uses `preemptChatRun` (always-preempt) to match opencode semantics.
+   *
+   * Why we keep it: a follow-up that catches a wedged daemon (e.g. a
+   * deadlocked tool with the row stuck in `running` and no log
+   * activity) can call this explicitly without forcing a preempt
+   * decision on healthy runs. The signal is log mtime — opencode
+   * writes to the per-message log file on every event, so a
+   * legitimately long-running step keeps the file growing.
+   */
+  async function preemptStalledChatRun(
+    chatId: string,
+    opts: { staleAfterMs?: number } = {},
+  ): Promise<{ preempted: string } | null> {
+    const staleAfterMs = opts.staleAfterMs
+      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+    const running = await findRunningChatTurn(chatId);
+    if (!running) return null;
     const logPath = path.join(
       home,
-      running.workspace_slug,
+      running.workspaceSlug,
       ".chats",
       chatId,
       "logs",
@@ -908,14 +969,12 @@ export function createRunManager(opts: RunManagerOptions) {
       const stat = await fsp.stat(logPath);
       mtimeMs = stat.mtimeMs;
     } catch {
-      // Deliberately conservative: a missing log file means opencode hasn't
-      // emitted its first event yet, which usually means the run is still
-      // in container-cold-start (entrypoint downloading deps, image pull,
-      // `.deskrc` running). Those legitimately take minutes; preempting
-      // there would abandon valid in-flight work. We only preempt when we
-      // have positive evidence of activity-then-silence — that's the
-      // "opencode wedged" signal. Stuck rows with no log ever are recovered
-      // by `recoverOrphanedRuns` at the requeue cap, not this hook.
+      // Missing log file means opencode hasn't emitted its first event
+      // yet — usually container cold-start (entrypoint downloading
+      // deps, `.deskrc` running). Stale-only mode is conservative:
+      // skip rather than risk killing legitimately-progressing work.
+      // Stuck-with-no-log rows are recovered by `recoverOrphanedRuns`
+      // at the requeue cap.
       return null;
     }
     const ageMs = Date.now() - mtimeMs;
@@ -940,6 +999,7 @@ export function createRunManager(opts: RunManagerOptions) {
     getActiveWorkspaceIds,
     cancelMessage,
     cancelRun,
+    preemptChatRun,
     preemptStalledChatRun,
     pauseMessage,
     resumeMessage,
