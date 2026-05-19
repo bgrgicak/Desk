@@ -1,4 +1,4 @@
-import type { ChatWithListMeta } from "@agent-desk/shared";
+import type { Agent, ChatWithListMeta, Workspace } from "@agent-desk/shared";
 
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
@@ -47,29 +47,21 @@ export interface ServerUser {
   createdAt: string;
 }
 
-export interface ServerAgent {
-  id: string;
-  userId: string;
-  name: string;
-  model: string;
-}
+/**
+ * Server agent / workspace types — re-exported from
+ * `@agent-desk/shared` so the API contract has a single source of
+ * truth.  The `ServerWorkspaceAgent` membership row is server-side
+ * only (no shared schema yet) since it pairs an Agent with its
+ * workspace enrollment timestamp.
+ */
+export type ServerAgent = Agent;
 
 /** Membership row from `GET /workspaces/:id/agents`: agent + enrollment timestamp. */
 export interface ServerWorkspaceAgent extends ServerAgent {
   addedAt: string;
 }
 
-export interface ServerWorkspace {
-  id: string;
-  userId: string;
-  name: string;
-  description: string;
-  icon: string;
-  color: string;
-  /** On-disk directory name under ~/Desk/. Used for sandbox path translation. */
-  path: string;
-  createdAt: string;
-}
+export type ServerWorkspace = Workspace;
 
 export type ConnectorStatus = "active" | "disabled" | "error" | "revoked";
 
