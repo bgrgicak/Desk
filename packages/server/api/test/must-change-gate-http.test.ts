@@ -1,0 +1,176 @@
+/**
+ * Regression coverage for the must-change-password HTTP gate
+ * (round-2 critical #6) and the WS upgrade gate (round-2 critical
+ * #1). Both refuse requests outside a small allowlist when the user
+ * is still on the documented public seed credential.
+ */
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import * as crypto from "node:crypto";
+import * as http from "node:http";
+import * as net from "node:net";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Pool, runMigrations, queries } from "@agent-desk/db";
+import { ensureLayout } from "@agent-desk/storage";
+import { createRunManager } from "@agent-desk/scheduler";
+import { generateId } from "@agent-desk/shared";
+import { createApp, type AppOptions } from "../src/app.js";
+import { issueSession, clearSessions } from "../src/auth/sessions.js";
+
+let pool: Pool;
+let home: string;
+let userId: string;
+let dbPath: string;
+let server: http.Server;
+let token: string;
+
+function appOpts(): AppOptions {
+  return {
+    pool,
+    storage: { pool, home },
+    runManager: createRunManager({
+      pool,
+      execRunFn: async () => ({ exitCode: 0 }),
+    }),
+  };
+}
+
+function request(method: string, reqPath: string, opts: { token?: string; body?: unknown } = {}): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const port = (server.address() as net.AddressInfo).port;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+    const payload = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
+    if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: reqPath, method, headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function rawWsUpgrade(reqPath: string): Promise<{ response: string; socket: net.Socket }> {
+  return new Promise((resolve, reject) => {
+    const port = (server.address() as net.AddressInfo).port;
+    const key = crypto.randomBytes(16).toString("base64");
+    const socket = net.createConnection({ port, host: "127.0.0.1" }, () => {
+      socket.write(
+        `GET ${reqPath} HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        `Upgrade: websocket\r\n` +
+        `Connection: Upgrade\r\n` +
+        `Sec-WebSocket-Key: ${key}\r\n` +
+        `Sec-WebSocket-Version: 13\r\n` +
+        `\r\n`,
+      );
+    });
+    let response = "";
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+      if (response.includes("\r\n\r\n")) resolve({ response, socket });
+    });
+    socket.on("error", reject);
+    setTimeout(() => reject(new Error("Upgrade timeout")), 3000);
+  });
+}
+
+beforeAll(async () => {
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-gate-db-"));
+  dbPath = path.join(dbDir, "test.sqlite3");
+  pool = new Pool({ path: dbPath });
+  await runMigrations(pool);
+
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-gate-"));
+  await ensureLayout(home);
+  process.env.DESK_HOME = home;
+
+  userId = generateId("user");
+  await queries.users.insert(pool, {
+    id: userId,
+    username: "mcg",
+    passwordHash: "$2b$10$placeholder",
+    email: "mcg@example.com",
+  });
+  // Force the flag on — simulates a fresh seed install whose operator
+  // hasn't changed the seed password yet.
+  await pool.query("UPDATE users SET must_change_password = 1 WHERE id = ?", [userId]);
+
+  server = createApp(appOpts());
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+});
+
+beforeEach(async () => {
+  await clearSessions(pool);
+  token = await issueSession(pool, userId);
+});
+
+afterAll(async () => {
+  server.close();
+  server.closeAllConnections?.();
+  if (pool) await pool.end();
+  if (home) await fs.rm(home, { recursive: true, force: true });
+  if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+  delete process.env.DESK_HOME;
+});
+
+describe("must-change-password — HTTP gate", () => {
+  it("allows GET /me (in the allowlist)", async () => {
+    const res = await request("GET", "/me", { token });
+    expect(res.status).toBe(200);
+    expect((res.body as { mustChangePassword: boolean }).mustChangePassword).toBe(true);
+  });
+
+  it("allows POST /me/password (in the allowlist)", async () => {
+    // Wrong current password → 401, NOT 403. That proves the gate
+    // is letting the request through to the actual handler.
+    const res = await request("POST", "/me/password", {
+      token,
+      body: { currentPassword: "wrong", newPassword: "a-strong-new-pw" },
+    });
+    expect([401]).toContain(res.status);
+  });
+
+  it("refuses GET /workspaces with 403 (NOT in the allowlist)", async () => {
+    const res = await request("GET", "/workspaces", { token });
+    expect(res.status).toBe(403);
+    expect((res.body as { code: string }).code).toBe("FORBIDDEN");
+  });
+
+  it("refuses POST /chats (state-changing, NOT in the allowlist)", async () => {
+    const res = await request("POST", "/chats", { token, body: {} });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("must-change-password — WS upgrade gate (round-2 critical #1)", () => {
+  it("refuses the /ws upgrade with 403 while the flag is set", async () => {
+    const { response, socket } = await rawWsUpgrade(`/ws?token=${token}`);
+    socket.destroy();
+    expect(response).toContain("403 Forbidden");
+  });
+
+  it("accepts the upgrade after the flag is cleared", async () => {
+    await pool.query("UPDATE users SET must_change_password = 0 WHERE id = ?", [userId]);
+    try {
+      const { response, socket } = await rawWsUpgrade(`/ws?token=${token}`);
+      socket.destroy();
+      expect(response).toContain("101 Switching Protocols");
+    } finally {
+      // Restore for subsequent tests that re-use this user.
+      await pool.query("UPDATE users SET must_change_password = 1 WHERE id = ?", [userId]);
+    }
+  });
+});

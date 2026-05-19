@@ -132,6 +132,47 @@ describe("isWsOriginAllowed unit", () => {
   });
 });
 
+describe("isLoopbackAddress unit", () => {
+  // Round-2 high-pri #5: the auto-login loopback check used to be a
+  // hand-rolled equality on "127.0.0.1" / "::1" / "::ffff:127.0.0.1"
+  // and missed the rest of 127.0.0.0/8.
+  it("matches every host in 127.0.0.0/8", async () => {
+    const { isLoopbackAddress } = await import("../src/http/security-headers.js");
+    expect(isLoopbackAddress("127.0.0.1")).toBe(true);
+    expect(isLoopbackAddress("127.0.0.2")).toBe(true);
+    expect(isLoopbackAddress("127.1.2.3")).toBe(true);
+    expect(isLoopbackAddress("127.255.255.255")).toBe(true);
+  });
+
+  it("matches the IPv6 loopback shapes Node emits", async () => {
+    const { isLoopbackAddress } = await import("../src/http/security-headers.js");
+    expect(isLoopbackAddress("::1")).toBe(true);
+    expect(isLoopbackAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackAddress("::ffff:127.42.42.42")).toBe(true);
+  });
+
+  it("rejects non-loopback addresses", async () => {
+    const { isLoopbackAddress } = await import("../src/http/security-headers.js");
+    expect(isLoopbackAddress("192.168.1.1")).toBe(false);
+    expect(isLoopbackAddress("10.0.0.5")).toBe(false);
+    expect(isLoopbackAddress("8.8.8.8")).toBe(false);
+    expect(isLoopbackAddress("::2")).toBe(false);
+    expect(isLoopbackAddress("")).toBe(false);
+    expect(isLoopbackAddress(undefined)).toBe(false);
+  });
+
+  it("rejects malformed-octet 127.x strings", async () => {
+    // Cosmetic — Node won't emit invalid IPs as remoteAddress —
+    // but tightening the regex stops the helper from silently
+    // accepting "127.999.999.999" if anyone reuses it from a less-
+    // trusted source.
+    const { isLoopbackAddress } = await import("../src/http/security-headers.js");
+    expect(isLoopbackAddress("127.999.999.999")).toBe(false);
+    expect(isLoopbackAddress("127.0.0")).toBe(false);
+    expect(isLoopbackAddress("127.0.0.1.5")).toBe(false);
+  });
+});
+
 describe("WebSocket upgrade — Origin allowlist (CSWSH mitigation)", () => {
   it("rejects upgrade with a cross-site Origin header", async () => {
     const port = (server.address() as net.AddressInfo).port;

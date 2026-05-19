@@ -94,14 +94,20 @@ const LOOPBACK_ORIGIN_PATTERN =
  * (matches against the host part of an origin URL) and the
  * /auth/auto-login dispatcher (matches against req.socket.remoteAddress
  * directly). Covers 127.0.0.0/8 and the two IPv6 loopback shapes Node
- * emits.
+ * emits as `req.socket.remoteAddress`.
+ *
+ * Tight octet match (0–255 only) so the helper can't accidentally
+ * accept a malformed string like "127.999.999.999" if it ever gets
+ * called from a less-trusted source than req.socket.
  */
+const LOOPBACK_OCTET = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const LOOPBACK_V4_RE = new RegExp(`^127\\.${LOOPBACK_OCTET}\\.${LOOPBACK_OCTET}\\.${LOOPBACK_OCTET}$`);
+
 export function isLoopbackAddress(addr: string | undefined): boolean {
   if (!addr) return false;
   if (addr === "::1") return true;
   if (addr.startsWith("::ffff:127.")) return true;
-  if (/^127(?:\.\d{1,3}){3}$/.test(addr)) return true;
-  return addr === "localhost"; // some clients pass the name through
+  return LOOPBACK_V4_RE.test(addr);
 }
 
 export function isWsOriginAllowed(

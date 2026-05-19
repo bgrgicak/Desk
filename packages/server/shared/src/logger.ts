@@ -25,51 +25,71 @@
 
 import { pino, type Logger as PinoLogger } from "pino";
 
+// Field names that are always redacted regardless of depth. pino's
+// fast-redact only supports single-segment `*` wildcards, so deep
+// nesting (`a.b.token`, `err.cause.user.token`) would leak with a
+// pure path list. We pre-walk every log object through
+// `scrubSensitive()` (below) — that handles arbitrary depth and
+// covers the cases pino's path syntax can't.
+const ALWAYS_REDACT_KEYS = new Set([
+  "authorization",
+  "cookie",
+  "token",
+  "password",
+  "currentpassword",
+  "newpassword",
+  "apikey",
+  "api_key",
+  "credentials",
+  "secret",
+  "refreshtoken",
+  "accesstoken",
+]);
+
+const REDACT_PLACEHOLDER = "[REDACTED]";
+const MAX_SCRUB_DEPTH = 8; // belt + suspenders against accidental cycles
+
+/**
+ * Recursively replaces values at any depth whose key looks like a
+ * secret with [REDACTED]. Returns a new object so the caller's data
+ * isn't mutated. Pino's fast-redact would do this natively if it
+ * supported `**` paths — until then we run our own walker.
+ */
+function scrubSensitive(value: unknown, depth = 0): unknown {
+  if (depth >= MAX_SCRUB_DEPTH) return value;
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map((v) => scrubSensitive(v, depth + 1));
+  if (typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (ALWAYS_REDACT_KEYS.has(k.toLowerCase())) {
+      out[k] = REDACT_PLACEHOLDER;
+    } else {
+      out[k] = scrubSensitive(v, depth + 1);
+    }
+  }
+  return out;
+}
+
+// pino path-based redact runs in addition to the scrubber. The
+// scrubber handles the deep cases; the path list locks down a few
+// well-known surfaces where the key is something we couldn't catch
+// by name (e.g. `req.headers["authorization"]` already gets caught
+// by ALWAYS_REDACT_KEYS, but listing it here doubles up for safety).
 const REDACT_PATHS = [
-  // Auth header values (rare in logs, but never leak). Cover top-level
-  // and the common nesting patterns (axios-style err.config.headers,
-  // node http err.req.headers).
   "req.headers.authorization",
   "headers.authorization",
   "authorization",
-  "*.headers.authorization",
-  "err.config.headers.authorization",
-  // Cookies can carry session bearer tokens.
   "req.headers.cookie",
   "headers.cookie",
   "cookie",
-  "*.headers.cookie",
-  // Token query params on /ws upgrade etc. Wildcards catch nested
-  // contexts (e.g. log.error({user: {token}}, ...)).
-  "token",
-  "*.token",
-  "password",
-  "*.password",
-  "currentPassword",
-  "newPassword",
-  // Provider/connection credentials.
-  "apiKey",
-  "*.apiKey",
-  "api_key",
-  "*.api_key",
-  "credentials",
-  "*.credentials",
-  "secret",
-  "*.secret",
-  // Error objects that get logged via {err}. Common nesting comes
-  // through axios (err.config), fetch errors (err.cause), and pg
-  // (err.where/err.detail can carry table contents).
-  "err.config",
-  "err.cause",
-  "err.config.data",
-  "err.response.data",
 ];
 
 const root: PinoLogger = pino({
   level: process.env.DESK_LOG_LEVEL ?? "info",
   redact: {
     paths: REDACT_PATHS,
-    censor: "[REDACTED]",
+    censor: REDACT_PLACEHOLDER,
     remove: false,
   },
   // Standardise the timestamp field so downstream log shippers don't
@@ -80,6 +100,13 @@ const root: PinoLogger = pino({
     // more often than parsers in our setup.
     level(label) {
       return { level: label };
+    },
+    // Walk every log object through scrubSensitive so deeply-nested
+    // secrets (e.g. err.cause.user.token, an axios response payload
+    // with a refresh token, a webhook event with an apiKey field)
+    // are redacted regardless of where they sit in the tree.
+    log(object) {
+      return scrubSensitive(object) as Record<string, unknown>;
     },
   },
 });

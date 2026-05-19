@@ -608,10 +608,19 @@ export function createApp(opts: AppOptions): Server {
     // broadcasts every workspace WsEvent — letting a user who's
     // still on the public seed credential subscribe to those events
     // would defeat the rest of the gate.
+    //
+    // Distinguish ForbiddenError (must-change gate) from other
+    // failures (transient DB issue, etc.) so a hiccup on findById
+    // doesn't false-positive into a 403 for a non-must-change user.
     try {
       await enforceMustChangePassword(pool, userId, "GET", "/ws");
-    } catch {
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    } catch (err) {
+      if (err instanceof DeskError && err.code === "FORBIDDEN") {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      } else {
+        log.warn({ err, userId }, "ws upgrade: must-change-password check threw");
+        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+      }
       socket.destroy();
       return;
     }
