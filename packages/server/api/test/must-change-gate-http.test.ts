@@ -11,7 +11,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, queries } from "@agent-desk/db";
+import { hashPassword, Pool, runMigrations, queries } from "@agent-desk/db";
 import { ensureLayout } from "@agent-desk/storage";
 import { createRunManager } from "@agent-desk/scheduler";
 import { generateId } from "@agent-desk/shared";
@@ -198,6 +198,58 @@ describe("must-change-password — /me/password policy (PR review high #4)", () 
     });
     expect(res.status).toBe(400);
     expect((res.body as { message: string }).message).toMatch(/seed password/i);
+  });
+});
+
+describe("must-change-password — full round-trip", () => {
+  // End-to-end of the entire gated flow against the real HTTP layer:
+  //   1. user is gated, /workspaces 403s
+  //   2. POST /me/password with the actual current password succeeds
+  //   3. /me now reports mustChangePassword=false
+  //   4. /workspaces is reachable again
+  // Lives next to the other gate tests so a regression in any of the
+  // four steps shows up under the same describe.
+  it("clears the flag and unlocks the rest of the API after a valid password change", async () => {
+    // Set a known current password we can use in the change call.
+    // Direct DB update sidesteps the gate path itself — we want to
+    // exercise change → unlock, not initial set.
+    const currentPassword = "current-pw-strong-1";
+    const hash = await hashPassword(currentPassword);
+    await pool.query(
+      "UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?",
+      [hash, userId],
+    );
+    // Refresh the bearer so this test isn't reusing one from a prior it().
+    token = await issueSession(pool, userId);
+
+    // Step 1: confirm we start gated.
+    const gatedMe = await request("GET", "/me", { token });
+    expect(gatedMe.status).toBe(200);
+    expect((gatedMe.body as { mustChangePassword: boolean }).mustChangePassword).toBe(true);
+    const gatedWs = await request("GET", "/workspaces", { token });
+    expect(gatedWs.status).toBe(403);
+
+    // Step 2: change the password through the gate.
+    const newPassword = "new-pw-very-strong-2";
+    const changeRes = await request("POST", "/me/password", {
+      token,
+      body: { currentPassword, newPassword },
+    });
+    expect(changeRes.status).toBe(200);
+    expect((changeRes.body as { ok: boolean }).ok).toBe(true);
+
+    // Step 3: /me now reports the flag is gone.
+    const ungatedMe = await request("GET", "/me", { token });
+    expect(ungatedMe.status).toBe(200);
+    expect((ungatedMe.body as { mustChangePassword: boolean }).mustChangePassword).toBe(false);
+
+    // Step 4: the rest of the API is reachable again.
+    const ungatedWs = await request("GET", "/workspaces", { token });
+    expect(ungatedWs.status).toBe(200);
+
+    // Restore the must-change flag so the other tests in this file
+    // (which share the user) keep their preconditions.
+    await pool.query("UPDATE users SET must_change_password = 1 WHERE id = ?", [userId]);
   });
 });
 

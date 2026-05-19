@@ -3,6 +3,11 @@ import { Toaster, toast } from 'sonner'
 import { Button, Input, TooltipProvider } from '@agent-desk/ui'
 import { useChangePasswordMutation } from '@/store/api'
 import { extractApiError } from '@/lib/api-error'
+import {
+  evaluatePasswordChange,
+  PASSWORD_MIN_LENGTH,
+  PUBLIC_SEED_PASSWORD,
+} from './forcedPasswordCheck'
 
 /**
  * Forced password-change gate.
@@ -24,22 +29,13 @@ export function ForcedPasswordChangeScreen() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changePassword, { isLoading }] = useChangePasswordMutation()
 
-  // Mirror the server-side password policy: min length 12 +
-  // refuse the documented public seed string verbatim.  Keeps the
-  // inline-validation messages from drifting away from what
-  // POST /me/password will accept.
-  const SEED_PASSWORD = 'change-me-before-first-boot'
-  const passwordMismatch =
-    newPassword.length > 0 &&
-    confirmPassword.length > 0 &&
-    newPassword !== confirmPassword
-  const tooShort = newPassword.length > 0 && newPassword.length < 12
-  const isSeed = newPassword === SEED_PASSWORD
-  const canSubmit =
-    newPassword.length >= 12 &&
-    !isSeed &&
-    !passwordMismatch &&
-    confirmPassword.length > 0
+  // Validation predicates live in forcedPasswordCheck.ts so the
+  // logic can be unit-tested without a React harness — the screen
+  // just renders the result.
+  const { canSubmit, tooShort, isSeed, passwordMismatch } = evaluatePasswordChange({
+    newPassword,
+    confirmPassword,
+  })
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -49,7 +45,7 @@ export function ForcedPasswordChangeScreen() {
       // very fact that the must-change flag is set means the user
       // logged in with it.
       await changePassword({
-        currentPassword: SEED_PASSWORD,
+        currentPassword: PUBLIC_SEED_PASSWORD,
         newPassword,
       }).unwrap()
       toast.success('Password updated')
@@ -90,7 +86,7 @@ export function ForcedPasswordChangeScreen() {
                   autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  minLength={12}
+                  minLength={PASSWORD_MIN_LENGTH}
                 />
                 {tooShort && (
                   <p className="text-xs text-destructive">
