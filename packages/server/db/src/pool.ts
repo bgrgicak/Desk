@@ -97,8 +97,12 @@ function execQuery<T>(
     result = { rows: [] as T[], rowCount: Number(info.changes) };
   }
   if (threshold > 0) {
-    const elapsed = Math.round(performance.now() - start);
-    if (elapsed >= threshold) logSlowQuery(elapsed, sql, result.rowCount);
+    // Compare on the raw float — Math.round on a sub-millisecond elapsed
+    // (e.g. 0.4ms) would collapse to 0 and silently drop the slow-query
+    // signal even though the query was technically over the threshold
+    // (which itself is an integer ms — anything ≥ threshold counts).
+    const elapsed = performance.now() - start;
+    if (elapsed >= threshold) logSlowQuery(Math.round(elapsed), sql, result.rowCount);
   }
   return result;
 }

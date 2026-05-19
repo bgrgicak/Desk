@@ -39,15 +39,17 @@ describe("slow-query log", () => {
     process.env.DESK_SLOW_QUERY_MS = "1"; // trigger on anything but trivial
     resetSlowQueryThresholdCache();
     const pool = new Pool(); // :memory:
-    pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, payload TEXT)");
-    pool.exec("BEGIN");
-    for (let i = 0; i < 5000; i++) {
-      await pool.query("INSERT INTO t (payload) VALUES (?)", [`row-${i}`]);
-    }
-    pool.exec("COMMIT");
-    // Force a slow read by sorting the whole table.
-    const res = await pool.query("SELECT * FROM t ORDER BY payload DESC LIMIT 100");
-    expect(res.rows.length).toBe(100);
+    // Recursive CTE generating 200k rows + COUNT is deterministically
+    // well over the 1ms threshold on every machine the test runs on,
+    // unlike a sort-100-rows query which can finish in sub-millisecond
+    // time on fast CPUs and silently miss the threshold (flake source).
+    const res = await pool.query<{ n: number }>(
+      `WITH RECURSIVE r(i) AS (
+         SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < 200000
+       )
+       SELECT COUNT(*) AS n FROM r`,
+    );
+    expect(res.rows[0].n).toBe(200000);
     expect(slowMessages().length).toBeGreaterThan(0);
     await pool.end();
   });
@@ -76,16 +78,16 @@ describe("slow-query log", () => {
     process.env.DESK_SLOW_QUERY_MS = "1";
     resetSlowQueryThresholdCache();
     const pool = new Pool();
-    pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, payload TEXT)");
-    pool.exec("BEGIN");
-    for (let i = 0; i < 5000; i++) {
-      await pool.query("INSERT INTO t (payload) VALUES (?)", [`row-${i}`]);
-    }
-    pool.exec("COMMIT");
-    await pool.query(`SELECT *
-                      FROM t
-                      WHERE payload LIKE ?
-                      ORDER BY payload DESC`, ["row-%"]);
+    // Same deterministic heavy query, parameterised so the bind-value
+    // leakage assertion has something to look for.
+    await pool.query(
+      `WITH RECURSIVE r(i) AS (
+         SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < ?
+       )
+       SELECT COUNT(*) AS n
+       FROM r`,
+      [200000],
+    );
     const slow = slowMessages();
     expect(slow.length).toBeGreaterThan(0);
     // The SQL inside the line is normalised to single spaces. Strip
@@ -93,6 +95,6 @@ describe("slow-query log", () => {
     const last = slow[slow.length - 1].replace(/\n$/, "");
     expect(last).not.toMatch(/\n/);
     // Bind values never appear in the log.
-    expect(slow.every((line) => !line.includes("row-"))).toBe(true);
+    expect(slow.every((line) => !line.includes("200000"))).toBe(true);
   });
 });
