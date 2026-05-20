@@ -3,6 +3,7 @@ import { ValidationError, type PinKind } from "@agent-desk/shared";
 import { withModule } from "@agent-desk/shared/logger";
 import * as accountRoutes from "../routes/account.js";
 import * as agentRoutes from "../routes/agents.js";
+import * as chatRoutes from "../routes/chats.js";
 import * as libraryRoutes from "../routes/library.js";
 import * as pinRoutes from "../routes/pins.js";
 import * as workspaceRoutes from "../routes/workspaces.js";
@@ -21,6 +22,7 @@ const log = withModule("api/dispatch/workspaces");
  *   /workspaces/{id}/agents (list, add, remove)
  *   /workspaces/{id}/pins (cross-workspace pins; list, create, delete)
  *   /workspaces/{id}/library-pins (within-workspace pins; create, delete)
+ *   /workspaces/{id}/chat-pins (within-workspace chat pins; create, delete)
  *   /agents (list, create)
  *   /agents/{id} (get, patch, delete)
  *
@@ -39,7 +41,7 @@ export async function dispatchWorkspaces(
     refreshSandboxConnections?: (userId: string, workspaceId?: string) => Promise<void>;
   },
 ): Promise<boolean> {
-  const { pool, storage, refreshConnections } = ctx;
+  const { pool, storage, refreshConnections, emit } = ctx;
 
   // ── Workspaces ──────────────────────────────────────────────────────
   if (path === "/workspaces" && method === "GET") {
@@ -187,6 +189,31 @@ export async function dispatchWorkspaces(
     const filePath = typeof body?.path === "string" ? body.path : "";
     if (!filePath) throw new ValidationError("Missing 'path' in body");
     await libraryRoutes.unpin(storage, segments[1], filePath);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  // ── Chat pins (within-workspace) ────────────────────────────────────
+  // Mirrors /workspaces/{id}/library-pins so the sidebar can pin a chat
+  // by id. Emits chat.updated post-mutation so other tabs see the new
+  // pinned flag without polling.
+  if (segments[0] === "workspaces" && segments[2] === "chat-pins" && segments.length === 3 && method === "POST") {
+    await requireOwnedWorkspace(pool, segments[1], userId);
+    const body = (await parseBody(req)) as { chatId?: unknown };
+    const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+    if (!chatId) throw new ValidationError("Missing 'chatId' in body");
+    await chatRoutes.pinChat(pool, segments[1], chatId);
+    emit({ type: "chat.updated", payload: await chatRoutes.getChat(pool, chatId) });
+    sendJson(res, 201, { ok: true });
+    return true;
+  }
+  if (segments[0] === "workspaces" && segments[2] === "chat-pins" && segments.length === 3 && method === "DELETE") {
+    await requireOwnedWorkspace(pool, segments[1], userId);
+    const body = (await parseBody(req)) as { chatId?: unknown };
+    const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+    if (!chatId) throw new ValidationError("Missing 'chatId' in body");
+    await chatRoutes.unpinChat(pool, segments[1], chatId);
+    emit({ type: "chat.updated", payload: await chatRoutes.getChat(pool, chatId) });
     sendJson(res, 200, { ok: true });
     return true;
   }

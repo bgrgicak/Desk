@@ -424,7 +424,7 @@ export function createApp(opts: AppOptions): Server {
 
     // Cross-chat message listing — read-only, AND-combined filters.
     // Powers the Runs page (scheduled/state filters) and Today / Inbox
-    // (awaitingUser) without introducing new top-level resources.
+    // (unread) without introducing new top-level resources.
     if (path === "/messages" && method === "GET") {
       const result = await messageRoutes.listMessages(pool, userId, query);
       sendJson(res, 200, result);

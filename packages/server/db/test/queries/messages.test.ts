@@ -35,20 +35,36 @@ afterAll(async () => {
 });
 
 describe("messages queries", () => {
-  it("inserts a message and marks chat unread", async () => {
+  it("inserts an agent message and marks chat unread", async () => {
+    // Only agent-authored visible messages flip chats.unread — your own
+    // sends aren't unread to you. See messages-writes.ts for the rule.
     await chats.markRead(pool, chatId);
     const msg = await messages.insert(pool, {
       id: generateId("message"),
       chatId,
-      role: "user",
+      role: "agent",
       content: { type: "text", text: "Hello" },
     });
     expect(msg.chatId).toBe(chatId);
-    expect(msg.role).toBe("user");
+    expect(msg.role).toBe("agent");
 
     const chat = await chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
     expect(chat!.updatedAt).toBe(msg.createdAt);
+  });
+
+  it("does not mark chat unread when the user sends a message", async () => {
+    const userChatId = generateId("chat");
+    await chats.insert(pool, { id: userChatId, workspaceId, agentId, title: "UserSend" });
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId: userChatId,
+      role: "user",
+      content: { type: "text", text: "I am the one sending" },
+    });
+
+    const chat = await chats.findById(pool, userChatId);
+    expect(chat!.unread).toBe(false);
   });
 
   it("inserts summary messages without marking chat unread", async () => {
@@ -76,7 +92,7 @@ describe("messages queries", () => {
     await messages.insert(pool, {
       id: generateId("message"),
       chatId: monotonicChatId,
-      role: "user",
+      role: "agent",
       content: { type: "text", text: "Hello from the past" },
     });
 

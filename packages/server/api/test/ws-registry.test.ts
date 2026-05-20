@@ -41,7 +41,6 @@ describe("WS registry", () => {
         title: "Test",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     };
@@ -69,7 +68,6 @@ describe("WS registry", () => {
         title: "Test",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     };
@@ -96,7 +94,6 @@ describe("WS registry", () => {
         title: "Test",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     });

@@ -44,7 +44,7 @@ describe("chats queries", () => {
     });
     expect(chat.id).toBe(chatId);
     expect(chat.title).toBe("Hello");
-    expect(chat.awaitingUser).toBe(false);
+    expect(chat.unread).toBe(false);
   });
 
   it("finds by id", async () => {
@@ -505,12 +505,6 @@ describe("chats queries", () => {
     await chats.markRead(pool, chatId);
     const chat = await chats.findById(pool, chatId);
     expect(chat!.unread).toBe(false);
-  });
-
-  it("sets awaiting user", async () => {
-    await chats.setAwaitingUser(pool, chatId, true);
-    const chat = await chats.findById(pool, chatId);
-    expect(chat!.awaitingUser).toBe(true);
   });
 
   it("clearOpencodeSessionsForAgent: nulls every chat using the agent and reports them", async () => {

@@ -138,8 +138,8 @@ export function buildMessagesQuery(f: MessagesFilter): string {
   if (f.state && f.state.length > 0) params.set("state", f.state.join(","));
   if (f.scheduled !== undefined)
     params.set("scheduled", String(f.scheduled));
-  if (f.awaitingUser !== undefined)
-    params.set("awaitingUser", String(f.awaitingUser));
+  if (f.unread !== undefined)
+    params.set("unread", String(f.unread));
   if (f.contentKind && f.contentKind.length > 0)
     params.set("contentKind", f.contentKind.join(","));
   if (f.kind && f.kind.length > 0) params.set("kind", f.kind.join(","));
@@ -1073,6 +1073,33 @@ export const api = createApi({
       invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
     }),
 
+    // ── Chat pins ────────────────────────────────────────────────────
+    pinChat: build.mutation<
+      { ok: true },
+      { workspaceId: string; chatId: string }
+    >({
+      query: ({ workspaceId, chatId }) => ({
+        url: `/workspaces/${workspaceId}/chat-pins`,
+        method: "POST",
+        body: { chatId },
+      }),
+      // The WS chat.updated event refreshes per-chat caches, but invalidate
+      // the chat list tag so the sidebar's pinned section repaints even when
+      // the socket round-trip is in flight.
+      invalidatesTags: [{ type: "Chat", id: "LIST" }],
+    }),
+    unpinChat: build.mutation<
+      { ok: true },
+      { workspaceId: string; chatId: string }
+    >({
+      query: ({ workspaceId, chatId }) => ({
+        url: `/workspaces/${workspaceId}/chat-pins`,
+        method: "DELETE",
+        body: { chatId },
+      }),
+      invalidatesTags: [{ type: "Chat", id: "LIST" }],
+    }),
+
     // ── Search ────────────────────────────────────────────────────────
     search: build.query<
       SearchResult[],
@@ -1155,6 +1182,8 @@ export const {
   useDeleteChatAttachmentMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
+  usePinChatMutation,
+  useUnpinChatMutation,
   useSearchQuery,
   useGetModelsQuery,
 } = api;

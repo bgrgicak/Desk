@@ -127,9 +127,6 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     });
   }
 
-  // chatA1 awaits user; the others don't. Used by the awaitingUser=true test.
-  await queries.chats.setAwaitingUser(pool, chatA1, true);
-
   const login = await request("POST", "/auth/login", null, { username, password });
   const token = (login.body as { token: string }).token;
 
@@ -159,7 +156,7 @@ async function insertMessage(
     title?: string | null;
   },
 ): Promise<string> {
-  // SQLite stores created_at at millisecond precision, and the awaitingUser
+  // SQLite stores created_at at millisecond precision, and the unread
   // query (and any "latest in chat" logic) tiebreaks ties on random nanoid id.
   // Sleep 2 ms so successive seed inserts always land in distinct ms buckets.
   await new Promise((r) => setTimeout(r, 2));
@@ -205,7 +202,7 @@ beforeAll(async () => {
 
   // 12 messages across alpha's chats spanning the states, scheduled and
   // unscheduled, and every content kind that shows up in this test.
-  // chatA1 (wsA, awaiting_user = true):
+  // chatA1 (wsA): receives multiple agent messages → unread = 1 naturally.
   //   1. user "text" pending (unscheduled)
   await insertMessage(alpha, {
     chatId: alpha.chatA1,
@@ -228,7 +225,7 @@ beforeAll(async () => {
     state: "succeeded",
   });
   //   4. agent "text" succeeded — latest in chatA1, which makes this the
-  //      one that satisfies awaitingUser=true.
+  //      one that satisfies unread=true.
   await insertMessage(alpha, {
     chatId: alpha.chatA1,
     role: "agent",
@@ -236,7 +233,10 @@ beforeAll(async () => {
     state: "succeeded",
   });
 
-  // chatA2 (wsA, not awaiting):
+  // chatA2 (wsA): no agent-authored visible messages, so unread stays 0
+  // naturally. The system agent_turn rows are internal; the agent rows
+  // here are failed/cancelled and so don't satisfy the unread filter's
+  // "latest succeeded agent message" check either.
   //   5. system agent_turn pending, scheduled via executeAt
   await insertMessage(alpha, {
     chatId: alpha.chatA2,
@@ -268,7 +268,9 @@ beforeAll(async () => {
     state: "cancelled",
   });
 
-  // chatB (wsB, not awaiting):
+  // chatB (wsB): the agent artifactRef (#12) is the latest non-internal
+  // message, so chatB.unread = 1 after seeding. The summary (#10) and
+  // summary_request (#11) are internal and do not affect unread.
   //   9. user "text" pending (unscheduled)
   await insertMessage(alpha, {
     chatId: alpha.chatB,
@@ -303,7 +305,7 @@ beforeAll(async () => {
 
   //  13. user-defined task in chatA2 (wsA), unscheduled, kind=task with a
   //      title — exercises the message-as-task path. Lives in chatA2 (not
-  //      chatA1) so it doesn't displace the awaiting-user fixture, which
+  //      chatA1) so it doesn't displace the unread-filter fixture, which
   //      relies on message #4 being the latest in chatA1.
   await insertMessage(alpha, {
     chatId: alpha.chatA2,
@@ -544,28 +546,38 @@ describe("GET /messages — kind", () => {
   });
 });
 
-describe("GET /messages — awaitingUser", () => {
-  it("awaitingUser=true returns the single latest-in-chat succeeded agent message in an awaiting chat", async () => {
-    const res = await request("GET", "/messages?awaitingUser=true", alpha.token);
+describe("GET /messages — unread", () => {
+  it("unread=true returns the latest succeeded agent message for each unread chat", async () => {
+    const res = await request("GET", "/messages?unread=true", alpha.token);
     expect(res.status).toBe(200);
     const items = (res.body as { items: Message[] }).items;
-    // chatA1 has awaiting_user=true, and message #4 is the latest + agent +
-    // succeeded. chatA2 / chatB have awaiting_user=false.
-    expect(items).toHaveLength(1);
-    expect(items[0].chatId).toBe(alpha.chatA1);
-    expect(items[0].role).toBe("agent");
-    expect(items[0].state).toBe("succeeded");
+    // chatA1 (latest = #4 agent text succeeded) and chatB (latest = #12
+    // agent artifactRef succeeded) both flipped unread=1 naturally during
+    // seeding. chatA2 received agent rows too but its latest is the user
+    // task (#13), so it doesn't satisfy the "latest + agent + succeeded"
+    // clause and is excluded.
+    expect(items).toHaveLength(2);
+    const byChat = new Map(items.map((m) => [m.chatId, m] as const));
+    const a1 = byChat.get(alpha.chatA1)!;
+    expect(a1).toBeDefined();
+    expect(a1.role).toBe("agent");
+    expect(a1.state).toBe("succeeded");
+    expect((a1.content as { type: string }).type).toBe("text");
+    const b = byChat.get(alpha.chatB)!;
+    expect(b).toBeDefined();
+    expect(b.role).toBe("agent");
+    expect(b.state).toBe("succeeded");
+    expect((b.content as { type: string }).type).toBe("artifactRef");
   });
 
-  it("ignores newer summary rows when deciding awaiting-user notifications", async () => {
+  it("ignores newer summary rows when deciding unread notifications", async () => {
     const chatId = generateId("chat");
     await queries.chats.insert(pool, {
       id: chatId,
       workspaceId: beta.wsA,
       agentId: beta.agentId,
-      title: "awaiting summary noise",
+      title: "unread summary noise",
     });
-    await queries.chats.setAwaitingUser(pool, chatId, true);
 
     const visibleAgentMessageId = await insertMessage(beta, {
       chatId,
@@ -583,7 +595,7 @@ describe("GET /messages — awaitingUser", () => {
 
     const res = await request(
       "GET",
-      `/messages?awaitingUser=true&chatId=${encodeURIComponent(chatId)}`,
+      `/messages?unread=true&chatId=${encodeURIComponent(chatId)}`,
       beta.token,
     );
     expect(res.status).toBe(200);

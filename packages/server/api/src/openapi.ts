@@ -793,7 +793,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
             { name: "chatId", in: "query", schema: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$" }, description: "Restrict to a single chat. Absent = all of the caller's chats." },
             { name: "state", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.state` values (`pending|running|succeeded|failed|cancelled`)." },
             { name: "scheduled", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled." },
-            { name: "awaitingUser", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set." },
+            { name: "unread", in: "query", schema: { type: "string", enum: ["true", "false"] }, description: "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `unread` flag is set (the chat has agent activity the user hasn't opened yet)." },
             { name: "contentKind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.content` discriminant values (e.g. `text,artifactRef`)." },
             { name: "kind", in: "query", schema: { type: "string" }, description: "Comma-separated list of `Message.kind` values (`chat|task|task_run|summary`). Distinct from `contentKind`." },
             { name: "parentId", in: "query", schema: { type: "string", pattern: "^msg_[A-Za-z0-9_-]+$" }, description: "Restrict to messages whose `parent_id` matches. Combined with `kind=task_run`, returns a task's run history." },

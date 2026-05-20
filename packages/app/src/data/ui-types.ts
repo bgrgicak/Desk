@@ -138,7 +138,13 @@ export interface Folder {
   name: string
   parentId: string | null
   createdAt: Date
+  /** True when the folder is pinned to the workspace sidebar (mirrors
+   *  ContextItem.pinned). Optional so library lists that don't surface
+   *  pin state stay compatible. */
+  pinned?: boolean
 }
+
+export type PinnedEntryKind = 'library' | 'folder' | 'chat'
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
@@ -259,6 +265,9 @@ export interface Chat {
    * message kind, falling back to `'chat'`.
    */
   kind?: ChatKind
+  /** True when the user has pinned this chat to the sidebar's Pinned
+   *  section. Server-derived from the chat_pins table. */
+  pinned?: boolean
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────

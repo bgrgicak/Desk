@@ -46,5 +46,6 @@ export function toUiChat(c: ServerChat): UiChat {
     agentId: c.agentId,
     goal: narrowChatGoal(c.goal),
     kind: c.kind,
+    pinned: c.pinned ?? false,
   };
 }

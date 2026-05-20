@@ -315,7 +315,7 @@ export interface CrossChatListOptions {
   chatId?: string;
   states?: string[];
   scheduled?: boolean;
-  awaitingUser?: boolean;
+  unread?: boolean;
   contentKinds?: string[];
   /** Filter by `messages.kind` (the message-kind discriminator — `task`,
    * `task_run`, `summary`, `chat`). Distinct from `contentKinds`, which
@@ -385,11 +385,14 @@ export async function listCrossChat(
     conditions.push(`m.created_at > ?`);
     params.push(new Date(opts.since));
   }
-  // `awaitingUser=true`: a message is "awaiting user" when it's the latest
-  // user-visible row in a chat whose awaiting_user flag is set, authored by the
-  // agent in a succeeded state. Internal rows such as chat summaries are
-  // ignored for this latest-message check so background compaction does not
-  // create or clear user-facing new-message badges.
+  // `unread=true`: a message is "unread" when it's the latest user-visible
+  // row in a chat whose `unread` flag is set, authored by the agent in a
+  // succeeded state. With the tightened unread semantics (only agent
+  // messages flip the chat flag — see messages-writes.ts), the role check
+  // is technically redundant but kept as a belt-and-braces guard against
+  // any legacy rows. Internal rows such as chat summaries are ignored for
+  // the latest-message check so background compaction does not create or
+  // clear user-facing badges.
   // SQLite stores BOOLEAN as INTEGER 0/1.
   const nonInternalClause = `(NOT (
     (json_valid(m.content) AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
@@ -399,8 +402,8 @@ export async function listCrossChat(
     (json_valid(m2.content) AND json_extract(m2.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
     OR m2.kind = 'summary'
   ))`;
-  const awaitingClause = `(
-    c.awaiting_user = 1
+  const unreadClause = `(
+    c.unread = 1
     AND ${nonInternalClause}
     AND m.role = 'agent'
     AND m.state = 'succeeded'
@@ -412,10 +415,10 @@ export async function listCrossChat(
       LIMIT 1
     )
   )`;
-  if (opts.awaitingUser === true) {
-    conditions.push(awaitingClause);
-  } else if (opts.awaitingUser === false) {
-    conditions.push(`NOT ${awaitingClause}`);
+  if (opts.unread === true) {
+    conditions.push(unreadClause);
+  } else if (opts.unread === false) {
+    conditions.push(`NOT ${unreadClause}`);
   }
   if (opts.cursor) {
     const sep = opts.cursor.indexOf("|");

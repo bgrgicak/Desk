@@ -85,7 +85,7 @@ describe("WorkspaceSchema", () => {
 });
 
 describe("ChatSchema", () => {
-  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", createdAt: now, updatedAt: now, awaitingUser: false, unread: true };
+  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", createdAt: now, updatedAt: now, unread: true };
 
   it("parses a valid chat", () => {
     expect(ChatSchema.parse(valid)).toEqual(valid);
@@ -95,8 +95,8 @@ describe("ChatSchema", () => {
     expect(ChatSchema.parse({ ...valid, goal: "Do stuff" })).toMatchObject({ goal: "Do stuff" });
   });
 
-  it("rejects wrong awaitingUser type", () => {
-    expect(() => ChatSchema.parse({ ...valid, awaitingUser: "yes" })).toThrow();
+  it("rejects wrong unread type", () => {
+    expect(() => ChatSchema.parse({ ...valid, unread: "yes" })).toThrow();
   });
 
   it("round-trips through JSON", () => {

@@ -379,7 +379,7 @@ Lists messages across all of the caller's chats with AND-combined filters. Read-
 | `chatId` | `chat_*` | Restrict to a single chat. |
 | `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
 | `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
-| `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
+| `unread` | `true\|false` | Matches the latest succeeded agent message in each chat whose `unread` flag is set (chat has agent activity the user hasn't opened yet). |
 | `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|summary\|summary_request\|agent_turn` |
 | `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
 | `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
@@ -394,7 +394,7 @@ Malformed params → 400. Non-owned `workspaceId` / `chatId` → 404.
 - Runs "Upcoming": `?scheduled=true&state=pending`
 - Runs "Active": `?state=running`
 - Runs "Completed / Cancelled / Failed": `?scheduled=true&state=succeeded,failed,cancelled`
-- Today / Inbox "Due now": `?awaitingUser=true`
+- Today / Inbox "Due now": `?unread=true`
 - Artifact badges: `?contentKind=artifactRef&since=…`
 
 ## Runs and scheduled jobs

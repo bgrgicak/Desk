@@ -73,6 +73,23 @@ export async function getChat(pool: Pool, id: string) {
   return chat;
 }
 
+/**
+ * Pins a chat to the workspace sidebar. The chat must already belong to
+ * the workspace — otherwise we'd silently create a pin row that joins to
+ * a chat under a different workspace.
+ */
+export async function pinChat(pool: Pool, workspaceId: string, chatId: string) {
+  const chat = await queries.chats.findById(pool, chatId);
+  if (!chat || chat.workspaceId !== workspaceId) {
+    throw new NotFoundError(`Chat not found in workspace: ${chatId}`);
+  }
+  await queries.chatPins.pin(pool, workspaceId, chatId);
+}
+
+export async function unpinChat(pool: Pool, workspaceId: string, chatId: string) {
+  await queries.chatPins.unpin(pool, workspaceId, chatId);
+}
+
 export async function createChat(
   pool: Pool,
   data: { workspaceId: string; agentId: string; title: string; goal?: string },

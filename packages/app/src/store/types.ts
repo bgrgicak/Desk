@@ -162,6 +162,7 @@ export interface ServerFolder {
   path: string;
   name: string;
   createdAt: string;
+  pinned?: boolean;
 }
 
 export interface Cursor {
@@ -187,7 +188,7 @@ export interface MessagesFilter {
   chatId?: string;
   state?: MessageState[];
   scheduled?: boolean;
-  awaitingUser?: boolean;
+  unread?: boolean;
   contentKind?: string[];
   /** Message-kind discriminator (`task`, `task_run`, `summary`, `chat`). The Tasks
    * page filters on `task`/`summary` definitions and separately fetches

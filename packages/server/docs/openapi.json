@@ -203,6 +203,32 @@
         }
       }
     },
+    "/auth/auto-login": {
+      "post": {
+        "summary": "Auto-login as the local Desk owner",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Session token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Auto-login disabled or no user available"
+          }
+        }
+      }
+    },
     "/auth/logout": {
       "post": {
         "summary": "Log out",
@@ -2059,7 +2085,7 @@
             "description": "`true` = only rows with `executeAt` or `cron`; `false` = only unscheduled."
           },
           {
-            "name": "awaitingUser",
+            "name": "unread",
             "in": "query",
             "schema": {
               "type": "string",
@@ -2068,7 +2094,7 @@
                 "false"
               ]
             },
-            "description": "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `awaitingUser` flag is set."
+            "description": "`true` = the message is an agent message in state `succeeded`, the latest in its chat, and its chat's `unread` flag is set (the chat has agent activity the user hasn't opened yet)."
           },
           {
             "name": "contentKind",

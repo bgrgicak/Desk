@@ -18,6 +18,10 @@ function validateGoal(goal: string | null | undefined): GoalKey | null | undefin
 }
 
 function rowToChat(row: Record<string, unknown>): Chat {
+  // `pinned` is only populated by queries that LEFT JOIN chat_pins; pass
+  // it through when present so callers can show the pinned badge without
+  // a second round-trip.
+  const pinned = "is_pinned" in row ? !!row.is_pinned : undefined;
   return ChatSchema.parse({
     id: row.id,
     workspaceId: row.workspace_id,
@@ -29,8 +33,8 @@ function rowToChat(row: Record<string, unknown>): Chat {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     // SQLite stores BOOLEAN as INTEGER 0/1; coerce at the boundary.
-    awaitingUser: !!row.awaiting_user,
     unread: !!row.unread,
+    ...(pinned !== undefined ? { pinned } : {}),
   });
 }
 
@@ -134,13 +138,19 @@ export async function listWithLatestMessage(
   db: Pool,
   workspaceId: string,
 ): Promise<ChatWithLastMessage[]> {
+  // LEFT JOIN chat_pins so the sidebar can render pin state without a
+  // second round-trip. Pinned rows return `is_pinned = 1`; everything
+  // else returns NULL → coerced to 0 by the `!!` boundary in rowToChat.
   const { rows } = await db.query(
     `SELECT c.*,
             c.list_kind AS kind,
             c.list_running AS is_running,
             c.list_failed AS is_failed,
+            (cp.chat_id IS NOT NULL) AS is_pinned,
             ${lastVisibleContentSubquerySql()}
       FROM chats c
+      LEFT JOIN chat_pins cp
+        ON cp.workspace_id = c.workspace_id AND cp.chat_id = c.id
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
       ORDER BY c.updated_at DESC`,
@@ -156,7 +166,19 @@ export async function listWithLatestMessage(
 }
 
 export async function findById(db: Pool, id: string): Promise<Chat | null> {
-  const { rows } = await db.query("SELECT * FROM chats WHERE id = ?", [id]);
+  // LEFT JOIN chat_pins so the WS chat.updated payload always carries the
+  // current pinned flag — without it, a downstream `chat.updated` emit
+  // after an unrelated patch (rename, agent swap) would overwrite the
+  // client-side `pinned: true` with `undefined`.
+  const { rows } = await db.query(
+    `SELECT c.*,
+            (cp.chat_id IS NOT NULL) AS is_pinned
+       FROM chats c
+       LEFT JOIN chat_pins cp
+         ON cp.workspace_id = c.workspace_id AND cp.chat_id = c.id
+      WHERE c.id = ?`,
+    [id],
+  );
   return rows.length ? rowToChat(rows[0]) : null;
 }
 
@@ -269,18 +291,6 @@ export async function markRead(db: Pool, id: string): Promise<Chat | null> {
     [id],
   );
   return rows.length ? rowToChat(rows[0]) : null;
-}
-
-export async function setAwaitingUser(
-  db: Pool,
-  id: string,
-  awaiting: boolean,
-): Promise<boolean> {
-  const { rowCount } = await db.query(
-    "UPDATE chats SET awaiting_user = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    [awaiting, id],
-  );
-  return (rowCount ?? 0) > 0;
 }
 
 /**
