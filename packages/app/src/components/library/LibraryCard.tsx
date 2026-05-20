@@ -2,27 +2,20 @@ import { type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import {
   Bot,
-  Download,
-  FolderPlus,
   MessageSquarePlus,
   MoreHorizontal,
-  Pencil,
-  Pin,
-  PinOff,
-  Trash2,
 } from 'lucide-react'
 import {
   Button,
   Checkbox,
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@agent-desk/ui'
 import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
+import { FileActionMenuItems } from '@/components/library/FileActionMenuItems'
 
 export const DRAG_TYPE_LIBRARY_ITEM = 'application/x-library-item'
 export const DRAG_TYPE_PINNED_ITEM  = 'application/x-pinned-item'
@@ -103,47 +96,16 @@ export function LibraryCard({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">
-        {onUseInChat && (
-          <DropdownMenuItem onClick={onUseInChat}>
-            <MessageSquarePlus className="h-4 w-4 mr-2" />
-            Use in chat
-          </DropdownMenuItem>
-        )}
-        {(onPin || onUnpin) && (
-          <DropdownMenuItem onClick={isPinned ? onUnpin : onPin}>
-            {isPinned
-              ? <><PinOff className="h-4 w-4 mr-2" />Unpin</>
-              : <><Pin className="h-4 w-4 mr-2" />Pin</>
-            }
-          </DropdownMenuItem>
-        )}
-        {onDownload && (
-          <DropdownMenuItem onClick={onDownload}>
-            <Download className="h-4 w-4 mr-2" />
-            Download
-          </DropdownMenuItem>
-        )}
-        {onRename && (
-          <DropdownMenuItem onClick={onRename}>
-            <Pencil className="h-4 w-4 mr-2" />
-            Rename
-          </DropdownMenuItem>
-        )}
-        {onMove && (
-          <DropdownMenuItem onClick={onMove}>
-            <FolderPlus className="h-4 w-4 mr-2" />
-            Move to folder
-          </DropdownMenuItem>
-        )}
-        {onDelete && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onDelete}>
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
-          </>
-        )}
+        <FileActionMenuItems
+          onUseInChat={onUseInChat}
+          isPinned={isPinned}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          onDownload={onDownload}
+          onRename={onRename}
+          onMove={onMove}
+          onDelete={onDelete}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   )

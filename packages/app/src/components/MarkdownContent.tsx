@@ -34,13 +34,15 @@ function urlTransform(url: string): string {
 }
 
 export function parseEntityUrl(href: string): { kind: EntityChipKind; id: string } | null {
-  const match = href.match(/^desk-entity:(chat|workspace):(.+)$/)
+  const match = href.match(/^desk-entity:(chat|workspace|task|artifact|file):(.+)$/)
   if (!match) return null
   try {
     const kind = match[1] as EntityChipKind
     const id = decodeURIComponent(match[2])
-    if (kind === 'chat' && !id.startsWith('cht_')) return null
-    if (kind === 'workspace' && !id.startsWith('wks_')) return null
+    const PREFIX: Record<EntityChipKind, string> = {
+      chat: 'cht_', workspace: 'wks_', task: 'tsk_', artifact: 'art_', file: 'fil_',
+    }
+    if (!id.startsWith(PREFIX[kind])) return null
     return { kind, id }
   } catch {
     return null
@@ -167,7 +169,11 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
               kind={entity.kind}
               id={entity.id}
               title={chat?.title ?? workspace?.name}
-              workspaceId={chat?.workspaceId ?? (entity.kind === 'chat' ? workspaceId : undefined)}
+              workspaceId={
+                entity.kind === 'workspace'
+                  ? undefined
+                  : chat?.workspaceId ?? workspaceId
+              }
             />
           )
         }
@@ -192,7 +198,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
   }), [chats, workspaces, workspacePath, workspaceId])
 
   return (
-    <div className="prose prose-neutral prose-sm min-w-0 max-w-none break-words text-foreground prose-headings:font-semibold prose-headings:text-foreground prose-p:text-sm prose-p:leading-relaxed prose-p:my-1 prose-li:text-sm prose-li:my-0 prose-ul:my-1 prose-ol:my-1 prose-strong:text-foreground prose-strong:font-semibold prose-code:text-sm prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:before:content-none prose-code:after:content-none prose-pre:max-w-full prose-pre:overflow-x-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted prose-pre:text-xs prose-pre:text-foreground prose-table:w-full prose-table:table-fixed prose-table:break-words prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:break-words prose-td:break-words prose-a:text-primary">
+    <div className="prose prose-neutral prose-sm min-w-0 max-w-none break-words text-foreground prose-headings:font-semibold prose-headings:text-foreground prose-p:text-sm prose-p:leading-relaxed prose-p:my-1 prose-li:text-sm prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-strong:text-foreground prose-strong:font-semibold prose-code:text-sm prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:font-normal prose-code:before:content-none prose-code:after:content-none prose-pre:max-w-full prose-pre:overflow-x-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted prose-pre:text-xs prose-pre:text-foreground prose-pre:font-normal prose-table:w-full prose-table:table-fixed prose-table:break-words prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:break-words prose-td:break-words prose-a:text-primary">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         urlTransform={urlTransform}

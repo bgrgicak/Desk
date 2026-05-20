@@ -16,7 +16,7 @@
 import { test, expect } from "../fixtures";
 
 async function openAgentsTab(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Customize/i }).click();
+  await page.getByRole("button", { name: /Settings/i }).click();
   await page.getByRole("button", { name: /^Agents$/i }).click();
   // Wait for /tools/models to populate. The Add form snapshots flatModels
   // via useState(initialModel) on mount — open it before models resolve and

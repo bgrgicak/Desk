@@ -153,9 +153,17 @@ export interface TaskOccurrence {
 export interface Task {
   id: string
   name: string
+  /** AI-generated short title (parity with chat titles). Shown as the
+   *  card heading above the body. Empty until titled. */
+  title?: string
   description?: string
   agentName: string
-  status: 'todo' | 'active' | 'complete' | 'scheduled'
+  /** `todo` = idle (created, not picked up). `active` = in progress
+   *  (picked up by the user or the AI / a run is executing).
+   *  `needs_input` = the AI paused awaiting the user's reply (the AI
+   *  moves it here and back). `scheduled` = has a future run.
+   *  `complete` = done/cancelled. */
+  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled'
   statusText: string
   priority?: 'low' | 'medium' | 'high' | 'highest'
   assigneeId?: string

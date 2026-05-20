@@ -71,7 +71,7 @@ test("editor shows no line numbers for markdown files", async ({
   await uploadFile(serverUrl, token, ws[0].id, filename, "# Test\nSome content\n", "text/markdown");
   // Switch to edit mode since markdown defaults to preview
   await openLibraryFile(loggedInPage, filename);
-  await loggedInPage.getByTestId("library-preview-toggle").click();
+  await loggedInPage.getByTestId("library-preview-toggle").getByRole("button", { name: "Code" }).click();
 
   await expect(loggedInPage.locator(".cm-lineNumbers")).not.toBeVisible();
 });
@@ -136,7 +136,7 @@ test("preview toggle switches to edit mode", async ({
   await openLibraryFile(loggedInPage, filename);
 
   // Default is preview — one click goes to edit
-  await loggedInPage.getByTestId("library-preview-toggle").click();
+  await loggedInPage.getByTestId("library-preview-toggle").getByRole("button", { name: "Code" }).click();
   await expect(loggedInPage.locator(".cm-content")).toBeVisible();
 });
 
@@ -156,7 +156,7 @@ test("preview mode selection persists across reloads", async ({
 
   // First open: defaults to preview, switch to edit
   await openLibraryFile(loggedInPage, filename);
-  await loggedInPage.getByTestId("library-preview-toggle").click();
+  await loggedInPage.getByTestId("library-preview-toggle").getByRole("button", { name: "Code" }).click();
   await expect(loggedInPage.locator(".cm-content")).toBeVisible();
 
   // Reload and re-open: should still be in edit mode
@@ -257,7 +257,7 @@ test("html preview toggle switches to edit mode", async ({
   await openLibraryFile(loggedInPage, filename);
 
   // Default is preview — one click goes to edit
-  await loggedInPage.getByTestId("library-preview-toggle").click();
+  await loggedInPage.getByTestId("library-preview-toggle").getByRole("button", { name: "Code" }).click();
   await expect(loggedInPage.locator(".cm-content")).toBeVisible();
   await expect(loggedInPage.locator("iframe")).not.toBeVisible();
 });

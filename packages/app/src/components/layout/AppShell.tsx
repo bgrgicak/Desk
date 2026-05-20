@@ -1,37 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { AnimatePresence } from 'framer-motion'
-import { Link } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import { FileText, MessageSquare } from 'lucide-react'
 import {
-  PinOff, Zap, FolderOpen, Plus,
-  ListFilter, SlidersHorizontal,
-  ChevronDown, MessageSquare, MoreHorizontal,
-  FileText, Loader2,
-  ImageIcon, Table, Globe, Play, ListTodo, CalendarClock,
-  type LucideIcon,
-} from 'lucide-react'
-import {
-  cn,
   Sheet,
   SheetContent,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarHeader,
   SidebarInset,
-  SidebarMenu,
-  SidebarMenuAction,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
-  useSidebar,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -39,42 +14,66 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
 } from '@agent-desk/ui'
-import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { TodayPanel } from '@/components/today/TodayPanel'
 import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
-import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
-import { WorkspaceBar, type WorkspaceInfo, type WorkspaceNavView } from './WorkspaceBar'
+import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
+import { TopBar } from '@/components/layout/TopBar'
+import { RoomSidebar } from '@/components/layout/RoomSidebar'
+import { RoomAvatarStack } from '@/components/layout/RoomAvatarStack'
+import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
+import { useSplitResize } from '@/components/shared/splitPane'
+import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { MyAccountModal } from '@/components/account/MyAccountModal'
 import type { Chat, Artifact, InboxItem, ContextItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
-import { iconForItem } from '@/data/file-kind'
-import { DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
+import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
+  useGetMeQuery,
   useGetWorkspacesQuery,
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
   useSearchQuery,
-  useGetAgentsQuery,
 } from '@/store/api'
+import { useAvatarUrl } from '@/hooks/use-avatar'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
-import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
-import { selectFailedChatIds, selectRunningChatIds } from '@/store/slices/derivedSlice'
-import { buildPath, NEW_CHAT_ID, type RouteView } from '@/router/nav'
+import {
+  PREVIEW_MIN_CHAT_WIDTH,
+  PREVIEW_MIN_PANEL_WIDTH,
+  PREVIEW_SPLIT_RATIO_STORAGE_KEY,
+  selectIsPreviewOpen,
+  selectPreviewSplitRatio,
+  setSplitRatio,
+} from '@/store/slices/previewPanelSlice'
+import { PreviewPanel } from '@/components/chats/PreviewPanel'
+import { buildPath, type RouteView } from '@/router/nav'
+import type { TopBarCrumb } from '@/components/layout/TopBar'
 
 export type View = 'today' | 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
 
-// ── NAV (no Today — Today lives in the workspace bar) ────────────────────────
-const NAV_ITEMS: { view: WorkspaceNavView; icon: LucideIcon; label: string }[] = [
-  { view: 'context', icon: FolderOpen, label: 'Library' },
-  { view: 'tasks',   icon: Zap,        label: 'Tasks'   },
-]
+// Below this width the preview panel switches from a docked flex
+// sibling to a full-screen overlay (same threshold as the chat right
+// panel). 1024 px is the standard "tablet → desktop" breakpoint.
+const PREVIEW_DESKTOP_BREAKPOINT_PX = 1024
+
+function useIsSmallViewport(): boolean {
+  const query = `(max-width: ${PREVIEW_DESKTOP_BREAKPOINT_PX - 1}px)`
+  const [small, setSmall] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(query).matches,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia(query)
+    const onChange = () => setSmall(mq.matches)
+    onChange()
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [query])
+  return small
+}
 
 // Fallback used only while the /workspaces query is in flight — the real
 // list comes from the server via useGetWorkspacesQuery().
@@ -87,78 +86,25 @@ const LOADING_WORKSPACE: WorkspaceInfo = {
   unreadCount: 0,
 }
 
-const CHATS_PER_PAGE = 10
-const PINNED_PER_PAGE = 5
-
-const EMPTY_FILTER: ChatFilterValues = { goal: null, agentId: null, updatesOnly: false, artifactsOnly: false }
-
-function MobileDismissSidebarMenuButton({
-  onClick,
-  ...props
-}: React.ComponentProps<typeof SidebarMenuButton>) {
-  const { isMobile, setOpen } = useSidebar()
-
-  return (
-    <SidebarMenuButton
-      onClick={(event) => {
-        onClick?.(event)
-        if (isMobile && !event.defaultPrevented) setOpen(false)
-      }}
-      {...props}
-    />
-  )
+// Breadcrumb labels for views that should render a `/ {label}` trailing
+// crumb after the workspace name. Only Library (`context`) gets one;
+// other routes show just `home / workspace` (section conveyed by the
+// sidebar's active state). When a Library file is open, its (truncated)
+// name is appended as a further crumb — see `buildTrailingCrumbs`.
+const VIEW_LABELS: Partial<Record<RouteView, string>> = {
+  context: 'Library',
+  tasks: 'Tasks',
 }
 
-function MobileDismissLink({
-  onClick,
-  ...props
-}: React.ComponentProps<typeof Link>) {
-  const { isMobile, setOpen } = useSidebar()
-
-  return (
-    <Link
-      onClick={(event) => {
-        onClick?.(event)
-        if (isMobile && !event.defaultPrevented) setOpen(false)
-      }}
-      {...props}
-    />
-  )
-}
-
-function sortedChats(chats: Chat[]): Chat[] {
-  return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-}
-
-// Picker-aligned icons for the persisted goal of the chat.
-// Source of truth: ChatInput's GOALS list — keep these in sync so the
-// sidebar mirrors what the user picked / typed about.
-const GOAL_ICONS: Record<NonNullable<Chat['goal']>, LucideIcon> = {
-  app:       Zap,
-  document:  FileText,
-  image:     ImageIcon,
-  data:      Table,
-  site:      Globe,
-  run:       Play,
-  task:      ListTodo,
-  scheduled: CalendarClock,
-}
-
-function getGoalIcon(goal: Chat['goal']): LucideIcon | null {
-  if (!goal) return null
-  return Object.prototype.hasOwnProperty.call(GOAL_ICONS, goal) ? GOAL_ICONS[goal] : null
-}
-
-function getChatIcon(chat: Chat): LucideIcon {
-  const GoalIcon = getGoalIcon(chat.goal)
-  if (GoalIcon) return GoalIcon
-  switch (chat.kind) {
-    case 'task':
-    case 'task_run':
-      return ListTodo
-    default:
-      return MessageSquare
-  }
+/** Truncate a file name to 40 chars *excluding* its extension, so
+ *  `my-really-long-report-name….pdf` keeps the extension legible.
+ *  Names with no extension are simply capped at 40 chars. */
+function truncateFileName(name: string, max = 40): string {
+  const dot = name.lastIndexOf('.')
+  const hasExt = dot > 0 && dot < name.length - 1
+  const base = hasExt ? name.slice(0, dot) : name
+  const ext = hasExt ? name.slice(dot) : ''
+  return base.length > max ? `${base.slice(0, max)}…${ext}` : `${base}${ext}`
 }
 
 interface AppShellProps {
@@ -174,7 +120,7 @@ interface AppShellProps {
 
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void
-  // ── Workspace bar ──
+  // ── Active room ──
   activeWorkspaceId: string
   onSelectWorkspace: (id: string) => void
   getWorkspaceHref?: (id: string) => string
@@ -189,6 +135,10 @@ interface AppShellProps {
   onPinItem?: (itemId: string) => void
   onUnpinItem?: (item: ContextItem) => void
   selectedItemId?: string | null
+  /** Display name of the Library file currently open (when
+   *  `activeView === 'context'` and a file detail is showing). Used
+   *  to append a `/ {file}` crumb after `/ Library`. */
+  libraryFileName?: string | null
 }
 
 export function AppShell({
@@ -200,14 +150,11 @@ export function AppShell({
   selectedChatId,
   onChatClick,
   onDeleteChat,
-  unreadCount = 0,
 
   isDetailOpen = false,
   onArtifactClick,
   activeWorkspaceId,
   onSelectWorkspace,
-  getWorkspaceHref,
-  onGlobalToday,
   todaySheetOpen = false,
   onTodaySheetClose,
   onSignOut,
@@ -217,38 +164,23 @@ export function AppShell({
   onPinItem,
   onUnpinItem,
   selectedItemId,
+  libraryFileName,
 }: AppShellProps) {
-  const [chatPage, setChatPage] = useState(1)
-  const [pinnedPage, setPinnedPage] = useState(1)
-  const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
-  const [chatsCollapsed, setChatsCollapsed] = useState(false)
-  const [isDraggingLibraryItem, setIsDraggingLibraryItem] = useState(false)
-  const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
-  const pinnedDropCounter = useRef(0)
-  const [isInsetDropOver, setIsInsetDropOver] = useState(false)
-  const insetDropCounter = useRef(0)
+  // Chat search command palette (global keyboard-shortcut surface).
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
   const [chatSearchValue, setChatSearchValue] = useState('')
-  // Server-side search — live query when the palette has ≥2 chars.
   const searchEnabled = chatSearchQuery.trim().length >= 2
   const { data: searchResults } = useSearchQuery(
     { q: chatSearchQuery.trim(), scope: 'all', workspaceId: activeWorkspaceId },
     { skip: !searchEnabled },
   )
 
-  const [appliedFilter, setAppliedFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
-  const [pendingFilter, setPendingFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
-  const [filterOpen, setFilterOpen] = useState(false)
-  const hasActiveFilter =
-    appliedFilter.goal !== null ||
-    appliedFilter.agentId !== null ||
-    appliedFilter.updatesOnly ||
-    appliedFilter.artifactsOnly
+  // Drag-onto-inset to unpin a pinned item — separate from the sidebar drop
+  // zone which handles library → pinned. This one handles pinned → unpin.
+  const [isInsetDropOver, setIsInsetDropOver] = useState(false)
+  const insetDropCounter = useRef(0)
 
-  const { data: agents = [] } = useGetAgentsQuery()
-  const runningChatIds = useAppSelector(selectRunningChatIds)
-  const failedChatIds = useAppSelector(selectFailedChatIds)
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -263,51 +195,6 @@ export function AppShell({
     setSettingsOpen(true)
     appDispatch(setPendingSettingsSection(null))
   }, [pendingSettingsSection, appDispatch])
-  const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
-
-  // Detect library item drags globally so the pinned section can show a dropzone.
-  useEffect(() => {
-    const handleDragStart = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes(DRAG_TYPE_LIBRARY_ITEM)) {
-        setIsDraggingLibraryItem(true)
-      }
-    }
-    const handleDragEnd = () => {
-      setIsDraggingLibraryItem(false)
-      setIsPinnedDropOver(false)
-      pinnedDropCounter.current = 0
-    }
-    document.addEventListener('dragstart', handleDragStart)
-    document.addEventListener('dragend', handleDragEnd)
-    return () => {
-      document.removeEventListener('dragstart', handleDragStart)
-      document.removeEventListener('dragend', handleDragEnd)
-    }
-  }, [])
-
-  const handlePinnedDragEnter = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
-    e.preventDefault()
-    pinnedDropCounter.current += 1
-    setIsPinnedDropOver(true)
-  }
-  const handlePinnedDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-  }
-  const handlePinnedDragLeave = () => {
-    pinnedDropCounter.current = Math.max(0, pinnedDropCounter.current - 1)
-    if (pinnedDropCounter.current === 0) setIsPinnedDropOver(false)
-  }
-  const handlePinnedDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    pinnedDropCounter.current = 0
-    setIsPinnedDropOver(false)
-    setIsDraggingLibraryItem(false)
-    const itemId = e.dataTransfer.getData(DRAG_TYPE_LIBRARY_ITEM)
-    if (itemId) onPinItem?.(itemId)
-  }
 
   const handleInsetDragEnter = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
@@ -333,404 +220,335 @@ export function AppShell({
     if (item) onUnpinItem?.(item)
   }
 
-  // Server-backed workspaces. The WorkspaceBar/Settings components still
-  // consume the shape `{ id, name, description, emoji, bg, unreadCount }`
-  // — we map in a selector so nothing in the render tree needs to change.
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
   const [patchWorkspaceMutation] = usePatchWorkspaceMutation()
   const [deleteWorkspaceMutation] = useDeleteWorkspaceMutation()
-  // Keep mutations reachable; the `create` modal lives inside WorkspaceBar
-  // and can be wired when we expose it via props. For now mutations below
-  // cover update + delete from the settings modal.
+
+  // Current user — drives the bottom profile row in the sidebar
+  // (avatar + "Hello, {username}"). Cache is warm because App.tsx
+  // already fetches /me at boot, so this is a no-op read here.
+  const { data: me } = useGetMeQuery()
+  const userAvatarUrl = useAvatarUrl(me?.id)
   const workspaces: WorkspaceInfo[] = (serverWorkspaces ?? []).map(toWorkspaceInfo)
   const displayWorkspaces = workspaces.length > 0 ? workspaces : [LOADING_WORKSPACE]
   const activeWorkspace =
     displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
 
-  const allChats = sortedChats(chats)
-  const filteredChats = allChats.filter(chat => {
-    if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
-    if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
-    if (appliedFilter.updatesOnly && !chat.unread) return false
-    if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
-    return true
-  })
-  const visibleChats = filteredChats.slice(0, chatPage * CHATS_PER_PAGE)
-  const hasMore      = filteredChats.length > visibleChats.length
+  // Trailing breadcrumb crumbs after the workspace name. Library gets
+  // `/ Library` (a link back to the list when a file is open) and, if
+  // a file is open, a further `/ {truncated file name}` leaf. Other
+  // routes get nothing (workspace-only breadcrumb).
+  const trailingCrumbs: TopBarCrumb[] = (() => {
+    // A chat can be opened from the Library list without the route's
+    // `view` segment changing (chat nav only sets `?chat=`), so
+    // `activeView` can still be `context` while a chat is actually
+    // on screen. Show the chat's own title as the trailing crumb
+    // (truncated to 24 chars) instead of the Library/file crumbs.
+    if (selectedChatId) {
+      const chatTitle = chats.find(c => c.id === selectedChatId)?.title?.trim()
+      if (!chatTitle) return []
+      return [{
+        label: chatTitle.length > 24 ? `${chatTitle.slice(0, 24)}…` : chatTitle,
+      }]
+    }
+    const sectionLabel = VIEW_LABELS[activeView]
+    if (!sectionLabel) return []
+    const crumbs: TopBarCrumb[] = [
+      {
+        label: sectionLabel,
+        to: activeWorkspaceId ? buildPath(activeWorkspaceId, activeView) : undefined,
+      },
+    ]
+    if (activeView === 'context' && isDetailOpen && libraryFileName) {
+      crumbs.push({ label: truncateFileName(libraryFileName) })
+    }
+    return crumbs
+  })()
+
+  // When the preview panel is open the chat surface enters a focused
+  // mode: the per-room sidebar collapses, the top-bar breadcrumb +
+  // actions hide, and the PreviewPanel mounts as a flex sibling of
+  // the SidebarProvider so it spans full viewport height (side-by-
+  // side with — not under — the chat column's top bar).
+  const isPreviewOpen = useAppSelector(selectIsPreviewOpen)
+  const previewSplitRatio = useAppSelector(selectPreviewSplitRatio)
+  const previewPanelWidth = `${Math.round((1 - previewSplitRatio) * 100)}vw`
+
+  // The per-room sidebar shows on the Library list, Tasks, and the
+  // chat list. It collapses in the two focused two-pane modes:
+  //  - chat with the preview open (chat | preview), and
+  //  - a Library file open (file | chat) — ContextDetail, which the
+  //    Figma shows with no nav rail.
+  // In both, the mobile TopBar sidebar-trigger is hidden too.
+  // Tasks keeps the nav rail visible at all times (it's a list view,
+  // not a focused two-pane detail like ContextDetail) — only the
+  // small-viewport gating below collapses it on narrow screens.
+  const isLibraryDetail = activeView === 'context' && isDetailOpen
+  const showSidebar = !isPreviewOpen && !isLibraryDetail
+
+  // Reactive small-viewport flag (matches the desktop / sidebar
+  // breakpoint used elsewhere). Below this width the preview panel
+  // becomes a full-screen overlay instead of a flex sibling.
+  const isSmallViewport = useIsSmallViewport()
+
+  // Drag-to-resize the preview panel. The chat column is the growing
+  // left pane (ratio = its viewport fraction); the preview is the
+  // fixed right pane. Shared with the Library file-detail split via
+  // `useSplitResize` — same math, mirrored roles. The final ratio is
+  // persisted so it survives reloads (the slice reads it back on
+  // init).
+  const { isResizing: isResizingPreview, onMouseDown: handleResizeStart } =
+    useSplitResize({
+      getStartRatio: () => previewSplitRatio,
+      onRatio: (r) => appDispatch(setSplitRatio(r)),
+      onCommit: (r) => {
+        try {
+          window.localStorage.setItem(
+            PREVIEW_SPLIT_RATIO_STORAGE_KEY,
+            String(r),
+          )
+        } catch {
+          // localStorage may be unavailable (private mode, quota).
+          // Drop the persist silently — the ratio still applies for
+          // the current session via the slice.
+        }
+      },
+      minLeftPx: PREVIEW_MIN_CHAT_WIDTH,
+      minRightPx: PREVIEW_MIN_PANEL_WIDTH,
+    })
 
   return (
-    <div className="flex w-full max-w-[100dvw] flex-col h-dvh overflow-hidden bg-muted bg-cover bg-center" style={{ '--topbar-height': '51px', backgroundImage: 'url(/background2.jpg)' } as React.CSSProperties}>
+    <div
+      className="relative flex w-full max-w-[100dvw] h-dvh overflow-hidden"
+      style={{ '--topbar-height': '64px' } as React.CSSProperties}
+    >
+      <BackgroundBlobs />
 
-
-      {/* ── Today sheet (slides in from left) ── */}
-      <Sheet
-        open={todaySheetOpen}
-        onOpenChange={open => {
-          if (!open) {
-            setSelectedTodayItem(null)
-            onTodaySheetClose?.()
-          }
+      {/* Global avatar stack — a fixed overlay in the top-bar row,
+          centred over the conversation column. Position comes from
+          CSS vars the active view publishes via `useContentAreaInsets`
+          (sidebar/preview/file-card widths). The horizontal position
+          does NOT animate (no `left/right` transition) — views
+          pre-position it at its eventual spot even while hidden, so
+          opening a panel only fades + slides it down in place rather
+          than sliding it across the viewport. Fallbacks here cover
+          views that don't publish insets. */}
+      <div
+        className="pointer-events-none fixed top-0 z-30 py-4"
+        style={{
+          left: `var(--content-area-left-offset, ${
+            showSidebar && !isSmallViewport ? '290px' : '0px'
+          })`,
+          right: `var(--content-area-right-offset, ${
+            isPreviewOpen && !isSmallViewport ? previewPanelWidth : '0px'
+          })`,
+          opacity: 'var(--content-avatar-opacity, 1)',
+          transform: 'translateY(var(--content-avatar-ty, 0px))',
+          transition:
+            'opacity 200ms ease var(--content-avatar-delay, 0ms), ' +
+            'transform 240ms cubic-bezier(0.4,0,0.2,1) var(--content-avatar-delay, 0ms)',
         }}
       >
-        <SheetContent
-          side="left"
-          showCloseButton={false}
-          className="flex flex-row p-0 gap-0 sm:max-w-none overflow-hidden"
-          style={{
-            width: selectedTodayItem ? '75vw' : '560px',
-            transition: 'width 0.25s ease',
-          }}
+        <div className="w-full max-w-4xl min-w-0 mx-auto px-6 flex justify-center">
+          <div className="pointer-events-auto">
+            <RoomAvatarStack workspace={activeWorkspace} />
+          </div>
+        </div>
+      </div>
+
+      {/* Chat column — top bar + sidebar + content. When the preview
+          panel mounts as the right sibling, this column shrinks via
+          `flex-1` to fill the remaining viewport width. */}
+      <SidebarProvider
+        style={{ height: 'auto', '--sidebar-width': '290px' } as React.CSSProperties}
+        className="flex-1 min-w-0 min-h-0 max-w-full flex flex-col overflow-hidden"
+      >
+        <TopBar
+          workspace={activeWorkspace}
+          trailing={trailingCrumbs}
+          hideBreadcrumb={isPreviewOpen}
+          hideSidebarTrigger={!showSidebar}
         >
-          {/* Primary panel */}
-          <div className="relative flex flex-col shrink-0 overflow-hidden border-r" style={{ width: '560px' }}>
-            <TodayPanel
-              onClose={() => { setSelectedTodayItem(null); onTodaySheetClose?.() }}
-              onSelectItem={(item, focusInput) => {
-                setFocusTodayInput(focusInput ?? false)
-                setSelectedTodayItem(prev => prev?.id === item.id && !focusInput ? null : item)
+          {/* ── Today sheet (slides in from left) ── */}
+          <Sheet
+            open={todaySheetOpen}
+            onOpenChange={open => {
+              if (!open) {
+                setSelectedTodayItem(null)
+                onTodaySheetClose?.()
+              }
+            }}
+          >
+            <SheetContent
+              side="left"
+              showCloseButton={false}
+              className="flex flex-row p-0 gap-0 sm:max-w-none overflow-hidden"
+              style={{
+                width: selectedTodayItem ? '75vw' : '560px',
+                transition: 'width 0.25s ease',
               }}
-              selectedItemId={selectedTodayItem?.id}
-            />
-          </div>
-
-          {/* Detail panel — wrapper gives it a stable layout box during transitions */}
-          <div className="flex-1 min-w-0 relative overflow-hidden">
-          <AnimatePresence>
-            {selectedTodayItem && (
-              <TodayDetailPanel
-                key={selectedTodayItem.id}
-                item={selectedTodayItem}
-                workspaceId={chats.find(c => c.id === selectedTodayItem.runId)?.workspaceId}
-                focusInput={focusTodayInput}
-                onFocusConsumed={() => setFocusTodayInput(false)}
-                onClose={() => setSelectedTodayItem(null)}
-                onOpenArtifact={(artifactId) => {
-                  const artifact = artifacts.find(a => a.id === artifactId)
-                  if (artifact) {
-                    onArtifactClick?.(artifact)
-                    setSelectedTodayItem(null)
-                    onTodaySheetClose?.()
-                  }
-                }}
-              />
-            )}
-          </AnimatePresence>
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* ── Card wrapper ── */}
-      <div className="flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden p-0 md:p-2">
-
-      {/* ── Single app card: workspace bar + sidebar + content ── */}
-      <div className="flex-1 min-w-0 min-h-0 h-full w-full max-w-full flex flex-col relative rounded-none border-x-0 border-y md:rounded-xl md:border overflow-hidden bg-sidebar/85 backdrop-blur-xl">
-
-        <WorkspaceBar
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          isGlobalToday={todaySheetOpen}
-          todayUnreadCount={unreadCount}
-          onGlobalToday={onGlobalToday}
-          onSelectWorkspace={onSelectWorkspace}
-          getWorkspaceHref={getWorkspaceHref}
-          onSignOut={onSignOut}
-          onOpenMyAccount={() => setMyAccountOpen(true)}
-        />
-
-      {/* ── Sidebar + content ── */}
-      <SidebarProvider style={{ height: 'auto' } as React.CSSProperties} className="flex-1 min-w-0 min-h-0 max-w-full overflow-hidden">
-        <Sidebar>
-
-          {/* ── Header: nav items ── */}
-          <SidebarHeader style={{ paddingTop: 'calc(var(--spacing) * 2.5)' }}>
-            <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
-            {/* Nav items: Library / Tasks */}
-            <SidebarMenu>
-              {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
-                <SidebarMenuItem key={view}>
-                  <MobileDismissSidebarMenuButton
-                    asChild
-                    isActive={activeView === view && !selectedChatId && !isDetailOpen}
-                  >
-                    <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, view) : '#'}>
-                      <Icon className="h-4 w-4" />
-                      <span>{label}</span>
-                    </Link>
-                  </MobileDismissSidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-
-            {/* ── Pinned items section ── */}
-            <div
-              className="mt-3"
-              onDragEnter={handlePinnedDragEnter}
-              onDragOver={handlePinnedDragOver}
-              onDragLeave={handlePinnedDragLeave}
-              onDrop={handlePinnedDrop}
             >
-              <div className="group flex items-center px-2 mb-2 gap-1">
-                <span className="text-xs font-medium text-foreground/70">Pinned</span>
-                <button
-                  onClick={() => setPinnedCollapsed(c => !c)}
-                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
-                  aria-label={pinnedCollapsed ? 'Expand Pinned' : 'Collapse Pinned'}
-                >
-                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${pinnedCollapsed ? '-rotate-90' : ''}`} />
-                </button>
+              <div className="relative flex flex-col shrink-0 overflow-hidden border-r" style={{ width: '560px' }}>
+                <TodayPanel
+                  onClose={() => { setSelectedTodayItem(null); onTodaySheetClose?.() }}
+                  onSelectItem={(item, focusInput) => {
+                    setFocusTodayInput(focusInput ?? false)
+                    setSelectedTodayItem(prev => prev?.id === item.id && !focusInput ? null : item)
+                  }}
+                  selectedItemId={selectedTodayItem?.id}
+                />
               </div>
-              {!pinnedCollapsed && (
-                isDraggingLibraryItem ? (
-                  <div className={`mx-2 rounded-lg border border-dashed p-4 min-h-[52px] flex items-center justify-center transition-colors ${
-                    isPinnedDropOver
-                      ? 'border-primary/40 bg-primary/5'
-                      : 'border-foreground/20 bg-foreground/5'
-                  }`}>
-                    <p className="text-xs text-muted-foreground">Drop here to pin</p>
-                  </div>
-                ) : isPinnedLoading ? (
-                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Loading pinned items…</span>
-                  </div>
-                ) : pinnedItems.length === 0 ? (
-                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
-                    <p className="text-xs text-muted-foreground">
-                      Pin or drag items from Library to see them here.
+
+              <div className="flex-1 min-w-0 relative overflow-hidden">
+                <AnimatePresence>
+                  {selectedTodayItem && (
+                    <TodayDetailPanel
+                      key={selectedTodayItem.id}
+                      item={selectedTodayItem}
+                      workspaceId={chats.find(c => c.id === selectedTodayItem.runId)?.workspaceId}
+                      focusInput={focusTodayInput}
+                      onFocusConsumed={() => setFocusTodayInput(false)}
+                      onClose={() => setSelectedTodayItem(null)}
+                      onOpenArtifact={(artifactId) => {
+                        const artifact = artifacts.find(a => a.id === artifactId)
+                        if (artifact) {
+                          onArtifactClick?.(artifact)
+                          setSelectedTodayItem(null)
+                          onTodaySheetClose?.()
+                        }
+                      }}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+            </SheetContent>
+          </Sheet>
+
+          {/* ── Sidebar + content (no card chrome — floats on the blob) ── */}
+          <div className="flex flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
+            {/* The per-room sidebar collapses away when the chat
+                enters preview-focused mode or the user opens a
+                Library file (ContextDetail). Rather than vanishing,
+                it animates out: width collapses to 0 while it slides
+                /fades left, and reverses on the way back. Kept
+                mounted through the exit via `AnimatePresence`. */}
+            <AnimatePresence initial={false}>
+              {showSidebar && (
+                <motion.div
+                  key="room-sidebar"
+                  initial={{ width: 0, opacity: 0, x: -24 }}
+                  animate={{ width: 290, opacity: 1, x: 0 }}
+                  exit={{ width: 0, opacity: 0, x: -24 }}
+                  transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                  // Must be a full-height flex container: the shadcn
+                  // Sidebar inside relies on `md:self-stretch` + an
+                  // inner `flex-1` scroll area, which collapse to 0
+                  // height without a flex/height context here (that's
+                  // what hid the chat list and floated the profile
+                  // row up under the header).
+                  className="flex h-full min-h-0 shrink-0 overflow-hidden"
+                >
+                  <RoomSidebar
+                    activeView={activeView}
+                    activeWorkspaceId={activeWorkspaceId}
+                    selectedChatId={selectedChatId}
+                    selectedItemId={selectedItemId}
+                    isDetailOpen={isDetailOpen}
+                    chats={chats}
+                    isChatsLoading={isChatsLoading}
+                    pinnedItems={pinnedItems}
+                    isPinnedLoading={isPinnedLoading}
+                    onDeleteChat={onDeleteChat}
+                    onPinItem={onPinItem}
+                    onUnpinItem={onUnpinItem}
+                    onOpenSettings={() => setSettingsOpen(true)}
+                    username={me?.username}
+                    email={me?.email}
+                    userAvatarUrl={userAvatarUrl}
+                    onOpenMyAccount={() => setMyAccountOpen(true)}
+                    onSignOut={onSignOut}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <SidebarInset
+              className="min-h-0 max-w-full overflow-hidden bg-transparent"
+              onDragEnter={handleInsetDragEnter}
+              onDragOver={handleInsetDragOver}
+              onDragLeave={handleInsetDragLeave}
+              onDrop={handleInsetDrop}
+            >
+              <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
+                {children}
+                {isInsetDropOver && (
+                  <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 backdrop-blur-[1px]">
+                    <p className="text-sm font-medium text-primary/70 bg-background/80 rounded-md px-3 py-2 shadow-sm">
+                      Drop here to unpin
                     </p>
                   </div>
-                ) : (
-                  <SidebarMenu>
-                    {pinnedItems.slice(0, pinnedPage * PINNED_PER_PAGE).map(item => {
-                      const ItemIcon = iconForItem(item)
-                      return (
-                        <SidebarMenuItem key={item.id}>
-                          <MobileDismissSidebarMenuButton
-                            asChild
-                            isActive={item.id === selectedItemId}
-                            className="text-foreground/70"
-                            draggable
-                            onDragStart={(e: React.DragEvent) => {
-                              e.dataTransfer.effectAllowed = 'move'
-                              e.dataTransfer.setData(DRAG_TYPE_PINNED_ITEM, item.id)
-                            }}
-                          >
-                            <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, 'context', { item: item.id }) : '#'}>
-                              <ItemIcon className="h-4 w-4 shrink-0" />
-                              <span className="truncate">{item.name}</span>
-                            </Link>
-                          </MobileDismissSidebarMenuButton>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <SidebarMenuAction showOnHover onClick={e => e.stopPropagation()} className="!right-2">
-                                <MoreHorizontal />
-                                <span className="sr-only">Item options</span>
-                              </SidebarMenuAction>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent side="right" align="start" className="w-36">
-                              <DropdownMenuItem onClick={() => onUnpinItem?.(item)}>
-                                <PinOff className="h-4 w-4 mr-2" />
-                                Unpin
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </SidebarMenuItem>
-                      )
-                    })}
-                    {pinnedItems.length > pinnedPage * PINNED_PER_PAGE && (
-                      <SidebarMenuItem>
-                        <SidebarMenuButton onClick={() => setPinnedPage(p => p + 1)} className="text-muted-foreground">
-                          <ChevronDown className="h-4 w-4 shrink-0" />
-                          <span>Show more</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    )}
-                  </SidebarMenu>
-                )
-              )}
-            </div>
-
-            {/* Chats label + filter + new chat buttons */}
-            <div className="group flex items-center justify-between px-2 mt-3">
-              <div className="flex items-center gap-1">
-                <span className="text-xs font-medium text-foreground/70">Chats</span>
-                <button
-                  onClick={() => setChatsCollapsed(c => !c)}
-                  className="opacity-0 group-hover:opacity-100 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground transition-opacity"
-                  aria-label={chatsCollapsed ? 'Expand Chats' : 'Collapse Chats'}
-                >
-                  <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${chatsCollapsed ? '-rotate-90' : ''}`} />
-                </button>
-              </div>
-              <div className={`flex items-center gap-0.5 ${chatsCollapsed ? 'invisible pointer-events-none' : ''}`}>
-                <Popover
-                  open={filterOpen}
-                  onOpenChange={(open) => {
-                    if (!open) setPendingFilter(appliedFilter)
-                    setFilterOpen(open)
-                  }}
-                >
-                  <PopoverTrigger asChild>
-                    <button
-                      title="Filter chats"
-                      className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
-                    >
-                      <ListFilter className="h-3.5 w-3.5" />
-                      <span className="sr-only">Filter chats</span>
-                      {hasActiveFilter && (
-                        <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
-                      )}
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" className="w-auto p-0">
-                    <ChatFilterPopover
-                      agents={agents}
-                      values={pendingFilter}
-                      onChange={setPendingFilter}
-                      onApply={() => { setAppliedFilter(pendingFilter); setFilterOpen(false) }}
-                      onCancel={() => { setPendingFilter(appliedFilter); setFilterOpen(false) }}
-                    />
-                  </PopoverContent>
-                </Popover>
-                <MobileDismissLink
-                  to={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: NEW_CHAT_ID }) : '#'}
-                  title="New chat"
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-foreground/70 hover:text-foreground hover:bg-background/40 transition-colors"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  <span className="sr-only">New chat</span>
-                </MobileDismissLink>
-              </div>
-            </div>
-          </SidebarHeader>
-
-          {/* ── Content: scrollable chat list ── */}
-          <SidebarContent ref={sidebarScrollRef}>
-            {!chatsCollapsed && <SidebarGroup className="px-2 py-0">
-              <SidebarGroupContent className="pb-10">
-                {isChatsLoading ? (
-                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Loading chats…</span>
-                  </div>
-                ) : filteredChats.length === 0 && (
-                  <div className="mx-2 rounded-lg border border-dashed border-foreground/10 p-2">
-                    {hasActiveFilter ? (
-                      <p className="text-xs text-muted-foreground">
-                        No chats found.{' '}
-                        <button
-                          className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors"
-                          onClick={() => { setAppliedFilter(EMPTY_FILTER); setPendingFilter(EMPTY_FILTER) }}
-                        >
-                          Clear filters
-                        </button>
-                      </p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: NEW_CHAT_ID }) : '#'} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors">Start a chat</Link>
-                        {' '}with an AI agent to see it here.
-                      </p>
-                    )}
-                  </div>
                 )}
-                <SidebarMenu>
-                  {!isChatsLoading && visibleChats.map(chat => {
-                    const ChatIcon = getChatIcon(chat)
-                    const isRunning = runningChatIds.includes(chat.id) || !!chat.running
-                    const isFailed = !isRunning && failedChatIds.includes(chat.id)
-                    return (
-                      <SidebarMenuItem key={chat.id}>
-                        <MobileDismissSidebarMenuButton
-                          asChild
-                          isActive={chat.id === selectedChatId && !isDetailOpen}
-                          className="pr-7 text-foreground/70"
-                        >
-                          <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}>
-                            <div className="relative shrink-0">
-                              {isRunning ? (
-                                <Loader2 className="h-4 w-4 animate-spin" data-testid="chat-running-spinner" />
-                              ) : (
-                                <ChatIcon className="h-4 w-4" />
-                              )}
-                              {!isRunning && (isFailed || chat.unread) ? (
-                                <span className={`absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full ${isFailed ? 'bg-red-500' : 'bg-blue-500'}`} />
-                              ) : null}
-                            </div>
-                            <span className="truncate">{chat.title}</span>
-                          </Link>
-                        </MobileDismissSidebarMenuButton>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <SidebarMenuAction
-                              showOnHover
-                              onClick={e => e.stopPropagation()}
-                              className="!right-2"
-                            >
-                              <MoreHorizontal />
-                              <span className="sr-only">Chat options</span>
-                            </SidebarMenuAction>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent side="right" align="start" className="w-40" onClick={e => e.stopPropagation()}>
-                            <ChatMenuItems chatId={chat.id} onDelete={onDeleteChat} />
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </SidebarMenuItem>
-                    )
-                  })}
-
-                  {hasMore && (
-                    <SidebarMenuItem>
-                      <SidebarMenuButton onClick={() => setChatPage(p => p + 1)} className="text-muted-foreground">
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                        <span>Show more</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>}
-          </SidebarContent>
-
-          {/* ── Footer: Customize only ── */}
-          <SidebarFooter className={cn('border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <MobileDismissSidebarMenuButton onClick={() => setSettingsOpen(true)}>
-                  <SlidersHorizontal className="h-4 w-4" />
-                  <span>Customize</span>
-                </MobileDismissSidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarFooter>
-        </Sidebar>
-
-        {/* Main content */}
-        <SidebarInset
-          className="min-h-0 max-w-full rounded-xl overflow-hidden shadow-xs mb-2 md:mr-2 md:peer-data-[state=collapsed]:ml-2"
-          onDragEnter={handleInsetDragEnter}
-          onDragOver={handleInsetDragOver}
-          onDragLeave={handleInsetDragLeave}
-          onDrop={handleInsetDrop}
-        >
-          <main className="relative flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
-            {children}
-            {isInsetDropOver && (
-              <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 backdrop-blur-[1px]">
-                <p className="text-sm font-medium text-primary/70 bg-background/80 rounded-md px-3 py-2 shadow-sm">
-                  Drop here to unpin
-                </p>
-              </div>
-            )}
-          </main>
-        </SidebarInset>
-
+              </main>
+            </SidebarInset>
+          </div>
+        </TopBar>
       </SidebarProvider>
 
-      </div>{/* end card inner */}
-      </div>{/* end card outer */}
+      {/* Preview panel ─────────────────────────────────────────────────
+          Desktop: docked flex sibling. `AnimatePresence` keeps it
+          mounted through its exit animation so the close transition
+          (width collapsing to 0) is visible. A 4 px drag divider sits
+          on the left edge — dragging dispatches `setSplitRatio`,
+          clamped to the configured min widths (400 chat / 512 panel).
+          The avatar-stack offset on the chat side has its own 300 ms
+          transition keyed on the same width, so the two move in sync.
 
-      {/* ── Workspace settings modal ── */}
+          Below the desktop breakpoint the panel turns into a full-
+          screen overlay (covers the chat) with no resize handle, so
+          users on tablets / phones get a usable single-pane view
+          without the geometry math breaking. */}
+      <AnimatePresence initial={false}>
+        {isPreviewOpen && (isSmallViewport ? (
+          <motion.div
+            key="preview-panel-overlay"
+            initial={{ opacity: 0, x: '100%' }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: '100%' }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="fixed inset-0 z-50 flex flex-col bg-background"
+          >
+            <PreviewPanel />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="preview-panel"
+            initial={{ width: 0 }}
+            animate={{ width: previewPanelWidth }}
+            exit={{ width: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="relative shrink-0 flex flex-col"
+          >
+            {/* Drag handle (shared with the Library file-detail
+                split). Lives OUTSIDE the overflow-hidden content
+                wrapper below — its hit area is translated -50 % so
+                the left half sits in the chat/panel seam; clipping it
+                would shear the grab bar's left edge off. */}
+            <SplitResizeHandle
+              isResizing={isResizingPreview}
+              onMouseDown={handleResizeStart}
+              ariaLabel="Resize preview panel"
+            />
+            {/* Content clip lives here (not on the motion.div) so the
+                panel's width-collapse close animation still hides any
+                overflow without also clipping the seam handle above. */}
+            <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+              <PreviewPanel />
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+
+      {/* ── Room settings modal ── */}
       <SettingsModal
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -757,7 +575,6 @@ export function AppShell({
         }}
       />
 
-      {/* ── My account modal ── */}
       <MyAccountModal
         open={myAccountOpen}
         onOpenChange={setMyAccountOpen}
@@ -781,55 +598,47 @@ export function AppShell({
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
 
-          {/* Default state: recent 5 chats */}
           {!chatSearchQuery.trim() && (
             <CommandGroup heading="Recent chats">
-              {allChats.slice(0, 5).map(chat => {
-                const ChatIcon = getChatIcon(chat)
-                return (
-                  <CommandItem
-                    key={chat.id}
-                    value={chat.id}
-                    onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
-                  >
-                    <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                    <span className="truncate">{chat.title}</span>
-                  </CommandItem>
-                )
-              })}
+              {chats.slice(0, 5).map(chat => (
+                <CommandItem
+                  key={chat.id}
+                  value={chat.id}
+                  onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
+                >
+                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                  <span className="truncate">{chat.title}</span>
+                </CommandItem>
+              ))}
             </CommandGroup>
           )}
 
-          {/* Search state — results come from the server /search endpoint. */}
           {chatSearchQuery.trim() && (
             <>
               <CommandGroup heading="Chats">
                 {(searchResults ?? [])
                   .filter(r => r.type === 'chat' || r.type === 'message')
-                  .map(r => {
-                    const chat = allChats.find(c => c.id === r.id)
-                    const ChatIcon = chat ? getChatIcon(chat) : MessageSquare
-                    return (
-                      <CommandItem
-                        key={r.messageId ?? r.id}
-                        value={r.messageId ?? r.id}
-                        onSelect={() => {
-                          if (chat) onChatClick(chat)
-                          setChatSearchOpen(false)
-                          setChatSearchQuery('')
-                          setChatSearchValue('')
-                        }}
-                      >
-                        <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                        <span className="min-w-0 truncate">
-                          <span className="block truncate">{r.title}</span>
-                          {r.snippet && (
-                            <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
-                          )}
-                        </span>
-                      </CommandItem>
-                    )
-                  })}
+                  .map(r => (
+                    <CommandItem
+                      key={r.messageId ?? r.id}
+                      value={r.messageId ?? r.id}
+                      onSelect={() => {
+                        const chat = chats.find(c => c.id === r.id)
+                        if (chat) onChatClick(chat)
+                        setChatSearchOpen(false)
+                        setChatSearchQuery('')
+                        setChatSearchValue('')
+                      }}
+                    >
+                      <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                      <span className="min-w-0 truncate">
+                        <span className="block truncate">{r.title}</span>
+                        {r.snippet && (
+                          <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
+                        )}
+                      </span>
+                    </CommandItem>
+                  ))}
               </CommandGroup>
               <CommandSeparator />
               <CommandGroup heading="Artifacts">
@@ -845,16 +654,16 @@ export function AppShell({
                     )
                     const ArtifactIcon = getArtifactIcon(artifact.type)
                     return (
-                    <CommandItem
-                      key={artifact.id}
-                      value={artifact.id}
-                      onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
-                    >
-                      <ArtifactIcon className="h-4 w-4 text-muted-foreground" />
-                      <span className="truncate">{artifact.name}</span>
-                    </CommandItem>
-                  )
-                })}
+                      <CommandItem
+                        key={artifact.id}
+                        value={artifact.id}
+                        onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
+                      >
+                        <ArtifactIcon className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate">{artifact.name}</span>
+                      </CommandItem>
+                    )
+                  })}
               </CommandGroup>
             </>
           )}
@@ -863,3 +672,4 @@ export function AppShell({
     </div>
   )
 }
+

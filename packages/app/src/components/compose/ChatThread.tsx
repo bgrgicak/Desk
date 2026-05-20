@@ -683,7 +683,25 @@ export function ChatThread({
       style={{ '--chat-thread-scrollbar-width': `${scrollbarWidth}px` } as CSSProperties}
     >
       {headerSlot}
-      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]" onScroll={handleScroll}>
+      <div
+        ref={scrollRef}
+        className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+        // Top + bottom edge mask: messages fade as they scroll up past
+        // the top bar and as they scroll down behind the composer.
+        // Mask is on the scrolling element itself (not an overlay) so it
+        // tracks the content, not a fixed strip near the chrome.
+        //
+        // Heads-up for anyone tempted to also put `mix-blend-mode` on a
+        // descendant bubble: `mask-image` here creates a new stacking
+        // context, which traps blends inside the masked subtree and
+        // stops them reaching the AppShell-level BackgroundBlobs.
+        // Either the mask goes, or the blend mode does.
+        style={{
+          maskImage: 'linear-gradient(to bottom, transparent 0, black 48px, black calc(100% - 48px), transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 48px, black calc(100% - 48px), transparent 100%)',
+        }}
+        onScroll={handleScroll}
+      >
         <div className={`min-w-0 max-w-full ${innerClassName}`}>
           {/* Loading-older indicator */}
           {isFetchingOlder && (
@@ -709,7 +727,27 @@ export function ChatThread({
               </p>
             )
           )}
-          {messages.map((msg, i) => (
+          {messages.map((msg, i) => {
+            // Consecutive same-role messages sent within a 1-second
+            // window are treated as a single group: only the last one
+            // surfaces the actions row, and within the group the
+            // bubbles sit tight (just the inter-message `space-y-3`
+            // gap, no per-message actions reserved space). Artifact
+            // refs and event logs participate in groups too, so a
+            // sequence like "text → file → text" sent in one breath
+            // reads as one expression. The 1-second threshold mirrors
+            // how rapid-fire follow-ups tend to be parts of one
+            // thought rather than separate turns.
+            const GROUP_WINDOW_MS = 1000
+            const prev: typeof msg | undefined = messages[i - 1]
+            const next: typeof msg | undefined = messages[i + 1]
+            const sameGroupAs = (a: typeof msg | undefined, b: typeof msg | undefined) =>
+              !!a && !!b
+              && a.role === b.role
+              && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) <= GROUP_WINDOW_MS
+            const isFirstInGroup = !sameGroupAs(prev, msg)
+            const isLastInGroup = !sameGroupAs(msg, next)
+            return (
             <div
               key={msg.id}
               className="min-w-0 max-w-full"
@@ -723,7 +761,8 @@ export function ChatThread({
                   workspacePath={workspacePath}
                   currentChatId={chatId}
                   agentName={agentName}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
+                  isFirstInGroup={isFirstInGroup}
+                  isLastInGroup={isLastInGroup}
                   isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}
                   onAttachmentClick={onAttachmentClick}
                   agentHeaderClassName={agentHeaderClassName}
@@ -737,7 +776,8 @@ export function ChatThread({
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
           {showToolOnlyFallback && (
             <div className={resolvedStatusClassName}>
               <ToolOnlyRunFallback />

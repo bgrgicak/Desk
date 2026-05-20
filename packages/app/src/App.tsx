@@ -31,6 +31,7 @@ import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { TasksPage } from '@/components/tasks/TasksPage'
+import { HomePage } from '@/components/home/HomePage'
 import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
 import { GlobalPalette } from '@/components/global-palette/GlobalPalette'
@@ -53,6 +54,7 @@ import {
   usePostChatMessageMutation,
   usePatchMessageMutation,
   useRunMessageMutation,
+  useDeleteMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
   useCreateThreadMutation,
@@ -77,9 +79,12 @@ import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
+import { useAvatarUrl } from '@/hooks/use-avatar'
+import { generateTaskTitle } from '@/lib/task-title'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
-import { buildTaskStatusMove } from '@/lib/task-status'
+import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
+import type { TaskComposerSubmit } from '@/components/tasks/TaskComposer'
 import {
   acceptBrowserNotificationPermissionOffer,
   markBrowserNotificationPermissionOffered,
@@ -198,11 +203,11 @@ function MustChangeGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-// Landing route — waits for the workspace list, then redirects into the
-// first workspace's default view. Anything unrecognised also lands here.
+// Landing route — waits for the workspace list, then shows the Home
+// page (room picker). Anything unrecognised also lands here.
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
-  const { defaultView, loaded: prefsLoaded } = usePrefs()
+  const { loaded: prefsLoaded } = usePrefs()
   // Loading state: queries still in flight. Render a centered spinner
   // instead of an empty div — an empty <div className="h-dvh"/> looks
   // identical to a crashed app, and any tab-switch / WS-reconnect that
@@ -217,25 +222,14 @@ function AppBoot() {
       </TooltipProvider>
     )
   }
-  // The user has zero workspaces (fresh install or all deleted). The
-  // app has no place to land — surface that explicitly instead of
-  // staying on a blank screen forever.
-  if (serverWorkspaces.length === 0) {
-    return (
-      <TooltipProvider>
-        <Toaster position="bottom-right" />
-        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
-          <div className="max-w-sm text-center px-6">
-            <h1 className="text-lg font-semibold mb-2">No workspaces yet</h1>
-            <p className="text-sm text-muted-foreground">
-              Create a workspace from the top bar to get started.
-            </p>
-          </div>
-        </div>
-      </TooltipProvider>
-    )
-  }
-  return <Navigate to={buildDefaultViewPath(serverWorkspaces[0].id, defaultView)} replace />
+  // Home handles the zero-workspace case itself (empty rooms list +
+  // the "Rooms +" create modal), so there's no dead-end state.
+  return (
+    <TooltipProvider>
+      <Toaster position="bottom-right" />
+      <HomePage />
+    </TooltipProvider>
+  )
 }
 
 function AppInner() {
@@ -256,6 +250,7 @@ function AppInner() {
   const selectedMessageId = searchParams.get('message')
   const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
   const startThreadParam = searchParams.get('startThread') // chatId:messageId
+  const selectedTaskId = searchParams.get('task')
   const shouldLoadTasksView = activeView === 'tasks'
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
@@ -266,6 +261,7 @@ function AppInner() {
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
+  const userAvatarUrl = useAvatarUrl(me?.id)
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
   const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',
@@ -394,6 +390,7 @@ function AppInner() {
   const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
+  const [deleteMessageMutation] = useDeleteMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
   const [unpinLibraryItem] = useUnpinLibraryItemMutation()
 
@@ -442,6 +439,7 @@ function AppInner() {
       folder?: string | null
       message?: string | null
       artifactParams?: string | null
+      task?: string | null
       startThread?: string | null
     } = {},
   ) => {
@@ -767,6 +765,7 @@ function AppInner() {
         pinnedItems={pinnedItems}
         isPinnedLoading={!!activeWorkspaceId && !libraryResp && (libraryLoading || libraryFetching || libraryUninitialized)}
         selectedItemId={effectiveItemPath}
+        libraryFileName={selectedContextItem?.name ?? null}
         onPinItem={(itemId) => {
           if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: itemId })
         }}
@@ -792,6 +791,13 @@ function AppInner() {
             }}
             onNavigateToFolder={(folderId) => goTo({ view: 'context', item: null, folder: folderId })}
             onRenameItem={(newPath) => goTo({ item: newPath })}
+            isPinned={selectedContextItem.pinned}
+            onPin={() => {
+              if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: selectedContextItem.id })
+            }}
+            onUnpin={() => {
+              if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: selectedContextItem.id })
+            }}
             previewParams={selectedArtifactParams}
           />
         )}
@@ -839,36 +845,16 @@ function AppInner() {
           <TasksPage
             tasks={tasks}
             isLoading={tasksListLoading}
-            onTaskMove={async (task, newStatus) => {
-              if (!task.chatId || !task.messageId) return false
-              const move = buildTaskStatusMove(task, newStatus, 'user')
-              if (move.kind === 'none') return false
-              if (move.kind === 'run') {
-                try {
-                  await runMessageMutation({
-                    chatId: task.chatId,
-                    messageId: task.messageId,
-                  }).unwrap()
-                } catch (err) {
-                  toast.error('Run failed', { description: extractApiError(err) })
-                  throw err
-                }
-                return true
-              }
-
-              try {
-                await patchMessageMutation({
-                  chatId: task.chatId,
-                  messageId: task.messageId,
-                  patch: move.patch,
-                }).unwrap()
-                return true
-              } catch (err) {
-                toast.error('Move failed', { description: extractApiError(err) })
-                throw err
-              }
-            }}
-            onCreateTask={async (input) => {
+            agents={workspaceServerAgents ?? serverAgents ?? []}
+            roomName={serverWorkspaces?.find(w => w.id === activeWorkspaceId)?.name}
+            unreadByChatId={Object.fromEntries(
+              chats.filter(c => c.unread).map(c => [c.id, 1] as const),
+            )}
+            authorName={me?.username}
+            authorAvatarUrl={userAvatarUrl}
+            selectedTaskId={selectedTaskId}
+            onSelectTask={(id) => goTo({ task: id })}
+            onCreateTask={async (input: TaskComposerSubmit) => {
               if (!activeWorkspaceId) return
               const pickedAgentId = workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
               if (!pickedAgentId) {
@@ -878,28 +864,77 @@ function AppInner() {
                 return
               }
               try {
+                // AI-style title from the user's message (stub now;
+                // backend later — see lib/task-title.ts). The full
+                // message stays the task body.
+                const generatedTitle = await generateTaskTitle(input.content)
                 const newChat = await createChatMutation({
                   workspaceId: activeWorkspaceId,
                   agentId: pickedAgentId,
-                  title: input.name.length > 50 ? input.name.slice(0, 50) + '…' : input.name,
+                  title: generatedTitle,
                 }).unwrap()
-                const newMessage = await postMessageMutation({
+                // No run — composer-created tasks land idle in "To do"
+                // (or "Scheduled" when an executeAt was picked).
+                await postMessageMutation({
                   chatId: newChat.id,
-                  content: input.description?.trim() ? `${input.name}\n\n${input.description}` : input.name,
+                  content: input.content,
                   kind: 'task',
-                  title: input.name,
-                  executeAt: input.status === 'scheduled' && input.scheduledFor
-                    ? input.scheduledFor.toISOString()
-                    : undefined,
-                  cron: input.cron,
+                  title: generatedTitle,
+                  executeAt: input.executeAt,
+                  attachments: input.attachments.length ? input.attachments : undefined,
                 }).unwrap()
-                if (input.status === 'active') {
-                  await runMessageMutation({ chatId: newMessage.chatId, messageId: newMessage.id }).unwrap()
-                }
               } catch (err) {
-                toast.error('Failed to create task', {
-                  description: err instanceof Error ? err.message : undefined,
-                })
+                toast.error('Failed to create task', { description: extractApiError(err) })
+              }
+            }}
+            onMarkDone={async (task) => {
+              if (!task.chatId || !task.messageId) return
+              const move = buildTaskStatusMove(task, 'complete', 'user')
+              if (move.kind !== 'patch') return
+              try {
+                await patchMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                  patch: move.patch,
+                }).unwrap()
+              } catch (err) {
+                toast.error('Failed to mark done', { description: extractApiError(err) })
+              }
+            }}
+            onRunNow={async (task) => {
+              if (!task.chatId || !task.messageId) return
+              try {
+                await runMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                }).unwrap()
+              } catch (err) {
+                toast.error('Run failed', { description: extractApiError(err) })
+              }
+            }}
+            onPause={async (task) => {
+              if (!task.chatId || !task.messageId) return
+              const move = buildTaskLifecycleMove(task, 'pause', 'user')
+              if (move.kind !== 'patch') return
+              try {
+                await patchMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                  patch: move.patch,
+                }).unwrap()
+              } catch (err) {
+                toast.error('Pause failed', { description: extractApiError(err) })
+              }
+            }}
+            onDelete={async (task) => {
+              if (!task.chatId || !task.messageId) return
+              try {
+                await deleteMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                }).unwrap()
+              } catch (err) {
+                toast.error('Delete failed', { description: extractApiError(err) })
               }
             }}
           />

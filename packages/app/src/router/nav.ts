@@ -18,6 +18,9 @@ export interface NavQuery {
    * sent message creates a thread anchored at this message instead of a
    * new standalone chat. */
   startThread?: string | null;
+  /** Selected task id on the Tasks view — opens its chat in the
+   * docked right sidebar (mirrors `item` for the Library detail). */
+  task?: string | null;
 }
 
 export const NEW_CHAT_ID = "new";
@@ -35,6 +38,7 @@ export function buildPath(
   if (q.message) sp.set("message", q.message);
   if (q.artifactParams) sp.set("artifactParams", q.artifactParams);
   if (q.startThread) sp.set("startThread", q.startThread);
+  if (q.task) sp.set("task", q.task);
   const s = sp.toString();
   return `/w/${wsId}/${view}${s ? "?" + s : ""}`;
 }

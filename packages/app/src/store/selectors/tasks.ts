@@ -166,6 +166,7 @@ export function toUiTask(
   return {
     id: m.id,
     name: nameFor(m, chats, workspaces),
+    title: m.title?.trim() || undefined,
     description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,

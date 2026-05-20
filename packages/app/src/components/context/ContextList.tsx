@@ -15,7 +15,6 @@ import {
   Download,
   Trash2,
   ChevronDown,
-  ChevronRight,
   Sparkles,
   Shapes,
   FileText,
@@ -33,12 +32,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
   Button,
   Checkbox,
   ContextMenu,
@@ -60,12 +53,12 @@ import {
   Input,
   Skeleton,
 } from '@agent-desk/ui'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { TopBarActions } from '@/components/layout/TopBar'
+import { useContentAreaInsets } from '@/components/shared/splitPane'
 import type { ContextItem } from '@/data/ui-types'
 import {
   getRelativeTime,
   getFolderById,
-  getFolderPath,
   getChildFolders,
   getItemsInFolder,
   countDirectChildren,
@@ -81,7 +74,8 @@ import {
 } from '@/store/api'
 import { downloadLibraryFile } from '@/store/library-download'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
-import { toContextItem, toFolderList } from '@/store/selectors/library'
+import { toContextItem, toFolderList, type MoveTarget } from '@/store/selectors/library'
+import { MoveToFolderDialog } from '@/components/library/MoveToFolderDialog'
 import { LibraryCard } from '@/components/library/LibraryCard'
 import { ArtifactCreationSheet, type ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
 import { toast } from 'sonner'
@@ -126,6 +120,10 @@ const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', l
 
 
 export function ContextList({ items, isLoading, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
+  // The Library list has no conversation, so the global avatar stack
+  // shouldn't appear over its header (insets irrelevant while hidden).
+  useContentAreaInsets('0px', '0px', { hidden: true })
+
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
   const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
@@ -197,9 +195,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     | { kind: 'file'; id: string; name: string }
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [moveTargets, setMoveTargets] = useState<
-    Array<{ path: string; name: string; kind: 'item' | 'folder' }> | null
-  >(null)
+  const [moveTargets, setMoveTargets] = useState<MoveTarget[] | null>(null)
 
   const handleDownload = async (item: ContextItem) => {
     if (!activeWorkspaceId) return
@@ -442,7 +438,6 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     : []
 
   const currentFolder = getFolderById(folders, currentFolderId)
-  const breadcrumbPath = getFolderPath(folders, currentFolderId)
   const isInsideFolder = currentFolder != null
 
   // Get folders + items in current location
@@ -535,51 +530,13 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
       {({ openPicker, openDirectoryPicker }) => (
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
-      {/* ── Header bar ── */}
-      <PageHeader
-        breadcrumb={
-          <Breadcrumb className="shrink-0">
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                {currentFolderId ? (
-                  <BreadcrumbLink asChild>
-                    <button
-                      onClick={() => navigateToFolder(null)}
-                      className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                    >
-                      Library
-                    </button>
-                  </BreadcrumbLink>
-                ) : (
-                  <BreadcrumbPage className="text-sm font-semibold text-foreground">Library</BreadcrumbPage>
-                )}
-              </BreadcrumbItem>
-              {breadcrumbPath.map((folder, idx) => {
-                const isLast = idx === breadcrumbPath.length - 1
-                return (
-                  <span key={folder.id} className="flex items-center gap-1.5">
-                    <BreadcrumbSeparator><ChevronRight className="h-3.5 w-3.5" /></BreadcrumbSeparator>
-                    <BreadcrumbItem>
-                      {isLast ? (
-                        <BreadcrumbPage className="text-sm font-semibold text-foreground">{folder.name}</BreadcrumbPage>
-                      ) : (
-                        <BreadcrumbLink asChild>
-                          <button
-                            onClick={() => navigateToFolder(folder.id)}
-                            className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                          >
-                            {folder.name}
-                          </button>
-                        </BreadcrumbLink>
-                      )}
-                    </BreadcrumbItem>
-                  </span>
-                )
-              })}
-            </BreadcrumbList>
-          </Breadcrumb>
-        }
-        actions={<div className="flex w-full min-w-0 flex-wrap items-center gap-1 sm:w-auto sm:flex-nowrap sm:justify-end sm:gap-2">
+      {/* Library controls are portaled into the global TopBar's
+          right-side actions slot (no in-content page header). The
+          folder breadcrumb that used to live here was removed with
+          the PageHeader — the TopBar shows `/ Library`, and folder
+          drill-down stays reachable through the list rows. */}
+      <TopBarActions>
+        <div className="flex items-center gap-2">
           {/* Type dropdown */}
           <div className="order-2 shrink-0 sm:order-none">
             {(() => {
@@ -679,14 +636,18 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        </div>}
-      />
+        </div>
+      </TopBarActions>
 
       {/* ── Body ── */}
       <ContextMenu>
       <ContextMenuTrigger asChild>
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-2 py-3 sm:px-4">
+      <div className="relative flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* `pt-6` matches the sidebar's first-section top padding
+          (RoomSidebar `<SidebarMenu className="pt-6">`) so the first
+          Library row lines up horizontally with the first sidebar
+          item now that the in-content page header is gone. */}
+      <div className="flex-1 overflow-y-auto px-8 pt-6 pb-3">
         {resolvedLoading ? (
           <div className="space-y-0.5 pt-1">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -740,7 +701,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
           /* ─── List view ─── */
           <div>
             {/* Column headers */}
-            <div className="flex items-center gap-3 px-3 py-1.5 mb-1">
+            <div className="flex items-center gap-3 px-3 pt-1.5 pb-2 mb-1">
               <Checkbox
                 checked={selectAllState}
                 onCheckedChange={toggleSelectAll}
@@ -964,15 +925,18 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
         )}
       </div>
 
-        {/* Bulk actions bar */}
+        {/* Bulk actions bar — floats as a card 24 px from the file
+            browser window's edges (bottom/left/right), matching other
+            floating layouts. Card chrome mirrors the composer input:
+            12 px radius, bg token, hairline border, `shadow-md`. */}
         <AnimatePresence>
           {hasSelection && (
             <motion.div
-              initial={{ opacity: 0, maxHeight: 0 }}
-              animate={{ opacity: 1, maxHeight: 120 }}
-              exit={{ opacity: 0, maxHeight: 0 }}
-              transition={{ duration: 0.2 }}
-              className="border-t bg-muted/30 overflow-hidden shrink-0"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+              className="absolute inset-x-6 bottom-6 z-30 rounded-xl border border-foreground/10 bg-background shadow-md"
             >
               <div className="flex items-center gap-3 px-5 py-3">
                 <Checkbox
@@ -1225,55 +1189,13 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
         </DialogContent>
       </Dialog>
 
-      {/* Move-to-folder dialog */}
-      <Dialog
-        open={moveTargets !== null}
-        onOpenChange={(open) => { if (!open) setMoveTargets(null) }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {moveTargets && moveTargets.length === 1
-                ? `Move "${moveTargets[0].name}"`
-                : `Move ${moveTargets?.length ?? 0} items`}
-            </DialogTitle>
-            <DialogDescription>Pick a destination folder.</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[50vh] overflow-y-auto py-2 space-y-1">
-            <button
-              className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
-              onClick={() => handleMoveToFolder(null)}
-            >
-              <FolderIcon className="h-4 w-4 mr-2 inline" />
-              Library (root)
-            </button>
-            {folders
-              // Can't move an item into itself or one of its descendants.
-              .filter((f) => {
-                if (!moveTargets) return true
-                for (const t of moveTargets) {
-                  if (t.path === f.id) return false
-                  if (f.id.startsWith(`${t.path}/`)) return false
-                }
-                return true
-              })
-              .sort((a, b) => a.id.localeCompare(b.id))
-              .map((f) => (
-                <button
-                  key={f.id}
-                  className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
-                  onClick={() => handleMoveToFolder(f.id)}
-                >
-                  <FolderIcon className="h-4 w-4 mr-2 inline" />
-                  {f.id}
-                </button>
-              ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMoveTargets(null)}>Cancel</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Move-to-folder dialog (shared with the file-detail view) */}
+      <MoveToFolderDialog
+        targets={moveTargets}
+        folders={folders}
+        onClose={() => setMoveTargets(null)}
+        onMove={handleMoveToFolder}
+      />
 
       <AlertDialog
         open={deleteTargets !== null}

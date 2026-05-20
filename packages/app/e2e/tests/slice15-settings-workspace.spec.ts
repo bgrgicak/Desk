@@ -2,7 +2,7 @@
  * Slice 15 — Settings → Workspace tab edits persist through PATCH
  * /workspaces/:id and survive a reload.
  *
- * Covers a different surface than slice02's "Customize" flow: the
+ * Covers a different surface than slice02's "Settings" flow: the
  * dedicated Workspace tab inside the SettingsModal (trunk's redesign
  * exposes both entry points).
  */
@@ -15,14 +15,13 @@ test("editing workspace name + icon + color from Settings → Workspace persists
 }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   // Workspace tab is the default. Confirm and edit.
   const dialog = loggedInPage.getByRole("dialog");
-  await expect(dialog.getByPlaceholder("Workspace name")).toBeVisible();
+  await expect(dialog.getByPlaceholder("e.g. Marketing")).toBeVisible();
 
-  await dialog.getByPlaceholder("Workspace name").fill("Slice15 Renamed");
-  await dialog.getByPlaceholder("What's this workspace for?").fill("renamed by slice15");
-  await dialog.getByRole("button", { name: "🚀" }).click();
+  await dialog.getByPlaceholder("e.g. Marketing").fill("Slice15 Renamed");
+  await dialog.getByPlaceholder("What this room is for…").fill("renamed by slice15");
   await dialog.getByRole("button", { name: "Teal", exact: true }).click();
   await dialog.getByRole("button", { name: /Save changes/ }).click();
 
@@ -36,11 +35,11 @@ test("editing workspace name + icon + color from Settings → Workspace persists
     headers: { Authorization: `Bearer ${token}` },
   });
   const list = (await res.json()) as Array<{
-    name: string; icon: string; color: string; description: string;
+    name: string; color: string; description: string;
   }>;
   const updated = list.find(w => w.name === "Slice15 Renamed");
   expect(updated).toBeDefined();
-  expect(updated).toMatchObject({ icon: "🚀", color: "#ccfbf1", description: "renamed by slice15" });
+  expect(updated).toMatchObject({ color: "#14b8a6", description: "renamed by slice15" });
 
   // Reload — values stick.
   await loggedInPage.reload();
