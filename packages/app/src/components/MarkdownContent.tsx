@@ -116,15 +116,40 @@ const selectAllCachedWorkspaces = createSelector(
   },
 )
 
-export const MarkdownContent = memo(function MarkdownContent({ text, workspacePath, workspaceId }: MarkdownContentProps) {
-  // shallowEqual lets the selector return a new array reference (which
-  // createSelector does on every cache change) without forcing a re-render
-  // when none of the items it cares about actually moved — the typical
-  // case during streaming, when most cache patches don't touch chats or
-  // workspaces at all.
-  const chats = useAppSelector(selectAllCachedChats, shallowEqual)
-  const workspaces = useAppSelector(selectAllCachedWorkspaces, shallowEqual)
+/**
+ * Per-id chat lookup. Pushing the cache subscription down to a child
+ * component is what stops a single chat update (e.g. a streaming chunk
+ * mutating one chat's `updatedAt`) from invalidating every mounted
+ * `MarkdownContent` in the thread. The narrow `{ title, workspaceId }`
+ * projection with `shallowEqual` further ensures we only re-render when
+ * this specific chat's title or owning workspace actually changes —
+ * not on unrelated cache churn.
+ */
+function ChatEntityChip({ id, fallbackWorkspaceId }: { id: string; fallbackWorkspaceId?: string }) {
+  const bits = useAppSelector(state => {
+    const chat = selectAllCachedChats(state).find(c => c.id === id)
+    return { title: chat?.title, workspaceId: chat?.workspaceId }
+  }, shallowEqual)
+  return (
+    <EntityChip
+      kind="chat"
+      id={id}
+      title={bits.title}
+      workspaceId={bits.workspaceId ?? fallbackWorkspaceId}
+    />
+  )
+}
 
+function WorkspaceEntityChip({ id }: { id: string }) {
+  // Selecting a string keeps the default `===` comparison cheap and
+  // re-renders only when this workspace's name actually changes.
+  const title = useAppSelector(state =>
+    selectAllCachedWorkspaces(state).find(w => w.id === id)?.name,
+  )
+  return <EntityChip kind="workspace" id={id} title={title} />
+}
+
+export const MarkdownContent = memo(function MarkdownContent({ text, workspacePath, workspaceId }: MarkdownContentProps) {
   // The plugins array and components map used to be recreated inline on
   // every render. ReactMarkdown's internal optimizations rely on stable
   // identities for these, so churning them defeats any reuse and forces a
@@ -137,6 +162,12 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
     [workspacePath],
   )
 
+  // Crucially the `chats` / `workspaces` arrays no longer appear here —
+  // entity chip resolution moved to the `*EntityChip` subcomponents
+  // above, which subscribe per-id. With only the stable string props
+  // (`workspacePath`, `workspaceId`) in this dep list the `components`
+  // map keeps its identity across most re-renders, letting the outer
+  // `memo` wrapper (and ReactMarkdown's internal reuse) actually work.
   const components = useMemo(() => ({
     pre: ({ children, ...props }: React.ComponentProps<'pre'>) => (
       <pre
@@ -158,24 +189,13 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
       if (href?.startsWith('desk-entity:')) {
         const entity = parseEntityUrl(href)
         if (entity) {
-          const chat = entity.kind === 'chat'
-            ? chats?.find(c => c.id === entity.id)
-            : undefined
-          const workspace = entity.kind === 'workspace'
-            ? workspaces?.find(w => w.id === entity.id)
-            : undefined
-          return (
-            <EntityChip
-              kind={entity.kind}
-              id={entity.id}
-              title={chat?.title ?? workspace?.name}
-              workspaceId={
-                entity.kind === 'workspace'
-                  ? undefined
-                  : chat?.workspaceId ?? workspaceId
-              }
-            />
-          )
+          if (entity.kind === 'chat') {
+            return <ChatEntityChip id={entity.id} fallbackWorkspaceId={workspaceId} />
+          }
+          if (entity.kind === 'workspace') {
+            return <WorkspaceEntityChip id={entity.id} />
+          }
+          return <EntityChip kind={entity.kind} id={entity.id} workspaceId={workspaceId} />
         }
         return <>{children}</>
       }
@@ -195,7 +215,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
       }
       return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
     },
-  }), [chats, workspaces, workspacePath, workspaceId])
+  }), [workspacePath, workspaceId])
 
   return (
     <div className="prose prose-neutral prose-sm min-w-0 max-w-none break-words text-foreground prose-headings:font-semibold prose-headings:text-foreground prose-p:text-sm prose-p:leading-relaxed prose-p:my-1 prose-li:text-sm prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-strong:text-foreground prose-strong:font-semibold prose-code:text-sm prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:font-normal prose-code:before:content-none prose-code:after:content-none prose-pre:max-w-full prose-pre:overflow-x-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted prose-pre:text-xs prose-pre:text-foreground prose-pre:font-normal prose-table:w-full prose-table:table-fixed prose-table:break-words prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:break-words prose-td:break-words prose-a:text-primary">
