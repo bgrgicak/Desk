@@ -4,8 +4,6 @@ import {
   eventHasUserVisibleDiagnostic,
   firstDiagnosticString,
   isUserVisibleDiagnosticLine,
-  userVisibleDiagnosticEventSql,
-  userVisibleDiagnosticSql,
 } from "./messages.sql-helpers.js";
 
 export type MessageListView = "full" | "compact" | "timeline";
@@ -62,99 +60,6 @@ export const FULL_MESSAGE_SELECT = `
   thread_chat_id
 `;
 
-// Compact chat loads are the normal UI path. Build the compact JSON in SQL so
-// hidden tool/event/summary payloads never leave SQLite just to be discarded by
-// the API serializer. This keeps the feature surface (visible assistant text,
-// agent_turn state, tool-only fallback markers) without shipping megabytes of
-// tool inputs/results/log lines on every chat open.
-export function compactContentSql(column = "content"): string {
-  return `
-  CASE json_extract(${column}, '$.type')
-    WHEN 'events' THEN json_object(
-      'type', 'events',
-      'log', json(COALESCE((
-        SELECT json_group_array(json(
-          CASE
-            WHEN json_extract(e.value, '$.kind') = 'event'
-              AND json_extract(e.value, '$.event.type') = 'text'
-              AND NOT EXISTS (
-                SELECT 1 FROM json_each(${column}, '$.log') AS r
-                WHERE json_extract(r.value, '$.kind') = 'event'
-                  AND json_extract(r.value, '$.event.type') = 'reasoning'
-                  AND json_type(e.value, '$.event.part.id') = 'text'
-                  AND json_extract(r.value, '$.event.part.id') = json_extract(e.value, '$.event.part.id')
-              )
-            THEN json_object(
-              'kind', 'event',
-              'event', json_object(
-                'type', 'text',
-                'part', json_object('text', json_extract(e.value, '$.event.part.text'))
-              )
-            )
-            WHEN json_extract(e.value, '$.kind') = 'event' THEN json_object(
-              'kind', 'event',
-              'event', json(json_extract(e.value, '$.event'))
-            )
-            WHEN json_extract(e.value, '$.kind') = 'stderr' THEN json_object('kind', 'stderr', 'line', json_extract(e.value, '$.line'))
-            ELSE json_object('kind', 'unparsed', 'line', json_extract(e.value, '$.line'))
-          END
-        ))
-        FROM json_each(${column}, '$.log') AS e
-        WHERE (
-          json_extract(e.value, '$.kind') = 'event'
-          AND json_extract(e.value, '$.event.type') = 'text'
-          AND json_type(e.value, '$.event.part.text') = 'text'
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(${column}, '$.log') AS r
-            WHERE json_extract(r.value, '$.kind') = 'event'
-              AND json_extract(r.value, '$.event.type') = 'reasoning'
-              AND json_type(e.value, '$.event.part.id') = 'text'
-              AND json_extract(r.value, '$.event.part.id') = json_extract(e.value, '$.event.part.id')
-          )
-        ) OR (
-          json_extract(e.value, '$.kind') = 'event'
-          AND ${userVisibleDiagnosticEventSql("e.value")}
-        ) OR (
-          json_extract(e.value, '$.kind') = 'unparsed'
-          AND (
-            NOT EXISTS (
-              SELECT 1 FROM json_each(${column}, '$.log') AS e2
-              WHERE json_extract(e2.value, '$.kind') = 'event'
-                AND CAST(e2.key AS INTEGER) < CAST(e.key AS INTEGER)
-            )
-            OR ${userVisibleDiagnosticSql("json_extract(e.value, '$.line')")}
-          )
-        ) OR (
-          json_extract(e.value, '$.kind') = 'stderr'
-          AND ${userVisibleDiagnosticSql("json_extract(e.value, '$.line')")}
-        )
-      ), '[]'))
-    )
-    WHEN 'toolCall' THEN json_object(
-      'type', 'toolCall',
-      'toolName', json_extract(${column}, '$.toolName'),
-      'args', json('{}')
-    )
-    WHEN 'toolResult' THEN json_object(
-      'type', 'toolResult',
-      'toolName', json_extract(${column}, '$.toolName'),
-      'result', CASE
-        WHEN ${userVisibleDiagnosticSql(`json_extract(${column}, '$.result')`)}
-        THEN json_extract(${column}, '$.result')
-        ELSE NULL
-      END
-    )
-    WHEN 'summary' THEN json_object('type', 'summary', 'body', '')
-    ELSE ${column}
-  END
-`;
-}
-
-export const COMPACT_MESSAGE_SELECT = FULL_MESSAGE_SELECT.replace(
-  "content,",
-  `${compactContentSql()} AS content,`,
-);
-
 export const FULL_MESSAGE_SELECT_M = `
   m.id,
   m.chat_id,
@@ -175,19 +80,6 @@ export const FULL_MESSAGE_SELECT_M = `
   m.title,
   m.thread_chat_id
 `;
-
-export const COMPACT_MESSAGE_SELECT_M = FULL_MESSAGE_SELECT_M.replace(
-  "m.content,",
-  `${compactContentSql("m.content")} AS content,`,
-);
-
-export function messageSelect(view: MessageListView): string {
-  return view === "full" ? FULL_MESSAGE_SELECT : COMPACT_MESSAGE_SELECT;
-}
-
-export function messageSelectFromAlias(view: MessageListView): string {
-  return view === "full" ? FULL_MESSAGE_SELECT_M : COMPACT_MESSAGE_SELECT_M;
-}
 
 const CONTENT_TYPE_SQL = "json_extract(content, '$.type')";
 
@@ -251,12 +143,23 @@ export function rowToMessage(row: Record<string, unknown>): Message {
 function compactContent(content: Message["content"]): Message["content"] {
   switch (content.type) {
     case "events": {
+      // Reasoning and text parts can share a `part.id` when the agent emits
+      // both streams for the same opencode part. Suppress the text twin so
+      // the compact log doesn't duplicate the same content twice.
+      const reasoningPartIds = new Set<string>();
+      for (const entry of content.log) {
+        if (entry.kind !== "event" || entry.event.type !== "reasoning") continue;
+        const id = entry.event.part?.id;
+        if (typeof id === "string") reasoningPartIds.add(id);
+      }
       const log: typeof content.log = [];
       let sawStructuredEvent = false;
       for (const entry of content.log) {
         if (entry.kind === "event") {
           sawStructuredEvent = true;
           if (entry.event.type === "text") {
+            const partId = entry.event.part?.id;
+            if (typeof partId === "string" && reasoningPartIds.has(partId)) continue;
             const text = entry.event.part?.text;
             if (typeof text === "string") {
               log.push({

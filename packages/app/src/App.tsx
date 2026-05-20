@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Routes,
   Route,
@@ -257,7 +257,7 @@ function AppInner() {
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
   const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
 
-  const savedArtifactIds = new Set(savedArtifactIdList)
+  const savedArtifactIds = useMemo(() => new Set(savedArtifactIdList), [savedArtifactIdList])
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
@@ -321,10 +321,12 @@ function AppInner() {
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const chats: Chat[] = (serverChats ?? []).map(toUiChat)
-  const selectedChatFromList = selectedChatId && selectedChatId !== NEW_CHAT_ID
-    ? chats.find(c => c.id === selectedChatId) ?? null
-    : null
+  const chats: Chat[] = useMemo(() => (serverChats ?? []).map(toUiChat), [serverChats])
+  const selectedChatFromList = useMemo(() => (
+    selectedChatId && selectedChatId !== NEW_CHAT_ID
+      ? chats.find(c => c.id === selectedChatId) ?? null
+      : null
+  ), [chats, selectedChatId])
   // Fetch the selected chat independently of the sidebar list. The list can be
   // relatively expensive on large workspaces; a direct chat URL should not wait
   // for sidebar hydration before rendering the conversation surface.
@@ -368,25 +370,39 @@ function AppInner() {
     { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), state: ['running'], limit: 200 },
     { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
   )
-  const taskRunsByParent = new Map<string, ServerMessage[]>()
-  const taskRunsById = new Map<string, ServerMessage>()
-  for (const run of taskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
-  for (const run of activeTaskRunsResp?.items ?? []) taskRunsById.set(run.id, run)
-  for (const run of taskRunsById.values()) {
-    if (!run.parentId) continue
-    const runs = taskRunsByParent.get(run.parentId) ?? []
-    runs.push(run)
-    taskRunsByParent.set(run.parentId, runs)
-  }
-  const tasks = [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
-    .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
-    .map(m => toUiTask(
-      m,
-      workspaceServerAgents ?? serverAgents ?? [],
-      serverChats ?? [],
-      serverWorkspaces ?? [],
-      taskRunsByParent.get(m.id) ?? [],
-    ))
+  const taskRunsByParent = useMemo(() => {
+    const byParent = new Map<string, ServerMessage[]>()
+    const byId = new Map<string, ServerMessage>()
+    for (const run of taskRunsResp?.items ?? []) byId.set(run.id, run)
+    for (const run of activeTaskRunsResp?.items ?? []) byId.set(run.id, run)
+    for (const run of byId.values()) {
+      if (!run.parentId) continue
+      const runs = byParent.get(run.parentId) ?? []
+      runs.push(run)
+      byParent.set(run.parentId, runs)
+    }
+    return byParent
+  }, [taskRunsResp?.items, activeTaskRunsResp?.items])
+  const tasks = useMemo(() => (
+    [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
+      .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
+      .map(m => toUiTask(
+        m,
+        workspaceServerAgents ?? serverAgents ?? [],
+        serverChats ?? [],
+        serverWorkspaces ?? [],
+        taskRunsByParent.get(m.id) ?? [],
+      ))
+  ), [
+    tasksResp?.items,
+    summaryRequestTasksResp?.items,
+    developerMode,
+    workspaceServerAgents,
+    serverAgents,
+    serverChats,
+    serverWorkspaces,
+    taskRunsByParent,
+  ])
   const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
@@ -627,11 +643,20 @@ function AppInner() {
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const libraryItems: ContextItem[] = activeWorkspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? []))
-    : []
-  const pinnedItems = libraryItems.filter(i => i.pinned)
-  const artifacts: Artifact[] = (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f))
+  const libraryAgents = useMemo(
+    () => workspaceServerAgents ?? serverAgents ?? [],
+    [workspaceServerAgents, serverAgents],
+  )
+  const libraryItems: ContextItem[] = useMemo(() => (
+    activeWorkspaceId
+      ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, libraryAgents))
+      : []
+  ), [activeWorkspaceId, libraryResp?.items, libraryAgents])
+  const pinnedItems = useMemo(() => libraryItems.filter(i => i.pinned), [libraryItems])
+  const artifacts: Artifact[] = useMemo(
+    () => (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f)),
+    [libraryResp?.items],
+  )
 
   // Files already in `/library` are by definition in the user's library —
   // mark them as saved so any inline "Save to Library" affordance is
@@ -669,18 +694,22 @@ function AppInner() {
   const activeChat = isNewChat
     ? { ...NEW_CHAT_STUB, workspaceId: activeWorkspaceId || undefined }
     : selectedChat
-  const chatArtifacts = (selectedChat?.artifactIds ?? [])
-    .map(id => artifacts.find(a => a.id === id))
-    .filter(Boolean) as Artifact[]
+  const chatArtifacts = useMemo(() => (
+    (selectedChat?.artifactIds ?? [])
+      .map(id => artifacts.find(a => a.id === id))
+      .filter(Boolean) as Artifact[]
+  ), [selectedChat?.artifactIds, artifacts])
   const chatShowNewBadge = !!selectedChat?.unread
 
   // Both `?artifact=<path>` and `?item=<path>` route to the same unified
   // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
   // the Desk → Library consolidation removes it.
   const effectiveItemPath = selectedContextPath ?? selectedArtifactPath
-  const libraryItem = effectiveItemPath
-    ? libraryItems.find(c => c.id === effectiveItemPath) ?? null
-    : null
+  const libraryItem = useMemo(() => (
+    effectiveItemPath
+      ? libraryItems.find(c => c.id === effectiveItemPath) ?? null
+      : null
+  ), [effectiveItemPath, libraryItems])
   // Fallback path: chat attachments live under `.chats/{id}/attachments/`
   // and don't appear in the default library listing. Fetch their metadata
   // by path so we can render the same ContextDetail view for them.

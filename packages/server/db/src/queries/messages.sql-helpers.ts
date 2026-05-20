@@ -1,80 +1,11 @@
 /**
- * SQL-fragment builders and JS-side classifiers shared by the
- * message-listing queries in `messages.ts`. Extracted to keep the
- * call-site file under a sane line count while preserving the
- * tightly-coupled relationships between these helpers (every
- * compactContentSql call cascades into the diagnostic + structured-
- * payload helpers, which is why they shipped together originally).
+ * JS-side diagnostic / structured-payload classifiers used by the
+ * message-listing queries in `messages-internal.ts` when compacting
+ * `events` log entries and `toolResult` payloads for non-`full` views.
  *
- * Everything in this module is package-private (`export` is for
- * messages.ts; consumers go through `queries.messages`).
+ * Everything in this module is package-private; consumers go through
+ * `queries.messages`.
  */
-
-export function userVisibleDiagnosticSql(expr: string): string {
-  const line = `lower(COALESCE(${expr}, ''))`;
-  return `(
-    NOT ${structuredToolPayloadSql(expr)} AND (
-    instr(${line}, 'error') > 0 OR
-    instr(${line}, 'failed') > 0 OR
-    instr(${line}, 'failure') > 0 OR
-    instr(${line}, 'exception') > 0 OR
-    instr(${line}, 'traceback') > 0 OR
-    instr(${line}, 'not found') > 0 OR
-    instr(${line}, 'permission denied') > 0 OR
-    instr(${line}, 'unauthorized') > 0 OR
-    instr(${line}, 'unauthorised') > 0 OR
-    instr(${line}, 'forbidden') > 0 OR
-    instr(${line}, 'invalid') > 0 OR
-    instr(${line}, 'cannot') > 0 OR
-    instr(${line}, 'can''t') > 0
-    )
-  )`;
-}
-
-export function structuredToolPayloadSql(expr: string): string {
-  const line = `lower(ltrim(COALESCE(${expr}, '')))`;
-  return `(
-    substr(${line}, 1, 6) = '<path>' OR
-    substr(${line}, 1, 6) = '<type>' OR
-    substr(${line}, 1, 9) = '<content>' OR
-    substr(${line}, 1, 14) = '<skill_content' OR
-    substr(${line}, 1, 16) = '<system-reminder' OR
-    substr(${line}, 1, 5) = '<env>' OR
-    substr(${line}, 1, 17) = '<available_skills' OR
-    instr(${line}, '</path> <type>') > 0 OR
-    instr(${line}, '<skill_content') > 0
-  )`;
-}
-
-export function userVisibleDiagnosticEventSql(expr: string): string {
-  return `(
-    ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.type')`)} AND (
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.error')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.error.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.error.data.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.details')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.detail')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.text')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.reason')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.data')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.data.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.error')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.error.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.error.data.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.details')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.detail')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.text')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.reason')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.data')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part.data.message')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.part')`)} OR
-      ${userVisibleDiagnosticSql(`json_extract(${expr}, '$.event.type')`)}
-    )
-  )`;
-}
 
 export function isUserVisibleDiagnosticLine(line: string): boolean {
   if (isStructuredToolPayloadLine(line)) return false;

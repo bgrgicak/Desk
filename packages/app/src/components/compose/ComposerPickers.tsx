@@ -13,9 +13,8 @@ import {
   PopoverTrigger,
 } from '@agent-desk/ui'
 import type { GoalKey } from '@agent-desk/shared'
-import type { ContextItem } from '@/data/ui-types'
 import { useGetLibraryQuery } from '@/store/api'
-import { toContextItem, toFolderList } from '@/store/selectors/library'
+import { toContextItem } from '@/store/selectors/library'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { ITEM_ICON, type ComposerAttachment } from './composer-pickers-utils'
 
@@ -134,27 +133,35 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
   },
   ref,
 ) {
-  // ── Library data ─────────────────────────────────────────────────────────
-  const { data: libraryResp } = useGetLibraryQuery(
-    workspaceId ? { workspaceId } : undefined,
-    { skip: !workspaceId },
-  )
-  const folders = workspaceId ? toFolderList(libraryResp?.folders ?? [], workspaceId) : []
-  const libraryItems: ContextItem[] = workspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, workspaceId, []))
-    : []
-
-  const allAttachments: ComposerAttachment[] = useMemo(() => [
-    ...folders.map(f => ({ kind: 'folder' as const, id: f.id, name: f.name })),
-    ...libraryItems.map(i => ({ kind: 'item' as const, id: i.id, name: i.name, type: i.type })),
-  ], [folders, libraryItems])
-
   // ── Files popover ────────────────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [filesOpen, setFilesOpen] = useState(false)
   const [filesSearch, setFilesSearch] = useState('')
   const [filesKbActive, setFilesKbActive] = useState(false)
   useEffect(() => { if (!filesOpen) setFilesKbActive(false) }, [filesOpen])
+
+  // Skip the RTK Query subscription entirely while the popover is closed.
+  // Subscribing eagerly meant every library refetch (frequent during
+  // artifact streaming after a send) re-rendered ComposerPickers and
+  // re-ran `toContextItem` across the entire library — even though the
+  // result is only consumed inside the (closed) popover.
+  const { data: libraryResp } = useGetLibraryQuery(
+    workspaceId ? { workspaceId } : undefined,
+    { skip: !workspaceId || !filesOpen },
+  )
+
+  const allAttachments: ComposerAttachment[] = useMemo(() => {
+    if (!workspaceId || !filesOpen) return []
+    const folderRefs = libraryResp?.folders ?? []
+    const itemRefs = libraryResp?.items ?? []
+    return [
+      ...folderRefs.map(f => ({ kind: 'folder' as const, id: f.path, name: f.name })),
+      ...itemRefs.map(f => {
+        const item = toContextItem(f, workspaceId, [])
+        return { kind: 'item' as const, id: item.id, name: item.name, type: item.type }
+      }),
+    ]
+  }, [workspaceId, filesOpen, libraryResp?.folders, libraryResp?.items])
 
   const filteredAttachments = useMemo(
     () => allAttachments.filter(a => !filesSearch || a.name.toLowerCase().includes(filesSearch.toLowerCase())),
