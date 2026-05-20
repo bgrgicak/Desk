@@ -1277,6 +1277,76 @@ describe("workspace.synced", () => {
   });
 });
 
+describe("preemptChatRun", () => {
+  it("a chat agent_turn cancelled mid-fire does not insert a duplicate child on the success path", async () => {
+    // Repro for: rapid user sends produce N identical agent replies.
+    //
+    // Per-send flow:
+    //   1. preemptChatRun → state='cancelled' on the in-flight trigger
+    //   2. insert a fresh agent_turn trigger
+    //   3. fireMessage(newTrigger) — fire-and-forget
+    //
+    // Each cancelled fire's execRunFn still resolves cleanly (opencode
+    // preserves session state on abort and exits 0). The success path
+    // at the bottom of fireMessageImpl then reads the log and inserts a
+    // child message — even though the row is already in 'cancelled'
+    // state and finalizeExecution was a WHERE-clause no-op. Net effect:
+    // every preempted turn leaves behind an extra identical child.
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => { release = resolve; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (id, _agentId, _prompt, onLog) => {
+        onLog({ runId: id, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "step_start", sessionID: "s1" }) });
+        onLog({ runId: id, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "duplicate reply" } }) });
+        // Hold until the test has preempted the row, then exit cleanly —
+        // mirroring opencode returning Cancelled with exitCode=0 after
+        // session.abort.
+        await released;
+        onLog({ runId: id, seq: 2, kind: "stdout", payload: JSON.stringify({ type: "step_finish" }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    const userMessageId = await insertChatRow({
+      targetChatId: chatId,
+      role: "user",
+      content: { type: "text", text: "first send" },
+      createdAt: new Date().toISOString(),
+    });
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId });
+
+    const firePromise = mgr.fireMessage(triggerId);
+
+    // Wait until claimPending has flipped state to 'running' so
+    // findRunningChatTurn (which filters on state='running') sees it.
+    let claimed = false;
+    for (let i = 0; i < 400; i++) {
+      const row = await queries.messages.findById(pool, triggerId);
+      if (row?.state === "running") { claimed = true; break; }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(claimed).toBe(true);
+
+    const preempted = await mgr.preemptChatRun(chatId);
+    expect(preempted?.preempted).toBe(triggerId);
+
+    release();
+    const result = await firePromise;
+    expect(result.fired).toBe(true);
+
+    const { rows: children } = await pool.query(
+      `SELECT id, content FROM messages WHERE parent_id = ? AND role = 'agent'`,
+      [triggerId],
+    );
+    expect(children).toHaveLength(0);
+
+    const finalTrigger = await queries.messages.findById(pool, triggerId);
+    expect(finalTrigger?.state).toBe("cancelled");
+  });
+});
+
 describe("cancelMessage", () => {
   it("removes the row", async () => {
     const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });

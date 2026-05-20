@@ -10,7 +10,7 @@ const now = new Date().toISOString();
 const fixtures: Record<string, WsEvent> = {
   "chat.updated": {
     type: "chat.updated",
-    payload: { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat", createdAt: now, updatedAt: now, awaitingUser: false, unread: false },
+    payload: { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat", createdAt: now, updatedAt: now, unread: false },
   },
   "message.appended": {
     type: "message.appended",

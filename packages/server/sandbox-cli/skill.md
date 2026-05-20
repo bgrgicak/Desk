@@ -5,7 +5,7 @@ runs inside the sandbox and POSTs to the host-side desk-server REST API.
 
 ## When to use it
 
-You have five commands:
+You have seven commands:
 - `desk-agent app create` — clone the Desk app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
 - `desk-agent chat attach-artifact` — surface a generated file **or directory**
@@ -14,7 +14,12 @@ You have five commands:
   LaTeX, and plain text files into agent-readable Markdown/text.
 - `desk-agent find library` — discover reusable apps, fragments, notes, and
   docs before building or answering whether a reusable item exists.
-- `desk-agent task schedule` — create or schedule Tasks board work.
+- `desk-agent task schedule` — create a *new* task card.
+- `desk-agent task reschedule` — change the time (and optionally title/body)
+  of an *existing* task in place. Use for any change/move/delay request —
+  never cancel+recreate.
+- `desk-agent task cancel` — stop an existing task entirely. Use only when
+  the user wants the task gone, not as part of a reschedule.
 
 Reach for them when:
 
@@ -325,6 +330,85 @@ like user-visible tasks.
   Double-check the id you're using.
 - `VALIDATION` — bad `--at` or `--cron`. Read the message and fix the
   argument; don't paper over it with a different schedule.
+
+## desk-agent task reschedule
+
+Change an existing task's schedule (and optionally its title/body) in
+place. Use this for any change/move/delay/bring-forward request. The task
+row is updated — same id, same created_at, state reset to pending — so the
+user sees the same card with a new time, not a new card.
+
+```
+desk-agent task reschedule --chat <id> --message-id <msg> \
+    (--at <iso8601> | --cron <expr>) [--title <text>] [<content>]
+```
+
+`--at` and `--cron` are mutually exclusive; one is required. Omitting both
+is a validation error — if the user wants to stop the task entirely use
+`desk-agent task cancel`. Reschedule never creates a second row; if you
+don't have a target message id, the user is asking for a *new* task and
+you want `desk-agent task schedule` instead.
+
+### Examples
+
+Move a one-shot task to a new time:
+
+```
+desk-agent task reschedule --chat ch_abc \
+    --message-id msg_123 \
+    --at "2026-05-02T15:00:00Z"
+```
+
+Convert a one-shot reminder into a daily recurring task:
+
+```
+desk-agent task reschedule --chat ch_abc \
+    --message-id msg_123 \
+    --cron "0 9 * * *"
+```
+
+Reschedule and refresh the body in one call:
+
+```
+desk-agent task reschedule --chat ch_abc \
+    --message-id msg_123 \
+    --at "2026-05-03T09:00:00Z" \
+    --title "Weekly review" \
+    "Pull this week's numbers and post them."
+```
+
+### Failure modes worth knowing
+
+- `NOT_FOUND` — the message id doesn't belong to this chat. Confirm the id
+  before retrying.
+- `VALIDATION` — bad `--at`/`--cron`, both supplied, or neither supplied.
+  Read the message and fix the argument.
+
+## desk-agent task cancel
+
+Stop an existing task entirely. Sets `state='cancelled'` on the row so it
+no longer fires and routes to the Complete tab. Use only when the user
+wants the task gone — not as part of a reschedule (use `task reschedule`
+for that).
+
+```
+desk-agent task cancel --chat <id> <message-id>
+```
+
+### Examples
+
+Cancel a single task:
+
+```
+desk-agent task cancel --chat ch_abc msg_123
+```
+
+### Failure modes worth knowing
+
+- `NOT_FOUND` — the message id doesn't belong to this chat. Don't recreate
+  blindly; confirm the id first.
+- `VALIDATION` — the message id was malformed or contained whitespace.
+  Pass a single id positional, no spaces.
 
 ## desk-agent secret list / desk-agent secret get
 

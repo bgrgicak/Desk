@@ -85,8 +85,11 @@ export const ChatSchema = z.object({
   goal: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  awaitingUser: z.boolean(),
   unread: z.boolean(),
+  /** True when this chat is pinned to the workspace sidebar's Pinned
+   *  section (chat_pins table). Optional so WS payloads that omit the
+   *  joined value still parse. */
+  pinned: z.boolean().optional(),
 });
 export type Chat = z.infer<typeof ChatSchema>;
 

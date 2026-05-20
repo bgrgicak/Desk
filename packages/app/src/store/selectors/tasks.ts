@@ -11,7 +11,10 @@ export function summaryRequestMessageKindsForDeveloperMode(developerMode: boolea
 }
 
 export function isTaskListMessageForDeveloperMode(m: ServerMessage, developerMode: boolean): boolean {
-  if (m.kind === "task") return true;
+  if (m.kind === "task") {
+    if (!developerMode && m.content.type === "reflection_request") return false;
+    return true;
+  }
   if (!developerMode) return false;
   return m.kind === "summary" && m.content.type === "summary_request";
 }
@@ -75,14 +78,19 @@ function descriptionFor(m: ServerMessage): string | undefined {
   return description.length > 0 ? description : undefined;
 }
 
-function statusFor(m: ServerMessage, runs: ServerMessage[] = []): Task["status"] {
+function statusFor(
+  m: ServerMessage,
+  runs: ServerMessage[] = [],
+  chat?: ServerChat,
+): Task["status"] {
   return taskStatusFromTaskAndRuns(
     { state: m.state ?? "pending", executeAt: m.executeAt, cron: m.cron },
     runs.map(run => ({ state: run.state })),
+    chat ? { unread: chat.unread, running: chat.running } : undefined,
   );
 }
 
-function statusTextFor(m: ServerMessage): string {
+function statusTextFor(m: ServerMessage, chat?: ServerChat): string {
   if (m.state === "running") return "Running";
   if (m.state === "succeeded") return "Completed";
   if (m.state === "failed") return "Failed";
@@ -92,12 +100,17 @@ function statusTextFor(m: ServerMessage): string {
     if (m.executeAt) return `Paused — was scheduled for ${new Date(m.executeAt).toLocaleString()}`;
     return "Paused";
   }
+  // Active chat work beats the schedule label, but a scheduled task with
+  // stale unread chatter stays "Scheduled" so the text matches the badge
+  // (see taskStatusFromTaskAndRuns).
+  if (chat?.running) return "Agent working…";
   if (m.executeAt) {
     const when = new Date(m.executeAt);
     const label = when.toLocaleString();
     return when.getTime() < Date.now() ? `Overdue since ${label}` : `Scheduled for ${label}`;
   }
   if (m.cron) return `Cron: ${m.cron}`;
+  if (chat?.unread) return "Waiting for your reply";
   return "Pending";
 }
 
@@ -136,9 +149,10 @@ export function toUiTask(
   runs: ServerMessage[] = [],
 ): Task {
   const agent = agents.find((a) => a.id === m.agentId);
+  const chat = chats.find((c) => c.id === m.chatId);
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
-  const status = statusFor(m, runs);
+  const status = statusFor(m, runs, chat);
 
   const history: TaskOccurrence[] = [];
   for (const run of runs) {
@@ -170,7 +184,7 @@ export function toUiTask(
     description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,
-    statusText: statusTextFor(m),
+    statusText: statusTextFor(m, chat),
     // The server has no `assigneeId` field — task assignment is just
     // `agentId`.  Drop the dead alias (PATCH bodies that included it
     // were silently no-op on the server) and use the row's agentId.

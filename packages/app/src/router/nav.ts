@@ -4,6 +4,26 @@ export function isRouteView(v: string | undefined): v is RouteView {
   return v === "pinned" || v === "tasks" || v === "context";
 }
 
+/** URL path segments that should resolve to a canonical {@link RouteView}.
+ *  `library` is the user-facing name for the Library view (stored
+ *  internally as `context`); `settings` is an alias that opens the
+ *  Tasks view with the settings modal pre-selected (handled by the
+ *  shell). Bookmarks and deep links to either path land on the
+ *  matching canonical view instead of silently falling back to
+ *  `tasks`. */
+const ROUTE_VIEW_ALIASES: Record<string, RouteView> = {
+  library: "context",
+};
+
+/** Resolve a URL path segment (raw `:view` param) to its canonical
+ *  {@link RouteView}. Returns `null` for unknown segments so the
+ *  caller can fall back to its own default. */
+export function resolveRouteView(v: string | undefined): RouteView | null {
+  if (!v) return null;
+  if (isRouteView(v)) return v;
+  return ROUTE_VIEW_ALIASES[v] ?? null;
+}
+
 export interface NavQuery {
   chat?: string | null;
   artifact?: string | null;

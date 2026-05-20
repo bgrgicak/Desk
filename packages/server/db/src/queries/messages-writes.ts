@@ -128,6 +128,12 @@ export async function insert(
   // internal regardless of content.type. Artifact references are intentionally
   // not treated as internal: they are visible agent messages and should move the
   // chat to the top just like text output.
+  //
+  // `unread` means "an agent said something the user hasn't engaged with yet"
+  // — your own messages aren't unread to you. Only agent-authored visible
+  // messages flip the flag; user messages bump updated_at without flipping
+  // unread. This is also the sole signal the Tasks page uses for the
+  // "Needs input" bucket (see task-status.ts).
   const contentType = (data.content as { type?: string } | null)?.type;
   const kind = data.kind ?? "chat";
   const isInternal =
@@ -136,6 +142,7 @@ export async function insert(
     contentType === "summary" ||
     kind === "summary";
   if (!isInternal) {
+    const setUnread = data.role === "agent" ? ", unread = 1" : "";
     const { rows: activityRows } = await db.query<{
       current_updated_at: string | null;
       max_updated_at: string | null;
@@ -176,7 +183,7 @@ export async function insert(
         : newestIso([messageCreatedAt, maxUpdatedAt ? bumpIsoAbove(maxUpdatedAt) : null]) ?? messageCreatedAt;
 
     await db.query(
-      "UPDATE chats SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END, unread = 1 WHERE id = ?",
+      `UPDATE chats SET updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at END${setUnread} WHERE id = ?`,
       [nextUpdatedAt, nextUpdatedAt, data.chatId],
     );
   }

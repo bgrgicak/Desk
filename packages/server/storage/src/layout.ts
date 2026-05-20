@@ -352,6 +352,54 @@ export function resolveHostPath(home: string, slug: string, storedPath: string):
 }
 
 /**
+ * One projected host directory exposed in the library listing. Local-
+ * filesystem connector grants surface the user's chosen host directories
+ * (e.g. `~/Downloads`) under a `homeName` prefix in the workspace library
+ * so they show up alongside in-workspace files.
+ */
+export interface VirtualLibraryMount {
+  /** Workspace-root basename the mount appears under (e.g. `Downloads`). */
+  homeName: string;
+  /** Absolute host path the user selected for this mount. */
+  sourcePath: string;
+}
+
+/**
+ * Same as `resolveHostPath` but aware of virtual library mounts. If the
+ * stored path's first segment matches a mount's `homeName`, the path
+ * resolves under that mount's `sourcePath` instead of the workspace root.
+ * Otherwise behaves identically to `resolveHostPath`.
+ *
+ * Used by every read/write helper that takes a library-relative path so
+ * files projected into the listing from a connected host directory open
+ * on the actual host file rather than 404'ing against a non-existent
+ * `~/Desk/<slug>/Downloads/...` path.
+ */
+export function resolveLibraryHostPath(
+  home: string,
+  slug: string,
+  storedPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): string {
+  for (const mount of virtualMounts ?? []) {
+    if (!mount.homeName) continue;
+    if (storedPath === mount.homeName) return mount.sourcePath;
+    if (storedPath.startsWith(mount.homeName + "/")) {
+      const sub = storedPath.slice(mount.homeName.length + 1);
+      const resolved = path.resolve(mount.sourcePath, sub);
+      if (
+        resolved !== mount.sourcePath
+        && !resolved.startsWith(mount.sourcePath + path.sep)
+      ) {
+        throw new ValidationError(`Path traversal detected: ${storedPath}`);
+      }
+      return resolved;
+    }
+  }
+  return resolveHostPath(home, slug, storedPath);
+}
+
+/**
  * Soft-deletes a workspace's on-disk directory by moving it to
  * `~/Desk/.trash/workspaces/{slug}-{timestamp}/`. Idempotent — returns
  * `{ moved: false }` if the source doesn't exist.

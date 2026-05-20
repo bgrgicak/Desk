@@ -8,10 +8,6 @@ import * as searchRoutes from "../routes/search.js";
 import * as vaultRoutes from "../routes/vault.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { parseSearchKinds, parseSearchScope } from "../routes/search-params.js";
-import {
-  findDuplicateScheduledSandboxTask,
-  sandboxSessionRunsScheduledTask,
-} from "../routes/sandbox-task-helpers.js";
 import type { DispatchContext } from "./context.js";
 
 /**
@@ -60,7 +56,7 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages" && method === "POST") {
     const tokenHeader = req.headers["x-desk-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { session, agent } = await authenticateSandboxToken(pool, token);
+    const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
     if (!body.chatId || typeof body.chatId !== "string") {
       throw new ValidationError("Missing chatId");
@@ -124,29 +120,90 @@ export async function dispatchSandbox(
     // reason to.
     if (!createdChat) chatRoutes.validateSendMessageBody(sendBody);
 
-    if (
-      !createdChat &&
-      await sandboxSessionRunsScheduledTask(pool, session.runId) &&
-      ((typeof sendBody.executeAt === "string" && sendBody.executeAt.trim()) || (typeof sendBody.cron === "string" && sendBody.cron.trim())) &&
-      (sendBody.kind === undefined || sendBody.kind === "task") &&
-      typeof sendBody.content === "string"
-    ) {
-      const duplicate = await findDuplicateScheduledSandboxTask(pool, {
-        userId: agent.userId,
-        chatId: targetChatId,
-        title: typeof sendBody.title === "string" && sendBody.title.trim() ? sendBody.title.trim() : undefined,
-        content: sendBody.content,
-        executeAt: typeof sendBody.executeAt === "string" ? sendBody.executeAt : undefined,
-        cron: typeof sendBody.cron === "string" ? sendBody.cron : undefined,
-      });
-      if (duplicate) {
-        sendJson(res, 200, duplicate);
-        return true;
-      }
-    }
-
+    // Reschedule semantics now live at /sandbox/messages/reschedule. The
+    // agent is instructed to call that endpoint for any change-time
+    // request, so /sandbox/messages always inserts a fresh row.
     const { userMessage } = await chatRoutes.sendMessage(pool, targetChatId, sendBody, emit, { role: "agent" });
     sendJson(res, 201, createdChat ? { chat: createdChat, message: userMessage } : userMessage);
+    return true;
+  }
+
+  // Sandbox task reschedule — modify an existing task's schedule (and
+  // optionally title/content) in place. The agent uses this when the user
+  // asks to change/move/delay an existing task. Strictly an UPDATE on the
+  // existing row: same id, same created_at, just a new fire time and
+  // state reset to pending. Refuses the call when no schedule is supplied
+  // so the agent can't silently turn a scheduled task into a manual one
+  // by forgetting --at.
+  if (path === "/sandbox/messages/reschedule" && method === "POST") {
+    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+    const { agent } = await authenticateSandboxToken(pool, token);
+    const body = await parseBody(req) as {
+      chatId?: unknown;
+      messageId?: unknown;
+      executeAt?: unknown;
+      cron?: unknown;
+      title?: unknown;
+      content?: unknown;
+    };
+    if (typeof body.chatId !== "string" || !body.chatId) {
+      throw new ValidationError("Missing chatId");
+    }
+    if (typeof body.messageId !== "string" || !body.messageId) {
+      throw new ValidationError("Missing messageId");
+    }
+    const hasAt = typeof body.executeAt === "string" && body.executeAt.trim().length > 0;
+    const hasCron = typeof body.cron === "string" && body.cron.trim().length > 0;
+    if (hasAt && hasCron) {
+      throw new ValidationError("executeAt and cron are mutually exclusive");
+    }
+    if (!hasAt && !hasCron) {
+      throw new ValidationError(
+        "reschedule requires executeAt or cron; use /sandbox/messages/cancel to stop a task entirely",
+      );
+    }
+
+    await requireOwnedChat(pool, body.chatId, agent.userId);
+    const current = await queries.messages.findById(pool, body.messageId);
+    if (!current || current.chatId !== body.chatId) {
+      throw new NotFoundError(`Message not found in chat: ${body.messageId}`);
+    }
+    if (current.kind !== "task") {
+      throw new ValidationError("Only task messages can be rescheduled via the sandbox task API");
+    }
+
+    // executeAt and cron are mutually exclusive on the row, so when the
+    // caller swaps from one to the other we have to clear the unused field.
+    const patch: { state: "pending"; executeAt?: string | null; cron?: string | null; title?: string; content?: { type: "text"; text: string } } = {
+      state: "pending",
+    };
+    if (hasAt) {
+      patch.executeAt = (body.executeAt as string).trim();
+      patch.cron = null;
+    } else {
+      patch.cron = (body.cron as string).trim();
+      patch.executeAt = null;
+    }
+    if (typeof body.title === "string") {
+      const trimmed = body.title.trim();
+      if (!trimmed) throw new ValidationError("title cannot be empty");
+      patch.title = trimmed;
+    }
+    if (typeof body.content === "string") {
+      patch.content = { type: "text", text: body.content };
+    }
+
+    const updated = await chatRoutes.patchMessage(
+      pool,
+      storage,
+      body.chatId,
+      body.messageId,
+      patch,
+      emit,
+      runManager,
+    );
+    sendJson(res, 200, updated);
     return true;
   }
 

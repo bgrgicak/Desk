@@ -87,9 +87,9 @@ export async function listMessages(
     ? parseBool("scheduled", scheduledRaw)
     : undefined;
 
-  const awaitingUserRaw = query.get("awaitingUser");
-  const awaitingUser = awaitingUserRaw !== null && awaitingUserRaw !== ""
-    ? parseBool("awaitingUser", awaitingUserRaw)
+  const unreadRaw = query.get("unread");
+  const unread = unreadRaw !== null && unreadRaw !== ""
+    ? parseBool("unread", unreadRaw)
     : undefined;
 
   const contentKindRaw = query.get("contentKind");
@@ -168,7 +168,7 @@ export async function listMessages(
     chatId,
     states,
     scheduled,
-    awaitingUser,
+    unread,
     contentKinds,
     kinds,
     parentId,

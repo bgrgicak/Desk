@@ -93,6 +93,7 @@ export function toFolderList(
       name: f.name,
       parentId,
       createdAt: new Date(f.createdAt),
+      pinned: f.pinned ?? false,
     };
   });
 }

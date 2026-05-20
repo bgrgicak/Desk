@@ -10,6 +10,7 @@ import {
   trashDir,
   resolveHostPath,
   chatsDir,
+  type VirtualLibraryMount,
 } from "./layout.js";
 import {
   uploadArtifact,
@@ -38,14 +39,12 @@ export interface FolderRef {
   name: string;
   /** ISO mtime. */
   createdAt: string;
+  /** True when the folder is pinned (mirrors FileRef.pinned). The route
+   *  layer fills this in from library_pins; storage leaves it unset. */
+  pinned?: boolean;
 }
 
-export interface VirtualLibraryMount {
-  /** Workspace-root basename where the connected directory appears, e.g. `Projects`. */
-  homeName: string;
-  /** Absolute server path selected by the user for this mount. */
-  sourcePath: string;
-}
+export type { VirtualLibraryMount } from "./layout.js";
 
 function guessMime(name: string): string {
   const ext = path.extname(name).toLowerCase();

@@ -68,7 +68,7 @@ describe('parseEntityUrl', () => {
           title: 'Planning thread',
           createdAt: '2026-05-13T00:00:00.000Z',
           updatedAt: '2026-05-13T00:00:00.000Z',
-          awaitingUser: false,
+          
           unread: false,
         }],
       },

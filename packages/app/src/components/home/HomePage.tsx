@@ -15,6 +15,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useIsMobile,
 } from '@agent-desk/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from '@/components/layout/sidebarShared'
@@ -74,7 +75,7 @@ function HomeRoomItem({
   const { data } = useGetMessagesQuery({
     workspaceId: workspace.id,
     kind: taskMessageKindsForDeveloperMode(developerMode),
-    awaitingUser: true,
+    unread: true,
   })
   const needsInput = data?.items.length ?? 0
 
@@ -105,6 +106,79 @@ function HomeRoomItem({
         </SidebarMenuBadge>
       )}
     </SidebarMenuItem>
+  )
+}
+
+/**
+ * Mobile-only main pane: a visible workspace picker. The sidebar is
+ * offcanvas-collapsed by default on mobile, so without this the entire
+ * `/` screen renders as a blank gradient — the user has no idea there's
+ * a hamburger in the corner. We surface the workspace list directly,
+ * with the same `Plus` / kebab affordances as the sidebar.
+ */
+function HomeMobileMain({
+  workspaces,
+  onOpen,
+  onCreate,
+}: {
+  workspaces: ServerWorkspace[]
+  onOpen: (ws: ServerWorkspace) => void
+  onCreate: () => void
+}) {
+  const isMobile = useIsMobile()
+  if (!isMobile) return null
+  return (
+    <div className="relative flex h-full w-full flex-col items-stretch overflow-y-auto px-4 pb-8 pt-16">
+      {/* Mobile top-row: hamburger to expand the offcanvas sidebar so
+          users can still reach "Your day" / "Ask AI" / the account
+          menu. The wordmark mirrors the in-sidebar header so the
+          screen still reads as "Desk" before any room is picked. */}
+      <div className="absolute inset-x-0 top-0 z-10 flex h-14 items-center gap-2 px-3">
+        <SidebarTrigger className="h-9 w-9 rounded-md" />
+        <DeskWordmark className="h-5 w-auto text-foreground" />
+      </div>
+      <div className="mx-auto flex w-full max-w-md flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-foreground">Rooms</h2>
+          <button
+            type="button"
+            onClick={onCreate}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground hover:bg-muted/50"
+          >
+            <Plus className="h-4 w-4" />
+            New room
+          </button>
+        </div>
+        {workspaces.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            You don't have any rooms yet. Create one to get started.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {workspaces.map(ws => {
+              const info = toWorkspaceInfo(ws)
+              return (
+                <li key={ws.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(ws)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-muted/40"
+                  >
+                    <span
+                      className="h-5 w-5 shrink-0 rounded-full border-2"
+                      style={{ borderColor: roomColor(info.bg) }}
+                    />
+                    <span className="flex-1 min-w-0 truncate text-base font-medium text-foreground">
+                      {info.name}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -212,8 +286,18 @@ export function HomePage() {
         </div>
       </Sidebar>
 
-      {/* Blank canvas — the rest is intentionally empty for now. */}
-      <main className="relative z-10 flex-1" />
+      {/* Main canvas. Empty on desktop (the sidebar is the entire UI
+          on this screen). On mobile the offcanvas sidebar is collapsed
+          by default and the workspace picker has nowhere to surface, so
+          render a minimal mobile workspace list here with an explicit
+          hamburger to reveal the full sidebar. */}
+      <main className="relative z-10 flex-1">
+        <HomeMobileMain
+          workspaces={workspaces ?? []}
+          onOpen={openRoom}
+          onCreate={() => setCreateOpen(true)}
+        />
+      </main>
 
       <CreateWorkspaceModal
         open={createOpen}

@@ -238,12 +238,19 @@ function Sidebar({
         <button
           type="button"
           aria-label="Close sidebar"
-          className="absolute inset-0 z-[45] bg-background/40 backdrop-blur-[1px] md:hidden"
+          // `fixed` so the scrim covers the entire viewport regardless
+          // of any 0-width wrapper a parent layout puts around the
+          // sidebar (e.g. AppShell collapses the desktop slot to 0 on
+          // mobile). Mobile-only. The 80 % opacity + `sm` blur is
+          // strong enough to mute the chat content visible past the
+          // drawer's right edge — the previous /50 + 1 px blur let
+          // task cards / icons read through legibly on phones.
+          className="fixed inset-0 z-[45] bg-background/80 backdrop-blur-sm md:hidden"
           onClick={() => setOpen(false)}
         />
       )}
       <div
-        className="group peer absolute inset-y-0 left-0 z-50 block w-(--sidebar-width) text-sidebar-foreground transition-[width] duration-200 ease-linear data-[collapsible=offcanvas]:w-0 md:relative md:inset-auto md:z-auto md:w-auto md:self-stretch"
+        className="group peer fixed inset-y-0 left-0 z-50 block w-(--sidebar-width) text-sidebar-foreground transition-[width] duration-200 ease-linear data-[collapsible=offcanvas]:w-0 md:relative md:inset-auto md:z-auto md:w-auto md:self-stretch"
         data-state={state}
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-variant={variant}
@@ -271,7 +278,12 @@ function Sidebar({
         aria-modal={isMobileDrawerOpen ? true : undefined}
         aria-label={isMobileDrawerOpen ? "Sidebar" : undefined}
         className={cn(
-          "absolute inset-y-0 z-50 flex w-(--sidebar-width) bg-[linear-gradient(160deg,oklch(1_0_0/.96)_0%,oklch(.985_.018_75/.9)_44%,oklch(.965_.025_255/.88)_100%)] shadow-xl backdrop-blur-xl transition-[left,right,width] duration-200 ease-linear md:z-10 md:bg-transparent md:bg-none md:shadow-none md:backdrop-blur-none dark:bg-[linear-gradient(160deg,oklch(.19_.018_285/.96)_0%,oklch(.16_.025_255/.92)_48%,oklch(.14_.018_315/.9)_100%)] dark:md:bg-none",
+          // On phones the drawer floats over the chat column — the
+          // gradient must be fully opaque (alpha = 1) or task cards
+          // and chat icons read straight through. Desktop drops the
+          // background entirely (`md:bg-transparent md:bg-none`) so
+          // the docked rail sits on the shared background blob.
+          "absolute inset-y-0 z-50 flex w-(--sidebar-width) bg-[linear-gradient(160deg,oklch(1_0_0)_0%,oklch(.985_.018_75)_44%,oklch(.965_.025_255)_100%)] shadow-xl transition-[left,right,width] duration-200 ease-linear md:z-10 md:bg-transparent md:bg-none md:shadow-none dark:bg-[linear-gradient(160deg,oklch(.19_.018_285)_0%,oklch(.16_.025_255)_48%,oklch(.14_.018_315)_100%)] dark:md:bg-none",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",

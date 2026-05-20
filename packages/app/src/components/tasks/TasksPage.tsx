@@ -9,6 +9,7 @@ import {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  useIsMobile,
 } from '@agent-desk/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
@@ -51,8 +52,6 @@ export interface TasksPageProps {
   /** Active room (workspace) name — shown as the agent label in the
    *  assignee filter. */
   roomName?: string
-  /** Best-effort unread reply counts keyed by backing chat id. */
-  unreadByChatId?: Record<string, number>
   /** Best-effort total message counts keyed by backing chat id —
    *  the "N replies" footer button. */
   repliesByChatId?: Record<string, number>
@@ -62,6 +61,9 @@ export interface TasksPageProps {
   /** Selected task id (App-owned, mirrored in `?task=`). Its chat is
    *  docked in the sidebar. */
   selectedTaskId?: string | null
+  /** Build the docked-chat URL for a task id. Drives the card-level
+   *  `<Link>` so middle-click / cmd-click opens the task in a new tab. */
+  hrefForTask: (id: string) => string
   /** Select a task (opens its docked chat) or `null` to close. */
   onSelectTask: (id: string | null) => void
   /** Create a task from the top composer (lands in idle "To do",
@@ -243,11 +245,11 @@ export function TasksPage({
   isLoading = false,
   agents,
   roomName,
-  unreadByChatId = {},
   repliesByChatId = {},
   authorName,
   authorAvatarUrl,
   selectedTaskId = null,
+  hrefForTask,
   onSelectTask,
   onCreateTask,
   onMarkDone,
@@ -297,6 +299,10 @@ export function TasksPage({
   )
   const panelOpen = !!selectedTask
   const isSmallViewport = useIsSmallRightPanelScreen()
+  // Mobile (<768px) renders the status tabs inline below the breadcrumb
+  // instead of overlaying them on the top bar (where they collide with
+  // the breadcrumb at narrow widths).
+  const isMobile = useIsMobile()
 
   // ── Resizable two-pane split (mirror of ContextDetail) ──
   // The list is the growing LEFT pane (its viewport fraction =
@@ -408,34 +414,58 @@ export function TasksPage({
             These belong to the *list* pane, so they render in the
             content-actions slot pinned to the list/chat seam (or the
             24 px gutter when no chat is docked), separate from the
-            chat-pane collapse X — mirroring ContextDetail. */}
-        <TopBarContentActions>
-          <TaskFilterSearch
-            filters={filters}
-            onFiltersChange={setFilters}
-            agents={agents}
-            roomName={roomName}
-            search={search}
-            onSearchChange={setSearch}
-          />
-        </TopBarContentActions>
+            chat-pane collapse X — mirroring ContextDetail.
+            Skipped on mobile when the chat overlay is open: the list
+            is fully covered by the overlay, and both slots resolve to
+            `right-6` at that breakpoint (no resizable split to push
+            list controls leftward), so the filter/search and the
+            chat-close X would otherwise stack on top of each other. */}
+        {!(panelOpen && isSmallViewport) && (
+          <TopBarContentActions>
+            <TaskFilterSearch
+              filters={filters}
+              onFiltersChange={setFilters}
+              agents={agents}
+              roomName={roomName}
+              search={search}
+              onSearchChange={setSearch}
+            />
+          </TopBarContentActions>
+        )}
 
         {/* Status-tab pills — hoisted into the global top bar (same
-            row as the breadcrumb). The wrapper pixel-tracks the list
-            column box ([room rail, viewport − chat pane]) so the pills
-            sit exactly over the list, even as the split is dragged. */}
-        <TopBarCenter>
-          <div
-            className="pointer-events-none absolute inset-y-0 flex items-center"
-            style={{ left: tabsLeftInset, right: tabsRightInset }}
-          >
-            <div className={`w-full ${gutter}`}>
-              <div className={`${COLUMN} pointer-events-auto`}>
-                <TaskTabs tab={tab} onTabChange={setTab} counts={counts} />
+            row as the breadcrumb) on desktop. The wrapper pixel-tracks
+            the list column box ([room rail, viewport − chat pane]) so
+            the pills sit exactly over the list, even as the split is
+            dragged.
+            On mobile (<768px) the breadcrumb already fills the bar so
+            we render the pills inline below it (see "Inline mobile tab
+            strip" below) instead. */}
+        {!isMobile && (
+          <TopBarCenter>
+            <div
+              className="pointer-events-none absolute inset-y-0 flex items-center"
+              style={{ left: tabsLeftInset, right: tabsRightInset }}
+            >
+              <div className={`w-full ${gutter}`}>
+                <div className={`${COLUMN} pointer-events-auto`}>
+                  <TaskTabs tab={tab} onTabChange={setTab} counts={counts} />
+                </div>
               </div>
             </div>
+          </TopBarCenter>
+        )}
+
+        {/* Inline mobile tab strip — sits directly under the top bar,
+            scrolls horizontally if the labels overflow the 375 px
+            viewport. The chip pill backgrounds + horizontal padding
+            keep adjacent label/count pairs visually separated when the
+            strip overflows. */}
+        {isMobile && (
+          <div className="shrink-0 border-b border-border/40 px-3 py-2">
+            <TaskTabs tab={tab} onTabChange={setTab} counts={counts} />
           </div>
-        </TopBarCenter>
+        )}
 
         {/* The list. Always fades into the bottom edge; the top edge
             only fades once scrolled, tucking scrolled content under
@@ -444,18 +474,27 @@ export function TasksPage({
           className="flex-1 min-h-0 overflow-y-auto"
           onScroll={onListScroll}
           style={{
+            // Bottom fade kept short (16 px) so the last card's
+            // action buttons stay readable instead of fading to
+            // sub-WCAG contrast against the composer below — the
+            // previous 64 px tail bled the Replies/Mark-as-done/More
+            // icons into the composer card on iPhone-SE-class
+            // viewports.
             maskImage: scrolled
-              ? 'linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%)'
-              : 'linear-gradient(to bottom, #000 0, #000 calc(100% - 64px), transparent 100%)',
+              ? 'linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 16px), transparent 100%)'
+              : 'linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%)',
             WebkitMaskImage: scrolled
-              ? 'linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 64px), transparent 100%)'
-              : 'linear-gradient(to bottom, #000 0, #000 calc(100% - 64px), transparent 100%)',
+              ? 'linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 16px), transparent 100%)'
+              : 'linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%)',
           }}
         >
           {/* Chat-view column geometry: responsive gutter → centred
               `max-w-4xl` inner, so the list lines up with a chat
-              thread. */}
-          <div className={`${gutter} pb-16 pt-6`}>
+              thread. `pb-32` is intentionally generous: the bottom
+              composer is in-flow, but cards near the foot of the
+              scroll viewport still need slack so their action row
+              isn't crowded against the composer's top edge. */}
+          <div className={`${gutter} pb-32 pt-6`}>
           <div className={`${COLUMN} flex flex-col`}>
             {/* List (tabs are in the top bar; filter/search far-right
                 in the top bar — nothing else above the cards). */}
@@ -481,7 +520,6 @@ export function TasksPage({
                 </h3>
                 <div className="flex flex-col gap-3">
                 {visible.map(task => {
-                  const unread = task.chatId ? unreadByChatId[task.chatId] ?? 0 : 0
                   const replies = task.chatId ? repliesByChatId[task.chatId] ?? 0 : 0
                   return (
                     <TaskCard
@@ -490,8 +528,8 @@ export function TasksPage({
                       authorName={authorName}
                       authorAvatarUrl={authorAvatarUrl}
                       repliesCount={replies}
-                      unreadCount={unread}
                       isActive={selectedTaskId === task.id}
+                      href={hrefForTask(task.id)}
                       onSelect={() => onSelectTask(task.id)}
                       onMarkDone={() => void onMarkDone(task)}
                       onRunNow={
@@ -564,7 +602,14 @@ export function TasksPage({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: '100%' }}
             transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-            className="absolute inset-y-0 right-0 z-40 flex w-full max-w-[320px] flex-col bg-background shadow-xl"
+            // Full-width overlay on small viewports (was capped at
+            // 320 px, which left ~55 px of the list peeking through on
+            // a 375 px phone with no close affordance on the visible
+            // strip). At the iPhone-SE width this fully replaces the
+            // list; on tablets the panel still respects the
+            // `<768 px` breakpoint above which it docks as a
+            // resizable split.
+            className="absolute inset-0 z-40 flex flex-col bg-background shadow-xl"
           >
             <TaskChatPanel task={selectedTask} />
           </motion.div>

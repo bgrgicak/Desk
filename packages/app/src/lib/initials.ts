@@ -4,8 +4,8 @@ export function initialsOf(name: string): string {
   if (parts.length === 1) {
     const word = parts[0]
     if (word.length === 1) return word[0].toUpperCase()
-    // Single-word names render as title case ("Automattic" -> "Au"), so they
-    // read as a proper noun fragment rather than an acronym ("AU").
+    // Single-word names render as title case ("Desk" -> "De"), so they
+    // read as a proper noun fragment rather than an acronym ("DE").
     return word[0].toUpperCase() + word[1].toLowerCase()
   }
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()

@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { format, isToday, isYesterday } from 'date-fns'
 import {
-  ChevronDown, FileText, FolderOpen, Globe, ImageIcon, ListFilter, ListTodo,
-  Loader2, MessageSquare, PinOff, Play, Plus, SlidersHorizontal,
-  Table, CalendarClock, Zap,
+  ChevronDown, FolderOpen, ListFilter,
+  Loader2, PinOff, Plus, SlidersHorizontal,
+  Zap,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -31,14 +31,13 @@ import { RowKebab } from '@/components/shared/RowKebab'
 import { SectionBody, SectionHeader } from '@/components/shared/SectionHeader'
 import { SectionEmptyState } from '@/components/shared/SectionEmptyState'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
-import { iconForItem } from '@/data/file-kind'
-import { DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
-import { useGetAgentsQuery } from '@/store/api'
+import { DRAG_TYPE_CHAT, DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import { useAppSelector } from '@/store/hooks'
 import { selectFailedChatIds, selectRunningChatIds } from '@/store/slices/derivedSlice'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { buildPath, NEW_CHAT_ID, type RouteView } from '@/router/nav'
-import type { Chat, ContextItem } from '@/data/ui-types'
+import { getChatIcon } from '@/data/chat-icons'
+import type { Chat, PinnedEntryKind } from '@/data/ui-types'
 
 // Per-room sidebar: Pinned + Chats (date-grouped) at the top, followed by a
 // footer with Library / Tasks / Customize. Extracted from AppShell so the
@@ -47,30 +46,99 @@ import type { Chat, ContextItem } from '@/data/ui-types'
 
 const CHATS_PER_PAGE = 10
 const PINNED_PER_PAGE = 5
-const EMPTY_FILTER: ChatFilterValues = { goal: null, agentId: null, updatesOnly: false, artifactsOnly: false }
+const EMPTY_FILTER: ChatFilterValues = { goal: null, updatesOnly: false }
 
-const GOAL_ICONS: Record<NonNullable<Chat['goal']>, LucideIcon> = {
-  app: Zap,
-  document: FileText,
-  image: ImageIcon,
-  data: Table,
-  site: Globe,
-  run: Play,
-  task: ListTodo,
-  scheduled: CalendarClock,
+/**
+ * Render-shaped sidebar pin entry. The assembler in App.tsx pre-computes
+ * the icon (mime-aware for files, FolderIcon for directories, chat-goal
+ * for chats) and the navigation href so this component can stay dumb
+ * about kind-specific routing.
+ */
+export interface PinnedSidebarEntry {
+  /** Compound id: `${kind}:${ref}` so a chat id and a path can't collide. */
+  id: string
+  kind: PinnedEntryKind
+  /** Library/folder: workspace-relative path. Chat: chat id. */
+  ref: string
+  name: string
+  icon: LucideIcon
+  href: string
+  /** True when this entry is the currently focused row. */
+  isActive?: boolean
 }
 
-function getChatIcon(chat: Chat): LucideIcon {
-  if (chat.goal && Object.prototype.hasOwnProperty.call(GOAL_ICONS, chat.goal)) {
-    return GOAL_ICONS[chat.goal]
-  }
-  switch (chat.kind) {
-    case 'task':
-    case 'task_run':
-      return ListTodo
-    default:
-      return MessageSquare
-  }
+/**
+ * One sidebar row for a chat — used by both the chat-list grouping AND
+ * the Pinned section's chat-kind entries. Keeps the spinner-or-icon +
+ * red/blue status dot rendering in a single place so both surfaces
+ * stay visually in sync without copy-paste.
+ *
+ * Behavior knobs the caller decides:
+ *  - `href`: routing differs (active view + ?chat= vs the same), but
+ *    the row doesn't need to know which surface it sits in.
+ *  - `dragType` / `dragValue`: chat-list rows emit `DRAG_TYPE_CHAT` so
+ *    they can be dropped on Pinned; pinned rows emit `DRAG_TYPE_PINNED_ITEM`
+ *    so dragging them onto the chat inset triggers unpin. Pass `null`
+ *    to disable drag (e.g. before the workspace resolves).
+ *  - `kebab`: the row owns the kebab container; the caller passes the
+ *    DropdownMenuItem children (Pin/Delete in the chat list, Unpin in
+ *    the pinned section).
+ */
+function ChatSidebarRow({
+  chat,
+  href,
+  isActive,
+  dragType,
+  dragValue,
+  kebab,
+}: {
+  chat: Chat
+  href: string
+  isActive: boolean
+  dragType: string | null
+  dragValue: string
+  kebab: React.ReactNode
+}) {
+  const runningChatIds = useAppSelector(selectRunningChatIds)
+  const failedChatIds = useAppSelector(selectFailedChatIds)
+  const ChatIcon = getChatIcon(chat)
+  const isRunning = runningChatIds.includes(chat.id) || !!chat.running
+  const isFailed = !isRunning && (failedChatIds.includes(chat.id) || !!chat.failed)
+  const isDraggable = dragType !== null
+  return (
+    <SidebarMenuItem>
+      <MobileDismissSidebarMenuButton
+        asChild
+        isActive={isActive}
+        className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-9 text-foreground')}
+        draggable={isDraggable || undefined}
+        onDragStart={isDraggable ? (e: React.DragEvent) => {
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData(dragType, dragValue)
+        } : undefined}
+      >
+        <Link to={href}>
+          <div className="relative shrink-0">
+            {isRunning ? (
+              <Loader2 className="h-4 w-4 animate-spin" data-testid="chat-running-spinner" />
+            ) : (
+              <ChatIcon className="h-4 w-4 text-muted-foreground" />
+            )}
+            {!isRunning && (isFailed || chat.unread) ? (
+              <span className={cn(
+                'absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full',
+                isFailed ? 'bg-red-500' : 'bg-blue-500',
+              )} />
+            ) : null}
+          </div>
+          <span className="flex-1 min-w-0 truncate">{chat.title}</span>
+        </Link>
+      </MobileDismissSidebarMenuButton>
+      <RowKebab align="start" side="right" contentClassName="w-40" label="Chat options">
+        {kebab}
+      </RowKebab>
+    </SidebarMenuItem>
+  )
 }
 
 function sortedByUpdatedDesc(chats: Chat[]): Chat[] {
@@ -142,11 +210,16 @@ interface RoomSidebarProps {
   isDetailOpen?: boolean
   chats: Chat[]
   isChatsLoading?: boolean
-  pinnedItems?: ContextItem[]
+  pinnedEntries?: PinnedSidebarEntry[]
   isPinnedLoading?: boolean
   onDeleteChat: (chatId: string) => void
-  onPinItem?: (itemId: string) => void
-  onUnpinItem?: (item: ContextItem) => void
+  /** Pins a library file or directory by workspace-relative path. */
+  onPinItem?: (path: string) => void
+  /** Pins a chat by id. */
+  onPinChat?: (chatId: string) => void
+  /** Unpins any kind — the entry carries `kind` so the handler can
+   *  dispatch to the right endpoint. */
+  onUnpinEntry?: (entry: PinnedSidebarEntry) => void
   onOpenSettings: () => void
   /** Display name shown next to the bottom profile avatar (e.g.
    *  "Hello, Bero"). Optional while the /me query is in flight. */
@@ -166,15 +239,15 @@ export function RoomSidebar({
   activeView,
   activeWorkspaceId,
   selectedChatId,
-  selectedItemId,
   isDetailOpen = false,
   chats,
   isChatsLoading = false,
-  pinnedItems = [],
+  pinnedEntries = [],
   isPinnedLoading = false,
   onDeleteChat,
   onPinItem,
-  onUnpinItem,
+  onPinChat,
+  onUnpinEntry,
   onOpenSettings,
   username,
   email,
@@ -186,7 +259,7 @@ export function RoomSidebar({
   const [pinnedPage, setPinnedPage] = useState(1)
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
   const [chatsCollapsed, setChatsCollapsed] = useState(false)
-  const [isDraggingLibraryItem, setIsDraggingLibraryItem] = useState(false)
+  const [isDraggingPinnable, setIsDraggingPinnable] = useState(false)
   const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
   const pinnedDropCounter = useRef(0)
 
@@ -195,25 +268,23 @@ export function RoomSidebar({
   const [filterOpen, setFilterOpen] = useState(false)
   const hasActiveFilter =
     appliedFilter.goal !== null ||
-    appliedFilter.agentId !== null ||
-    appliedFilter.updatesOnly ||
-    appliedFilter.artifactsOnly
+    appliedFilter.updatesOnly
 
-  const { data: agents = [] } = useGetAgentsQuery()
-  const runningChatIds = useAppSelector(selectRunningChatIds)
-  const failedChatIds = useAppSelector(selectFailedChatIds)
   const { ref: sidebarScrollRef, scrolledUnder: sidebarScrolledUnder } = useScrolledUnder()
 
-  // Library drags from the LibraryCard set the DRAG_TYPE_LIBRARY_ITEM
-  // payload — listen globally so the Pinned section can offer a dropzone.
+  // Library AND chat drags both light up the Pinned drop zone — listen
+  // globally for either payload so the affordance appears regardless of
+  // which surface the drag started in.
   useEffect(() => {
     const onStart = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes(DRAG_TYPE_LIBRARY_ITEM)) {
-        setIsDraggingLibraryItem(true)
+      const t = e.dataTransfer?.types
+      if (!t) return
+      if (t.includes(DRAG_TYPE_LIBRARY_ITEM) || t.includes(DRAG_TYPE_CHAT)) {
+        setIsDraggingPinnable(true)
       }
     }
     const onEnd = () => {
-      setIsDraggingLibraryItem(false)
+      setIsDraggingPinnable(false)
       setIsPinnedDropOver(false)
       pinnedDropCounter.current = 0
     }
@@ -225,14 +296,19 @@ export function RoomSidebar({
     }
   }, [])
 
+  function dragHasPinnable(types: DOMStringList | ReadonlyArray<string>): boolean {
+    const arr = Array.from(types as ArrayLike<string>)
+    return arr.includes(DRAG_TYPE_LIBRARY_ITEM) || arr.includes(DRAG_TYPE_CHAT)
+  }
+
   const handlePinnedDragEnter = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    if (!dragHasPinnable(e.dataTransfer.types)) return
     e.preventDefault()
     pinnedDropCounter.current += 1
     setIsPinnedDropOver(true)
   }
   const handlePinnedDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_TYPE_LIBRARY_ITEM)) return
+    if (!dragHasPinnable(e.dataTransfer.types)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
   }
@@ -244,17 +320,22 @@ export function RoomSidebar({
     e.preventDefault()
     pinnedDropCounter.current = 0
     setIsPinnedDropOver(false)
-    setIsDraggingLibraryItem(false)
-    const itemId = e.dataTransfer.getData(DRAG_TYPE_LIBRARY_ITEM)
-    if (itemId) onPinItem?.(itemId)
+    setIsDraggingPinnable(false)
+    const libraryPath = e.dataTransfer.getData(DRAG_TYPE_LIBRARY_ITEM)
+    if (libraryPath) {
+      onPinItem?.(libraryPath)
+      return
+    }
+    const chatId = e.dataTransfer.getData(DRAG_TYPE_CHAT)
+    if (chatId) onPinChat?.(chatId)
   }
 
-  const allChats = sortedByUpdatedDesc(chats)
+  // Pinned chats render in the Pinned section above; hide them here so
+  // the same chat isn't shown twice in the sidebar.
+  const allChats = sortedByUpdatedDesc(chats).filter(c => !c.pinned)
   const filteredChats = allChats.filter(chat => {
     if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
-    if (appliedFilter.agentId && chat.agentId !== appliedFilter.agentId) return false
     if (appliedFilter.updatesOnly && !chat.unread) return false
-    if (appliedFilter.artifactsOnly && !(chat.artifactIds?.length)) return false
     return true
   })
   const visibleChats = filteredChats.slice(0, chatPage * CHATS_PER_PAGE)
@@ -316,7 +397,7 @@ export function RoomSidebar({
             onToggle={() => setPinnedCollapsed(c => !c)}
           />
           <SectionBody collapsed={pinnedCollapsed}>
-            {isDraggingLibraryItem ? (
+            {isDraggingPinnable ? (
               <div className={cn(
                 'mx-2 rounded-lg border border-dashed p-4 min-h-[52px] flex items-center justify-center transition-colors',
                 isPinnedDropOver ? 'border-primary/40 bg-primary/5' : 'border-foreground/20 bg-foreground/5',
@@ -328,33 +409,59 @@ export function RoomSidebar({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 <span>Loading pinned items…</span>
               </div>
-            ) : pinnedItems.length === 0 ? (
+            ) : pinnedEntries.length === 0 ? (
               <SectionEmptyState>
-                Pin or drag items from Library to see them here.
+                Pin or drag items from Library or Chats to see them here.
               </SectionEmptyState>
             ) : (
               <SidebarMenu>
-                {pinnedItems.slice(0, pinnedPage * PINNED_PER_PAGE).map(item => {
-                  const ItemIcon = iconForItem(item)
+                {pinnedEntries.slice(0, pinnedPage * PINNED_PER_PAGE).map(entry => {
+                  // Chat entries share the exact ChatSidebarRow used by
+                  // the chats list below — same icon, same spinner, same
+                  // red/blue status dot. Looking up the underlying chat
+                  // by ref keeps the row reactive to chat.updated WS
+                  // events (e.g. a pinned chat's run finishing flips the
+                  // spinner off in both surfaces simultaneously).
+                  if (entry.kind === 'chat') {
+                    const chat = chats.find(c => c.id === entry.ref)
+                    if (!chat) return null
+                    return (
+                      <ChatSidebarRow
+                        key={entry.id}
+                        chat={chat}
+                        isActive={!!entry.isActive}
+                        href={entry.href}
+                        dragType={DRAG_TYPE_PINNED_ITEM}
+                        dragValue={entry.id}
+                        kebab={
+                          <DropdownMenuItem onClick={() => onUnpinEntry?.(entry)}>
+                            <PinOff className="h-4 w-4 mr-2" />
+                            Unpin
+                          </DropdownMenuItem>
+                        }
+                      />
+                    )
+                  }
+                  const ItemIcon = entry.icon
                   return (
-                    <SidebarMenuItem key={item.id}>
+                    <SidebarMenuItem key={entry.id}>
                       <MobileDismissSidebarMenuButton
                         asChild
-                        isActive={item.id === selectedItemId}
+                        isActive={!!entry.isActive}
                         className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-9 text-foreground')}
                         draggable
                         onDragStart={(e: React.DragEvent) => {
                           e.dataTransfer.effectAllowed = 'move'
-                          e.dataTransfer.setData(DRAG_TYPE_PINNED_ITEM, item.id)
+                          e.dataTransfer.setData(DRAG_TYPE_PINNED_ITEM, entry.id)
                         }}
                       >
-                        <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, 'context', { item: item.id }) : '#'}>
+                        <Link to={entry.href}>
                           <ItemIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="flex-1 min-w-0 truncate">{item.name}</span>
+                          <span className="flex-1 min-w-0 truncate">{entry.name}</span>
                         </Link>
                       </MobileDismissSidebarMenuButton>
                       <RowKebab align="start" side="right" contentClassName="w-36" label="Item options">
-                        <DropdownMenuItem onClick={() => onUnpinItem?.(item)}>
+                        <DropdownMenuItem onClick={() => onUnpinEntry?.(entry)}>
                           <PinOff className="h-4 w-4 mr-2" />
                           Unpin
                         </DropdownMenuItem>
@@ -362,7 +469,7 @@ export function RoomSidebar({
                     </SidebarMenuItem>
                   )
                 })}
-                {pinnedItems.length > pinnedPage * PINNED_PER_PAGE && (
+                {pinnedEntries.length > pinnedPage * PINNED_PER_PAGE && (
                   <SidebarMenuItem>
                     <SidebarMenuButton onClick={() => setPinnedPage(p => p + 1)} className={cn('text-muted-foreground', SIDEBAR_ROW_STATE_CLASS)}>
                       <ChevronDown className="h-4 w-4 shrink-0" />
@@ -404,7 +511,6 @@ export function RoomSidebar({
                 </PopoverTrigger>
                 <PopoverContent align="center" sideOffset={8} className="w-auto p-0">
                   <ChatFilterPopover
-                    agents={agents}
                     values={pendingFilter}
                     onChange={setPendingFilter}
                     onApply={() => { setAppliedFilter(pendingFilter); setFilterOpen(false) }}
@@ -459,40 +565,35 @@ export function RoomSidebar({
                       {group.label}
                     </div>
                     <SidebarMenu>
-                      {group.chats.map(chat => {
-                        const ChatIcon = getChatIcon(chat)
-                        const isRunning = runningChatIds.includes(chat.id) || !!chat.running
-                        const isFailed = !isRunning && (failedChatIds.includes(chat.id) || !!chat.failed)
-                        return (
-                          <SidebarMenuItem key={chat.id}>
-                            <MobileDismissSidebarMenuButton
-                              asChild
-                              isActive={chat.id === selectedChatId && !isDetailOpen}
-                              className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-9 text-foreground')}
-                            >
-                              <Link to={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}>
-                                <div className="relative shrink-0">
-                                  {isRunning ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" data-testid="chat-running-spinner" />
-                                  ) : (
-                                    <ChatIcon className="h-4 w-4 text-muted-foreground" />
-                                  )}
-                                  {!isRunning && (isFailed || chat.unread) ? (
-                                    <span className={cn(
-                                      'absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full',
-                                      isFailed ? 'bg-red-500' : 'bg-blue-500',
-                                    )} />
-                                  ) : null}
-                                </div>
-                                <span className="flex-1 min-w-0 truncate">{chat.title}</span>
-                              </Link>
-                            </MobileDismissSidebarMenuButton>
-                            <RowKebab align="start" side="right" contentClassName="w-40" label="Chat options">
-                              <ChatMenuItems chatId={chat.id} onDelete={onDeleteChat} />
-                            </RowKebab>
-                          </SidebarMenuItem>
-                        )
-                      })}
+                      {group.chats.map(chat => (
+                        <ChatSidebarRow
+                          key={chat.id}
+                          chat={chat}
+                          isActive={chat.id === selectedChatId && !isDetailOpen}
+                          href={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}
+                          dragType={onPinChat ? DRAG_TYPE_CHAT : null}
+                          dragValue={chat.id}
+                          kebab={
+                            <ChatMenuItems
+                              chatId={chat.id}
+                              isPinned={chat.pinned}
+                              onPin={onPinChat}
+                              onUnpin={(chatId) => {
+                                const entry = pinnedEntries.find(e => e.kind === 'chat' && e.ref === chatId)
+                                onUnpinEntry?.(entry ?? {
+                                  id: `chat:${chatId}`,
+                                  kind: 'chat',
+                                  ref: chatId,
+                                  name: chat.title,
+                                  icon: getChatIcon(chat),
+                                  href: '#',
+                                })
+                              }}
+                              onDelete={onDeleteChat}
+                            />
+                          }
+                        />
+                      ))}
                     </SidebarMenu>
                   </div>
                 ))

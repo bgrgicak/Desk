@@ -181,6 +181,31 @@ export function shouldPinTextareaScrollToEnd(valueLength: number, selectionEnd: 
   return (selectionEnd ?? valueLength) >= valueLength
 }
 
+/**
+ * Returns true when the element accepts typed text — textareas, text-like
+ * inputs, and contenteditable surfaces. Used to decide whether a paste should
+ * stay with the focused element or get redirected to the chat composer.
+ */
+export function isEditableElement(el: Element | null): boolean {
+  if (!el) return false
+  if (el instanceof HTMLTextAreaElement) return true
+  if (el instanceof HTMLInputElement) {
+    const type = el.type.toLowerCase()
+    return (
+      type === 'text'
+      || type === 'search'
+      || type === 'email'
+      || type === 'url'
+      || type === 'tel'
+      || type === 'password'
+      || type === 'number'
+      || type === ''
+    )
+  }
+  if (el instanceof HTMLElement && el.isContentEditable) return true
+  return false
+}
+
 export function ChatInput({
   onSend,
   disabled = false,
@@ -432,6 +457,31 @@ export function ChatInput({
   useLayoutEffect(() => {
     resizeTextarea()
   }, [resizeTextarea])
+
+  // Redirect pastes that happen while no editable element is focused (e.g. user
+  // clicked into the message list, then hit Cmd+V) into the composer so the
+  // content always lands where they can send it from.
+  useEffect(() => {
+    if (disabled) return
+    const onDocumentPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented) return
+      if (isEditableElement(document.activeElement)) return
+      const el = textareaRef.current
+      if (!el) return
+      const text = e.clipboardData?.getData('text/plain') ?? ''
+      if (!text) return
+      e.preventDefault()
+      const start = el.selectionStart ?? el.value.length
+      const end = el.selectionEnd ?? el.value.length
+      replaceTextareaRangePreservingUndo(el, start, end, text)
+      const caret = start + text.length
+      el.setSelectionRange(caret, caret)
+      syncValue(el.value)
+      recordTextHistory(el)
+    }
+    document.addEventListener('paste', onDocumentPaste)
+    return () => document.removeEventListener('paste', onDocumentPaste)
+  }, [disabled, recordTextHistory, syncValue])
 
   // Detect @ mention while typing — drives the attach picker open via
   // the ComposerPickers imperative handle.

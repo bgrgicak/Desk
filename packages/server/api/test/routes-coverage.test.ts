@@ -776,7 +776,10 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   it("PATCH /chats/:id — unread: false marks chat as read", async () => {
-    // Create a chat and insert a message to mark it unread.
+    // Create a chat and flip it to unread directly. Only agent-authored
+    // visible messages flip chats.unread, and the user-facing POST /messages
+    // route inserts a user row — so seed unread via SQL to keep the test
+    // focused on the PATCH behavior we're exercising here.
     const createRes = await request("POST", "/chats", token, {
       workspaceId,
       agentId,
@@ -785,11 +788,7 @@ describe("Routes coverage (real Postgres)", () => {
     expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
 
-    // Sending a message sets chats.unread = 1 via the DB trigger.
-    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
-      content: "hello",
-    });
-    expect(msgRes.status).toBe(201);
+    await pool.query("UPDATE chats SET unread = 1 WHERE id = ?", [chat.id]);
 
     // Confirm the chat is now unread.
     const getRes1 = await request("GET", `/chats/${chat.id}`, token);
@@ -815,10 +814,9 @@ describe("Routes coverage (real Postgres)", () => {
     });
     const chat = createRes.body as { id: string };
 
-    // Make it unread via a message.
-    await request("POST", `/chats/${chat.id}/messages`, token, {
-      content: "trigger unread",
-    });
+    // Seed unread directly — user POSTs don't flip the flag under the
+    // tightened semantics.
+    await pool.query("UPDATE chats SET unread = 1 WHERE id = ?", [chat.id]);
 
     // PATCH both title and unread in one call.
     const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {

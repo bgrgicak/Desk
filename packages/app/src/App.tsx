@@ -9,7 +9,7 @@ import {
   useSearchParams,
 } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Loader2 } from 'lucide-react'
+import { Folder as FolderIcon, Loader2 } from 'lucide-react'
 import {
   Button,
   Dialog,
@@ -57,6 +57,8 @@ import {
   useDeleteMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
+  usePinChatMutation,
+  useUnpinChatMutation,
   useCreateThreadMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
@@ -74,9 +76,12 @@ import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
 import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from '@/store/selectors/tasks'
-import { toContextItem } from '@/store/selectors/library'
+import { toContextItem, toFolderList } from '@/store/selectors/library'
+import { iconForItem } from '@/data/file-kind'
+import { getChatIcon } from '@/data/chat-icons'
+import type { PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
 import { toArtifactFromFile } from '@/store/selectors/artifacts'
-import { buildPath, isRouteView, NEW_CHAT_ID, type RouteView } from '@/router/nav'
+import { buildPath, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useAvatarUrl } from '@/hooks/use-avatar'
@@ -241,8 +246,24 @@ function AppInner() {
   const appStore = useAppStore()
   const [notificationPromptOpen, setNotificationPromptOpen] = useState(false)
 
-  const activeView: RouteView = isRouteView(viewParam) ? viewParam : 'tasks'
+  // Resolve the URL's `:view` segment to a canonical RouteView. Both
+  // the canonical names (`tasks`, `context`, `pinned`) and known
+  // aliases (e.g. `library` → `context`) resolve here so deep links
+  // and bookmarks survive. Unknown segments fall back to `tasks`.
+  const activeView: RouteView = resolveRouteView(viewParam) ?? 'tasks'
   const activeWorkspaceId = wsId
+
+  // `/w/<id>/settings` is a deep link to the Settings modal pre-opened
+  // at the workspace section. The view itself behaves as `tasks` (the
+  // sidebar's active row matches whichever view is rendered behind the
+  // modal), but the modal opens automatically via the shared pending-
+  // section channel and the URL replaces to `/tasks` so a back/forward
+  // doesn't reopen it.
+  useEffect(() => {
+    if (viewParam !== 'settings') return
+    dispatch(setPendingSettingsSection('workspace'))
+    navigate(buildPath(wsId || activeWorkspaceId, 'tasks'), { replace: true })
+  }, [viewParam, wsId, activeWorkspaceId, dispatch, navigate])
   const { defaultView, developerMode } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
@@ -404,11 +425,26 @@ function AppInner() {
     taskRunsByParent,
   ])
   const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
+
+  // Opening a task's detail panel counts as engagement: clear the backing
+  // chat's unread flag so the task drops out of "Needs input" without
+  // requiring the user to navigate into the chat view. Drive this off
+  // `selectedTaskId` (the URL param) rather than the card click handler —
+  // the card itself navigates via <Link to={href}>, which never fires
+  // onSelect.
+  useEffect(() => {
+    if (!selectedTaskId) return
+    const chatId = tasks.find(t => t.id === selectedTaskId)?.chatId
+    if (!chatId) return
+    markChatReadQuietly(chatId, dispatch, appStore.getState)
+  }, [selectedTaskId, tasks, dispatch, appStore])
   const [patchMessageMutation] = usePatchMessageMutation()
   const [runMessageMutation] = useRunMessageMutation()
   const [deleteMessageMutation] = useDeleteMessageMutation()
   const [pinLibraryItem] = usePinLibraryItemMutation()
   const [unpinLibraryItem] = useUnpinLibraryItemMutation()
+  const [pinChat] = usePinChatMutation()
+  const [unpinChat] = useUnpinChatMutation()
 
   const doCreateAndPost = useCallback(async (opts: {
     agentId: string
@@ -631,7 +667,7 @@ function AppInner() {
 
   // Inbox badge count = server-reported awaiting-user messages.
   // Don't filter by workspace — the inbox is global.
-  const { data: awaitingResp } = useGetMessagesQuery({ awaitingUser: true })
+  const { data: awaitingResp } = useGetMessagesQuery({ unread: true })
   const unreadCount = awaitingResp?.items.length ?? 0
 
   const {
@@ -652,7 +688,11 @@ function AppInner() {
       ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, libraryAgents))
       : []
   ), [activeWorkspaceId, libraryResp?.items, libraryAgents])
-  const pinnedItems = useMemo(() => libraryItems.filter(i => i.pinned), [libraryItems])
+  const libraryFolders = useMemo(() => (
+    activeWorkspaceId
+      ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+      : []
+  ), [activeWorkspaceId, libraryResp?.folders])
   const artifacts: Artifact[] = useMemo(
     () => (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f)),
     [libraryResp?.items],
@@ -730,6 +770,59 @@ function AppInner() {
     !selectedContextItem &&
     (!libraryResp || libraryLoading || libraryFetching || fallbackFileFetching)
 
+  // ── Unified sidebar pinned list ─────────────────────────────────────
+  // Files, directories, and chats land in one ordered list. Library
+  // entries lead (files-before-folders is what the user typically pins
+  // first), chats follow. Each entry carries its render-time icon and
+  // navigation href so the sidebar doesn't have to know about kinds.
+  const pinnedEntries: PinnedSidebarEntry[] = useMemo(() => {
+    if (!activeWorkspaceId) return []
+    const entries: PinnedSidebarEntry[] = []
+    for (const item of libraryItems) {
+      if (!item.pinned) continue
+      entries.push({
+        id: `library:${item.id}`,
+        kind: 'library',
+        ref: item.id,
+        name: item.name,
+        icon: iconForItem(item),
+        href: buildPath(activeWorkspaceId, 'context', { item: item.id }),
+        isActive: item.id === effectiveItemPath,
+      })
+    }
+    for (const folder of libraryFolders) {
+      if (!folder.pinned) continue
+      entries.push({
+        id: `folder:${folder.id}`,
+        kind: 'folder',
+        ref: folder.id,
+        name: folder.name,
+        icon: FolderIcon,
+        // Folders navigate to the Library list scoped to that folder.
+        // `?folder=<path>` is the existing in-library navigation param.
+        href: buildPath(activeWorkspaceId, 'context', { folder: folder.id }),
+        isActive: false,
+      })
+    }
+    for (const chat of chats) {
+      if (!chat.pinned) continue
+      // Chat icon + status (spinner/red/blue dot) is rendered by the
+      // sidebar's shared ChatSidebarRow, which reads runningChatIds /
+      // failedChatIds itself. The entry only needs the routing fields.
+      entries.push({
+        id: `chat:${chat.id}`,
+        kind: 'chat',
+        ref: chat.id,
+        name: chat.title,
+        icon: getChatIcon(chat),
+        href: buildPath(activeWorkspaceId, activeView, { chat: chat.id }),
+        isActive: chat.id === selectedChatId,
+      })
+    }
+    return entries
+  }, [activeWorkspaceId, activeView, libraryItems, libraryFolders, chats, effectiveItemPath, selectedChatId])
+
+
 
   return (
     <TooltipProvider>
@@ -791,15 +884,25 @@ function AppInner() {
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
         onChatWithAgent={handleChatWithAgent}
-        pinnedItems={pinnedItems}
+        pinnedEntries={pinnedEntries}
         isPinnedLoading={!!activeWorkspaceId && !libraryResp && (libraryLoading || libraryFetching || libraryUninitialized)}
         selectedItemId={effectiveItemPath}
         libraryFileName={selectedContextItem?.name ?? null}
-        onPinItem={(itemId) => {
-          if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: itemId })
+        onPinItem={(path) => {
+          if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path })
         }}
-        onUnpinItem={(item) => {
-          if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
+        onPinChat={(chatId) => {
+          if (activeWorkspaceId) void pinChat({ workspaceId: activeWorkspaceId, chatId })
+        }}
+        onUnpinEntry={(entry) => {
+          if (!activeWorkspaceId) return
+          // Library files AND directories share one endpoint — they're
+          // path-keyed in library_pins. Chats go through chat-pins.
+          if (entry.kind === 'chat') {
+            void unpinChat({ workspaceId: activeWorkspaceId, chatId: entry.ref })
+          } else {
+            void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: entry.ref })
+          }
         }}
       >
         {selectedContextItem && (
@@ -876,12 +979,10 @@ function AppInner() {
             isLoading={tasksListLoading}
             agents={workspaceServerAgents ?? serverAgents ?? []}
             roomName={serverWorkspaces?.find(w => w.id === activeWorkspaceId)?.name}
-            unreadByChatId={Object.fromEntries(
-              chats.filter(c => c.unread).map(c => [c.id, 1] as const),
-            )}
             authorName={me?.username}
             authorAvatarUrl={userAvatarUrl}
             selectedTaskId={selectedTaskId}
+            hrefForTask={(id) => buildPath(activeWorkspaceId, 'tasks', { task: id })}
             onSelectTask={(id) => goTo({ task: id })}
             onCreateTask={async (input: TaskComposerSubmit) => {
               if (!activeWorkspaceId) return
@@ -979,6 +1080,12 @@ function AppInner() {
             }}
             onUnpinItem={(item) => {
               if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: item.id })
+            }}
+            onPinFolder={(folder) => {
+              if (activeWorkspaceId) void pinLibraryItem({ workspaceId: activeWorkspaceId, path: folder.id })
+            }}
+            onUnpinFolder={(folder) => {
+              if (activeWorkspaceId) void unpinLibraryItem({ workspaceId: activeWorkspaceId, path: folder.id })
             }}
             onCreateArtifact={handleCreateArtifact}
             onSkipToChat={async (agentId) => {

@@ -696,6 +696,21 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       const terminal = result.exitCode === 0 ? "succeeded" : "failed";
       await queries.messages.finalizeExecution(pool, runId, terminal);
+      // Symmetric to the catch-block guard below: if `preemptChatRun`
+      // already set state='cancelled' while we were awaiting the runner,
+      // `finalizeExecution` was a WHERE-clause no-op and the row is
+      // still cancelled. opencode's session.abort path resolves with
+      // exitCode=0, so without this guard the success path below would
+      // happily read the (orphaned) log and insert another agent child —
+      // producing one duplicate reply per preempted send when the user
+      // types faster than the model.
+      if (await isAlreadyCancelled(pool, runId)) {
+        emit({
+          type: "message.updated",
+          payload: (await queries.messages.findById(pool, runId))!,
+        });
+        return { fired: true, childIds: [] };
+      }
       emit({
         type: "message.updated",
         payload: (await queries.messages.findById(pool, runId))!,

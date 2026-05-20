@@ -79,7 +79,9 @@ describe("renderAgentFile", () => {
     });
 
     expect(result).toContain("not reported — assume UTC");
-    expect(result).toContain("run `desk-agent task schedule`");
+    expect(result).toContain("`desk-agent task schedule`");
+    expect(result).toContain("`desk-agent task reschedule`");
+    expect(result).toContain("`desk-agent task cancel`");
   });
 
   it("includes goal autodetection instructions by default", () => {

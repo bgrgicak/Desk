@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import {
   MessageSquare,
   CheckCircle2,
@@ -65,8 +66,6 @@ export interface TaskCardProps {
   task: Task
   /** Total messages on the backing chat — the "N replies" button. */
   repliesCount?: number
-  /** Unread agent replies — shown as a pill in the status area. */
-  unreadCount?: number
   /** Display name for the author avatar. Defaults to "You". */
   authorName?: string
   /** Current user's avatar (data URL). Falls back to initials. */
@@ -74,8 +73,12 @@ export interface TaskCardProps {
   /** Selected → its chat is docked in the sidebar; styled like the
    *  chat view's active item card. */
   isActive?: boolean
-  /** Open this task's chat in the docked sidebar (whole card + the
-   *  "replies" button). */
+  /** Destination for the card itself — the docked-chat URL. Rendering
+   *  the card as a real anchor lets middle-click / cmd-click open the
+   *  task in a new tab. */
+  href: string
+  /** Open this task's chat in the docked sidebar (the "replies"
+   *  button; the card wrapper navigates via {@link href}). */
   onSelect: () => void
   /** Mark the task done / dismiss it. */
   onMarkDone: () => void
@@ -88,19 +91,20 @@ export interface TaskCardProps {
 
 /**
  * The bulletin-board task row. Store-agnostic (task + callbacks only)
- * so Home can reuse it. The whole card is clickable to open the
- * task's chat in the docked sidebar; the footer keeps a "N replies"
- * button (same action) plus a "Mark as done" split (Run now / Pause /
- * Delete). Unread + status are pills in the header; an active card
- * gets the chat-view item-card highlight.
+ * so Home can reuse it. The whole card is a router `<Link>` to the
+ * task's docked-chat URL so middle-click / cmd-click opens it in a
+ * new tab; the footer keeps a "N replies" button (same action) plus a
+ * "Mark as done" split (Run now / Pause / Delete). A single status pill
+ * sits in the header (Needs input subsumes "unread" — opening the task
+ * clears both); an active card gets the chat-view item-card highlight.
  */
 export function TaskCard({
   task,
   repliesCount = 0,
-  unreadCount = 0,
   authorName = 'You',
   authorAvatarUrl,
   isActive = false,
+  href,
   onSelect,
   onMarkDone,
   onRunNow,
@@ -142,18 +146,11 @@ export function TaskCard({
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onSelect()
-        }
-      }}
+    <Link
+      to={href}
+      draggable={false}
       className={cn(
-        'flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 transition-colors',
+        'flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 no-underline text-inherit transition-colors',
         isActive
           ? 'border-foreground/40 bg-secondary shadow-sm'
           : cn(
@@ -179,27 +176,30 @@ export function TaskCard({
             {initialsOf(authorName)}
           </AvatarFallback>
         </Avatar>
-        <div className="flex min-w-0 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-sm font-medium text-foreground">{authorName}</span>
-          <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+          {/* Meta wraps on narrow widths so the schedule/next-run text
+              flows below the timestamp instead of running under the
+              status pills on the right. Items are spaced with gap-x
+              rather than interpunct prefixes — a leading "·" reads as
+              a list bullet once items wrap onto their own line. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span className="truncate">{getRelativeTime(task.startedAt)}</span>
             {metaParts.map((part) => (
-              <span key={part} className="flex shrink-0 items-center gap-1">
-                <span aria-hidden>·</span>
-                <span className="truncate">{part}</span>
+              <span key={part} className="truncate">
+                {part}
               </span>
             ))}
             {showNextRun && (
               <span className="flex shrink-0 items-center gap-1">
-                <span aria-hidden>·</span>
                 <NextRunRing value={nextRunProgress} />
                 <span className="truncate">{nextRunText}</span>
               </span>
             )}
           </span>
         </div>
-        <div className="ml-auto shrink-0">
-          <TaskPills status={task.status} unreadCount={unreadCount} />
+        <div className="shrink-0">
+          <TaskPills status={task.status} />
         </div>
       </div>
 
@@ -282,6 +282,6 @@ export function TaskCard({
           )}
         </div>
       </div>
-    </div>
+    </Link>
   )
 }
