@@ -2,8 +2,7 @@ import type { Pool } from "../pool.js";
 import type { Message } from "@agent-desk/shared";
 import {
   FULL_MESSAGE_SELECT,
-  messageSelect,
-  messageSelectFromAlias,
+  FULL_MESSAGE_SELECT_M,
   rowToListedMessage,
   rowToMessage,
   timelineFilterSql,
@@ -168,7 +167,7 @@ async function listByChatInChat(
     // Fetch in DESC order so LIMIT clips the *oldest* surplus row, then
     // reverse to ASC for the caller.
     const { rows } = await db.query(
-      `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
+      `SELECT ${FULL_MESSAGE_SELECT} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
       params,
     );
 
@@ -198,7 +197,7 @@ async function listByChatInChat(
     params.push(limit + 1);
 
     const { rows } = await db.query(
-      `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at, id LIMIT ?`,
+      `SELECT ${FULL_MESSAGE_SELECT} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at, id LIMIT ?`,
       params,
     );
 
@@ -219,7 +218,7 @@ async function listByChatInChat(
   params.push(...timeline.params);
   params.push(limit + 1);
   const { rows } = await db.query(
-    `SELECT ${messageSelect(view)} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
+    `SELECT ${FULL_MESSAGE_SELECT} FROM messages WHERE ${whereClause} ${timeline.sql} ORDER BY created_at DESC, id DESC LIMIT ?`,
     params,
   );
 
@@ -302,12 +301,12 @@ export async function findAnchorForThreadChat(
   threadChatId: string,
   view: MessageListView = "full",
 ): Promise<Message | null> {
-  const sel = messageSelect(view);
   const { rows } = await db.query(
-    `SELECT ${sel} FROM messages WHERE thread_chat_id = ? LIMIT 1`,
+    `SELECT ${FULL_MESSAGE_SELECT} FROM messages WHERE thread_chat_id = ? LIMIT 1`,
     [threadChatId],
   );
-  return rows.length ? rowToMessage(rows[0]) : null;
+  if (!rows.length) return null;
+  return view === "full" ? rowToMessage(rows[0]) : rowToListedMessage(rows[0], view);
 }
 
 export interface CrossChatListOptions {
@@ -433,7 +432,7 @@ export async function listCrossChat(
   params.push(limit + 1);
 
   const sql = `
-    SELECT ${messageSelectFromAlias(opts.view ?? "full")}
+    SELECT ${FULL_MESSAGE_SELECT_M}
     FROM messages m
     JOIN chats c ON c.id = m.chat_id
     JOIN workspaces w ON w.id = c.workspace_id
