@@ -70,9 +70,15 @@ export interface TasksPageProps {
    *  or "Scheduled" when an executeAt was set). */
   onCreateTask: (input: TaskComposerSubmit) => void | Promise<void>
   onMarkDone: (task: Task) => void | Promise<void>
+  /** Reopen a completed task — moves it back to "todo". Wired by the
+   *  TaskCard's primary button when the task is in `complete` status. */
+  onReopen: (task: Task) => void | Promise<void>
   onRunNow: (task: Task) => void | Promise<void>
   onPause: (task: Task) => void | Promise<void>
   onDelete: (task: Task) => void | Promise<void>
+  /** When `true`, the bottom composer auto-focuses on mount — used
+   *  when navigating in from Home with the intent to compose. */
+  composerAutoFocus?: boolean
 }
 
 // Exact mirror of the chat view's conversation column: a responsive
@@ -253,9 +259,11 @@ export function TasksPage({
   onSelectTask,
   onCreateTask,
   onMarkDone,
+  onReopen,
   onRunNow,
   onPause,
   onDelete,
+  composerAutoFocus = false,
 }: TasksPageProps) {
   // The top fade only kicks in once the list is scrolled — at rest
   // (scrollTop 0) the composer must stay crisp, not faded. The fade
@@ -532,6 +540,7 @@ export function TasksPage({
                       href={hrefForTask(task.id)}
                       onSelect={() => onSelectTask(task.id)}
                       onMarkDone={() => void onMarkDone(task)}
+                      onReopen={() => void onReopen(task)}
                       onRunNow={
                         task.status === 'scheduled' ? () => void onRunNow(task) : undefined
                       }
@@ -580,7 +589,7 @@ export function TasksPage({
             >
               <div className={`${gutter} pt-2 pb-6`}>
                 <div className={COMPOSER_COLUMN}>
-                  <TaskComposer onSubmit={onCreateTask} />
+                  <TaskComposer onSubmit={onCreateTask} autoFocus={composerAutoFocus} />
                 </div>
               </div>
             </motion.div>

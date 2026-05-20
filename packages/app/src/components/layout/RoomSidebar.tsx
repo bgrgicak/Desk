@@ -590,6 +590,12 @@ export function RoomSidebar({
                                 })
                               }}
                               onDelete={onDeleteChat}
+                              homePin={{
+                                kind: 'chat',
+                                id: chat.id,
+                                workspaceId: activeWorkspaceId,
+                                label: chat.title,
+                              }}
                             />
                           }
                         />

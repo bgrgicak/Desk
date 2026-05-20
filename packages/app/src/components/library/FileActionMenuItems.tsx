@@ -8,6 +8,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { DropdownMenuItem, DropdownMenuSeparator } from '@agent-desk/ui'
+import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
+import type { HomePinRef } from '@/hooks/use-home-pins'
 
 /**
  * The canonical file context-menu (kebab) items, shared by the
@@ -29,6 +31,8 @@ export interface FileActionMenuItemsProps {
   onDownload?: () => void
   onRename?: () => void
   onMove?: () => void
+  /** When provided, adds a "Show in Home" toggle (Favorites). */
+  homePin?: HomePinRef
   onDelete?: () => void
 }
 
@@ -40,6 +44,7 @@ export function FileActionMenuItems({
   onDownload,
   onRename,
   onMove,
+  homePin,
   onDelete,
 }: FileActionMenuItemsProps) {
   return (
@@ -76,6 +81,7 @@ export function FileActionMenuItems({
           Move to folder
         </DropdownMenuItem>
       )}
+      {homePin && <ShowInHomeMenuItem pin={homePin} />}
       {onDelete && (
         <>
           <DropdownMenuSeparator />

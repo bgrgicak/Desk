@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Play,
   Pause,
+  RotateCcw,
   Trash2,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
@@ -22,6 +23,8 @@ import {
 import type { Task } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { initialsOf } from '@/lib/initials'
+import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
+import type { HomePinRef } from '@/hooks/use-home-pins'
 import { TaskPills, PRIORITY_LABELS } from './task-badges'
 import { describeCron } from './schedule-utils'
 
@@ -68,6 +71,17 @@ export interface TaskCardProps {
   repliesCount?: number
   /** Display name for the author avatar. Defaults to "You". */
   authorName?: string
+  /** Owning room name — shown in the meta line (used on Home where
+   *  cards are aggregated across rooms). */
+  roomName?: string
+  /** Owning room accent color — when paired with `roomName` AND no
+   *  `roomIconUrl`, renders a small colored ring before the room name
+   *  (matches the sidebar's "no custom icon" fallback). */
+  roomColor?: string
+  /** Owning room icon — when set, renders as a small circular image
+   *  before the room name (preferred over the color ring; same rule
+   *  the sidebar uses for room rows). */
+  roomIconUrl?: string | null
   /** Current user's avatar (data URL). Falls back to initials. */
   authorAvatarUrl?: string | null
   /** Selected → its chat is docked in the sidebar; styled like the
@@ -82,10 +96,17 @@ export interface TaskCardProps {
   onSelect: () => void
   /** Mark the task done / dismiss it. */
   onMarkDone: () => void
+  /** Reopen a completed task — moves it back to "todo". When the task
+   *  is already in `complete` status, the primary footer button flips
+   *  to "Reopen" and calls this. Optional so legacy callers stay
+   *  compatible (the button stays disabled if this isn't wired). */
+  onReopen?: () => void
   /** Caret menu actions — omitted ones are hidden. */
   onRunNow?: () => void
   onPause?: () => void
   onDelete?: () => void
+  /** When provided, adds a "Show in Home" toggle to the kebab. */
+  homePinRef?: HomePinRef
   className?: string
 }
 
@@ -102,14 +123,19 @@ export function TaskCard({
   task,
   repliesCount = 0,
   authorName = 'You',
+  roomName,
+  roomColor,
+  roomIconUrl,
   authorAvatarUrl,
   isActive = false,
   href,
   onSelect,
   onMarkDone,
+  onReopen,
   onRunNow,
   onPause,
   onDelete,
+  homePinRef,
   className,
 }: TaskCardProps) {
   const isDone = task.status === 'complete'
@@ -138,7 +164,7 @@ export function TaskCard({
   const showNextRun = !!nextRunText && !isRunning
   const nextRunProgress = showNextRun ? nextRunProgressFor(task) : 0
 
-  const hasMenu = !!(onRunNow || onPause || onDelete)
+  const hasMenu = !!(onRunNow || onPause || onDelete || homePinRef)
   // Don't let footer controls trigger the card-level open.
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -150,18 +176,24 @@ export function TaskCard({
       to={href}
       draggable={false}
       className={cn(
-        'flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 no-underline text-inherit transition-colors',
+        'relative flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 no-underline text-inherit transition-colors',
+        // Hover state — a `:before` overlay layered ABOVE bg-background
+        // and BELOW the card's children (children are made `relative`
+        // via `[&>*]:relative` so their stacking context paints on
+        // top of the absolute pseudo-element). Replacing `bg-background`
+        // on hover instead would let the BackgroundBlobs show through,
+        // which read as the card going darker.
+        '[&>*]:relative before:pointer-events-none before:absolute before:inset-0 before:rounded-2xl before:bg-foreground/[0.03] before:opacity-0 before:transition-opacity hover:before:opacity-100',
         isActive
           ? 'border-foreground/40 bg-secondary shadow-sm'
           : cn(
-              'bg-background hover:bg-foreground/[0.02]',
+              'bg-background',
               // Needs-input cards get an amber border so they stand
               // out in the list.
               isNeedsInput
                 ? 'border-[var(--color-amber-400)]'
                 : 'border-border',
             ),
-        isDone && !isActive && 'opacity-60',
         className,
       )}
       data-testid={`task-card-${task.id}`}
@@ -184,6 +216,25 @@ export function TaskCard({
               rather than interpunct prefixes — a leading "·" reads as
               a list bullet once items wrap onto their own line. */}
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+            {roomName && (
+              <span className="flex shrink-0 items-center gap-1">
+                {roomIconUrl ? (
+                  <img
+                    src={roomIconUrl}
+                    alt=""
+                    aria-hidden
+                    className="h-3 w-3 shrink-0 rounded-full object-cover"
+                  />
+                ) : roomColor ? (
+                  <span
+                    aria-hidden
+                    className="h-2.5 w-2.5 shrink-0 rounded-full border-2"
+                    style={{ borderColor: roomColor }}
+                  />
+                ) : null}
+                <span className="truncate max-w-[10rem]">{roomName}</span>
+              </span>
+            )}
             <span className="truncate">{getRelativeTime(task.startedAt)}</span>
             {metaParts.map((part) => (
               <span key={part} className="truncate">
@@ -210,7 +261,7 @@ export function TaskCard({
             {task.title}
           </h3>
         )}
-        <p className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words">
+        <p className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words line-clamp-4">
           {task.description ?? task.name}
         </p>
       </div>
@@ -229,20 +280,38 @@ export function TaskCard({
           {repliesCount > 0 ? `${repliesCount} replies` : 'Replies'}
         </Button>
 
-        {/* Mark as done split button */}
+        {/* Mark as done / Reopen split button. Done tasks flip the
+            primary button to "Reopen" so the action stays one click
+            away (moves the task back to "todo"). When the parent
+            hasn't wired `onReopen`, the button stays disabled — same
+            behaviour as before. */}
         <div className="flex items-center">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-8 gap-1.5 rounded-r-none"
-            onClick={stop(onMarkDone)}
-            disabled={isDone}
-            data-testid={`task-done-${task.id}`}
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            {isDone ? 'Done' : 'Mark as done'}
-          </Button>
+          {isDone ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 rounded-r-none"
+              onClick={onReopen ? stop(onReopen) : undefined}
+              disabled={!onReopen}
+              data-testid={`task-reopen-${task.id}`}
+            >
+              <RotateCcw className="h-4 w-4" />
+              Reopen
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 rounded-r-none"
+              onClick={stop(onMarkDone)}
+              data-testid={`task-done-${task.id}`}
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Mark as done
+            </Button>
+          )}
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -271,6 +340,7 @@ export function TaskCard({
                     Pause
                   </DropdownMenuItem>
                 )}
+                {homePinRef && <ShowInHomeMenuItem pin={homePinRef} />}
                 {onDelete && (
                   <DropdownMenuItem onClick={stop(onDelete)}>
                     <Trash2 className="h-4 w-4 mr-2" />

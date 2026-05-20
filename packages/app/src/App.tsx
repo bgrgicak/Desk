@@ -983,6 +983,14 @@ function AppInner() {
             authorAvatarUrl={userAvatarUrl}
             selectedTaskId={selectedTaskId}
             hrefForTask={(id) => buildPath(activeWorkspaceId, 'tasks', { task: id })}
+            // Home's empty-section "Create new task" dropdown passes
+            // `state.focusComposer` when navigating here, so the
+            // bottom composer grabs focus on arrival.
+            composerAutoFocus={
+              typeof location.state === 'object' &&
+              location.state !== null &&
+              (location.state as { focusComposer?: unknown }).focusComposer === true
+            }
             onSelectTask={(id) => goTo({ task: id })}
             onCreateTask={async (input: TaskComposerSubmit) => {
               if (!activeWorkspaceId) return
@@ -1029,6 +1037,23 @@ function AppInner() {
                 }).unwrap()
               } catch (err) {
                 toast.error('Failed to mark done', { description: extractApiError(err) })
+              }
+            }}
+            onReopen={async (task) => {
+              if (!task.chatId || !task.messageId) return
+              // Reopen → move the task back to "todo" (idle, no
+              // schedule). buildTaskStatusMove handles the patch shape
+              // (`executeAt: null, cron: null, state: 'pending'`).
+              const move = buildTaskStatusMove(task, 'todo', 'user')
+              if (move.kind !== 'patch') return
+              try {
+                await patchMessageMutation({
+                  chatId: task.chatId,
+                  messageId: task.messageId,
+                  patch: move.patch,
+                }).unwrap()
+              } catch (err) {
+                toast.error('Reopen failed', { description: extractApiError(err) })
               }
             }}
             onRunNow={async (task) => {

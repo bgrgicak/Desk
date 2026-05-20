@@ -22,6 +22,7 @@ import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
 import { buildPath } from '@/router/nav'
 import { StatusBadge, PRIORITY_LABELS } from '@/components/tasks/task-badges'
 import { describeCron } from '@/components/tasks/schedule-utils'
+import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
 
 function errMsg(err: unknown): string | undefined {
   if (typeof err === 'object' && err && 'data' in err) {
@@ -172,6 +173,16 @@ export function TaskResultCard({
                 <Pause className="h-4 w-4 mr-2" />
                 Pause
               </DropdownMenuItem>
+            )}
+            {workspaceId && (
+              <ShowInHomeMenuItem
+                pin={{
+                  kind: 'task',
+                  id: message.id,
+                  workspaceId,
+                  label: task.title || task.name,
+                }}
+              />
             )}
             <DropdownMenuItem onClick={() => void remove()}>
               <Trash2 className="h-4 w-4 mr-2" />
