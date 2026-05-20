@@ -74,14 +74,14 @@ async function issueSandboxToken(): Promise<string> {
   return token;
 }
 
-function sandboxPost(body: unknown, token: string): Promise<{ status: number; body: any }> {
+function sandboxPost(body: unknown, token: string, urlPath = "/sandbox/messages"): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const raw = JSON.stringify(body);
     const req = http.request(
       {
         hostname: "127.0.0.1",
         port,
-        path: "/sandbox/messages",
+        path: urlPath,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -164,5 +164,163 @@ describe("POST /sandbox/messages", () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/Invalid attachment path/);
     expect(after.rows[0].count).toBe(before.rows[0].count);
+  });
+});
+
+describe("POST /sandbox/messages/reschedule", () => {
+  async function createScheduledTask(token: string, executeAt = "2026-06-01T09:00:00Z") {
+    const create = await sandboxPost({
+      chatId: sourceChatId,
+      title: "Daily review",
+      content: "Review the build",
+      executeAt,
+    }, token);
+    expect(create.status).toBe(201);
+    return create.body as { id: string; chatId: string; executeAt?: string; cron?: string; createdAt: string; title?: string };
+  }
+
+  it("updates executeAt in place — same id, same created_at, state pending", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token);
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+      executeAt: "2026-06-02T09:00:00Z",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(created.id);
+    expect(res.body.createdAt).toBe(created.createdAt);
+    expect(res.body.executeAt).toBe("2026-06-02T09:00:00.000Z");
+    expect(res.body.cron).toBeFalsy();
+    expect(res.body.state).toBe("pending");
+
+    // Confirm the row count for this chat did not grow.
+    const { rows } = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ? AND kind = 'task'",
+      [sourceChatId],
+    );
+    expect(rows[0].count).toBe(1);
+  });
+
+  it("swaps a one-shot task to recurring by clearing executeAt when cron is provided", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-06-10T09:00:00Z");
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+      cron: "0 9 * * 1-5",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(created.id);
+    expect(res.body.cron).toBe("0 9 * * 1-5");
+    expect(res.body.executeAt).toBeTruthy();
+    // rescheduleMessage recomputes executeAt from the cron expression; it
+    // should no longer equal the original one-shot timestamp.
+    expect(res.body.executeAt).not.toBe("2026-06-10T09:00:00Z");
+  });
+
+  it("optionally updates title and content alongside the schedule", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-07-01T09:00:00Z");
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+      executeAt: "2026-07-02T09:00:00Z",
+      title: "Weekly review",
+      content: "Updated body",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe("Weekly review");
+    expect(res.body.content).toEqual({ type: "text", text: "Updated body" });
+  });
+
+  it("resurrects a cancelled task by resetting state to pending", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-08-01T09:00:00Z");
+    await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+    }, token, "/sandbox/messages/cancel");
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+      executeAt: "2026-08-15T09:00:00Z",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe("pending");
+    expect(res.body.executeAt).toBe("2026-08-15T09:00:00.000Z");
+  });
+
+  it("rejects when neither executeAt nor cron is supplied", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-09-01T09:00:00Z");
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/executeAt or cron/);
+  });
+
+  it("rejects executeAt and cron together", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-09-15T09:00:00Z");
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: created.id,
+      executeAt: "2026-09-16T09:00:00Z",
+      cron: "0 9 * * *",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects messages from a different chat", async () => {
+    const token = await issueSandboxToken();
+    const created = await createScheduledTask(token, "2026-10-01T09:00:00Z");
+    const otherChatId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [otherChatId, workspaceId, agentId, "Other chat"],
+    );
+
+    const res = await sandboxPost({
+      chatId: otherChatId,
+      messageId: created.id,
+      executeAt: "2026-10-02T09:00:00Z",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects non-task message kinds", async () => {
+    const token = await issueSandboxToken();
+    const chatMsgId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, created_at, updated_at)
+       VALUES (?, ?, 'user', '{"type":"text","text":"hi"}', 'chat', ?, ?)`,
+      [chatMsgId, sourceChatId, new Date(), new Date()],
+    );
+
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      messageId: chatMsgId,
+      executeAt: "2026-11-01T09:00:00Z",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Only task messages/);
   });
 });
