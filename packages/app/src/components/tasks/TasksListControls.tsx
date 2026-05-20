@@ -71,41 +71,58 @@ interface TaskTabsProps {
  */
 export function TaskTabs({ tab, onTabChange, counts, className }: TaskTabsProps) {
   return (
-    <div className={cn('flex min-w-0 items-center gap-1 overflow-x-auto', className)}>
-      {TABS.map(t => {
-        const active = tab === t.key
-        const count = counts[t.key] ?? 0
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => onTabChange(t.key)}
-            className={cn(
-              'relative shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
-              active
-                ? 'text-secondary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-            data-testid={`task-tab-${t.key}`}
-          >
-            {active && (
-              <motion.span
-                layoutId="task-tab-active"
-                className="absolute inset-0 rounded-full bg-secondary"
-                transition={{ type: 'spring', stiffness: 500, damping: 38 }}
-              />
-            )}
-            <span className="relative z-10 inline-flex items-center gap-1.5">
-              {/* Status dot — matches the status badge colour for
-                  each state; "All" stays a neutral dark gray. */}
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 shrink-0 rounded-full',
-                  t.key === 'all' ? 'bg-foreground/40' : STATUS_DOT[t.key],
-                )}
-              />
-              {t.label}
-              {(count > 0 || t.key === 'all') && (
+    // Right-edge fade hints at off-screen tabs when the strip
+    // overflows on narrow viewports (375 px doesn't fit all six
+    // chips). The fade itself is the only affordance — there is no
+    // scrollbar on mobile — so it must not be hidden by the chip
+    // hover/active background, hence wrapping rather than masking the
+    // scroll container directly.
+    <div className={cn('relative min-w-0', className)}>
+      <div
+        className="flex items-center gap-1 overflow-x-auto pr-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {TABS.map(t => {
+          const active = tab === t.key
+          // Always render the count (including 0) so a tab never
+          // silently drops its number — the prior `count > 0` gate
+          // hid "Scheduled 0" / "Done 0", which made the strip
+          // visually inconsistent.
+          const count = counts[t.key] ?? 0
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => onTabChange(t.key)}
+              className={cn(
+                // Every tab keeps its own padding + a subtle hover/
+                // resting background so labels and counts read as
+                // distinct chips when the strip overflows on narrow
+                // viewports. The active tab gets a stronger pill via
+                // the framer `layoutId` span below.
+                'relative shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
+                active
+                  ? 'text-secondary-foreground'
+                  : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+              )}
+              data-testid={`task-tab-${t.key}`}
+            >
+              {active && (
+                <motion.span
+                  layoutId="task-tab-active"
+                  className="absolute inset-0 rounded-full bg-secondary"
+                  transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                />
+              )}
+              <span className="relative z-10 inline-flex items-center gap-1.5">
+                {/* Status dot — matches the status badge colour for
+                    each state; "All" stays a neutral dark gray. */}
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 shrink-0 rounded-full',
+                    t.key === 'all' ? 'bg-foreground/40' : STATUS_DOT[t.key],
+                  )}
+                />
+                {t.label}
                 <span
                   className={cn(
                     'tabular-nums text-xs',
@@ -114,11 +131,19 @@ export function TaskTabs({ tab, onTabChange, counts, className }: TaskTabsProps)
                 >
                   {count}
                 </span>
-              )}
-            </span>
-          </button>
-        )
-      })}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      {/* Edge-fade indicator — bleeds the rightmost chip into the
+          background so the user knows the strip scrolls. Sits above
+          the scroll row, pointer-events-none so it doesn't block
+          drag/tap. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-background to-transparent"
+      />
     </div>
   )
 }
@@ -160,7 +185,10 @@ export function TaskFilterSearch({
     setFilterOpen(false)
   }
   return (
-    <div className="flex items-center gap-2">
+    // `gap-3` between filter and search so the two icon buttons don't
+    // visually fuse on mobile (the previous `gap-2 = 8 px` looked
+    // adjoined against the topbar's grey hover background).
+    <div className="flex items-center gap-3">
       <Popover open={filterOpen} onOpenChange={openFilter}>
         <PopoverTrigger asChild>
           <Button

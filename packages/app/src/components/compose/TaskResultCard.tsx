@@ -11,6 +11,7 @@ import {
 import type { ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import {
+  useGetChatQuery,
   useGetWorkspacesQuery,
   usePatchMessageMutation,
   useRunMessageMutation,
@@ -51,11 +52,12 @@ export function TaskResultCard({
   workspaceId?: string
 }) {
   const { data: workspaces } = useGetWorkspacesQuery()
+  const { data: chat } = useGetChatQuery(message.chatId, { skip: !message.chatId })
   const [patchMessage] = usePatchMessageMutation()
   const [runMessage] = useRunMessageMutation()
   const [deleteMessage] = useDeleteMessageMutation()
 
-  const task = toUiTask(message, [], [], workspaces ?? [], [])
+  const task = toUiTask(message, [], chat ? [chat] : [], workspaces ?? [], [])
   const isDone = task.status === 'complete'
   const canRunNow = task.status === 'scheduled'
   const canPause =
@@ -119,7 +121,11 @@ export function TaskResultCard({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex min-w-0 items-center gap-2">
+        {/* Title row: on mobile the status pill drops below the title
+            (`flex-wrap`) so it doesn't visually fuse with the View
+            button on the right — at 375 px the title truncates hard,
+            leaving the pill butted right up against View. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap">
           <span className="min-w-0 truncate text-sm font-medium leading-5 text-foreground">
             {task.title || task.name}
           </span>
@@ -132,14 +138,10 @@ export function TaskResultCard({
         </span>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
-        {viewHref ? (
+      <div className="flex shrink-0 items-center gap-1 self-start sm:self-center">
+        {viewHref && (
           <Button asChild variant="outline" size="sm" className="h-7 px-2.5 text-xs">
             <Link to={viewHref}>View</Link>
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" disabled>
-            View
           </Button>
         )}
         <DropdownMenu>

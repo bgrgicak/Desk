@@ -615,8 +615,13 @@ export function ChatThread({
 
     prevMessageCountRef.current = messages.length
 
-    // Auto-scroll to bottom when at/near the bottom.
-    if (isAtBottomRef.current) {
+    // Auto-scroll to bottom when at/near the bottom — but only if
+    // there's actually a thread of messages. When the chat is empty
+    // (new-chat first paint), the scroll-to-bottom pushes the
+    // empty-state H2 ("What would you like to create?") above the
+    // viewport on short screens; messages.length === 0 means there's
+    // nothing to follow, so the scroll is purely harmful.
+    if (isAtBottomRef.current && messages.length > 0) {
       el.scrollTop = el.scrollHeight
     }
   }, [messages, isTyping, failedAgentTurn, highlightMessageId])

@@ -610,7 +610,12 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
                 // Segmented Preview/Code toggle — matches Figma
                 // 628:7031 (accent track, 10px radius, 3px inset;
                 // the active tab is a white, sm-shadowed 8px pill).
-                <div className="flex items-center gap-1 rounded-[10px] bg-accent p-[3px]" data-testid="library-preview-toggle">
+                // Hidden on mobile: with Save + kebab + Open-chat +
+                // (when docked) Close-X already in the row, the
+                // toggle pushed the file-name crumb to "CL…" on a
+                // 375 px viewport. Mobile defaults to the preview
+                // mode set by `showPreview`'s persisted state.
+                <div className="hidden items-center gap-1 rounded-[10px] bg-accent p-[3px] sm:flex" data-testid="library-preview-toggle">
                   <button
                     onClick={() => setShowPreview(true)}
                     className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${showPreview ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}

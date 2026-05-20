@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
-  CalendarClock, CheckCircle2, ExternalLink, ListFilter, Loader2,
+  CalendarClock, CheckCircle2, ExternalLink, Loader2,
   Paperclip, Plus, Trash2, Zap,
 } from 'lucide-react'
 import {
@@ -15,9 +15,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   DropdownMenuItem,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
 } from '@agent-desk/ui'
 import { iconForFile } from '@/data/file-kind'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
@@ -27,10 +24,11 @@ import { SectionBody, SectionHeader } from '@/components/shared/SectionHeader'
 import { SectionEmptyState } from '@/components/shared/SectionEmptyState'
 import { StatusBadge } from '@/components/tasks/task-badges'
 import { TaskSheet, type TaskCreateInput } from '@/components/tasks/TaskSheet'
-import { ALL_TASK_STATUSES, TasksFilterPopover, isTasksFilterActive, type TasksFilterValues } from '@/components/chats/TasksFilterPopover'
+import { isTasksFilterActive, type TasksFilterValues } from '@/components/chats/TasksFilterPopover'
 import {
   useDeleteMessageMutation,
   useGetAgentsQuery,
+  useGetChatQuery,
   useGetMessagesQuery,
   usePatchMessageMutation,
   usePostChatMessageMutation,
@@ -44,6 +42,12 @@ interface ChatRightPanelProps {
   chatId: string
   workspaceId?: string
   files: ServerFile[]
+  /** Free-text query (from the chat TopBar's search icon-popover). Empty string =
+   *  no filtering. Filters both files (by name) and tasks (by name). */
+  searchQuery: string
+  /** Status filter (from the chat TopBar's filter icon-popover). Applied to the
+   *  Tasks section only. */
+  tasksFilter: TasksFilterValues
   /** Double-click: open the file in detail view. */
   onFileClick?: (file: ServerFile) => void
   /** Single-click (or kebab "Use in chat"): stage the file for the next outgoing message. */
@@ -62,23 +66,38 @@ export function ChatRightPanel({
   chatId,
   workspaceId,
   files,
+  searchQuery,
+  tasksFilter,
   onFileClick,
   onFileStage,
   onFileRemove,
 }: ChatRightPanelProps) {
   const [removingFile, setRemovingFile] = useState<ServerFile | null>(null)
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const filteredFiles = normalizedQuery
+    ? files.filter(f =>
+        f.name.toLowerCase().includes(normalizedQuery)
+        || (f.label?.toLowerCase().includes(normalizedQuery) ?? false),
+      )
+    : files
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto pl-1.5 pr-6">
         <FilesSection
-          files={files}
+          files={filteredFiles}
           workspaceId={workspaceId}
+          hasSearch={normalizedQuery.length > 0}
           onFileClick={onFileClick}
           onFileStage={onFileStage}
           onRequestRemove={file => setRemovingFile(file)}
         />
-        <TasksSection chatId={chatId} workspaceId={workspaceId} />
+        <TasksSection
+          chatId={chatId}
+          workspaceId={workspaceId}
+          searchQuery={normalizedQuery}
+          filter={tasksFilter}
+        />
       </div>
 
       <AlertDialog
@@ -116,12 +135,14 @@ export function ChatRightPanel({
 function FilesSection({
   files,
   workspaceId,
+  hasSearch,
   onFileClick,
   onFileStage,
   onRequestRemove,
 }: {
   files: ServerFile[]
   workspaceId?: string
+  hasSearch: boolean
   onFileClick?: (file: ServerFile) => void
   onFileStage?: (file: ServerFile) => void
   onRequestRemove?: (file: ServerFile) => void
@@ -138,7 +159,9 @@ function FilesSection({
       <SectionBody collapsed={collapsed}>
         {files.length === 0 ? (
           <SectionEmptyState>
-            Files shared in this chat appear here.
+            {hasSearch
+              ? 'No files match the search.'
+              : 'Files shared in this chat appear here.'}
           </SectionEmptyState>
         ) : (
           <ul className="flex flex-col gap-0.5">
@@ -249,10 +272,22 @@ function FileRow({
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
-function TasksSection({ chatId, workspaceId }: { chatId: string; workspaceId?: string }) {
+function TasksSection({
+  chatId,
+  workspaceId,
+  searchQuery,
+  filter,
+}: {
+  chatId: string
+  workspaceId?: string
+  /** Already lower-cased + trimmed by the parent. */
+  searchQuery: string
+  filter: TasksFilterValues
+}) {
   const navigate = useNavigate()
   const hasRealId = !!chatId && chatId !== NEW_CHAT_ID
   const { data: agents = [] } = useGetAgentsQuery()
+  const { data: chat } = useGetChatQuery(chatId, { skip: !hasRealId })
   const { currentData: tasksResp, isLoading } = useGetMessagesQuery(
     { chatId, kind: ['task'] },
     { skip: !hasRealId, refetchOnMountOrArgChange: true },
@@ -264,20 +299,18 @@ function TasksSection({ chatId, workspaceId }: { chatId: string; workspaceId?: s
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null)
   const [collapsed, setCollapsed] = useState(false)
 
-  // Status filter — applied = what's actually filtering the list; pending =
-  // the in-progress popover state that becomes applied on Apply. The list of
-  // statuses is what the user wants to *see*; everything is checked by
-  // default and the user un-checks to hide.
-  const [appliedFilter, setAppliedFilter] = useState<TasksFilterValues>(ALL_TASK_STATUSES)
-  const [pendingFilter, setPendingFilter] = useState<TasksFilterValues>(ALL_TASK_STATUSES)
-  const [filterOpen, setFilterOpen] = useState(false)
-  const hasActiveFilter = isTasksFilterActive(appliedFilter)
+  const hasActiveFilter = isTasksFilterActive(filter)
+  const hasSearch = searchQuery.length > 0
 
   // New-task sheet — pre-fills `chatId` so the created task lands here.
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const allTasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents))
-  const tasks = allTasks.filter(t => appliedFilter.statuses.includes(t.status))
+  const allTasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents, chat ? [chat] : []))
+  const tasks = allTasks.filter(t => {
+    if (!filter.statuses.includes(t.status)) return false
+    if (hasSearch && !t.name.toLowerCase().includes(searchQuery)) return false
+    return true
+  })
 
   const goToTasks = () => {
     if (workspaceId) navigate(buildPath(workspaceId, 'tasks'))
@@ -333,47 +366,16 @@ function TasksSection({ chatId, workspaceId }: { chatId: string; workspaceId?: s
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
         actions={
-          <>
-            <Popover
-              open={filterOpen}
-              onOpenChange={(open) => {
-                if (!open) setPendingFilter(appliedFilter)
-                else setPendingFilter(appliedFilter)
-                setFilterOpen(open)
-              }}
-            >
-              <PopoverTrigger asChild>
-                <button
-                  title="Filter tasks"
-                  className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-colors"
-                >
-                  <ListFilter className="h-4 w-4" />
-                  <span className="sr-only">Filter tasks</span>
-                  {hasActiveFilter && (
-                    <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-500" />
-                  )}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="end" sideOffset={8} className="w-auto p-0">
-                <TasksFilterPopover
-                  values={pendingFilter}
-                  onChange={setPendingFilter}
-                  onApply={() => { setAppliedFilter(pendingFilter); setFilterOpen(false) }}
-                  onCancel={() => { setPendingFilter(appliedFilter); setFilterOpen(false) }}
-                />
-              </PopoverContent>
-            </Popover>
-            <button
-              type="button"
-              onClick={() => setSheetOpen(true)}
-              disabled={!hasRealId}
-              title="New task"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="sr-only">New task</span>
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            disabled={!hasRealId}
+            title="New task"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="sr-only">New task</span>
+          </button>
         }
       />
       <SectionBody collapsed={collapsed}>
@@ -387,21 +389,13 @@ function TasksSection({ chatId, workspaceId }: { chatId: string; workspaceId?: s
             <span>Loading tasks…</span>
           </div>
         ) : tasks.length === 0 ? (
-          hasActiveFilter ? (
-            <SectionEmptyState>
-              No tasks match the current filter.{' '}
-              <button
-                className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground hover:decoration-muted-foreground transition-colors"
-                onClick={() => { setAppliedFilter(ALL_TASK_STATUSES); setPendingFilter(ALL_TASK_STATUSES) }}
-              >
-                Clear filter
-              </button>
-            </SectionEmptyState>
-          ) : (
-            <SectionEmptyState>
-              Tasks created in this chat appear here.
-            </SectionEmptyState>
-          )
+          <SectionEmptyState>
+            {hasSearch
+              ? 'No tasks match the search.'
+              : hasActiveFilter
+                ? 'No tasks match the current filter.'
+                : 'Tasks created in this chat appear here.'}
+          </SectionEmptyState>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {tasks.map(task => (

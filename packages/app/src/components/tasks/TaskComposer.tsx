@@ -68,10 +68,10 @@ export function TaskComposer({ onSubmit, disabled }: TaskComposerProps) {
     <ChatInput
       goal="task"
       showGoalPicker={false}
-      placeholder="What do you want to achieve? Assign a task to Automattic or yourself."
+      placeholder="What do you want to achieve?"
       draftKey="tasks:new-task"
       disabled={disabled}
       onSend={handleSend}
     />
-  )
+  );
 }

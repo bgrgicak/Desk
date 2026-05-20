@@ -42,6 +42,16 @@ describe('task selectors', () => {
     }), false)).toBe(true)
   })
 
+  it('hides workspace reflection requests outside developer mode', () => {
+    const reflection = message({
+      id: 'msg_reflection_request',
+      kind: 'task',
+      content: { type: 'reflection_request', workspaceId: 'wks_test' },
+    })
+    expect(isTaskListMessageForDeveloperMode(reflection, false)).toBe(false)
+    expect(isTaskListMessageForDeveloperMode(reflection, true)).toBe(true)
+  })
+
   it('maps reflection requests as readable developer tasks', () => {
     const task = toUiTask(message({
       id: 'msg_reflection_request',
@@ -85,7 +95,6 @@ describe('task selectors', () => {
       title: 'Launch planning',
       createdAt: '2099-05-07T10:00:00.000Z',
       updatedAt: '2099-05-07T10:00:00.000Z',
-      awaitingUser: false,
       unread: false,
     }])
 
@@ -169,6 +178,128 @@ describe('task selectors', () => {
         status: 'scheduled',
       },
     ])
+  })
+
+  it('shows a parent task as active when the chat has an in-flight agent_turn', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_chat_running',
+      role: 'user',
+      kind: 'task',
+      title: 'Live chat task',
+      content: { type: 'text', text: 'Live chat task' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'pending',
+    }), [], [{
+      id: 'cht_test',
+      workspaceId: 'wks_test',
+      agentId: 'agent_test',
+      title: 'Live chat',
+      createdAt: '2099-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
+      unread: false,
+      running: true,
+    }])
+
+    expect(task.status).toBe('active')
+    expect(task.statusText).toBe('Agent working…')
+  })
+
+  it('shows a parent task as needs_input when the chat is unread (agent has spoken)', () => {
+    const task = toUiTask(message({
+      id: 'msg_parent_unread',
+      role: 'user',
+      kind: 'task',
+      title: 'Awaiting reply',
+      content: { type: 'text', text: 'Awaiting reply' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'pending',
+    }), [], [{
+      id: 'cht_test',
+      workspaceId: 'wks_test',
+      agentId: 'agent_test',
+      title: 'Awaiting reply',
+      createdAt: '2099-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
+      unread: true,
+    }])
+
+    expect(task.status).toBe('needs_input')
+    expect(task.statusText).toBe('Waiting for your reply')
+  })
+
+  it('keeps a scheduled task labeled scheduled even when the chat is unread', () => {
+    const task = toUiTask(message({
+      id: 'msg_scheduled_and_unread',
+      role: 'user',
+      kind: 'task',
+      title: 'Daily check',
+      content: { type: 'text', text: 'Daily check' },
+      executeAt: '2099-05-08T08:00:00.000Z',
+      cron: undefined,
+      state: 'pending',
+    }), [], [{
+      id: 'cht_test',
+      workspaceId: 'wks_test',
+      agentId: 'agent_test',
+      title: 'Daily check',
+      createdAt: '2099-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
+      unread: true,
+      running: false,
+    }])
+
+    expect(task.status).toBe('scheduled')
+    expect(task.statusText).toBe(`Scheduled for ${new Date('2099-05-08T08:00:00.000Z').toLocaleString()}`)
+  })
+
+  it('lets the chat in-flight signal trump the scheduled label', () => {
+    const task = toUiTask(message({
+      id: 'msg_scheduled_but_running',
+      role: 'user',
+      kind: 'task',
+      title: 'Daily check',
+      content: { type: 'text', text: 'Daily check' },
+      executeAt: '2099-05-08T08:00:00.000Z',
+      cron: undefined,
+      state: 'pending',
+    }), [], [{
+      id: 'cht_test',
+      workspaceId: 'wks_test',
+      agentId: 'agent_test',
+      title: 'Daily check',
+      createdAt: '2099-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
+      unread: false,
+      running: true,
+    }])
+
+    expect(task.status).toBe('active')
+  })
+
+  it('keeps terminal task state above live chat signals', () => {
+    const task = toUiTask(message({
+      id: 'msg_succeeded_but_chat_active',
+      role: 'user',
+      kind: 'task',
+      title: 'Closed task',
+      content: { type: 'text', text: 'Closed task' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'succeeded',
+    }), [], [{
+      id: 'cht_test',
+      workspaceId: 'wks_test',
+      agentId: 'agent_test',
+      title: 'Closed task',
+      createdAt: '2099-05-07T10:00:00.000Z',
+      updatedAt: '2099-05-07T10:00:00.000Z',
+      unread: true,
+      running: true,
+    }])
+
+    expect(task.status).toBe('complete')
   })
 
   it('shows a parent task as active while an agent-owned task_run is running', () => {

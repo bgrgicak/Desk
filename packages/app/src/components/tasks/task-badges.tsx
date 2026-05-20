@@ -1,4 +1,4 @@
-import { ChevronsUp, ArrowUp, Minus, ArrowDown, MessageCircle, MessageCircleQuestion, CircleDot, CheckCircle2, CalendarClock } from 'lucide-react'
+import { ChevronsUp, ArrowUp, Minus, ArrowDown, MessageCircleQuestion, CircleDot, CheckCircle2, CalendarClock } from 'lucide-react'
 import type { Task } from '@/data/ui-types'
 
 export type Priority = NonNullable<Task['priority']>
@@ -42,11 +42,12 @@ export function StatusBadge({ status, small }: { status: Task['status']; small?:
 }
 
 // ── Redesigned task-card pills (Figma 568-7586 / 580-9462) ────────────────────
-// The card shows up to two pills on the right: an optional "N unread"
-// pill (unread agent replies), then the single status pill — which is
-// "Needs input" *in place of* the normal state when the task is
-// awaiting the user, else blue "Open" / violet "Scheduled" / green
-// "Done". Open and Needs input are never shown together.
+// The card shows a single status pill on the right. "Needs input" used
+// to coexist with a separate "N unread" pill, but with the tightened
+// `unread` semantics they are the same signal — `chat.unread` only
+// flips on agent activity, and that's exactly what drives `needs_input`.
+// Showing both was redundant. Opening the task clears `unread`, which
+// drops the card back to "To do" on the next render.
 
 function Pill({
   icon: Icon,
@@ -65,33 +66,20 @@ function Pill({
   )
 }
 
-export function TaskPills({
-  status,
-  unreadCount = 0,
-}: {
-  status: Task['status']
-  unreadCount?: number
-}) {
-  return (
-    <span className="flex items-center gap-1">
-      {unreadCount > 0 && (
-        <Pill
-          icon={MessageCircle}
-          label={`${unreadCount} unread`}
-          className="border border-border bg-background text-foreground"
-        />
-      )}
-      {status === 'complete' ? (
-        <Pill icon={CheckCircle2} label="Done" className="bg-emerald-100 text-emerald-700" />
-      ) : status === 'needs_input' ? (
-        <Pill icon={MessageCircleQuestion} label="Needs input" className="bg-amber-100 text-amber-700" />
-      ) : status === 'scheduled' ? (
-        <Pill icon={CalendarClock} label="Scheduled" className="bg-violet-100 text-violet-700" />
-      ) : (
-        <Pill icon={CircleDot} label="Open" className="bg-blue-500 text-white" />
-      )}
-    </span>
-  )
+export function TaskPills({ status }: { status: Task['status'] }) {
+  if (status === 'complete') {
+    return <Pill icon={CheckCircle2} label="Done" className="bg-emerald-100 text-emerald-700" />
+  }
+  if (status === 'needs_input') {
+    return <Pill icon={MessageCircleQuestion} label="Needs input" className="bg-amber-100 text-amber-700" />
+  }
+  if (status === 'scheduled') {
+    return <Pill icon={CalendarClock} label="Scheduled" className="bg-violet-100 text-violet-700" />
+  }
+  if (status === 'active') {
+    return <Pill icon={CircleDot} label="Active" className="bg-blue-500 text-white" />
+  }
+  return <Pill icon={CircleDot} label="To do" className="bg-blue-500 text-white" />
 }
 
 // ── Priority badge ─────────────────────────────────────────────────────────────

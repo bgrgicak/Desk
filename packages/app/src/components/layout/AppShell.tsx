@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileText, MessageSquare } from 'lucide-react'
 import {
@@ -14,19 +15,20 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  useIsMobile,
 } from '@agent-desk/ui'
 import { TodayPanel } from '@/components/today/TodayPanel'
 import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { TopBar } from '@/components/layout/TopBar'
-import { RoomSidebar } from '@/components/layout/RoomSidebar'
+import { RoomSidebar, type PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
 import { RoomAvatarStack } from '@/components/layout/RoomAvatarStack'
 import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
 import { useSplitResize } from '@/components/shared/splitPane'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { MyAccountModal } from '@/components/account/MyAccountModal'
-import type { Chat, Artifact, InboxItem, ContextItem } from '@/data/ui-types'
+import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
 import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
@@ -107,6 +109,56 @@ function truncateFileName(name: string, max = 40): string {
   return base.length > max ? `${base.slice(0, max)}…${ext}` : `${base}${ext}`
 }
 
+/**
+ * The room sidebar's outer slot. Lives inside `<SidebarProvider>` so it
+ * can read mobile state and the toggle's open/closed state.
+ *
+ * Desktop (≥768px): the slot animates its width 0 ↔ 290 px, slotting the
+ * per-room sidebar into the layout as a docked flex sibling. The chat
+ * column reflows to fill the remaining width.
+ *
+ * Mobile (<768px): the slot collapses to 0 px so the chat column gets
+ * the full viewport. The sidebar's inner `<Sidebar>` (shadcn primitive)
+ * is `position: absolute` + `data-collapsible=offcanvas`, so it slides
+ * in from the left only when the user taps the top-bar hamburger. The
+ * primitive renders its own backdrop scrim — see
+ * `packages/ui/src/components/sidebar.tsx`.
+ */
+function RoomSidebarSlot({
+  show,
+  children,
+}: {
+  show: boolean
+  children: ReactNode
+}) {
+  const isMobile = useIsMobile()
+  return (
+    <AnimatePresence initial={false}>
+      {show && (
+        <motion.div
+          key="room-sidebar"
+          initial={{ width: 0, opacity: 0, x: -24 }}
+          animate={{
+            width: isMobile ? 0 : 290,
+            opacity: 1,
+            x: 0,
+          }}
+          exit={{ width: 0, opacity: 0, x: -24 }}
+          transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+          // Full-height flex container: the shadcn Sidebar inside
+          // relies on `md:self-stretch` + an inner `flex-1` scroll
+          // area, which collapse to 0 height without a flex/height
+          // context. `relative` so the absolute-positioned mobile
+          // drawer anchors here.
+          className="relative flex h-full min-h-0 shrink-0"
+        >
+          {children}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
+
 interface AppShellProps {
   children: ReactNode
   activeView: RouteView
@@ -130,10 +182,11 @@ interface AppShellProps {
   onTodaySheetClose?: () => void
   onSignOut?: () => void
   onChatWithAgent?: (agentId: string) => void
-  pinnedItems?: ContextItem[]
+  pinnedEntries?: PinnedSidebarEntry[]
   isPinnedLoading?: boolean
-  onPinItem?: (itemId: string) => void
-  onUnpinItem?: (item: ContextItem) => void
+  onPinItem?: (path: string) => void
+  onPinChat?: (chatId: string) => void
+  onUnpinEntry?: (entry: PinnedSidebarEntry) => void
   selectedItemId?: string | null
   /** Display name of the Library file currently open (when
    *  `activeView === 'context'` and a file detail is showing). Used
@@ -159,10 +212,11 @@ export function AppShell({
   onTodaySheetClose,
   onSignOut,
   onChatWithAgent,
-  pinnedItems = [],
+  pinnedEntries = [],
   isPinnedLoading = false,
   onPinItem,
-  onUnpinItem,
+  onPinChat,
+  onUnpinEntry,
   selectedItemId,
   libraryFileName,
 }: AppShellProps) {
@@ -215,9 +269,9 @@ export function AppShell({
     e.preventDefault()
     insetDropCounter.current = 0
     setIsInsetDropOver(false)
-    const itemId = e.dataTransfer.getData(DRAG_TYPE_PINNED_ITEM)
-    const item = pinnedItems.find(i => i.id === itemId)
-    if (item) onUnpinItem?.(item)
+    const entryId = e.dataTransfer.getData(DRAG_TYPE_PINNED_ITEM)
+    const entry = pinnedEntries.find(e => e.id === entryId)
+    if (entry) onUnpinEntry?.(entry)
   }
 
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
@@ -235,9 +289,12 @@ export function AppShell({
     displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]
 
   // Trailing breadcrumb crumbs after the workspace name. Library gets
-  // `/ Library` (a link back to the list when a file is open) and, if
-  // a file is open, a further `/ {truncated file name}` leaf. Other
-  // routes get nothing (workspace-only breadcrumb).
+  // `/ Library`, then one crumb per folder segment when the user is
+  // inside a folder (`?folder=`) or viewing a file (`?item=` whose
+  // parent path provides the segments), and finally the truncated
+  // file name as the leaf when a file is open. Other routes get
+  // nothing (workspace-only breadcrumb).
+  const [searchParams] = useSearchParams()
   const trailingCrumbs: TopBarCrumb[] = (() => {
     // A chat can be opened from the Library list without the route's
     // `view` segment changing (chat nav only sets `?chat=`), so
@@ -259,8 +316,28 @@ export function AppShell({
         to: activeWorkspaceId ? buildPath(activeWorkspaceId, activeView) : undefined,
       },
     ]
-    if (activeView === 'context' && isDetailOpen && libraryFileName) {
-      crumbs.push({ label: truncateFileName(libraryFileName) })
+    if (activeView === 'context') {
+      // Folder context: when a file is open, derive it from the
+      // item's path (parent of `?item=`); otherwise read `?folder=`
+      // directly. Both are workspace-relative paths.
+      const itemPath = searchParams.get('item')
+      const folderParam = searchParams.get('folder')
+      const folderPath = itemPath
+        ? (itemPath.includes('/') ? itemPath.slice(0, itemPath.lastIndexOf('/')) : '')
+        : (folderParam ?? '')
+      const segments = folderPath.split('/').filter(Boolean)
+      segments.forEach((name, i) => {
+        const cumPath = segments.slice(0, i + 1).join('/')
+        crumbs.push({
+          label: name,
+          to: activeWorkspaceId
+            ? buildPath(activeWorkspaceId, 'context', { folder: cumPath })
+            : undefined,
+        })
+      })
+      if (isDetailOpen && libraryFileName) {
+        crumbs.push({ label: truncateFileName(libraryFileName) })
+      }
     }
     return crumbs
   })()
@@ -275,16 +352,21 @@ export function AppShell({
   const previewPanelWidth = `${Math.round((1 - previewSplitRatio) * 100)}vw`
 
   // The per-room sidebar shows on the Library list, Tasks, and the
-  // chat list. It collapses in the two focused two-pane modes:
+  // chat list. On desktop it collapses in the two focused two-pane
+  // modes:
   //  - chat with the preview open (chat | preview), and
   //  - a Library file open (file | chat) — ContextDetail, which the
   //    Figma shows with no nav rail.
-  // In both, the mobile TopBar sidebar-trigger is hidden too.
+  // Mobile has no docked sidebar — it lives as an off-canvas overlay
+  // summoned by the TopBar SidebarTrigger — so the sidebar (and its
+  // trigger) must stay mounted there regardless of view, or the user
+  // has no menu button to navigate elsewhere from a library item.
   // Tasks keeps the nav rail visible at all times (it's a list view,
   // not a focused two-pane detail like ContextDetail) — only the
   // small-viewport gating below collapses it on narrow screens.
   const isLibraryDetail = activeView === 'context' && isDetailOpen
-  const showSidebar = !isPreviewOpen && !isLibraryDetail
+  const isMobile = useIsMobile()
+  const showSidebar = isMobile || (!isPreviewOpen && !isLibraryDetail)
 
   // Reactive small-viewport flag (matches the desktop / sidebar
   // breakpoint used elsewhere). Below this width the preview panel
@@ -334,7 +416,11 @@ export function AppShell({
           than sliding it across the viewport. Fallbacks here cover
           views that don't publish insets. */}
       <div
-        className="pointer-events-none fixed top-0 z-30 py-4"
+        // Hidden on mobile: the stacked user+workspace avatars overlap
+        // the top-bar breadcrumb at narrow widths and don't add
+        // information there — the workspace name is in the breadcrumb
+        // and the user avatar lives in the sidebar account menu.
+        className="pointer-events-none fixed top-0 z-30 py-4 hidden md:block"
         style={{
           left: `var(--content-area-left-offset, ${
             showSidebar && !isSmallViewport ? '290px' : '0px'
@@ -426,51 +512,29 @@ export function AppShell({
 
           {/* ── Sidebar + content (no card chrome — floats on the blob) ── */}
           <div className="flex flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
-            {/* The per-room sidebar collapses away when the chat
-                enters preview-focused mode or the user opens a
-                Library file (ContextDetail). Rather than vanishing,
-                it animates out: width collapses to 0 while it slides
-                /fades left, and reverses on the way back. Kept
-                mounted through the exit via `AnimatePresence`. */}
-            <AnimatePresence initial={false}>
-              {showSidebar && (
-                <motion.div
-                  key="room-sidebar"
-                  initial={{ width: 0, opacity: 0, x: -24 }}
-                  animate={{ width: 290, opacity: 1, x: 0 }}
-                  exit={{ width: 0, opacity: 0, x: -24 }}
-                  transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-                  // Must be a full-height flex container: the shadcn
-                  // Sidebar inside relies on `md:self-stretch` + an
-                  // inner `flex-1` scroll area, which collapse to 0
-                  // height without a flex/height context here (that's
-                  // what hid the chat list and floated the profile
-                  // row up under the header).
-                  className="flex h-full min-h-0 shrink-0 overflow-hidden"
-                >
-                  <RoomSidebar
-                    activeView={activeView}
-                    activeWorkspaceId={activeWorkspaceId}
-                    selectedChatId={selectedChatId}
-                    selectedItemId={selectedItemId}
-                    isDetailOpen={isDetailOpen}
-                    chats={chats}
-                    isChatsLoading={isChatsLoading}
-                    pinnedItems={pinnedItems}
-                    isPinnedLoading={isPinnedLoading}
-                    onDeleteChat={onDeleteChat}
-                    onPinItem={onPinItem}
-                    onUnpinItem={onUnpinItem}
-                    onOpenSettings={() => setSettingsOpen(true)}
-                    username={me?.username}
-                    email={me?.email}
-                    userAvatarUrl={userAvatarUrl}
-                    onOpenMyAccount={() => setMyAccountOpen(true)}
-                    onSignOut={onSignOut}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <RoomSidebarSlot show={showSidebar}>
+              <RoomSidebar
+                activeView={activeView}
+                activeWorkspaceId={activeWorkspaceId}
+                selectedChatId={selectedChatId}
+                selectedItemId={selectedItemId}
+                isDetailOpen={isDetailOpen}
+                chats={chats}
+                isChatsLoading={isChatsLoading}
+                pinnedEntries={pinnedEntries}
+                isPinnedLoading={isPinnedLoading}
+                onDeleteChat={onDeleteChat}
+                onPinItem={onPinItem}
+                onPinChat={onPinChat}
+                onUnpinEntry={onUnpinEntry}
+                onOpenSettings={() => setSettingsOpen(true)}
+                username={me?.username}
+                email={me?.email}
+                userAvatarUrl={userAvatarUrl}
+                onOpenMyAccount={() => setMyAccountOpen(true)}
+                onSignOut={onSignOut}
+              />
+            </RoomSidebarSlot>
 
             <SidebarInset
               className="min-h-0 max-w-full overflow-hidden bg-transparent"

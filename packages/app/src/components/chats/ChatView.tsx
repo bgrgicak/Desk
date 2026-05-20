@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
 import { ChatRightPanel } from '@/components/chats/ChatRightPanel'
+import { ALL_TASK_STATUSES, type TasksFilterValues } from '@/components/chats/TasksFilterPopover'
 import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
@@ -30,7 +32,7 @@ import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
-import { DESKTOP_SIDEBAR_BREAKPOINT, chatRightPanelClassName, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
+import { DESKTOP_SIDEBAR_BREAKPOINT, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
 
 const STARTER_CHIPS = [
   'Draft a project brief',
@@ -146,6 +148,13 @@ export function ChatView({
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
 
+  // Search + filter for the right panel (Files + Tasks). Owned here so the
+  // chat TopBar's icon-popovers and the panel's list views read from the
+  // same source — matches the TasksPage pattern. Scoped per-chat: switching
+  // chats remounts ChatView, which resets both.
+  const [panelSearchQuery, setPanelSearchQuery] = useState('')
+  const [tasksFilter, setTasksFilter] = useState<TasksFilterValues>(ALL_TASK_STATUSES)
+
   const setPanelOpenFromUser = useCallback((open: boolean) => {
     setPanelOpen(open)
   }, [setPanelOpen])
@@ -179,14 +188,15 @@ export function ChatView({
 
   const dispatch = useAppDispatch()
 
-  // Close the preview panel whenever the user switches chats — keeps
-  // the panel scoped to the chat the artifact was opened from. The
-  // ChatView is keyed by `chat.id` upstream, so a new chat id either
-  // remounts the view (where the slice still has the old artifact and
-  // this effect closes it) or this effect runs on first render with a
-  // null `previewArtifact` and is a no-op.
+  // The preview panel is scoped to the chat the artifact was opened
+  // from: close it on chat switch AND on unmount, so leaving the chat
+  // surface entirely (e.g. to a library item) doesn't leave
+  // `isPreviewOpen` stuck true in the slice — which would keep the
+  // AppShell sidebar hidden after the user navigates back via the
+  // breadcrumb.
   useEffect(() => {
     dispatch(closeArtifact())
+    return () => { dispatch(closeArtifact()) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.id])
   const store = useAppStore()
@@ -399,6 +409,11 @@ export function ChatView({
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
           showPanelToggle={!isPreviewOpen}
+          showPanelControls={!isPreviewOpen && panelOpen}
+          searchQuery={panelSearchQuery}
+          onSearchChange={setPanelSearchQuery}
+          tasksFilter={tasksFilter}
+          onTasksFilterChange={setTasksFilter}
         />
 
         {/* Messages + Input via shared ChatThread */}
@@ -572,37 +587,68 @@ export function ChatView({
           own right column — the `PreviewPanel` mounts at AppShell
           level so it sits side-by-side with (not under) the top bar.
           Otherwise the regular ChatRightPanel (Files + Tasks) mounts
-          here at its standard 320 px width. */}
-      {!isPreviewOpen && (
-        <div className={chatRightPanelClassName(panelOpen, isSmallViewport)}>
-          {panelOpen && (
-            <ChatRightPanel
-              chatId={chat.id}
-              workspaceId={chat.workspaceId}
-              files={visibleChatFiles}
-              onFileClick={(file) => {
-                if (isAppArtifactFile(file)) {
-                  onAttachmentClick?.({
-                    path: `${file.path}/desk.app.json`,
-                    name: file.label ?? file.name,
-                    mime: 'application/json',
-                    size: file.size,
-                  })
-                  return
-                }
+          here. Desktop docks it as a 290 px flex sibling that animates
+          its width; small screens slide it in from the right as an
+          overlay with a solid background + shadow so the chat input
+          underneath stays covered. Mirrors the file-chat overlay in
+          `ContextDetail`. */}
+      {!isPreviewOpen && (() => {
+        const panel = (
+          <ChatRightPanel
+            chatId={chat.id}
+            workspaceId={chat.workspaceId}
+            files={visibleChatFiles}
+            searchQuery={panelSearchQuery}
+            tasksFilter={tasksFilter}
+            onFileClick={(file) => {
+              if (isAppArtifactFile(file)) {
                 onAttachmentClick?.({
-                  path: file.path,
+                  path: `${file.path}/desk.app.json`,
                   name: file.label ?? file.name,
-                  mime: file.mime,
+                  mime: 'application/json',
                   size: file.size,
                 })
-              }}
-              onFileStage={addStagedChatFile}
-              onFileRemove={hasRealChatId ? removeChatFile : undefined}
-            />
-          )}
-        </div>
-      )}
+                return
+              }
+              onAttachmentClick?.({
+                path: file.path,
+                name: file.label ?? file.name,
+                mime: file.mime,
+                size: file.size,
+              })
+            }}
+            onFileStage={addStagedChatFile}
+            onFileRemove={hasRealChatId ? removeChatFile : undefined}
+          />
+        )
+        return (
+          <AnimatePresence initial={false}>
+            {panelOpen && (isSmallViewport ? (
+              <motion.div
+                key="chat-right-overlay"
+                initial={{ opacity: 0, x: '100%' }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: '100%' }}
+                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                className="absolute inset-y-0 right-0 z-40 flex w-full max-w-[290px] flex-col bg-background shadow-xl"
+              >
+                {panel}
+              </motion.div>
+            ) : (
+              <motion.div
+                key="chat-right"
+                initial={{ width: 0 }}
+                animate={{ width: 290 }}
+                exit={{ width: 0 }}
+                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                className="shrink-0 flex flex-col overflow-hidden"
+              >
+                {panel}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        )
+      })()}
 
     </div>
   )

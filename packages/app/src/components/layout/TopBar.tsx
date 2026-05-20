@@ -93,7 +93,14 @@ export function TopBar({ workspace, trailing, className, hideBreadcrumb = false,
         <div className="h-8 w-8 shrink-0 md:hidden">
           {!hideSidebarTrigger && <SidebarTrigger className="h-8 w-8 rounded-md" />}
         </div>
-        <nav className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Reserve room for the right-side action slots (absolute,
+            anchored at `right-6`) so the trailing crumb doesn't
+            slide under the Filter/Search icons on narrow viewports.
+            Mobile shrinks `gap-3 → gap-2` to claw back ~8 px per
+            separator — three crumbs (`Home / workspace / view-label`)
+            at the old gap left no room between "Tasks" and the
+            filter icon on a 375 px iPhone-SE-class viewport. */}
+        <nav className="flex min-w-0 flex-1 items-center gap-2 pr-20 sm:gap-3">
           {!hideBreadcrumb && (
             <>
               <Link
@@ -104,34 +111,59 @@ export function TopBar({ workspace, trailing, className, hideBreadcrumb = false,
                 <Home className="h-5 w-5" />
               </Link>
               {workspace && (
-                <>
-                  <span aria-hidden className="text-lg font-medium leading-6 text-muted-foreground">/</span>
+                // The workspace crumb hides on mobile when a trailing
+                // crumb is present — the page name (chat title /
+                // Library / Tasks) is the more useful context, and
+                // packing both into a 375 px viewport reduced "Desk
+                // dev" to an ugly "D…". The workspace's accent colour
+                // still shows on the trailing crumb's separator so
+                // the room identity isn't lost entirely. The desktop
+                // breadcrumb stays unchanged via `sm:contents`.
+                <span className={
+                  (trailing && trailing.length > 0)
+                    ? 'hidden sm:contents'
+                    : 'contents'
+                }>
+                  <span aria-hidden className="text-base font-medium leading-6 text-muted-foreground sm:text-lg">/</span>
                   <Link
                     to={buildPath(workspace.id, 'tasks')}
-                    className="truncate text-xl font-semibold leading-6 rounded-sm transition-opacity hover:opacity-80"
+                    className="truncate text-base font-semibold leading-6 rounded-sm transition-opacity hover:opacity-80 sm:text-xl"
                     style={accent ? { color: accent } : undefined}
                     title={`Go to ${workspace.name}`}
                   >
                     {workspace.name}
                   </Link>
-                </>
+                </span>
               )}
               {workspace && (trailing ?? []).map((crumb, i, arr) => {
                 const isLast = i === arr.length - 1
+                // Intermediate crumbs (those with a `to` link, not the
+                // leaf) are hidden on mobile — the leaf is what the
+                // user cares about, and packing `/ Library / file.md`
+                // into 375 px squeezed the file name down to "CL…".
+                // Desktop keeps the full trail via `sm:flex`.
+                const isIntermediate = !isLast
                 return (
-                  <span key={i} className="flex min-w-0 items-center gap-3">
-                    <span aria-hidden className="text-lg font-medium leading-6 text-muted-foreground">/</span>
+                  <span
+                    key={i}
+                    className={
+                      isIntermediate
+                        ? 'hidden min-w-0 items-center gap-2 sm:flex sm:gap-3'
+                        : 'flex min-w-0 items-center gap-2 sm:gap-3'
+                    }
+                  >
+                    <span aria-hidden className="text-base font-medium leading-6 text-muted-foreground sm:text-lg">/</span>
                     {crumb.to && !isLast ? (
                       <Link
                         to={crumb.to}
-                        className="block truncate text-xl font-semibold leading-6 text-foreground rounded-sm transition-opacity hover:opacity-80"
+                        className="block truncate text-base font-semibold leading-6 text-foreground rounded-sm transition-opacity hover:opacity-80 sm:text-xl"
                         title={crumb.label}
                       >
                         {crumb.label}
                       </Link>
                     ) : (
                       <span
-                        className="block truncate text-xl font-semibold leading-6 text-foreground"
+                        className="block truncate text-base font-semibold leading-6 text-foreground sm:text-xl"
                         title={crumb.label}
                       >
                         {crumb.label}
@@ -156,20 +188,26 @@ export function TopBar({ workspace, trailing, className, hideBreadcrumb = false,
             its right edge aligned to the content pane via
             `--topbar-content-actions-right` (a view sets it to the
             chat-pane width so these sit at the file/chat seam;
-            default = the 24 px gutter). */}
+            default = the 24 px gutter). `gap-2` baseline so adjacent
+            icon buttons aren't visually fused on phones — the
+            previous `gap-1.5` left only 6 px between Filter and
+            Search at 375 px. */}
         <div
           ref={setContentActionsEl}
-          className="absolute inset-y-0 flex items-center gap-1.5 sm:gap-2"
+          className="absolute inset-y-0 flex items-center gap-2"
           style={{ right: 'var(--topbar-content-actions-right, 1.5rem)' }}
         />
         {/* Far-right actions slot — pinned to the true far right
             (`right-6`), over the chat pane. Holds the chat-list /
             chat-detail controls and (on the file detail) only the
             collapse X. Both slots are absolute → out of flow → the
-            breadcrumb never reflows between views. */}
+            breadcrumb never reflows between views. `gap-2` matches
+            the content-actions slot so adjacent icon buttons in this
+            slot (e.g. RecentRuns clock + close-X on a docked task
+            chat) aren't visually fused either. */}
         <div
           ref={setActionsEl}
-          className="absolute inset-y-0 right-6 flex items-center gap-1"
+          className="absolute inset-y-0 right-6 flex items-center gap-2"
         />
       </div>
       {children}

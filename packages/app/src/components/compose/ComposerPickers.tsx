@@ -11,6 +11,11 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+  useIsMobile,
 } from '@agent-desk/ui'
 import type { GoalKey } from '@agent-desk/shared'
 import { useGetLibraryQuery } from '@/store/api'
@@ -212,6 +217,12 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
     },
   }), [])
 
+  // Phone-class viewports turn the Schedule popover into a bottom
+  // sheet — the calendar + time row otherwise extend past the
+  // viewport edge (or get pinched against the composer's top edge)
+  // on iPhone SE-class screens.
+  const isMobile = useIsMobile()
+
   // ── Tools popover ────────────────────────────────────────────────────────
   const [toolsOpen, setToolsOpen] = useState(false)
   const activeGoal: Goal = GOALS.find(g => g.key === goalKey) ?? NO_GOAL
@@ -319,51 +330,119 @@ export const ComposerPickers = forwardRef<ComposerPickersHandle, ComposerPickers
 
       {/* Schedule — only relevant when the user has picked the "Task"
           tool. Other goals can't be scheduled, so we hide the button
-          entirely instead of leaving an inert control next to Tools. */}
+          entirely instead of leaving an inert control next to Tools.
+          On mobile (narrow viewports) the picker renders as a bottom
+          sheet — the popover variant gets pinched against the
+          composer's top edge and clips the time row. */}
       {onExecuteAtChange && goalKey === 'task' && (
-        <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={cn(toolbarBtnClass, executeAt && 'text-foreground')}
-              title="Schedule"
+        isMobile ? (
+          <Sheet open={scheduleOpen} onOpenChange={setScheduleOpen}>
+            <SheetTrigger asChild>
+              <button
+                type="button"
+                className={cn(toolbarBtnClass, executeAt && 'text-foreground')}
+                title="Schedule"
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
+                <span className="truncate">
+                  {scheduledDate ? format(scheduledDate, 'MMM d, h:mm a') : 'Schedule'}
+                </span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </button>
+            </SheetTrigger>
+            <SheetContent
+              side="bottom"
+              showCloseButton={false}
+              // Cap the sheet height so it never gobbles the whole
+              // screen — calendar (~280 px) + time row (~48 px) +
+              // padding fits well under 60 % of a 667 px viewport.
+              className="max-h-[80dvh] gap-0 overflow-y-auto rounded-t-xl p-3"
             >
-              <CalendarClock className="h-3.5 w-3.5" />
-              <span className="truncate">
-                {scheduledDate ? format(scheduledDate, 'MMM d, h:mm a') : 'Schedule'}
-              </span>
-              <ChevronDown className="h-3 w-3 opacity-60" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="start" sideOffset={6} className="w-auto p-2">
-            <Calendar
-              mode="single"
-              selected={scheduledDate ?? undefined}
-              onSelect={applyScheduleDate}
-              disabled={d => d < new Date(new Date().setHours(0, 0, 0, 0))}
-            />
-            <div className="flex items-center justify-between gap-2 px-1 pt-2 border-t border-foreground/[0.06]">
-              <label className="text-xs text-muted-foreground flex items-center gap-2">
-                <span>Time</span>
-                <input
-                  type="time"
-                  value={pendingTime}
-                  onChange={e => setPendingTime(e.target.value)}
-                  className="bg-transparent border border-foreground/10 rounded px-2 py-1 text-xs text-foreground outline-none focus:border-foreground/30"
-                />
-              </label>
-              {scheduledDate && (
-                <button
-                  type="button"
-                  onClick={clearSchedule}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          </PopoverContent>
-        </Popover>
+              {/* Radix Dialog requires a title for accessible
+                  announcement; visually hidden since the calendar UI
+                  is self-explanatory. */}
+              <SheetTitle className="sr-only">Schedule task</SheetTitle>
+              <Calendar
+                mode="single"
+                selected={scheduledDate ?? undefined}
+                onSelect={applyScheduleDate}
+                disabled={d => d < new Date(new Date().setHours(0, 0, 0, 0))}
+                className="mx-auto"
+              />
+              <div className="mt-3 flex items-center justify-between gap-2 border-t border-foreground/[0.06] px-1 pt-3">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Time</span>
+                  <input
+                    type="time"
+                    value={pendingTime}
+                    onChange={e => setPendingTime(e.target.value)}
+                    className="rounded border border-foreground/10 bg-transparent px-2 py-1 text-xs text-foreground outline-none focus:border-foreground/30"
+                  />
+                </label>
+                {scheduledDate && (
+                  <button
+                    type="button"
+                    onClick={clearSchedule}
+                    className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </SheetContent>
+          </Sheet>
+        ) : (
+          <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(toolbarBtnClass, executeAt && 'text-foreground')}
+                title="Schedule"
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
+                <span className="truncate">
+                  {scheduledDate ? format(scheduledDate, 'MMM d, h:mm a') : 'Schedule'}
+                </span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              sideOffset={6}
+              // Cap to the safe area so the calendar doesn't extend up
+              // behind the top bar on short / mobile viewports — the
+              // popover scrolls internally past that height.
+              className="w-auto max-h-[calc(100dvh-5rem)] overflow-y-auto p-2"
+            >
+              <Calendar
+                mode="single"
+                selected={scheduledDate ?? undefined}
+                onSelect={applyScheduleDate}
+                disabled={d => d < new Date(new Date().setHours(0, 0, 0, 0))}
+              />
+              <div className="flex items-center justify-between gap-2 px-1 pt-2 border-t border-foreground/[0.06]">
+                <label className="text-xs text-muted-foreground flex items-center gap-2">
+                  <span>Time</span>
+                  <input
+                    type="time"
+                    value={pendingTime}
+                    onChange={e => setPendingTime(e.target.value)}
+                    className="bg-transparent border border-foreground/10 rounded px-2 py-1 text-xs text-foreground outline-none focus:border-foreground/30"
+                  />
+                </label>
+                {scheduledDate && (
+                  <button
+                    type="button"
+                    onClick={clearSchedule}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )
       )}
 
       {/* Files */}
