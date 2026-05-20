@@ -56,7 +56,7 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages" && method === "POST") {
     const tokenHeader = req.headers["x-desk-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { session, agent } = await authenticateSandboxToken(pool, token);
+    const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
     if (!body.chatId || typeof body.chatId !== "string") {
       throw new ValidationError("Missing chatId");
