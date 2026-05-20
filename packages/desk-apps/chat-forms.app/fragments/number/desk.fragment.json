@@ -1,0 +1,19 @@
+{
+  "name": "number",
+  "description": "Renders a question with a numeric input. Agents attach with --param question=\"...\" to ask the user for a number via UI.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "min": {
+      "type": "number",
+      "description": "Minimum allowed value (HTML5 input min)."
+    },
+    "max": {
+      "type": "number",
+      "description": "Maximum allowed value (HTML5 input max)."
+    }
+  }
+}

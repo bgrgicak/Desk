@@ -103,9 +103,13 @@ export function AppPreview(props: AppPreviewProps) {
   const [retryToken, setRetryToken] = useState(0)
   const [frameHeight, setFrameHeight] = useState(initialHeight)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const getMaxFrameHeight = () => variant === 'inline'
-    ? Math.min(Math.floor(window.innerHeight * 0.6), 500)
-    : Math.floor(window.innerHeight * 0.85)
+  // Cap frame height at 85% of the viewport for both variants. The content
+  // inside an inline fragment drives its own height via the resize bridge;
+  // we only need a ceiling so a runaway fragment can't push the chat
+  // composer off-screen. The previous 500px hard cap was too tight for
+  // multi-step wizards and produced an inner scrollbar even when the
+  // fragment's natural height would have fit fine.
+  const getMaxFrameHeight = () => Math.floor(window.innerHeight * 0.85)
 
   useEffect(() => {
     let cancelled = false

@@ -1,9 +1,9 @@
 {
-  "name": "@agent-desk/app-scaffold",
-  "version": "0.0.1",
+  "name": "@agent-desk/chat-forms-app",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Template for an agent-authored Desk app. Cloned by `desk-agent app create` into a chat artifact directory.",
+  "description": "Built-in chat-forms Desk app. Fragments for asking the user structured questions via UI (yes-no, single-choice, multi-select, short-text, long-text, number, date, rating, multi-step wizard).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

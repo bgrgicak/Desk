@@ -392,6 +392,23 @@ function applyScriptNonce(html: string, nonce: string): string {
   );
 }
 
+/**
+ * Body of the iframe-side bridge. Exposed for unit tests; the real script
+ * tag is built by {@link injectBridge} with a CSP nonce and an inlined
+ * payload. The body intentionally does NOT include the surrounding IIFE —
+ * `injectBridge` wraps it.
+ *
+ * Height reporting: we measure both `documentElement.scrollHeight` and
+ * `body.scrollHeight` and take the max. `body.scrollHeight` alone
+ * understates when the body's child uses `min-height` + flex centering and
+ * the natural content is taller than the min — the documentElement value
+ * tracks the real layout box. We observe both elements so subsequent
+ * mutations (wizard step changes, form errors) re-fire `v()`, and we
+ * re-measure once `document.fonts.ready` resolves so font-induced layout
+ * shifts don't leave the iframe one frame short.
+ */
+export const BRIDGE_SCRIPT_BODY = `const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const d=document.documentElement;const b=document.body;const h=Math.ceil(Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0,d?d.getBoundingClientRect().height:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};`;
+
 function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   const payload = JSON.stringify({
     app: { name: ctx.appName },
@@ -408,7 +425,7 @@ function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   // sandboxed iframes without `allow-same-origin` have an opaque `null`
   // origin, so the parent authenticates messages by exact contentWindow
   // identity instead of by Origin.
-  const script = `<script nonce="${nonce}">(()=>{const c=${payload};const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?.scrollHeight||0,b?.offsetHeight||0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const b=document.body;const ro=new ResizeObserver(v);if(b)ro.observe(b);window.addEventListener("load",v,{once:true})}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};})();</script>`;
+  const script = `<script nonce="${nonce}">(()=>{const c=${payload};${BRIDGE_SCRIPT_BODY}})();</script>`;
   if (html.includes("</head>")) {
     return html.replace("</head>", `${script}</head>`);
   }
@@ -667,9 +684,15 @@ export async function handleStaticAppRequest(
   // served HTML resolve correctly).
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost").pathname;
-    const trailingSlash = incoming.endsWith("/") ? "/" : "";
-    const cleanPath = `/${segments.join("/")}${trailingSlash}`;
+    const incoming = new URL(req.url ?? "/", "http://localhost");
+    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
+    // Strip only the bearer token; preserve any other query params the
+    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
+    // Dropping the full search broke fragments that depend on URL params.
+    const cleanSearch = new URLSearchParams(incoming.search);
+    cleanSearch.delete("t");
+    const cleanQs = cleanSearch.toString();
+    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
     res.writeHead(302, { Location: cleanPath });
     res.end();
     return true;
@@ -891,9 +914,15 @@ export async function handleStaticGlobalAppRequest(
 
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost").pathname;
-    const trailingSlash = incoming.endsWith("/") ? "/" : "";
-    const cleanPath = `/${segments.join("/")}${trailingSlash}`;
+    const incoming = new URL(req.url ?? "/", "http://localhost");
+    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
+    // Strip only the bearer token; preserve any other query params the
+    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
+    // Dropping the full search broke fragments that depend on URL params.
+    const cleanSearch = new URLSearchParams(incoming.search);
+    cleanSearch.delete("t");
+    const cleanQs = cleanSearch.toString();
+    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
     res.writeHead(302, { Location: cleanPath });
     res.end();
     return true;
@@ -1203,9 +1232,15 @@ export async function handleStaticLibraryAppRequest(
 
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost").pathname;
-    const trailingSlash = incoming.endsWith("/") ? "/" : "";
-    const cleanPath = `/${segments.join("/")}${trailingSlash}`;
+    const incoming = new URL(req.url ?? "/", "http://localhost");
+    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
+    // Strip only the bearer token; preserve any other query params the
+    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
+    // Dropping the full search broke fragments that depend on URL params.
+    const cleanSearch = new URLSearchParams(incoming.search);
+    cleanSearch.delete("t");
+    const cleanQs = cleanSearch.toString();
+    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
     res.writeHead(302, { Location: cleanPath });
     res.end();
     return true;

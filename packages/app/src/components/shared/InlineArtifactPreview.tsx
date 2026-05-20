@@ -181,8 +181,18 @@ export function InlineArtifactPreview({ workspaceId, chatId, path, name, mime, p
   // Fragments are sub-routes of an app meant to inline into the conversation
   // as if they were native message content — no chrome, no header, no
   // separate max-width. Skip the shell entirely.
+  //
+  // The `w-full min-w-0` wrapper is load-bearing: callers (ArtifactRefRow,
+  // AttachmentCard) drop this component into a `flex-col items-start` parent
+  // without giving it an explicit width. Without `w-full` here the iframe
+  // collapses to its CSS intrinsic 300px and the fragment renders as a tiny
+  // centered card instead of filling the message column.
   if (state.status === 'ready' && state.kind === 'app' && appPreviewRef?.fragment) {
-    return <AppPreview {...appPreviewRef} />
+    return (
+      <div className="w-full min-w-0">
+        <AppPreview {...appPreviewRef} />
+      </div>
+    )
   }
 
   if (state.status === 'loading') {

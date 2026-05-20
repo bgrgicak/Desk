@@ -53,6 +53,12 @@ export function MessageBubble({
   const hasAttachments = !!message.attachments && message.attachments.length > 0
   const showThread = isRegularMessageVisible(message) && !!workspaceId
     && message.threadChatId !== currentChatId
+    // ArtifactRef messages render as inline previews (chat-forms fragments,
+    // app embeds). The thread-button sibling forces the preview into a
+    // narrower flex column, which is what kept fragment iframes from
+    // reaching the full chat-column width. Threading still works through
+    // the surrounding turn — just not from the artifactRef row itself.
+    && message.content.type !== 'artifactRef'
 
   if (isUser) {
     if (message.kind === 'task_run' && message.content.type === 'text') {

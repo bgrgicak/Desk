@@ -154,7 +154,10 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   const inlinePreview = page.getByTestId('artifact-inline-preview').first()
   await expect(inlinePreview).toBeVisible({ timeout: 10_000 })
   const previewBox = await inlinePreview.boundingBox()
-  expect(previewBox?.height ?? Infinity).toBeLessThanOrEqual(700)
+  // Inline previews are capped at 0.85 * viewport height plus the inline
+  // shell chrome (~40px). Allow some slop for the shell + sub-pixel layout.
+  const PREVIEW_HEIGHT_CEILING = Math.floor(844 * 0.85) + 80
+  expect(previewBox?.height ?? Infinity).toBeLessThanOrEqual(PREVIEW_HEIGHT_CEILING)
   expect(previewBox?.x ?? -Infinity).toBeGreaterThanOrEqual(0)
   expect((previewBox?.x ?? 0) + (previewBox?.width ?? Infinity)).toBeLessThanOrEqual(390)
 
@@ -174,7 +177,7 @@ test('chat artifact refs render bounded HTML previews and fallback when unsuppor
   await page.waitForTimeout(250)
   const growingBoxAfter = await growingPreview.boundingBox()
   expect(growingBoxAfter?.height ?? 0).toBeGreaterThan((growingBoxBefore?.height ?? 0) + 200)
-  expect(growingBoxAfter?.height ?? Infinity).toBeLessThanOrEqual(700)
+  expect(growingBoxAfter?.height ?? Infinity).toBeLessThanOrEqual(PREVIEW_HEIGHT_CEILING)
 
   const fallback = page.getByTestId('artifact-inline-fallback').filter({ hasText: zipName })
   await expect(fallback).toBeVisible()
