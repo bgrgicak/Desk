@@ -72,6 +72,14 @@ describe("chats queries", () => {
       role: "user",
       content: { type: "text", text: "How do tasks work?" },
     });
+    // `created_at` defaults to `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` (ms
+    // precision). On fast CI runners two back-to-back inserts can land in
+    // the same millisecond, and `listWithLatestMessage`'s subquery then
+    // tiebreaks by `id DESC` — but `generateId` produces a random nanoid,
+    // so the user prompt can randomly win the tiebreak and the wrong
+    // preview gets surfaced. A 2ms pause guarantees the agent reply's
+    // timestamp sorts strictly after the user prompt's.
+    await new Promise((resolve) => setTimeout(resolve, 2));
     // Agent's events-shaped reply with two visible text parts.
     await messages.insert(pool, {
       id: generateId("message"),
