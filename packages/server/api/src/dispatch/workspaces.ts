@@ -179,7 +179,7 @@ export async function dispatchWorkspaces(
     const body = (await parseBody(req)) as { path?: unknown };
     const filePath = typeof body?.path === "string" ? body.path : "";
     if (!filePath) throw new ValidationError("Missing 'path' in body");
-    await libraryRoutes.pin(storage, segments[1], filePath);
+    await libraryRoutes.pin(storage, userId, segments[1], filePath);
     sendJson(res, 201, { ok: true });
     return true;
   }

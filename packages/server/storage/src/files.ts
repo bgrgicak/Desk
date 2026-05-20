@@ -14,9 +14,11 @@ import {
   chatArtifactsDir,
   chatAttachmentsDir,
   resolveHostPath,
+  resolveLibraryHostPath,
   tmpDir,
   trashDir,
   workspaceRootPath,
+  type VirtualLibraryMount,
 } from "./layout.js";
 import { ID_PREFIXES } from "@agent-desk/shared";
 
@@ -228,8 +230,13 @@ export async function uploadArtifact(
   };
 }
 
-async function fileRefFromDisk(home: string, slug: string, relPath: string): Promise<FileRef> {
-  const abs = resolveHostPath(home, slug, relPath);
+async function fileRefFromDisk(
+  home: string,
+  slug: string,
+  relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): Promise<FileRef> {
+  const abs = resolveLibraryHostPath(home, slug, relPath, virtualMounts);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   // Allow `.app/` directories to be stat'd so the frontend can render them
@@ -262,15 +269,19 @@ async function fileRefFromDisk(home: string, slug: string, relPath: string): Pro
 
 /**
  * Opens a file for reading. The `ref` is the workspace-relative path
- * returned by uploadArtifact / listLibrary.
+ * returned by uploadArtifact / listLibrary. `virtualMounts` lets paths
+ * projected from connected host directories (e.g. `Downloads/foo.md`)
+ * resolve to the actual host file instead of 404'ing inside the
+ * workspace tree.
  */
 export async function readFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ stream: Readable; file: FileRef }> {
-  const file = await fileRefFromDisk(ctx.home, slug, relPath);
-  const abs = resolveHostPath(ctx.home, slug, relPath);
+  const file = await fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
   const stream = createReadStream(abs);
   return { stream, file };
 }
@@ -280,8 +291,9 @@ export async function downloadFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ stream: Readable; file: FileRef }> {
-  return readFile(ctx, slug, relPath);
+  return readFile(ctx, slug, relPath, virtualMounts);
 }
 
 /**
@@ -291,8 +303,29 @@ export async function statFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<FileRef> {
-  return fileRefFromDisk(ctx.home, slug, relPath);
+  return fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
+}
+
+/**
+ * Existence-only stat that accepts any path (files OR directories) inside
+ * the workspace. Used by the pin route to validate a target without the
+ * `fileRefFromDisk` directory restriction (which rejects non-`.app` dirs).
+ */
+export async function statPath(
+  ctx: StorageContext,
+  slug: string,
+  relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): Promise<{ isDir: boolean }> {
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Path not found: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new NotFoundError(`Path not found: ${relPath}`);
+  }
+  return { isDir: stat.isDirectory() };
 }
 
 /**
@@ -310,16 +343,22 @@ export async function overwriteFile(
   slug: string,
   relPath: string,
   stream: Readable,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<FileRef> {
-  const abs = resolveHostPath(ctx.home, slug, relPath);
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
   const stat = await fs.stat(abs).catch(() => null);
   if (stat && !stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
 
   // Ensure parent directory exists so new files in nested hidden paths
   // (e.g. .memory/workspace.md) can be created via PUT.
-  await fs.mkdir(path.dirname(abs), { recursive: true });
+  const parent = path.dirname(abs);
+  await fs.mkdir(parent, { recursive: true });
 
-  const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
+  // Place the temp file beside the target rather than under Desk's tmp
+  // dir. Virtual mounts can live on a different filesystem (e.g. a user's
+  // home directory on a separate mount), and `fs.rename` across devices
+  // fails with EXDEV.
+  const tmpPath = path.join(parent, `.tmp-${crypto.randomUUID()}`);
   let size = 0;
   const sizeEnforcer = new (await import("node:stream")).Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -344,7 +383,7 @@ export async function overwriteFile(
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
-  return fileRefFromDisk(ctx.home, slug, relPath);
+  return fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
 }
 
 /**

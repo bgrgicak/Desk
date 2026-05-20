@@ -101,7 +101,7 @@ export async function dispatchLibrary(
     if (!p) throw new ValidationError("Missing path query parameter");
     const wsId = await requireWorkspaceId(pool, userId, query);
     await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-    const result = await libraryRoutes.get(storage, wsId, p);
+    const result = await libraryRoutes.get(storage, userId, wsId, p);
     // Summary mirrors live at `.chats/<id>/notes/<msgId>.md` — surface the
     // user-friendly "Chat summary" label so the detail view doesn't title
     // the page with the messageId-based filename.
@@ -116,7 +116,7 @@ export async function dispatchLibrary(
     if (!p) throw new ValidationError("Missing path query parameter");
     const wsId = await requireWorkspaceId(pool, userId, query);
     await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-    const { stream, file } = await libraryRoutes.download(storage, wsId, p);
+    const { stream, file } = await libraryRoutes.download(storage, userId, wsId, p);
     res.writeHead(200, {
       "Content-Type": file.mime,
       "Content-Disposition": `attachment; filename="${file.name}"`,
@@ -129,7 +129,7 @@ export async function dispatchLibrary(
     if (!p) throw new ValidationError("Missing path query parameter");
     const wsId = await requireWorkspaceId(pool, userId, query);
     await requireReadablePathForRoute(pool, storage, userId, p, wsId);
-    const { stream, file } = await libraryRoutes.download(storage, wsId, p);
+    const { stream, file } = await libraryRoutes.download(storage, userId, wsId, p);
     res.writeHead(200, {
       "Content-Type": file.mime,
       "Content-Disposition": `inline; filename="${file.name}"`,
@@ -148,11 +148,11 @@ export async function dispatchLibrary(
     // Strip quotes from ETag header value: "123" → 123
     const ifMatch = rawIfMatch ? rawIfMatch.replace(/^"|"$/g, "") : undefined;
     try {
-      const result = await libraryRoutes.saveContent(storage, wsId, p, req, emit, ifMatch);
+      const result = await libraryRoutes.saveContent(storage, userId, wsId, p, req, emit, ifMatch);
       sendJson(res, 200, result);
     } catch (err) {
       if (err instanceof ConflictError) {
-        const { stream: currentStream, file: currentFile } = await libraryRoutes.download(storage, wsId, p);
+        const { stream: currentStream, file: currentFile } = await libraryRoutes.download(storage, userId, wsId, p);
         const chunks: Buffer[] = [];
         await new Promise<void>((resolve, reject) => {
           currentStream.on("data", (c: Buffer) => chunks.push(c));

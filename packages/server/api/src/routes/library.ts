@@ -11,6 +11,7 @@ import {
   readFile,
   downloadFile,
   statFile,
+  statPath,
   overwriteFile,
   type StorageContext,
   type FileRef,
@@ -88,8 +89,12 @@ export async function list(
     }
     if (pinnedPaths.has(item.path)) item.pinned = true;
   }
+  for (const folder of result.folders) {
+    if (pinnedPaths.has(folder.path)) folder.pinned = true;
+  }
   if (opts?.pinned) {
     result.items = result.items.filter((item) => item.pinned);
+    result.folders = result.folders.filter((folder) => folder.pinned);
   }
   return result;
 }
@@ -127,11 +132,13 @@ export async function upload(
 /** Stat metadata lookup. */
 export async function get(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   relPath: string,
 ): Promise<FileRef> {
   const slug = await resolveSlug(ctx, workspaceId);
-  return statFile(ctx, slug, relPath);
+  const virtualMounts = await connectedLocalFilesystemMounts(ctx, userId, workspaceId);
+  return statFile(ctx, slug, relPath, virtualMounts);
 }
 
 /**
@@ -146,6 +153,7 @@ export async function get(
  */
 export async function saveContent(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   relPath: string,
   stream: Readable,
@@ -153,13 +161,14 @@ export async function saveContent(
   ifMatch?: string,
 ): Promise<FileRef> {
   const slug = await resolveSlug(ctx, workspaceId);
+  const virtualMounts = await connectedLocalFilesystemMounts(ctx, userId, workspaceId);
   if (ifMatch !== undefined) {
-    const current = await statFile(ctx, slug, relPath);
+    const current = await statFile(ctx, slug, relPath, virtualMounts);
     if (current.updatedAtMs !== ifMatch) {
       throw new ConflictError(`File modified since ${ifMatch}`);
     }
   }
-  const file = await overwriteFile(ctx, slug, relPath, stream);
+  const file = await overwriteFile(ctx, slug, relPath, stream, virtualMounts);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "updated" },
@@ -169,11 +178,13 @@ export async function saveContent(
 
 export async function download(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   relPath: string,
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
-  return downloadFile(ctx, slug, relPath);
+  const virtualMounts = await connectedLocalFilesystemMounts(ctx, userId, workspaceId);
+  return downloadFile(ctx, slug, relPath, virtualMounts);
 }
 
 /**
@@ -287,16 +298,19 @@ export async function remove(
 
 export async function pin(
   ctx: StorageContext,
+  userId: string,
   workspaceId: string,
   filePath: string,
 ): Promise<void> {
   const slug = await resolveSlug(ctx, workspaceId);
   const normalizedPath = normalizePinnedLibraryPath(filePath);
-  // Validate the target and canonicalize path variants before writing the pin.
-  // Without this, callers can create stale duplicate pin rows such as
-  // `foo.app` and `foo.app/`, which makes the sidebar/list state drift from
-  // the actual library contents.
-  await statFile(ctx, slug, normalizedPath);
+  const virtualMounts = await connectedLocalFilesystemMounts(ctx, userId, workspaceId);
+  // Validate the target exists and canonicalize path variants before writing
+  // the pin. `statPath` (not `statFile`) so both files and directories are
+  // accepted — users can pin a folder to keep it in the sidebar.
+  // Without normalization callers can create stale duplicate pin rows such
+  // as `foo.app` and `foo.app/`, drifting from the actual library contents.
+  await statPath(ctx, slug, normalizedPath, virtualMounts);
   await queries.libraryPins.pin(ctx.pool, workspaceId, normalizedPath);
 }
 

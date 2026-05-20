@@ -30,6 +30,7 @@ export {
   readFile,
   downloadFile,
   statFile,
+  statPath,
   moveFile,
   deleteFile,
   overwriteFile,
