@@ -104,6 +104,14 @@ export function resolveOpenAiBillingSource(
 export interface FireMessageOptions {
   /** Manual task fires create a run now without consuming the task's schedule. */
   manual?: boolean;
+  /**
+   * For task kinds: the id of a task_run row the caller already inserted
+   * (via `beginTaskRun`) and emitted `message.appended` for. When set,
+   * fireMessage skips its own `startTaskRun` and executes the agent against
+   * the supplied run. Lets a caller surface an "active" task_run in its
+   * own response before the long exec begins.
+   */
+  preStartedRunId?: string;
 }
 
 /**
@@ -221,6 +229,43 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
+   * Synchronously insert a task_run row for an unscheduled task and emit
+   * its `message.appended`. Used by the sandbox auto-fire path so the HTTP
+   * response carries an `active` task_run before the long exec starts —
+   * otherwise the UI's status selector (which only marks a task active
+   * when a child run is `running`) sees an empty runs list and shows
+   * `todo` until the SSE event arrives.
+   *
+   * Returns the inserted run, or `null` when the message is missing,
+   * isn't a task, or another run is already in flight (e.g. a concurrent
+   * scheduler tick beat us to it; the caller should fall back to the
+   * regular `fireMessage` path which can detect the same condition).
+   */
+  async function beginTaskRun(messageId: string): Promise<Message | null> {
+    const msg = await queries.messages.findById(pool, messageId);
+    if (!msg || msg.kind !== "task") return null;
+    const executionChatId = msg.threadChatId ?? msg.chatId;
+    const { rows } = await pool.query<{ workspace_id: string }>(
+      `SELECT workspace_id FROM chats WHERE id = ?`,
+      [executionChatId],
+    );
+    const workspaceId = rows[0]?.workspace_id;
+    const newRunId = generateId("message");
+    const run = await queries.messages.startTaskRun(pool, {
+      runId: newRunId,
+      taskId: messageId,
+      chatId: executionChatId,
+      role: msg.role,
+      content: msg.content,
+      agentId: msg.agentId ?? null,
+      model: msg.model ?? null,
+    });
+    if (!run) return null;
+    emit({ type: "message.appended", payload: run, workspaceId });
+    return run;
+  }
+
+  /**
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
    *   - `task`: inserts a fresh `task_run` child of the task and runs the
@@ -289,21 +334,29 @@ export function createRunManager(opts: RunManagerOptions) {
     // kinds, it's the message itself.
     let runId: string;
     if (msg.kind === "task") {
-      const newRunId = generateId("message");
-      const run = await queries.messages.startTaskRun(pool, {
-        runId: newRunId,
-        taskId: messageId,
-        chatId: executionChatId,
-        role: msg.role,
-        content: msg.content,
-        agentId: msg.agentId ?? null,
-        model: msg.model ?? null,
-      });
-      if (!run) return { fired: false, childIds: [] };
-      runId = run.id;
-      emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
-      // The task_run child is the authoritative agent-owned Active signal. The
-      // parent is emitted only when a lifecycle policy below changes it.
+      if (fireOptions.preStartedRunId) {
+        // The caller (sandbox auto-fire dispatcher) already inserted the
+        // task_run row via `beginTaskRun` and emitted the appended event.
+        // Re-running startTaskRun would hit its in-flight guard and refuse,
+        // so just adopt the run and proceed to exec.
+        runId = fireOptions.preStartedRunId;
+      } else {
+        const newRunId = generateId("message");
+        const run = await queries.messages.startTaskRun(pool, {
+          runId: newRunId,
+          taskId: messageId,
+          chatId: executionChatId,
+          role: msg.role,
+          content: msg.content,
+          agentId: msg.agentId ?? null,
+          model: msg.model ?? null,
+        });
+        if (!run) return { fired: false, childIds: [] };
+        runId = run.id;
+        emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+        // The task_run child is the authoritative agent-owned Active signal. The
+        // parent is emitted only when a lifecycle policy below changes it.
+      }
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
@@ -1022,6 +1075,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   return {
     fireMessage,
+    beginTaskRun,
     tickScheduled,
     startPolling,
     sweepIdleSandboxes,

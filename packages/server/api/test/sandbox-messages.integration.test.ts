@@ -47,7 +47,16 @@ beforeAll(async () => {
     [sourceChatId, workspaceId, agentId, "Source investigation chat"],
   );
 
-  const runManager = createRunManager({ pool });
+  // Fake execRun so the auto-fire path on unscheduled tasks doesn't try
+  // to spawn a real Docker sandbox. Resolves immediately with a short
+  // stdout payload so finalizeExecution sees a clean exit.
+  const runManager = createRunManager({
+    pool,
+    execRunFn: async (runId, _agentId, _prompt, onLog) => {
+      await onLog({ runId, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "ok" } }) });
+      return { exitCode: 0 };
+    },
+  });
   server = createApp({ pool, storage: { pool, home }, runManager });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as net.AddressInfo).port;
@@ -105,69 +114,157 @@ function sandboxPost(body: unknown, token: string, urlPath = "/sandbox/messages"
 }
 
 describe("POST /sandbox/messages", () => {
-  it("creates a simple task in a fresh chat with context attachments", async () => {
+  it("posts the task anchor in the source chat and spawns a dedicated thread chat", async () => {
     const token = await issueSandboxToken();
     const res = await sandboxPost({
       chatId: sourceChatId,
-      newChat: true,
       title: "Stabilize blank replies",
       content: "Investigate the blank reply issue",
       attachments: [{ path: `.chats/${sourceChatId}/artifacts/report.md`, name: "report.md" }],
     }, token);
 
     expect(res.status).toBe(201);
-    expect(res.body.chat.id).not.toBe(sourceChatId);
-    expect(res.body.chat.goal).toBe("task");
-    expect(res.body.message.chatId).toBe(res.body.chat.id);
+    // Anchor lives in the source chat — the task message is the thread
+    // start, visible inline in the source conversation.
+    expect(res.body.message.chatId).toBe(sourceChatId);
     expect(res.body.message.kind).toBe("task");
-    expect(res.body.message.executeAt).toBeUndefined();
-    expect(res.body.message.cron).toBeUndefined();
+    expect(res.body.message.threadChatId).toBe(res.body.threadChat.id);
     expect(res.body.message.attachments).toEqual([
       { path: `.chats/${sourceChatId}/artifacts/report.md`, name: "report.md" },
     ]);
-    expect(res.body.message.content.text).toContain(`Originating chat: ${sourceChatId}`);
+    // Thread chat is a separate chat anchored to the task message; the
+    // tasks list opens this thread (where task_runs / follow-ups land).
+    expect(res.body.parentChatId).toBe(sourceChatId);
+    expect(res.body.threadChat.id).not.toBe(sourceChatId);
+    // Thread inherits the task anchor's title so the sidebar entry is
+    // distinct from the parent ("Source investigation chat"); the
+    // anchor's task title is the most informative source.
+    expect(res.body.threadChat.title).toBe("Stabilize blank replies");
   });
 
-  it("keeps scheduled and recurring tasks on the existing chat path", async () => {
+  it("spawns a thread for scheduled and recurring tasks too — the schedule lives on the anchor", async () => {
     const token = await issueSandboxToken();
     const scheduled = await sandboxPost({
       chatId: sourceChatId,
-      newChat: true,
+      title: "Later one-shot",
       content: "Run later",
       executeAt: "2026-05-01T09:00:00Z",
     }, token);
-    expect(scheduled.status).toBe(400);
-    expect(scheduled.body.message).toMatch(/simple manual tasks/);
+    expect(scheduled.status).toBe(201);
+    expect(scheduled.body.message.chatId).toBe(sourceChatId);
+    expect(scheduled.body.message.executeAt).toBe("2026-05-01T09:00:00.000Z");
+    expect(scheduled.body.message.threadChatId).toBe(scheduled.body.threadChat.id);
+    expect(scheduled.body.threadChat.id).not.toBe(sourceChatId);
 
     const recurring = await sandboxPost({
       chatId: sourceChatId,
-      newChat: true,
+      title: "Daily ping",
       content: "Run daily",
       cron: "0 9 * * *",
     }, token);
-    expect(recurring.status).toBe(400);
-    expect(recurring.body.message).toMatch(/simple manual tasks/);
+    expect(recurring.status).toBe(201);
+    expect(recurring.body.message.chatId).toBe(sourceChatId);
+    expect(recurring.body.message.cron).toBe("0 9 * * *");
+    expect(recurring.body.message.threadChatId).toBe(recurring.body.threadChat.id);
+    expect(recurring.body.threadChat.id).not.toBe(sourceChatId);
+
+    // Auto-fire is gated on having no schedule. Scheduled and recurring
+    // tasks must NOT fire on insert — the scheduler owns their fire time.
+    // We assert this on the recurring case (the riskier of the two: a
+    // bug here would burn a cron tick early).
+    await new Promise((r) => setTimeout(r, 50));
+    const runs = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM messages
+        WHERE chat_id = ? AND kind = 'task_run'`,
+      [recurring.body.threadChat.id],
+    );
+    expect(runs.rows[0].count).toBe(0);
   });
 
-  it("rejects unsafe attachment paths before creating the fresh chat", async () => {
+  it("auto-fires unscheduled agent tasks — the anchor runs immediately, no manual Run click required", async () => {
+    // The agent's intent when spawning an unscheduled sub-task via
+    // `desk-agent task schedule` (no --at / --cron) is "go do this now."
+    // Sitting in pending until the user clicks Run defeats the purpose.
+    // The sandbox endpoint must insert the first task_run row before
+    // returning so the response carries an `active` state and the UI's
+    // status selector (which only marks a task active when a child run
+    // is `running`) doesn't show `todo` for a window.
     const token = await issueSandboxToken();
-    const before = await pool.query<{ count: number }>("SELECT COUNT(*) AS count FROM chats");
     const res = await sandboxPost({
       chatId: sourceChatId,
-      newChat: true,
+      title: "Build a small app",
+      content: "Scaffold a hello-world page.",
+    }, token);
+    expect(res.status).toBe(201);
+    const threadChatId = res.body.threadChat.id as string;
+    const anchorId = res.body.message.id as string;
+
+    // The response itself must include the freshly-inserted task_run
+    // in `running` state. This is the contract the UI's optimistic
+    // active-on-create render relies on.
+    expect(res.body.run).toBeDefined();
+    expect(res.body.run.kind).toBe("task_run");
+    expect(res.body.run.parentId).toBe(anchorId);
+    expect(res.body.run.chatId).toBe(threadChatId);
+    expect(res.body.run.state).toBe("running");
+
+    // And the DB must reflect the same row synchronously — no
+    // poll-and-retry: the task_run exists by the time the response
+    // returns. Use a single, immediate query (no setTimeout loop).
+    const { rows } = await pool.query<{ count: number; state: string }>(
+      `SELECT COUNT(*) AS count, MIN(state) AS state FROM messages
+        WHERE chat_id = ? AND kind = 'task_run' AND parent_id = ?`,
+      [threadChatId, anchorId],
+    );
+    expect(rows[0].count).toBe(1);
+    expect(rows[0].state).toBe("running");
+  });
+
+  it("rejects requests with no chatId — agents must always anchor tasks to a chat", async () => {
+    // Contract: the agent CLI's `--chat <id>` is required and the
+    // sandbox endpoint mirrors that on the wire. Tasks are threads of a
+    // source chat; there is no "create a chatless task" path for agents
+    // today. (If we later want one, it should be an explicit opt-in
+    // flag, not a missing-field fallback.)
+    const token = await issueSandboxToken();
+    const res = await sandboxPost({
+      title: "No chat",
+      content: "Should be rejected",
+    }, token);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Missing chatId/);
+  });
+
+  it("rejects unsafe attachment paths before creating the anchor or thread", async () => {
+    const token = await issueSandboxToken();
+    const before = await pool.query<{ count: number }>("SELECT COUNT(*) AS count FROM chats");
+    const beforeMsgs = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [sourceChatId],
+    );
+    const res = await sandboxPost({
+      chatId: sourceChatId,
       title: "Unsafe attachment",
-      content: "This should not create a chat",
+      content: "This should not create a chat or message",
       attachments: [{ path: "/etc/passwd", name: "passwd" }],
     }, token);
     const after = await pool.query<{ count: number }>("SELECT COUNT(*) AS count FROM chats");
+    const afterMsgs = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [sourceChatId],
+    );
 
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/Invalid attachment path/);
     expect(after.rows[0].count).toBe(before.rows[0].count);
+    expect(afterMsgs.rows[0].count).toBe(beforeMsgs.rows[0].count);
   });
 });
 
 describe("POST /sandbox/messages/reschedule", () => {
+  // Each scheduled task is an anchor in the source chat + a thread chat
+  // anchored to it. Reschedule targets the anchor where it actually
+  // lives (`message.chatId` === source chat), not the thread chat.
   async function createScheduledTask(token: string, executeAt = "2026-06-01T09:00:00Z") {
     const create = await sandboxPost({
       chatId: sourceChatId,
@@ -176,7 +273,12 @@ describe("POST /sandbox/messages/reschedule", () => {
       executeAt,
     }, token);
     expect(create.status).toBe(201);
-    return create.body as { id: string; chatId: string; executeAt?: string; cron?: string; createdAt: string; title?: string };
+    const body = create.body as {
+      threadChat: { id: string };
+      parentChatId: string;
+      message: { id: string; chatId: string; executeAt?: string; cron?: string; createdAt: string; title?: string; threadChatId?: string };
+    };
+    return { ...body.message, threadChatId: body.threadChat.id };
   }
 
   it("updates executeAt in place — same id, same created_at, state pending", async () => {
@@ -184,7 +286,7 @@ describe("POST /sandbox/messages/reschedule", () => {
     const created = await createScheduledTask(token);
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
       executeAt: "2026-06-02T09:00:00Z",
     }, token, "/sandbox/messages/reschedule");
@@ -196,10 +298,10 @@ describe("POST /sandbox/messages/reschedule", () => {
     expect(res.body.cron).toBeFalsy();
     expect(res.body.state).toBe("pending");
 
-    // Confirm the row count for this chat did not grow.
+    // The anchor stays put — reschedule never creates a new task row.
     const { rows } = await pool.query<{ count: number }>(
-      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ? AND kind = 'task'",
-      [sourceChatId],
+      "SELECT COUNT(*) AS count FROM messages WHERE id = ? AND kind = 'task'",
+      [created.id],
     );
     expect(rows[0].count).toBe(1);
   });
@@ -209,7 +311,7 @@ describe("POST /sandbox/messages/reschedule", () => {
     const created = await createScheduledTask(token, "2026-06-10T09:00:00Z");
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
       cron: "0 9 * * 1-5",
     }, token, "/sandbox/messages/reschedule");
@@ -228,7 +330,7 @@ describe("POST /sandbox/messages/reschedule", () => {
     const created = await createScheduledTask(token, "2026-07-01T09:00:00Z");
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
       executeAt: "2026-07-02T09:00:00Z",
       title: "Weekly review",
@@ -244,12 +346,12 @@ describe("POST /sandbox/messages/reschedule", () => {
     const token = await issueSandboxToken();
     const created = await createScheduledTask(token, "2026-08-01T09:00:00Z");
     await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
     }, token, "/sandbox/messages/cancel");
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
       executeAt: "2026-08-15T09:00:00Z",
     }, token, "/sandbox/messages/reschedule");
@@ -264,7 +366,7 @@ describe("POST /sandbox/messages/reschedule", () => {
     const created = await createScheduledTask(token, "2026-09-01T09:00:00Z");
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
     }, token, "/sandbox/messages/reschedule");
 
@@ -277,7 +379,7 @@ describe("POST /sandbox/messages/reschedule", () => {
     const created = await createScheduledTask(token, "2026-09-15T09:00:00Z");
 
     const res = await sandboxPost({
-      chatId: sourceChatId,
+      chatId: created.chatId,
       messageId: created.id,
       executeAt: "2026-09-16T09:00:00Z",
       cron: "0 9 * * *",
@@ -322,5 +424,148 @@ describe("POST /sandbox/messages/reschedule", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/Only task messages/);
+  });
+});
+
+describe("POST /sandbox/messages/complete", () => {
+  // The agent sits inside the sub-task thread; it passes the thread chat
+  // id and the server walks back to the anchor in the parent chat.
+  async function spawnSubTask(token: string, opts?: { cron?: string; at?: string }) {
+    const body: Record<string, unknown> = {
+      chatId: sourceChatId,
+      title: "Sub-task",
+      content: "Investigate the spike",
+    };
+    if (opts?.cron) body.cron = opts.cron;
+    if (opts?.at) body.executeAt = opts.at;
+    const create = await sandboxPost(body, token);
+    expect(create.status).toBe(201);
+    const result = create.body as {
+      message: { id: string; chatId: string; state: string };
+      threadChat: { id: string };
+      parentChatId: string;
+    };
+    return result;
+  }
+
+  it("flips the anchor to succeeded and posts the report back to the parent chat", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token);
+
+    const before = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    const res = await sandboxPost({
+      chatId: spawned.threadChat.id,
+      message: "Done — 3 PRs flagged: #145, #161, #163.",
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(200);
+
+    // Anchor transitioned to succeeded, executeAt cleared.
+    expect(res.body.task.id).toBe(spawned.message.id);
+    expect(res.body.task.state).toBe("succeeded");
+    expect(res.body.task.executeAt).toBeFalsy();
+    expect(res.body.parentChatId).toBe(spawned.parentChatId);
+
+    // Report message landed in the *parent* chat with parentId = anchor.
+    expect(res.body.report).toBeTruthy();
+    expect(res.body.report.chatId).toBe(spawned.parentChatId);
+    expect(res.body.report.role).toBe("agent");
+    expect(res.body.report.parentId).toBe(spawned.message.id);
+    expect(res.body.report.content).toEqual({
+      type: "text",
+      text: "Done — 3 PRs flagged: #145, #161, #163.",
+    });
+
+    // Exactly one new row in the parent chat (the report). Anchor was
+    // already there from spawn; thread messages live elsewhere.
+    const after = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count + 1);
+  });
+
+  it("works without a --message — anchor flips to succeeded but no report is posted", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token);
+
+    const before = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    const res = await sandboxPost({
+      chatId: spawned.threadChat.id,
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(200);
+    expect(res.body.task.state).toBe("succeeded");
+    expect(res.body.report).toBeUndefined();
+
+    const after = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count);
+  });
+
+  it("rejects recurring (cron) tasks — they're not the right shape for completion", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token, { cron: "0 9 * * *" });
+
+    const res = await sandboxPost({
+      chatId: spawned.threadChat.id,
+      message: "Should be rejected",
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Recurring tasks cannot be marked complete/);
+
+    // Anchor unchanged (still pending).
+    const anchor = await pool.query<{ state: string }>(
+      "SELECT state FROM messages WHERE id = ?",
+      [spawned.message.id],
+    );
+    expect(anchor.rows[0].state).toBe("pending");
+  });
+
+  it("rejects a second complete on a task that's already terminal", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token);
+
+    const first = await sandboxPost({
+      chatId: spawned.threadChat.id,
+    }, token, "/sandbox/messages/complete");
+    expect(first.status).toBe(200);
+
+    const second = await sandboxPost({
+      chatId: spawned.threadChat.id,
+      message: "second attempt",
+    }, token, "/sandbox/messages/complete");
+    expect(second.status).toBe(400);
+    expect(second.body.message).toMatch(/already in terminal state/);
+  });
+
+  it("rejects when the chat is not a thread chat (no anchor pointing at it)", async () => {
+    const token = await issueSandboxToken();
+    const orphanChatId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [orphanChatId, workspaceId, agentId, "Not a thread"],
+    );
+
+    const res = await sandboxPost({
+      chatId: orphanChatId,
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(404);
+    expect(res.body.message).toMatch(/No task anchor/);
+  });
+
+  it("rejects requests with no chatId", async () => {
+    const token = await issueSandboxToken();
+    const res = await sandboxPost({
+      message: "no chat",
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Missing chatId/);
   });
 });

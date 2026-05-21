@@ -6,9 +6,11 @@ export const usage =
   'desk-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
 
 export const help = `\
-desk-agent task schedule — create a task message. The task can be one of:
-scheduled (fires once at --at), recurring (fires on --cron), or manual
-(no schedule — runs immediately when spawned by an agent).
+desk-agent task schedule — create a task message. By default the task
+starts running immediately in its own thread; pass --at or --cron only
+when the user explicitly wants the work deferred to a future time.
+The three shapes are: unscheduled (default, runs now), scheduled
+(fires once at --at), and recurring (fires on --cron).
 
 Tasks are *threads of the source chat*. The task message (containing the
 full content you pass) is posted in --chat as the thread anchor. The
@@ -17,11 +19,13 @@ task_run (and any user follow-up) lands in that thread chat, never back
 in the source. The response includes the new thread chat under
 \`threadChat\` alongside the anchor under \`message\`.
 
-Auto-start: an unscheduled task created via this command starts
-running immediately — the server fires it as soon as the anchor +
-thread are in place. The user does not have to click "Run" first.
-Scheduled (--at) and recurring (--cron) tasks still wait for their
-fire time; the scheduler picks them up when due.
+Auto-start: an unscheduled task is the default and starts running
+immediately — the server inserts the first task_run row before this
+command returns, so the response carries it under \`run\` and the
+Tasks board renders the card as Active right away. The user does
+not have to click "Run" first. Only pass --at or --cron when the
+user has asked for a specific later/repeating time; the scheduler
+picks scheduled and recurring tasks up when their fire time is due.
 
 Required:
   --chat <id>            The source chat. The task message is posted
@@ -68,8 +72,9 @@ Examples:
       --at "2026-05-01T15:00:00Z" \\
       "Review the schema migration PR before the merge freeze"
 
-  # Manual task (no schedule) — sits in the user's Tasks board until
-  # they run it.
+  # Unscheduled task — starts running immediately in its own thread.
+  # No --at / --cron means "go do this now"; the server fires the task
+  # as soon as the anchor and thread are in place.
   desk-agent task schedule --chat ch_abc \\
       --title "Summarize Q1 metrics" \\
       "Pull the Q1 numbers from the deck and produce a 1-pager"
@@ -81,9 +86,10 @@ Examples:
       "Use the attached report and fix the blank-reply issue"
 
 Exit codes:
-  0 on success — JSON \`{ message, threadChat, parentChatId }\` on stdout
-    (the anchor message in the source chat, plus the dedicated thread
-    chat the task's runs will land in).
+  0 on success — JSON \`{ message, threadChat, parentChatId, run? }\` on
+    stdout (the anchor message in the source chat, the dedicated thread
+    chat the task's runs land in, and — for unscheduled tasks — the
+    first task_run row in \`running\` state).
   Non-zero on failure — JSON {code, message} on stderr.`;
 
 export async function run(argv: string[]): Promise<void> {
