@@ -168,6 +168,82 @@ export function resolveModelForRun(
 }
 
 /**
+ * Returns true when the chain entry has live auth in the current run
+ * env, so the driver should actually attempt it. Mirrors the gate logic
+ * inside `resolveModelForRun`: `opencode/*` is always reachable (free
+ * tier, no key), `openai/*` and `codex/*` need either OPENAI_API_KEY or
+ * the Codex OAuth blob, `anthropic/*` needs ANTHROPIC_API_KEY. Any other
+ * provider passes through (Desk doesn't gatekeep it; opencode-serve
+ * applies its own validation).
+ */
+function modelHasLiveAuth(
+  model: string,
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): boolean {
+  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
+  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
+  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
+  if (model.startsWith("opencode/")) return true;
+  if (model.startsWith("codex/")) return oauthAvailable || hasOpenAiKey;
+  if (model.startsWith("openai/")) return hasOpenAiKey || oauthAvailable;
+  if (model.startsWith("anthropic/")) return hasAnthropicKey;
+  return true;
+}
+
+/**
+ * Drops chain entries whose provider has no live auth — they'd round-
+ * trip to the daemon only to come back as a 401 anyway. Preserves order
+ * so the user's preferred model still leads when authed.
+ */
+function filterUnauthedModels(
+  chain: string[],
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): string[] {
+  return chain.filter((m) => modelHasLiveAuth(m, providerKeys, extraEnv));
+}
+
+function uniqStrings(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Resolves the ordered fallback chain for a single run. Phase 1: chain
+ * is `[selectedModel, FALLBACK_MODEL]`, deduped and filtered to entries
+ * with live auth. `goal` is accepted but unused — Phase 2 will key
+ * goal-specific chains off it, and keeping the signature stable now
+ * means callers don't churn between phases.
+ *
+ * Returns `{ chain, providerKeys, reason }` mirroring `resolveModelForRun`
+ * so the call site can keep using `providerKeys`/`reason` unchanged.
+ * `chain[0]` is the model the driver attempts first; `chain` is also
+ * forwarded into the driver's `RunOptions.modelChain` for in-driver
+ * fallback when chain[0] surfaces a retryable upstream error mid-turn.
+ */
+export async function resolveModelChainForRun(
+  model: string,
+  goal: GoalKey | null,
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): Promise<{ chain: string[]; providerKeys: Record<string, string>; reason: ModelResolutionReason }> {
+  void goal; // reserved for Phase 2 (goal-specific chains from the goals table)
+  const head = resolveModelForRun(model, providerKeys, extraEnv);
+  const raw = uniqStrings([head.runtimeModel, FALLBACK_MODEL]);
+  const chain = filterUnauthedModels(raw, head.providerKeys, extraEnv);
+  // FALLBACK_MODEL is `opencode/*` so `modelHasLiveAuth` always keeps it —
+  // the chain is therefore guaranteed non-empty.
+  return { chain, providerKeys: head.providerKeys, reason: head.reason };
+}
+
+/**
  * @deprecated Kept for backwards-compatibility with existing tests
  * that import the old name. New code should use `resolveModelForRun`.
  */
@@ -557,7 +633,13 @@ export function createRunManager(opts: RunManagerOptions) {
         // `ProviderModelNotFoundError` or, worse, silently rides a
         // stale OAuth blob that opencode-serve cached from a previous
         // spawn.
-        const billing = resolveModelForRun(agentFileInput.model, providerKeys, extraEnv);
+        const billing = await resolveModelChainForRun(
+          agentFileInput.model,
+          chatGoal,
+          providerKeys,
+          extraEnv,
+        );
+        const billingHeadModel = billing.chain[0];
         if (billing.reason === "no-auth-fallback") {
           // Surface the downgrade so the user sees what changed.
           //
@@ -575,15 +657,15 @@ export function createRunManager(opts: RunManagerOptions) {
             seq: 0,
             kind: "stderr",
             payload:
-              `No live auth for ${agentFileInput.model}; falling back to the free ${billing.runtimeModel}. ` +
+              `No live auth for ${agentFileInput.model}; falling back to the free ${billingHeadModel}. ` +
               `Free fallback can be rate-limited or unavailable upstream — ` +
               `enable a model provider in Settings → Connections to restore the picked model reliably.`,
           });
         }
         const runtimeAgentInput: AgentFileInput =
-          billing.runtimeModel === agentFileInput.model
+          billingHeadModel === agentFileInput.model
             ? agentFileInput
-            : { ...agentFileInput, model: billing.runtimeModel };
+            : { ...agentFileInput, model: billingHeadModel };
         // Transparent container-gone retry: a reaper, manual `rm -f`, or
         // some other rare race outside the per-workspace createOrReuse
         // mutex can leave the sandbox container removed between
@@ -625,6 +707,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 extraEnv,
                 mountPlan,
                 opencodeSessionId,
+                modelChain: billing.chain,
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {

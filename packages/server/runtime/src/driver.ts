@@ -80,6 +80,16 @@ export interface RunOptions {
    */
   model?: string;
   /**
+   * Ordered fallback chain. The driver tries `modelChain[0]` first; if
+   * the daemon surfaces a retryable upstream error (rate-limit, 401, 5xx,
+   * quota — see `isRetryableUpstreamError`), it emits a stderr notice
+   * and resubmits the turn against `modelChain[i+1]` under the same
+   * `sessionId`. The failed attempt's assistant message stays in the
+   * session history. When omitted or empty, the driver falls back to
+   * `[model ?? "opencode/big-pickle"]` (single-attempt behavior).
+   */
+  modelChain?: string[];
+  /**
    * Provider API keys forwarded into the daemon at start time. When the
    * keys change, the daemon is restarted with the new env on the next
    * `execRun`.
@@ -482,8 +492,9 @@ function createRealDriver(): SandboxDriver {
       };
       activeRuns.set(opts.runId, tracked);
 
-      const model = opts.model ?? "opencode/big-pickle";
-      const { providerID, modelID } = parseModelSpec(model);
+      const chain = opts.modelChain && opts.modelChain.length > 0
+        ? opts.modelChain
+        : [opts.model ?? "opencode/big-pickle"];
       const parts = buildMessageParts({
         prompt: opts.prompt,
         attachments: opts.attachments,
@@ -549,26 +560,59 @@ function createRealDriver(): SandboxDriver {
         }
       })();
 
+      // Retry loop across `chain`. On a retryable upstream error
+      // (rate-limit / 401 / 5xx / quota — see `isRetryableUpstreamError`)
+      // that's not the final attempt, emit a stderr fallback notice and
+      // resubmit against the next model under the same `sessionId`. The
+      // failed attempt's assistant message stays in opencode's session
+      // history; the polling loop above keeps running across attempts
+      // and picks up the successful one's parts via the same `partState`
+      // (different message ids → distinct part-state keys, no collision).
+      // Transport errors (catch below) are NOT retried — a dead daemon
+      // or stale session won't be helped by a different model.
+      let response: { info?: { id?: string; error?: unknown } } | null = null;
       try {
-        const response = (await client.sendMessage(sessionId, {
-          providerID,
-          modelID,
-          parts,
-          ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
-        })) as { info?: { id?: string; error?: unknown } };
+        let attemptIdx = 0;
+        attemptLoop: while (true) {
+          const modelSpec = chain[attemptIdx];
+          const { providerID, modelID } = parseModelSpec(modelSpec);
+          response = (await client.sendMessage(sessionId, {
+            providerID,
+            modelID,
+            parts,
+            ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
+          })) as { info?: { id?: string; error?: unknown } };
 
-        // opencode-serve does NOT throw on upstream model errors. It
-        // resolves the HTTP call with an `info.error` field populated
-        // (e.g. `Model big-pickle not supported for format anthropic`
-        // when the zen endpoint deprecates a model, or per-provider
-        // 401/429). Without this check, the run "succeeds" with exit 0
-        // and zero text — the UI flags it as failed via the diagnostic
-        // banner heuristic, but the user gets no useful information
-        // about what went wrong. Surface the upstream error verbatim
-        // so retry / settings actions are actionable.
-        const upstreamError = describeDaemonError(response.info?.error);
-        if (upstreamError) {
-          emitLog("stderr", `opencode-serve model error (${modelID}): ${upstreamError}`);
+          // opencode-serve does NOT throw on upstream model errors. It
+          // resolves the HTTP call with an `info.error` field populated
+          // (e.g. `Model big-pickle not supported for format anthropic`
+          // when the zen endpoint deprecates a model, or per-provider
+          // 401/429). Without this check, the run "succeeds" with exit 0
+          // and zero text — the UI flags it as failed via the diagnostic
+          // banner heuristic, but the user gets no useful information
+          // about what went wrong. Surface the upstream error verbatim
+          // so retry / settings actions are actionable.
+          const upstreamError = describeDaemonError(response.info?.error);
+          if (upstreamError) {
+            const isLastAttempt = attemptIdx === chain.length - 1;
+            if (!isLastAttempt && isRetryableUpstreamError(upstreamError)) {
+              const next = chain[attemptIdx + 1];
+              emitLog(
+                "stderr",
+                `Model ${modelSpec} hit upstream error (${upstreamError}); falling back to ${next}.`,
+              );
+              attemptIdx++;
+              continue attemptLoop;
+            }
+            emitLog("stderr", `opencode-serve model error (${modelID}): ${upstreamError}`);
+            await Promise.all(pendingLogs);
+            return { exitCode: 1, opencodeSessionId: sessionId };
+          }
+          break attemptLoop;
+        }
+        if (!response) {
+          // Loop only breaks via success or returns on error, so this
+          // is unreachable — but TS needs the narrowing.
           await Promise.all(pendingLogs);
           return { exitCode: 1, opencodeSessionId: sessionId };
         }
@@ -804,6 +848,43 @@ export function* synthesizeNonTextEvents(
  *   { name, message }
  *   bare string
  */
+/**
+ * Classifies a daemon-side or transport error message as worth retrying
+ * against the next model in `RunOptions.modelChain`. We re-attempt when
+ * the upstream provider is transiently unavailable (rate-limit,
+ * concurrency cap, 5xx) OR has rejected our credential (401/403, invalid
+ * key) — both are "user's preferred model can't respond right now; fall
+ * through to the chain's safety net" cases.
+ *
+ * Patterns kept broad on purpose: opencode-serve wraps each provider's
+ * native error envelope in slightly different ways across releases, so
+ * matching by message substring + canonical HTTP status survives version
+ * drift better than parsing structured fields. Word-boundary HTTP
+ * matchers guard against false positives on transcript text that
+ * happens to contain digits (e.g. `42960 tokens`).
+ *
+ * Not retryable: validation errors, 400 (bad request — the chain won't
+ * help), `ProviderConfigError` (wiring is wrong), generic transport
+ * blow-ups handled elsewhere by `isServerGoneError`.
+ */
+export function isRetryableUpstreamError(errMessage: string | null | undefined): boolean {
+  if (!errMessage) return false;
+  const s = errMessage.toLowerCase();
+  // HTTP status patterns — word-boundary to avoid `42960`-style false matches.
+  if (/\b429\b/.test(s)) return true;
+  if (/\b40[13]\b/.test(s)) return true;
+  if (/\b5\d\d\b/.test(s)) return true;
+  // Provider-message patterns.
+  if (/rate.?limit/.test(s)) return true;
+  if (/usage\s*limit/.test(s)) return true;
+  if (/quota\s*exceeded/.test(s)) return true;
+  if (/high\s*concurrency/.test(s)) return true;
+  if (/unauthorized/.test(s)) return true;
+  if (/invalid.*api.?key/.test(s)) return true;
+  if (/providermodelnotfounderror/.test(s)) return true;
+  return false;
+}
+
 export function describeDaemonError(error: unknown): string | null {
   if (!error) return null;
   if (typeof error === "string") return error;
