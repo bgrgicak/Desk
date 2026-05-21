@@ -4,7 +4,6 @@ import {
   buildMessageParts,
   describeDaemonError,
   isContainerGoneError,
-  isRetryableUpstreamError,
   parseModelSpec,
   synthesizeNonTextEvents,
   toSandboxPath,
@@ -498,54 +497,5 @@ describe("buildMessageParts", () => {
     expect(first.type).toBe("text");
     expect(first.text).toContain(`${SANDBOX_HOME}/notes.txt`);
     expect(second.text).toContain(`${SANDBOX_HOME}/subdir/page.md`);
-  });
-});
-
-describe("isRetryableUpstreamError", () => {
-  it("matches HTTP 429 with word boundaries (no false-positive on `42960 tokens`)", () => {
-    expect(isRetryableUpstreamError("Request failed with status 429")).toBe(true);
-    expect(isRetryableUpstreamError("APIError: 42960 tokens exceeds the limit")).toBe(false);
-  });
-
-  it("matches HTTP 401 and 403 (auth failures — expired keys should fall through)", () => {
-    expect(isRetryableUpstreamError("HTTP 401: Invalid Authentication")).toBe(true);
-    expect(isRetryableUpstreamError("HTTP 403 Forbidden")).toBe(true);
-    // 400 is NOT retryable — bad request shape won't be fixed by another model.
-    expect(isRetryableUpstreamError("400 bad request")).toBe(false);
-  });
-
-  it("matches HTTP 5xx with word boundaries", () => {
-    expect(isRetryableUpstreamError("upstream returned 500")).toBe(true);
-    expect(isRetryableUpstreamError("Gateway timeout (HTTP 504)")).toBe(true);
-    expect(isRetryableUpstreamError("transcript: 5000 lines processed")).toBe(false);
-  });
-
-  it("matches provider rate-limit / quota / concurrency phrasings", () => {
-    expect(isRetryableUpstreamError("rate limit exceeded")).toBe(true);
-    expect(isRetryableUpstreamError("Rate-limit hit")).toBe(true);
-    expect(isRetryableUpstreamError("usage limit reached on your plan")).toBe(true);
-    expect(isRetryableUpstreamError("quota exceeded for this model")).toBe(true);
-    expect(isRetryableUpstreamError("HIGH CONCURRENCY — try again shortly")).toBe(true);
-  });
-
-  it("matches auth-message variants (unauthorized, invalid api key)", () => {
-    expect(isRetryableUpstreamError("Unauthorized: missing credentials")).toBe(true);
-    expect(isRetryableUpstreamError("Invalid API Key provided")).toBe(true);
-    expect(isRetryableUpstreamError("invalid_api_key")).toBe(true);
-    expect(isRetryableUpstreamError("invalid-api-key")).toBe(true);
-  });
-
-  it("matches ProviderModelNotFoundError (model id rejected at the daemon)", () => {
-    expect(
-      isRetryableUpstreamError("ProviderModelNotFoundError: openai/gpt-99 not registered"),
-    ).toBe(true);
-  });
-
-  it("rejects empty / null / non-retryable error strings", () => {
-    expect(isRetryableUpstreamError(null)).toBe(false);
-    expect(isRetryableUpstreamError(undefined)).toBe(false);
-    expect(isRetryableUpstreamError("")).toBe(false);
-    expect(isRetryableUpstreamError("ProviderConfigError: missing region")).toBe(false);
-    expect(isRetryableUpstreamError("Validation error: prompt too long")).toBe(false);
   });
 });

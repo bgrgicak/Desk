@@ -88,16 +88,6 @@ export interface RunOptions {
    */
   model?: string;
   /**
-   * Ordered fallback chain. The driver tries `modelChain[0]` first; if
-   * the daemon surfaces a retryable upstream error (rate-limit, 401, 5xx,
-   * quota — see `isRetryableUpstreamError`), it emits a stderr notice
-   * and resubmits the turn against `modelChain[i+1]` under the same
-   * `sessionId`. The failed attempt's assistant message stays in the
-   * session history. When omitted or empty, the driver falls back to
-   * `[model ?? "opencode/big-pickle"]` (single-attempt behavior).
-   */
-  modelChain?: string[];
-  /**
    * Provider API keys forwarded into the daemon at start time. When the
    * keys change, the daemon is restarted with the new env on the next
    * `execRun`.
@@ -537,16 +527,8 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      // Ordered model fallback chain. The driver tries `chain[0]` first;
-      // on a retryable upstream error (rate-limit / 401 / 5xx / quota —
-      // see `isRetryableUpstreamError`), it emits a stderr notice and
-      // resubmits the turn against the next entry under the same
-      // `sessionId`. The failed attempt's assistant message stays in
-      // opencode's session history. Single-entry chains are the
-      // legacy "single model, no fallback" behavior.
-      const chain = opts.modelChain && opts.modelChain.length > 0
-        ? opts.modelChain
-        : [opts.model ?? "opencode/big-pickle"];
+      const model = opts.model ?? "opencode/big-pickle";
+      const { providerID, modelID } = parseModelSpec(model);
       const parts = buildMessageParts({
         prompt: opts.prompt,
         attachments: opts.attachments,
@@ -587,23 +569,8 @@ function createRealDriver(): SandboxDriver {
       };
 
       const MESSAGE_SEND_MAX_ATTEMPTS = 3;
-      // Two retry axes share the same attempt loop:
-      //   - `messageAttempt` (bounded by MESSAGE_SEND_MAX_ATTEMPTS):
-      //     consumed by every iteration. Drives silent transport
-      //     recovery on daemon-gone failures.
-      //   - `chainIdx`: advances when polling surfaces a retryable
-      //     upstream model error from `chain[chainIdx]`. The next
-      //     iteration runs against the next model in the chain under
-      //     the same opencode session. The failed attempt's assistant
-      //     message stays in opencode's session history.
-      // Both axes consume the same MESSAGE_SEND_MAX_ATTEMPTS budget on
-      // purpose: a noisy combination of transport + upstream failures
-      // shouldn't exceed three sandbox-side sendMessage round-trips.
-      let chainIdx = 0;
       try {
         for (let messageAttempt = 0; messageAttempt < MESSAGE_SEND_MAX_ATTEMPTS; messageAttempt++) {
-          const modelSpec = chain[chainIdx];
-          const { providerID, modelID } = parseModelSpec(modelSpec);
           // Wire SSE subscription before sending the message so we
           // don't miss early events. The multiplexer dedups its own
           // connection. Each retry needs a fresh subscription against
@@ -893,26 +860,6 @@ function createRealDriver(): SandboxDriver {
             sendAbort.abort();
 
             if (outcome.kind === "upstream-error") {
-              // Model-chain fallback: when the failed model isn't the
-              // last in the chain and the error matches the retryable
-              // pattern (rate-limit / 401 / 5xx / quota / model-not-
-              // found — see `isRetryableUpstreamError`), advance
-              // `chainIdx` and let the loop re-issue sendMessage
-              // against the next model under the same session. Same
-              // attempt-budget — a model fallback consumes one of the
-              // MESSAGE_SEND_MAX_ATTEMPTS slots.
-              const isLastInChain = chainIdx === chain.length - 1;
-              const haveRetries = messageAttempt < MESSAGE_SEND_MAX_ATTEMPTS - 1;
-              if (!isLastInChain && haveRetries && isRetryableUpstreamError(outcome.message)) {
-                const next = chain[chainIdx + 1];
-                emitLog(
-                  "stderr",
-                  `Model ${modelSpec} hit upstream error (${outcome.message}); falling back to ${next}.`,
-                );
-                await teardownAttempt();
-                chainIdx++;
-                continue;
-              }
               emitLog(
                 "stderr",
                 `opencode-serve model error (${modelID}): ${outcome.message}`,
@@ -1114,43 +1061,6 @@ function createRealDriver(): SandboxDriver {
  *   { name, message }
  *   bare string
  */
-/**
- * Classifies a daemon-side or transport error message as worth retrying
- * against the next model in `RunOptions.modelChain`. We re-attempt when
- * the upstream provider is transiently unavailable (rate-limit,
- * concurrency cap, 5xx) OR has rejected our credential (401/403, invalid
- * key) — both are "user's preferred model can't respond right now; fall
- * through to the chain's safety net" cases.
- *
- * Patterns kept broad on purpose: opencode-serve wraps each provider's
- * native error envelope in slightly different ways across releases, so
- * matching by message substring + canonical HTTP status survives version
- * drift better than parsing structured fields. Word-boundary HTTP
- * matchers guard against false positives on transcript text that
- * happens to contain digits (e.g. `42960 tokens`).
- *
- * Not retryable: validation errors, 400 (bad request — the chain won't
- * help), `ProviderConfigError` (wiring is wrong), generic transport
- * blow-ups handled elsewhere by `isServerGoneError`.
- */
-export function isRetryableUpstreamError(errMessage: string | null | undefined): boolean {
-  if (!errMessage) return false;
-  const s = errMessage.toLowerCase();
-  // HTTP status patterns — word-boundary to avoid `42960`-style false matches.
-  if (/\b429\b/.test(s)) return true;
-  if (/\b40[13]\b/.test(s)) return true;
-  if (/\b5\d\d\b/.test(s)) return true;
-  // Provider-message patterns.
-  if (/rate.?limit/.test(s)) return true;
-  if (/usage\s*limit/.test(s)) return true;
-  if (/quota\s*exceeded/.test(s)) return true;
-  if (/high\s*concurrency/.test(s)) return true;
-  if (/unauthorized/.test(s)) return true;
-  if (/invalid.*api.?key/.test(s)) return true;
-  if (/providermodelnotfounderror/.test(s)) return true;
-  return false;
-}
-
 export function describeDaemonError(error: unknown): string | null {
   if (!error) return null;
   if (typeof error === "string") return error;

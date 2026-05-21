@@ -53,12 +53,6 @@ export interface ExecRunOptions {
    * for the caller (the scheduler) to persist on the chat row.
    */
   opencodeSessionId?: string | null;
-  /**
-   * Ordered fallback chain forwarded to the driver. When omitted, the
-   * driver derives a single-attempt chain from `agent.model`. See
-   * `RunOptions.modelChain` in `driver.ts` for the retry semantics.
-   */
-  modelChain?: string[];
   onLog: (event: LogEvent) => void;
 }
 
@@ -226,7 +220,6 @@ export async function execRun(
       // to the session at creation time — so changing the model in
       // the UI never propagates to subsequent turns.
       model: opts.agent.model,
-      modelChain: opts.modelChain,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
       mountPlan: opts.mountPlan,
