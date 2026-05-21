@@ -37,6 +37,27 @@ const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
   10,
 );
 const REMOVE_IN_PROGRESS_POLL_MS = 100;
+/**
+ * RootlessKit / userland port-forwarder retries. Measured: the prior
+ * binding clears in 50-300 ms on a quiet host, occasionally up to ~1.5 s
+ * when several containers were torn down in quick succession. Three
+ * attempts at 200 / 600 / 1500 ms cover the long tail without delaying
+ * a non-rootless engine where the first attempt always wins.
+ */
+const PORT_BIND_RETRY_ATTEMPTS = 3;
+const PORT_BIND_RETRY_BACKOFF_MS = [200, 600, 1500];
+
+function isPortPublishConflict(stderrLower: string): boolean {
+  // Two surface forms we've actually observed:
+  //   - "rootlesskit portmanager.addport(): listen tcp4 127.0.0.1:NNNN: bind: address already in use"
+  //   - "failed to set up container networking: ... bind: address already in use"
+  // The combination of "bind" + "address already in use" is specific
+  // enough that name conflicts (which read "container name … is already
+  // in use by container …") don't false-match.
+  return stderrLower.includes("bind: address already in use") ||
+    (stderrLower.includes("rootlesskit") && stderrLower.includes("already in use")) ||
+    (stderrLower.includes("port is already allocated"));
+}
 
 export type EngineName = "docker" | "nerdctl";
 
@@ -160,6 +181,31 @@ export interface ExecHandle {
 
 export interface EngineConflictError extends Error {
   conflict: true;
+}
+
+/**
+ * Rootless Docker (via RootlessKit's userland port forwarder) sometimes
+ * refuses to bind a freshly-allocated host port because the previous
+ * container's `docker-proxy` hasn't released it yet. Surfaces as
+ *   `error while calling RootlessKit PortManager.AddPort():
+ *    listen tcp4 127.0.0.1:NNNN: bind: address already in use`
+ * during `docker run` (or a subsequent `docker start`). Recoverable by
+ * retrying with backoff — the proxy releases asynchronously. Engine
+ * implementations throw this so callers can distinguish a port-forwarding
+ * race from a real "name in use" container conflict.
+ */
+export class PortPublishConflictError extends Error {
+  readonly engine: "docker" | "nerdctl" | "unknown";
+  readonly originalStderr: string;
+  constructor(engine: "docker" | "nerdctl" | "unknown", originalStderr: string) {
+    super(
+      `host port binding refused by ${engine} (RootlessKit / port-forwarder did not release ` +
+        `the prior binding yet): ${originalStderr.trim()}`,
+    );
+    this.name = "PortPublishConflictError";
+    this.engine = engine;
+    this.originalStderr = originalStderr;
+  }
 }
 
 export class ContainerRuntimeUnavailableError extends DeskError {
@@ -385,22 +431,77 @@ class CliEngine implements Engine {
     args.push(spec.image);
     // The image's CMD is what we want (sandbox image runs `sleep infinity`),
     // so don't append anything after it.
-    try {
-      const { stdout } = await this.run(args);
-      return stdout.trim();
-    } catch (err) {
-      const stderr = ((err as { stderr?: string }).stderr ?? "").toLowerCase();
-      if (stderr.includes("already in use") || stderr.includes("conflict")) {
-        const e = new Error(`container name ${spec.name} already in use`) as EngineConflictError;
-        e.conflict = true;
-        throw e;
+    //
+    // Two failure modes get classified here, before bubbling to callers:
+    //   - Name conflict (the workspace serializer's loser, or a stale
+    //     container that wasn't reaped yet): EngineConflictError.
+    //   - RootlessKit / port-forwarder hasn't released the prior host port
+    //     binding yet: PortPublishConflictError. The userland proxy is
+    //     async; the prior container's `docker-proxy` can stay listening
+    //     for hundreds of ms after the container is gone. We retry with
+    //     short backoff inside `create` so callers see at most one of
+    //     these per real failure rather than every transient race.
+    let lastPortConflict: PortPublishConflictError | null = null;
+    for (let attempt = 0; attempt < PORT_BIND_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const { stdout } = await this.run(args);
+        return stdout.trim();
+      } catch (err) {
+        const stderrRaw = (err as { stderr?: string }).stderr ?? "";
+        const stderr = stderrRaw.toLowerCase();
+        if (isPortPublishConflict(stderr)) {
+          // Name was registered before `docker run` failed at the network
+          // step. Without removing it, the next attempt sees "already in
+          // use" and we never get past the conflict. `remove --force` is
+          // idempotent on a name with no live container.
+          await this.remove(spec.name, true).catch(() => {});
+          lastPortConflict = new PortPublishConflictError(this.name, stderrRaw);
+          if (attempt < PORT_BIND_RETRY_ATTEMPTS - 1) {
+            await delay(PORT_BIND_RETRY_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw lastPortConflict;
+        }
+        if (stderr.includes("already in use") || stderr.includes("conflict")) {
+          const e = new Error(`container name ${spec.name} already in use`) as EngineConflictError;
+          e.conflict = true;
+          throw e;
+        }
+        throw err;
       }
-      throw err;
     }
+    // Loop exit without success — only reachable if PORT_BIND_RETRY_ATTEMPTS
+    // is zero, which would be a code change. Surface the last conflict so
+    // callers can route to the recovery path.
+    throw lastPortConflict ?? new Error(`${this.name} run failed after retries`);
   }
 
   async start(nameOrId: string): Promise<void> {
-    await this.run(["start", nameOrId]);
+    // `docker start` on a container that already failed at the network
+    // step can hit the same RootlessKit port-bind race as `create`. The
+    // existing `--restart=no` containers won't auto-retry; we do it here
+    // so transient port conflicts during create-then-start sequences
+    // self-heal at the engine layer.
+    let lastPortConflict: PortPublishConflictError | null = null;
+    for (let attempt = 0; attempt < PORT_BIND_RETRY_ATTEMPTS; attempt++) {
+      try {
+        await this.run(["start", nameOrId]);
+        return;
+      } catch (err) {
+        const stderrRaw = (err as { stderr?: string }).stderr ?? "";
+        const stderr = stderrRaw.toLowerCase();
+        if (isPortPublishConflict(stderr)) {
+          lastPortConflict = new PortPublishConflictError(this.name, stderrRaw);
+          if (attempt < PORT_BIND_RETRY_ATTEMPTS - 1) {
+            await delay(PORT_BIND_RETRY_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw lastPortConflict;
+        }
+        throw err;
+      }
+    }
+    throw lastPortConflict ?? new Error(`${this.name} start failed after retries`);
   }
 
   async stop(nameOrId: string, graceSeconds = 10): Promise<void> {

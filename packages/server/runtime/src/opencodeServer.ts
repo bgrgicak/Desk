@@ -268,11 +268,34 @@ export async function restartOpencodeServer(
  * so the next `ensureOpencodeServer` re-spawns. Returns the stale
  * instance, if any, so the caller can record metrics about the
  * restart-cause.
+ *
+ * When `staleInstance` is provided, the eviction is compare-and-swap:
+ * if the cache currently holds a *different* instance, the entry is
+ * left in place untouched. This prevents the chaos-test cascade where
+ * concurrent chats sharing a daemon each detect the same death and
+ * blindly wipe the successor's freshly-populated entry — every wipe
+ * triggered another spawn that killed the previous one (see
+ * `startOpencodeServer`'s `killAnyOpencodeServeInContainer` step),
+ * locking the workspace in a kill-spawn-kill loop.
+ *
+ * Identity is keyed on `password`: opencode-serve mints a fresh random
+ * password per spawn, so two instances are equal iff they're the same
+ * process.
  */
 export function invalidateOpencodeServerCache(
   containerId: string,
+  staleInstance?: OpencodeServerInstance,
 ): OpencodeServerInstance | null {
   const entry = cache.get(containerId);
+  if (
+    staleInstance &&
+    entry?.instance &&
+    entry.instance.password !== staleInstance.password
+  ) {
+    // Cache has a successor's fresh instance; this caller is acting
+    // on stale information. No-op.
+    return null;
+  }
   cache.delete(containerId);
   return entry?.instance ?? null;
 }
@@ -718,6 +741,41 @@ export async function killAnyOpencodeServeInContainer(
     ],
   });
   await waitWithSignal(h, signal);
+}
+
+/**
+ * Tail the daemon log file from inside a sandbox container. The daemon
+ * writes `--port`-bound stderr/stdout to `/tmp/opencode-serve.log` (see
+ * `startOpencodeServer`). When the daemon resolves a `POST /session/:id/message`
+ * with `name: "UnknownError"` and the boilerplate `Check server logs`
+ * pointer, the only place those server logs live is that file — pulling
+ * the tail surfaces it to the host caller so reflection failures and
+ * mid-turn 500s actually say what went wrong.
+ *
+ * Best-effort: returns "" when the container is gone, the file doesn't
+ * exist yet (daemon never spawned), or the exec fails. Bytes is a soft
+ * cap; we read the file's tail rather than the head so a long-running
+ * daemon's earliest startup chatter doesn't crowd out the latest stack
+ * trace.
+ */
+export async function readDaemonLogTail(
+  engine: Engine,
+  containerId: string,
+  bytes: number = 4000,
+): Promise<string> {
+  try {
+    const h = await engine.exec({
+      containerId,
+      cmd: ["sh", "-c", `tail -c ${bytes} /tmp/opencode-serve.log 2>/dev/null || true`],
+    });
+    const chunks: Buffer[] = [];
+    h.stdout.on("data", (c: Buffer) => chunks.push(c));
+    const code = await h.wait();
+    if (code !== 0) return "";
+    return Buffer.concat(chunks).toString("utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 /**

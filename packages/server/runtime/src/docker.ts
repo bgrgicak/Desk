@@ -26,7 +26,12 @@ import {
   buildDefaultMountPlan,
   type MountPlan,
 } from "./mounts.js";
-import { detectEngine, type BindMount, type Engine } from "./engine.js";
+import {
+  detectEngine,
+  PortPublishConflictError,
+  type BindMount,
+  type Engine,
+} from "./engine.js";
 import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/docker");
@@ -354,6 +359,34 @@ export async function createOrReuse(
   }
 }
 
+/**
+ * Outer-loop attempt cap for `createOrReuseImpl`. Each iteration may
+ * remove a broken container and try again — the cases we self-heal
+ * inside the loop are:
+ *
+ *   1. Drift: image/mount/user mismatch → remove + recreate.
+ *   2. Networking broken on a reused container (RootlessKit didn't wire
+ *      up the port publish, or the container came back from a shim
+ *      crash without rejoining the bridge): `publishedPorts` empty or
+ *      `engine.port()` returns null → remove + recreate.
+ *   3. Port-bind race on create (`PortPublishConflictError`): the
+ *      engine has already backed-off + retried internally; reaching
+ *      here means the previous proxy is still squatting the slot after
+ *      seconds. Remove and try a fresh host port on the next loop.
+ *   4. waitForEntrypointReady reports "container gone" mid-poll: a
+ *      parallel reaper raced our create. Re-inspect and either adopt
+ *      the winner or recreate.
+ *   5. Name conflict from a parallel `createOrReuse` for the same
+ *      workspace name (the in-flight serializer should make this rare,
+ *      but a manual `docker run --name=…` from outside the runtime can
+ *      still hit it). Adopt the winner if it's healthy, else recreate.
+ *
+ * Three attempts is enough to absorb stacked transients (e.g. a port
+ * race during creation + a slow shim attach on the next try) without
+ * letting a truly broken host loop forever.
+ */
+const CREATE_OR_REUSE_MAX_ATTEMPTS = 3;
+
 async function createOrReuseImpl(
   workspaceId: string,
   workspaceSlug: string,
@@ -374,148 +407,258 @@ async function createOrReuseImpl(
   const expectedUser = SANDBOX_CONTAINER_USER;
   const agentUser = await sandboxUser(engine);
 
-  // Reuse the container only if its image, binds, container user, and agent
-  // user still match the current expectation; otherwise tear it down and fall
-  // through to the create path. Bind order isn't meaningful, compare as sets.
-  const existing = await engine.inspect(containerName);
-  if (existing) {
-    const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
-    const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
-    const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
-    const userMatches = existing.user === expectedUser;
-    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
-    const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
-    let containerAlreadyGone = false;
-    if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
-      if (!existing.running) await engine.start(containerName);
-      try {
-        await waitForEntrypointReady(engine, existing.id);
-        // Note: we never resize on plain reuse. Sandboxes start at the
-        // baseline and only grow when a run actually fails with a
-        // resource-shaped error — see `growSandboxForResourceError`. A
-        // re-use that *would* benefit from a larger sandbox surfaces that
-        // need by failing first, which is the correct signal.
-        return { containerId: existing.id, workspaceId };
-      } catch (err) {
-        // The container can vanish between inspect() above and the first
-        // exec poll — reaper, drift recreate elsewhere, parallel fire's
-        // remove, or a manual rm. waitForEntrypointReady's fast-bail
-        // surfaces that as a "no longer present" error. Falling through
-        // to the create-fresh path below recovers in seconds rather than
-        // making every caller paper over the race with its own retry.
-        if (!/no longer present|no such (container|object)/i.test(
-          (err as Error).message ?? "",
-        )) {
-          throw err;
-        }
-        containerAlreadyGone = true;
-      }
-    }
-    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
-    // confirmed the container is gone. Under a parallel fire, the name
-    // may already point at the winner's brand-new container — issuing
-    // `docker rm -f <name>` here would clobber it. The drift-recreate
-    // path still needs the remove because the existing container is
-    // alive but no longer matches our expected layout.
-    if (!containerAlreadyGone) {
-      await engine.remove(containerName, true);
-    }
-  }
-
-  // Pre-create every source dir and nested target mount point so the runtime
-  // doesn't auto-create them as root and break subsequent non-root writes.
+  // Pre-create every source dir and nested target mount point once
+  // upfront so a recreate-retry doesn't have to redo this work. The
+  // operations are idempotent (`mkdir -p`-equivalent), so calling them
+  // before the inspect/drift branch is safe even when we end up reusing.
   for (const entry of plan) {
     if (entry.ensureSource !== false) await fs.mkdir(entry.sourcePath, { recursive: true });
   }
   await ensureNestedMountTargets(plan);
 
-  try {
-    // Egress policy. Default is "bridge" (full outbound) because the
-    // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
-    // opencode), GitHub for git operations, and tool registries.
-    // Operators running a paranoid deployment can set
-    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
-    // and any tooling that downloads from the network, but keeps the
-    // sandbox effective for purely-local workloads (file editing,
-    // text-only chats with a pre-cached model).
-    //
-    // A full domain-based allowlist would require a sidecar HTTP
-    // proxy (squid / mitmproxy in transparent mode) and is out of
-    // scope for v1; the two-option knob ("unrestricted" vs "none")
-    // covers the realistic deployment matrix.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < CREATE_OR_REUSE_MAX_ATTEMPTS; attempt++) {
+    // Re-inspect every loop iteration: the container can have appeared
+    // (a parallel writer just created one) or vanished (we just removed
+    // a broken one) since the last iteration. Cheap; the source of truth
+    // for every drift / pre-flight decision below.
+    const existing = await engine.inspect(containerName);
+    if (existing) {
+      const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
+      const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
+      const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
+      const userMatches = existing.user === expectedUser;
+      const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
+      const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+      // Pre-flight: the host-side port publish must be live. A container
+      // can be `running` with `publishedPorts` empty when RootlessKit's
+      // PortManager.AddPort failed at create time and the desk-server
+      // crashed/restarted before it could tear the half-init container
+      // down. Treat as drift; recreate.
+      const portWired = hasOpencodeServePort(existing.publishedPorts);
+      const driftReasons = collectDriftReasons({
+        imageMatches,
+        mountsMatch,
+        userMatches,
+        resourcesMatch,
+        agentUserMatches,
+        portWired: portWired || !existing.running, // skip port check on stopped containers; engine.start populates it
+      });
+      if (driftReasons.length === 0) {
+        try {
+          if (!existing.running) {
+            await engine.start(containerName);
+          }
+          await waitForEntrypointReady(engine, existing.id);
+          // Post-start pre-flight: confirm engine actually published 9105.
+          // This catches the "started but no Ports map" case that the
+          // upfront `publishedPorts` check skipped for stopped containers.
+          const binding = await engine.port(
+            existing.id,
+            OPENCODE_SERVE_CONTAINER_PORT,
+            "tcp",
+          );
+          if (!binding) {
+            log.warn(
+              { containerName, attempt },
+              "sandbox: reused container has no host-side binding for opencode-serve port; recreating",
+            );
+            await engine.remove(containerName, true).catch(() => {});
+            continue;
+          }
+          return { containerId: existing.id, workspaceId };
+        } catch (err) {
+          // The container can vanish between inspect and start/poll — a
+          // parallel reaper, a manual rm, or a drift-recreate elsewhere.
+          // Fall through to the create path on this iteration.
+          const message = (err as Error).message ?? "";
+          if (/no longer present|no such (container|object)/i.test(message)) {
+            log.info(
+              { containerName, attempt, message },
+              "sandbox: existing container vanished mid-reuse; creating a fresh one",
+            );
+            // Don't re-issue a name-targeted remove: under a parallel
+            // fire the name may already point at the winner's container.
+          } else if (err instanceof PortPublishConflictError) {
+            log.warn(
+              { containerName, attempt, originalStderr: err.originalStderr },
+              "sandbox: rootless port-bind race on start; recreating",
+            );
+            await engine.remove(containerName, true).catch(() => {});
+            lastErr = err;
+            continue;
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        log.info(
+          { containerName, attempt, drift: driftReasons },
+          "sandbox: removing drifted container",
+        );
+        await engine.remove(containerName, true).catch(() => {});
+      }
+    }
+
+    // Fresh create. Egress policy: default "bridge" (full outbound) —
+    // the sandbox needs to reach AI provider APIs, GitHub, tool
+    // registries. Operators can flip DESK_SANDBOX_NETWORK="none" to
+    // drop egress; that breaks AI calls but keeps purely-local
+    // workloads working. A real domain allowlist would need a sidecar
+    // proxy and is out of scope for v1.
     const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
     const network = egressMode === "none" ? "none" : "bridge";
 
-    const containerId = await engine.create({
-      name: containerName,
-      image: sandboxImage(workspaceKind),
-      // Start the long-lived container as root so the entrypoint can wire up
-      // the per-host `agent` user and passwordless sudo. Individual agent
-      // execs still run as `sandboxUser()` below, keeping normal workspace
-      // writes owned by the host user on rootful Docker.
-      user: expectedUser,
-      env: [
-        ...providerKeyEnv(providerKeys, extraEnv),
-        `DESK_SANDBOX_AGENT_USER=${agentUser}`,
-      ],
-      labels: {
-        [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
-        [SANDBOX_AGENT_USER_LABEL]: agentUser,
-      },
-      network,
-      // host-gateway lets the in-sandbox `desk` CLI reach the host-side
-      // desk-server REST API as `host.docker.internal`. Without it the
-      // bridge default has no DNS name for the host, so the agent has no
-      // route back to /sandbox/messages. `--network none` drops this
-      // capability; an operator who picks "none" accepts losing in-
-      // sandbox host callbacks.
-      extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
-      pidsLimit: SANDBOX_BASELINE_PIDS,
-      memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
-      tmpfs: SANDBOX_TMPFS,
-      binds: expectedBinds,
-      // Publish the in-container `opencode serve` port to a host-auto-
-      // assigned port on 127.0.0.1. The driver reads the assigned port
-      // back via `engine.port()` and uses it to reach the per-sandbox
-      // opencode daemon over HTTP/SSE. Bumping SANDBOX_RUNTIME_TAG ensures
-      // pre-existing containers without this publish fail the drift check
-      // and get recreated once on first use.
-      ports: [{ containerPort: OPENCODE_SERVE_CONTAINER_PORT, hostIp: "127.0.0.1" }],
-      // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
-      // children. The sandbox CMD is `sleep infinity`, which never reaps,
-      // so without this every npx/esbuild/playwright child that exits
-      // after its parent leaks a `<defunct>` slot until the container is
-      // restarted. The flag is part of the resource profile string above,
-      // so an old container created without it fails the drift check.
-      init: true,
-    });
-    await waitForEntrypointReady(engine, containerId);
-    return { containerId, workspaceId };
-  } catch (err) {
-    // Race: two startSandbox() calls for the same workspace can both pass
-    // the inspect() check (no container) and both try to create. The
-    // loser sees a name conflict. The winner has a usable container with
-    // matching binds (we'd have reused it above otherwise), so reuse
-    // it instead of failing the fire.
-    //
-    // The first inspect-after-conflict can briefly return null on dockerd
-    // when the winning `docker run` has registered the name but the
-    // container isn't fully created yet, so the loser sees neither
-    // "exists" nor a fresh slot. Poll for up to ~2 s before giving up.
-    if ((err as { conflict?: boolean }).conflict) {
-      const deadline = Date.now() + 2000;
-      while (Date.now() < deadline) {
-        const winner = await engine.inspect(containerName);
-        if (winner) {
-          if (!winner.running) await engine.start(containerName);
-          await waitForEntrypointReady(engine, winner.id);
-          return { containerId: winner.id, workspaceId };
+    let containerId: string;
+    try {
+      containerId = await engine.create({
+        name: containerName,
+        image: sandboxImage(workspaceKind),
+        // Start the long-lived container as root so the entrypoint can wire up
+        // the per-host `agent` user and passwordless sudo. Individual agent
+        // execs still run as `sandboxUser()` below, keeping normal workspace
+        // writes owned by the host user on rootful Docker.
+        user: expectedUser,
+        env: [
+          ...providerKeyEnv(providerKeys, extraEnv),
+          `DESK_SANDBOX_AGENT_USER=${agentUser}`,
+        ],
+        labels: {
+          [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
+          [SANDBOX_AGENT_USER_LABEL]: agentUser,
+        },
+        network,
+        // host-gateway lets the in-sandbox `desk` CLI reach the host-side
+        // desk-server REST API as `host.docker.internal`. `--network none`
+        // drops this capability; an operator who picks "none" accepts
+        // losing in-sandbox host callbacks.
+        extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
+        pidsLimit: SANDBOX_BASELINE_PIDS,
+        memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
+        tmpfs: SANDBOX_TMPFS,
+        binds: expectedBinds,
+        // Publish opencode-serve to a host-auto-assigned port on 127.0.0.1.
+        ports: [{ containerPort: OPENCODE_SERVE_CONTAINER_PORT, hostIp: "127.0.0.1" }],
+        // Docker `--init` (bundled tini) is PID 1; reaps reparented children.
+        init: true,
+      });
+    } catch (err) {
+      // Name-conflict race: two `startSandbox` calls for the same workspace
+      // both passed the inspect() check and both tried to create. The
+      // loser sees this branch. Wait briefly for the winner's container
+      // to be fully created (post-conflict inspects can briefly return
+      // null), then adopt it if healthy, else fall back to recreate.
+      if ((err as { conflict?: boolean }).conflict) {
+        const deadline = Date.now() + 2000;
+        while (Date.now() < deadline) {
+          const winner = await engine.inspect(containerName);
+          if (winner) {
+            // Try the next loop iteration so the winner gets validated by
+            // the same drift + pre-flight checks as any reused container.
+            break;
+          }
+          await delay(100);
         }
-        await delay(100);
+        lastErr = err;
+        continue;
       }
+      // PortPublishConflictError from `engine.create` means the inner
+      // retry budget was exhausted. Outer loop tries one more recreate;
+      // by then the prior docker-proxy has almost certainly released.
+      if (err instanceof PortPublishConflictError) {
+        log.warn(
+          { containerName, attempt, originalStderr: err.originalStderr },
+          "sandbox: rootless port-bind race during create; recreating with a new host port",
+        );
+        // `engine.create` already removed the half-created container in
+        // its retry loop, but defensive remove costs nothing.
+        await engine.remove(containerName, true).catch(() => {});
+        lastErr = err;
+        continue;
+      }
+      throw err;
     }
-    throw err;
+
+    try {
+      await waitForEntrypointReady(engine, containerId);
+    } catch (err) {
+      const message = (err as Error).message ?? "";
+      if (/no longer present|no such (container|object)/i.test(message)) {
+        // Someone removed it before the entrypoint signalled ready.
+        // Loop and either reuse the new winner or recreate.
+        log.info(
+          { containerName, attempt, message },
+          "sandbox: freshly created container vanished before entrypoint ready; retrying",
+        );
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+
+    // Post-create pre-flight: even after `waitForEntrypointReady` the
+    // userland port-forwarder may have failed silently — `publishedPorts`
+    // empty, `docker port` returns nothing. Surface that here so the
+    // next iteration recreates rather than handing the broken container
+    // to the daemon-start path (where it surfaces as the misleading
+    // "no host-side binding for container port 9105").
+    const binding = await engine.port(
+      containerId,
+      OPENCODE_SERVE_CONTAINER_PORT,
+      "tcp",
+    );
+    if (!binding) {
+      log.warn(
+        { containerName, attempt, containerId },
+        "sandbox: fresh container has no host-side binding for opencode-serve port; recreating",
+      );
+      await engine.remove(containerId, true).catch(() => {});
+      lastErr = new Error("fresh container had no host-side binding for opencode-serve port");
+      continue;
+    }
+
+    return { containerId, workspaceId };
   }
+
+  // Outer loop exhausted. Every recoverable transient has had three
+  // chances; what we're seeing now is a real environment problem
+  // (Docker daemon down, image corrupted, /tmp full, etc.). Surface to
+  // the caller so the run fails cleanly rather than looping forever.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(
+        `createOrReuse: gave up after ${CREATE_OR_REUSE_MAX_ATTEMPTS} attempts for ${containerName}`,
+      );
+}
+
+/**
+ * Drift breakdown for telemetry. Each entry is a kebab-case reason
+ * so log aggregation can count drift causes without parsing strings.
+ */
+function collectDriftReasons(checks: {
+  imageMatches: boolean;
+  mountsMatch: boolean;
+  userMatches: boolean;
+  resourcesMatch: boolean;
+  agentUserMatches: boolean;
+  portWired: boolean;
+}): string[] {
+  const reasons: string[] = [];
+  if (!checks.imageMatches) reasons.push("image-id-mismatch");
+  if (!checks.mountsMatch) reasons.push("mount-layout-mismatch");
+  if (!checks.userMatches) reasons.push("container-user-mismatch");
+  if (!checks.resourcesMatch) reasons.push("resource-profile-mismatch");
+  if (!checks.agentUserMatches) reasons.push("agent-user-mismatch");
+  if (!checks.portWired) reasons.push("opencode-serve-port-unbound");
+  return reasons;
+}
+
+function hasOpencodeServePort(
+  publishedPorts: Record<string, Array<{ hostIp: string; hostPort: number }>> | undefined,
+): boolean {
+  if (!publishedPorts) return false;
+  const bindings = publishedPorts[`${OPENCODE_SERVE_CONTAINER_PORT}/tcp`];
+  return Array.isArray(bindings) && bindings.length > 0;
 }
 
 export async function waitForEntrypointReady(
