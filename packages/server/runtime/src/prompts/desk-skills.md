@@ -43,6 +43,26 @@ UI with plain-text CRUD unless the user explicitly asks the agent to directly
 create, edit, delete, import, export, migrate, or repair records, asks for raw
 data, or automation is the explicit goal.
 
+When you need the user to answer multiple questions, collect structured input,
+or provide details for a later task, prefer the built-in `chat-forms.app` over
+inline questions.
+
+Use inline questions only when:
+- there is exactly one quick clarification,
+- the question is casual/non-blocking,
+- the forms app is unavailable after a real attach attempt,
+- or the user explicitly asks for plain chat questions.
+
+For 2+ questions, attach `/opt/desk-apps/chat-forms.app` as the default
+interaction surface, choosing the smallest fitting fragment:
+- `multi-step` for mixed or sequential questions
+- `short-text` / `long-text` for text answers
+- `single-choice` / `multi-select` for options
+- `yes-no`, `number`, `date`, or `rating` when appropriate
+
+Do not silently skip the form path; try attachment first, then fall back. If
+attaching the form fails, briefly say it failed and then fall back inline.
+
 When the request is about a specific record or filtered result (for example,
 "show me the 122 note"), prefer the fragment that can target that record via
 params. Attach that fragment with concrete `--param key=value` values when it
