@@ -3,24 +3,40 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  'desk-agent task schedule --chat <id> [--new-chat] [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
+  'desk-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
 
 export const help = `\
-desk-agent task schedule — create a task message in a chat. The task can be one
-of: scheduled (fires once at --at), recurring (fires on --cron), or manual
-(no schedule — sits as a TODO until the user runs it).
+desk-agent task schedule — create a task message. The task can be one of:
+scheduled (fires once at --at), recurring (fires on --cron), or manual
+(no schedule — runs immediately when spawned by an agent).
+
+Tasks are *threads of the source chat*. The task message (containing the
+full content you pass) is posted in --chat as the thread anchor. The
+server auto-creates a dedicated thread chat anchored to it — every
+task_run (and any user follow-up) lands in that thread chat, never back
+in the source. The response includes the new thread chat under
+\`threadChat\` alongside the anchor under \`message\`.
+
+Auto-start: an unscheduled task created via this command starts
+running immediately — the server fires it as soon as the anchor +
+thread are in place. The user does not have to click "Run" first.
+Scheduled (--at) and recurring (--cron) tasks still wait for their
+fire time; the scheduler picks them up when due.
 
 Required:
-  --chat <id>            The current/source chat. By default the task belongs
-                         to this chat. With --new-chat, this is used as the
-                         source context for the fresh task chat.
-  <content>              Task body (positional). Becomes the prompt the
-                         agent sees when the task fires.
+  --chat <id>            The source chat. The task message is posted
+                         here as the thread anchor; a fresh thread chat
+                         is created for the task's runs and replies.
+                         Required — agents cannot create chatless tasks.
+                         (Only the user, via the Tasks page composer,
+                         can spawn a standalone task without anchoring
+                         it to a parent conversation.)
+  <content>              Task body (positional). MUST include everything
+                         the agent needs to act when the task fires —
+                         the goal, required context, success criteria.
+                         Becomes the first thread message the user sees.
 
 Optional:
-  --new-chat             Create a fresh chat for a simple manual task. Invalid
-                         with --at or --cron so scheduled/recurring tasks stay
-                         on the scheduler's existing chat model.
   --title <text>         Title shown on the Tasks board / column header.
                          Strongly recommended for non-trivial tasks.
   --attach <path>        Attach a relevant workspace-relative file or directory
@@ -58,14 +74,16 @@ Examples:
       --title "Summarize Q1 metrics" \\
       "Pull the Q1 numbers from the deck and produce a 1-pager"
 
-  # Simple task as a fresh task chat with relevant context attached.
-  desk-agent task schedule --chat ch_abc --new-chat \\
+  # Task with relevant context attached from the source chat.
+  desk-agent task schedule --chat ch_abc \\
       --title "Investigate blank replies" \\
       --attach ".chats/ch_abc/artifacts/report.md" \\
       "Use the attached report and fix the blank-reply issue"
 
 Exit codes:
-  0 on success — JSON message row on stdout.
+  0 on success — JSON \`{ message, threadChat, parentChatId }\` on stdout
+    (the anchor message in the source chat, plus the dedicated thread
+    chat the task's runs will land in).
   Non-zero on failure — JSON {code, message} on stderr.`;
 
 export async function run(argv: string[]): Promise<void> {
@@ -74,14 +92,13 @@ export async function run(argv: string[]): Promise<void> {
     return;
   }
 
-  const { flags, positionals } = parseFlags(argv, ["attach"], ["new-chat"]);
+  const { flags, positionals } = parseFlags(argv, ["attach"], []);
   const chatId = flags["chat"];
   const content = positionals.join(" ");
   const at = flags["at"];
   const cron = flags["cron"];
   const title = flags["title"];
   const kind = flags["kind"];
-  const newChat = flags["new-chat"] === true;
   const attachFlag = flags["attach"];
 
   if (typeof chatId !== "string" || !chatId) {
@@ -93,15 +110,8 @@ export async function run(argv: string[]): Promise<void> {
   if (typeof at === "string" && typeof cron === "string") {
     throw new CliError("INVALID_ARGS", "--at and --cron are mutually exclusive");
   }
-  if (newChat && (typeof at === "string" || typeof cron === "string")) {
-    throw new CliError("INVALID_ARGS", "--new-chat is only for simple manual tasks; scheduled and recurring tasks must stay in their existing task chat");
-  }
-  if (newChat && typeof kind === "string" && kind !== "task") {
-    throw new CliError("INVALID_ARGS", "--new-chat is only for simple manual tasks; --kind must be omitted or task");
-  }
 
   const body: Record<string, unknown> = { chatId, content };
-  if (newChat) body.newChat = true;
   if (typeof title === "string") body.title = title;
   if (typeof at === "string") body.executeAt = at;
   if (typeof cron === "string") body.cron = cron;
