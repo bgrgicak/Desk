@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { renderAgentFile, writeAgentFile } from "../src/agentFile.js";
+import {
+  chatNeedsBrowser,
+  renderAgentFile,
+  writeAgentFile,
+  writeWorkspaceMcpConfig,
+} from "../src/agentFile.js";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 
 describe("renderAgentFile", () => {
@@ -190,6 +195,75 @@ describe("renderAgentFile", () => {
       .toBeLessThan(result.indexOf("## User's goal: write a document"));
     expect(result.indexOf("## User's goal: write a document"))
       .toBeLessThan(result.indexOf("## Desk native skills"));
+  });
+});
+
+describe("chatNeedsBrowser", () => {
+  it("enables the browser only for site/app goals", () => {
+    expect(chatNeedsBrowser("site")).toBe(true);
+    expect(chatNeedsBrowser("app")).toBe(true);
+    // Conservative on purpose: a `document` chat that occasionally needs
+    // the browser still doesn't pre-warm firefox; the user can flip it
+    // on explicitly. Anything else is false.
+    expect(chatNeedsBrowser("document")).toBe(false);
+    expect(chatNeedsBrowser("data")).toBe(false);
+    expect(chatNeedsBrowser(null)).toBe(false);
+    expect(chatNeedsBrowser(undefined)).toBe(false);
+  });
+});
+
+describe("writeWorkspaceMcpConfig", () => {
+  it("writes the playwright entry with enabled=true and the right argv for browser-goal chats", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.command).toBe("playwright-mcp");
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "firefox"]);
+      // DISPLAY env passed so playwright-mcp's firefox child reaches the
+      // Xvfb display the host runtime started.
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":99");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("emits enabled=false explicitly when the chat doesn't need a browser so a previously-enabled entry gets re-disabled", async () => {
+    // Without an explicit `enabled: false` the desk-mcp-bridge extension
+    // would still try to spawn playwright-mcp on first session_start,
+    // launching firefox unnecessarily. Explicit false is what makes the
+    // toggle real.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns changed=false when the file already has the desired content (the per-workspace lock dedupes)", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const first = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      expect(first.changed).toBe(true);
+      const second = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      expect(second.changed).toBe(false);
+      const third = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      expect(third.changed).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });
 

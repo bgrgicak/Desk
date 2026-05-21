@@ -33,8 +33,11 @@ LABEL org.opencontainers.image.title="Desk Sandbox" \
 
 # Install basics. Node.js/npm are provided by the base image; installing Ubuntu's
 # npm package pulls hundreds of Debian packages and has made CI builds stall.
+# `xvfb` is needed when the desk-mcp-bridge extension's playwright-mcp server
+# runs a real browser; idle cost is ~zero until Xvfb is started by the
+# host runtime via ensureContainerXvfb.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git imagemagick jq pandoc poppler-utils python3 python3-pip sudo \
+    ca-certificates curl git imagemagick jq pandoc poppler-utils python3 python3-pip sudo xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pi coding agent (global). `pi` becomes available on PATH.
@@ -43,6 +46,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # deliberately after smoke-testing a new release.
 RUN npm install -g @earendil-works/pi-coding-agent@0.75.4 --omit=dev --loglevel=error \
     && rm -rf /root/.npm
+
+# Browser/display stack for the desk-mcp-bridge playwright server. Browser
+# binaries live outside any bind-mounted workspace home so every sandbox
+# user shares the pinned version. Xvfb itself is *not* started here —
+# the host runtime starts it lazily only for browser-goal chats via
+# ensureContainerXvfb, keeping the ~68 MiB framebuffer cost off
+# non-browser chats.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+ENV DISPLAY=:99
+RUN npm install -g playwright@1.60.0-alpha-1777669338000 @playwright/mcp@0.0.73 --omit=dev --loglevel=error \
+    && npx playwright install-deps firefox \
+    && npx playwright install firefox \
+    && chmod -R a+rX /opt/playwright-browsers \
+    && rm -rf /root/.npm /var/lib/apt/lists/*
+
+# Bake the desk-mcp-bridge pi extension into /etc/skel/.pi/agent/extensions/
+# so every workspace's first boot gets it via the entrypoint's cp -rn.
+# Pi auto-discovers extensions in ~/.pi/agent/extensions/<name>/index.ts.
+COPY packages/server/runtime/pi-extensions/desk-mcp-bridge /etc/skel/.pi/agent/extensions/desk-mcp-bridge
+RUN chmod -R a+rX /etc/skel/.pi
 
 # Install @agent-desk/sandbox-cli binary from builder stage. esbuild's `banner`
 # config already prepends `#!/usr/bin/env node`, so we just symlink — adding

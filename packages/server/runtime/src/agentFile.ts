@@ -72,3 +72,72 @@ export async function writeAgentFile(
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");
 }
+
+/**
+ * Goals where the agent will likely need to drive a browser. Only chats
+ * tagged with one of these get playwright-mcp wired up via the
+ * desk-mcp-bridge extension; everything else starts the sandbox without
+ * firefox/Xvfb in memory, which is the single largest baseline-resource
+ * saving on the sandbox.
+ *
+ * Conservative on purpose: there is no per-run override yet, so a chat
+ * whose goal isn't `site`/`app` simply won't have firefox available. If
+ * we accumulate edge cases that need the browser under other goals, the
+ * right fix is either (a) re-tag the chat's goal or (b) add a per-
+ * workspace `enable_playwright` setting — not a list of every goal that
+ * *might* occasionally want it.
+ */
+const BROWSER_GOALS: ReadonlySet<GoalKey> = new Set(["site", "app"]);
+
+export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
+  if (!goal) return false;
+  return BROWSER_GOALS.has(goal);
+}
+
+/**
+ * Writes the per-workspace `.agents/mcp.json` consumed by the
+ * desk-mcp-bridge pi extension. Always overwrites rather than merging
+ * so the chat-goal heuristic stays the source of truth — if a previous
+ * run enabled playwright for a `site` chat and the workspace's primary
+ * goal has since become `document`, the next write turns it off again.
+ *
+ * The shape mirrors the standard MCP `mcpServers` map (Claude Desktop /
+ * opencode compatible) so future MCP servers slot in without bespoke
+ * config. `enabled: false` is emitted explicitly when playwright isn't
+ * needed so the extension can DELETE its tools on the next session
+ * boot, rather than relying on absence (which the user might shadow
+ * with their own hand-written entry).
+ *
+ * Returns `{ changed: true }` when the file content actually changed
+ * since the previous write — callers use this to skip the lazy-Xvfb
+ * startup when nothing toggled.
+ */
+export async function writeWorkspaceMcpConfig(
+  home: string,
+  workspaceSlug: string,
+  opts: { enablePlaywright: boolean },
+): Promise<{ changed: boolean }> {
+  const config = {
+    mcpServers: {
+      playwright: {
+        command: "playwright-mcp",
+        args: ["--browser", "firefox"],
+        enabled: opts.enablePlaywright,
+        env: { DISPLAY: ":99" },
+      },
+    },
+  };
+  const dir = path.join(workspaceRootPath(home, workspaceSlug), ".agents");
+  await fs.mkdir(dir, { recursive: true });
+  const target = path.join(dir, "mcp.json");
+  const next = JSON.stringify(config, null, 2) + "\n";
+  let prev: string | null = null;
+  try {
+    prev = await fs.readFile(target, "utf-8");
+  } catch {
+    prev = null;
+  }
+  if (prev === next) return { changed: false };
+  await fs.writeFile(target, next, "utf-8");
+  return { changed: true };
+}

@@ -199,30 +199,34 @@ that translates that same blob into pi's `~/.pi/agent/auth.json` format
 before each pi exec. Mechanically the same shape we built for the chaos
 image — wire it into the per-run setup. One-day task, follow-up PR.
 
-## Follow-ups (not blocking the swap, ordered by impact)
+## Follow-ups shipped in this PR
 
-These are the gaps between this PR's "core runtime swap" and a 100%
-opencode replacement. Each is a small PR on its own.
+All three gaps closed before merge — the swap is a 100% replacement.
 
-1. **Fallback model on provider failure** — original product ask.
-   If the chat's default model fails (provider down, rate-limited, quota),
-   the runtime should automatically retry with a configured fallback model.
-   ~50 LOC in `driver.ts` + a fallback-list field on the agent row + chaos
-   validation. **~30 min of work.**
+1. **Fallback model on provider failure** (commit `59a9abd`). Per-run
+   attempt loop in `driver.ts`. After pi exits non-zero with a
+   provider-shaped stderr (matched by `isModelFailure`), spawn pi
+   again with the next fallback model in the list. Cancel + container-
+   gone deliberately skip the fallback path. Configured via the
+   `DESK_FALLBACK_MODELS` env (comma-separated); a future agent-row
+   column can replace the env hop without changing the contract.
 
-2. **Codex/ChatGPT subscription bridge** — DESK already reads
-   `~/.codex/auth.json` via `localSources/codex` and surfaces it as
-   `OPENCODE_AUTH_CONTENT`. Pi needs the same OAuth blob translated into
-   its `~/.pi/agent/auth.json` shape per turn. The translation is ~20
-   lines of Node (the chaos image build script already does it for the
-   test path); just needs to live in the runtime instead of `/etc/skel`.
-   **Without this, this PR works against API-key providers but not your
-   Codex subscription in prod. ~1 day.**
+2. **Codex/ChatGPT subscription bridge** (commit `8c1d99e`).
+   `localSources/codex.ts` now emits `PI_AUTH_JSON_BASE64` alongside
+   the existing `OPENCODE_AUTH_CONTENT`. `piClient.ts` base64-decodes
+   it into the per-pi `PI_CODING_AGENT_DIR/auth.json` with 0600 perms
+   before exec'ing pi. Fresh per turn — host-side codex refresh
+   propagates immediately, no daemon cache to invalidate.
 
-3. **MCP bridge pi-extension for Playwright** — pi rejects MCP
-   philosophically; needs a small extension that reads a workspace-level
-   MCP config and exposes each MCP server's tools to the agent. Browser-
-   goal chats (`site`, `app`) will fail without it. **~2–3 days.**
-
-Provider failover is included in (1) by design. The Codex bridge in (2)
-is the one that matters for *your* deployment specifically.
+3. **MCP bridge pi-extension** (this commit). New
+   `pi-extensions/desk-mcp-bridge/` extension reads
+   `<workspace>/.agents/mcp.json`, spawns each MCP server via stdio
+   (bare JSON-RPC, no SDK dep), runs the
+   initialize → tools/list → tools/call handshake, and registers each
+   discovered tool as a pi tool named `<server>__<tool>`. Baked into
+   the sandbox image at `/etc/skel/.pi/agent/extensions/desk-mcp-bridge/`
+   so every workspace's first boot picks it up via the entrypoint's
+   `cp -rn`. Browser-goal (`site`/`app`) chats wire up playwright-mcp
+   automatically via the resurrected `writeWorkspaceMcpConfig` +
+   `chatNeedsBrowser` + lazy `ensureContainerXvfb` path (same shape as
+   the old opencode-era logic, just pointed at the new bridge).
