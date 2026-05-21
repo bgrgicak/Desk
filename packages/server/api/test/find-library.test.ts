@@ -79,4 +79,56 @@ describe("findLibraryItems", () => {
     const hits = await findLibraryItems(pool, { pool, home }, userId, { workspaceId });
     expect(hits.some((hit) => hit.kind === "note" && hit.path === "notes/kanban.md")).toBe(true);
   });
+
+  it("surfaces Desk-shipped global apps in every workspace's library", async () => {
+    const globalAppDir = path.join(home, ".apps", "chat-forms.app");
+    await fs.mkdir(path.join(globalAppDir, "fragments", "yes-no"), { recursive: true });
+    await fs.writeFile(
+      path.join(globalAppDir, "desk.app.json"),
+      JSON.stringify({
+        name: "chat-forms",
+        description: "Built-in forms for agents to ask the user structured questions via UI.",
+        capabilities: ["chats.write"],
+        fragments: ["yes-no"],
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(globalAppDir, "fragments", "yes-no", "desk.fragment.json"),
+      JSON.stringify({
+        name: "yes-no",
+        description: "Ask the user a yes/no question via UI buttons.",
+        capabilities: ["chats.write"],
+        params: { question: "The yes/no question to display." },
+      }),
+      "utf-8",
+    );
+
+    const apps = await findLibraryItems(pool, { pool, home }, userId, { kind: "app" });
+    expect(apps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "app",
+        name: "chat-forms",
+        path: "/opt/desk-apps/chat-forms.app",
+        workspaceSlug: "_desk_apps",
+      }),
+    ]));
+
+    const frags = await findLibraryItems(pool, { pool, home }, userId, { kind: "fragment" });
+    const yesNo = frags.find((hit) => hit.path === "/opt/desk-apps/chat-forms.app/dist/fragments/yes-no");
+    expect(yesNo).toMatchObject({
+      kind: "fragment",
+      name: "yes-no",
+      workspaceSlug: "_desk_apps",
+      params_schema: { question: "The yes/no question to display." },
+    });
+
+    // Query-based filtering uses substring match across name + description.
+    const queried = await findLibraryItems(pool, { pool, home }, userId, { query: "yes/no" });
+    expect(queried.some((hit) => hit.path === "/opt/desk-apps/chat-forms.app/dist/fragments/yes-no")).toBe(true);
+
+    // Even when the search is scoped to a specific workspace, global apps still show up.
+    const inWorkspace = await findLibraryItems(pool, { pool, home }, userId, { kind: "app", workspaceId });
+    expect(inWorkspace.some((hit) => hit.path === "/opt/desk-apps/chat-forms.app")).toBe(true);
+  });
 });

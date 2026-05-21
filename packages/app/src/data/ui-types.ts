@@ -115,11 +115,6 @@ export interface ContextItem {
   folderId?: string | null
   addedAt: Date
   usedBy: string[]
-  uploadedBy: 'user' | 'ai'
-  /** Display name of the agent that originally created this file, when
-   * `uploadedBy === 'ai'`. Used to show an inline provenance badge on
-   * library cards. */
-  agentName?: string
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean
   lastAccessed?: Date
@@ -164,12 +159,16 @@ export interface Task {
   title?: string
   description?: string
   agentName: string
-  /** `todo` = idle (created, not picked up). `active` = in progress
-   *  (picked up by the user or the AI / a run is executing).
-   *  `needs_input` = the AI paused awaiting the user's reply (the AI
-   *  moves it here and back). `scheduled` = has a future run.
-   *  `complete` = done/cancelled. */
-  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled'
+  /** `todo` = idle (created, not picked up, OR last agent run errored —
+   *  failure is internal-only and surfaces as Open in the UI so the
+   *  user retries from the same column instead of learning a new
+   *  status). `active` = in progress (picked up by the user or the AI
+   *  / a run is executing / parent state is `running`). `needs_input`
+   *  = the AI paused awaiting the user's reply (the AI moves it here
+   *  and back). `scheduled` = has a future run. `complete` =
+   *  done/cancelled. `failed` = a run terminated in error and no
+   *  retry has succeeded since. */
+  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled' | 'failed'
   statusText: string
   priority?: 'low' | 'medium' | 'high' | 'highest'
   assigneeId?: string
@@ -185,8 +184,15 @@ export interface Task {
   messageRole?: 'user' | 'agent' | 'system'
   /** Raw server lifecycle state. UI status is derived from this plus schedule/run children. */
   messageState?: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'paused'
-  /** Chat the backing message lives in. */
+  /** Chat the backing message (anchor) lives in. For tasks created from
+   *  within a chat this is the *parent/source* chat — clicking the task
+   *  in the tasks list should open `threadChatId` (the dedicated thread
+   *  chat) instead, where task_runs and replies live. */
   chatId?: string
+  /** Dedicated thread chat anchored at this task's message. Present
+   *  when the task was created from inside an existing conversation;
+   *  absent for stand-alone tasks created via the TasksPage composer. */
+  threadChatId?: string
   /** True when the task has actually fired at least once. */
   hasRealStartedAt?: boolean
   artifactIds: string[]
@@ -268,6 +274,12 @@ export interface Chat {
   /** True when the user has pinned this chat to the sidebar's Pinned
    *  section. Server-derived from the chat_pins table. */
   pinned?: boolean
+  /** When this chat is a thread, the parent chat where the anchor
+   *  message lives. Server-derived; absent for standalone chats. */
+  parentChatId?: string
+  /** When this chat is a thread, the anchor message id in
+   *  `parentChatId`. Used to deep-link back to the originating turn. */
+  anchorMessageId?: string
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────

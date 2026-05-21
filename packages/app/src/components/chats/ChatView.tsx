@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -7,7 +7,10 @@ import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
 import { ChatRightPanel } from '@/components/chats/ChatRightPanel'
-import { ALL_TASK_STATUSES, type TasksFilterValues } from '@/components/chats/TasksFilterPopover'
+import { ThreadParentChip } from '@/components/chats/ThreadParentChip'
+import { useTaskForChat } from '@/components/tasks/useTaskForChat'
+import { useTaskActions } from '@/components/tasks/useTaskActions'
+import { buildPath } from '@/router/nav'
 import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
@@ -140,6 +143,7 @@ export function ChatView({
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
   const location = useLocation()
+  const navigate = useNavigate()
   const anchorMessage = startThread
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
@@ -147,13 +151,6 @@ export function ChatView({
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
-
-  // Search + filter for the right panel (Files + Tasks). Owned here so the
-  // chat TopBar's icon-popovers and the panel's list views read from the
-  // same source — matches the TasksPage pattern. Scoped per-chat: switching
-  // chats remounts ChatView, which resets both.
-  const [panelSearchQuery, setPanelSearchQuery] = useState('')
-  const [tasksFilter, setTasksFilter] = useState<TasksFilterValues>(ALL_TASK_STATUSES)
 
   const setPanelOpenFromUser = useCallback((open: boolean) => {
     setPanelOpen(open)
@@ -185,6 +182,20 @@ export function ChatView({
   useContentAreaInsets(chatAreaLeft, chatAreaRight)
 
   const isNewChat = chat.id === NEW_CHAT_ID
+
+  // If the current chat is a task surface (thread chat or a
+  // standalone-task chat), resolve the backing Task so the kebab can
+  // show the task action menu instead of the generic chat menu.
+  const backingTask = useTaskForChat({
+    chatId: isNewChat ? undefined : chat.id,
+    workspaceId: chat.workspaceId,
+  })
+  const taskActions = useTaskActions()
+  const handleTaskDeleted = useCallback(() => {
+    if (chat.workspaceId) {
+      navigate(buildPath(chat.workspaceId, 'tasks'))
+    }
+  }, [chat.workspaceId, navigate])
 
   const dispatch = useAppDispatch()
 
@@ -409,11 +420,9 @@ export function ChatView({
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
           showPanelToggle={!isPreviewOpen}
-          showPanelControls={!isPreviewOpen && panelOpen}
-          searchQuery={panelSearchQuery}
-          onSearchChange={setPanelSearchQuery}
-          tasksFilter={tasksFilter}
-          onTasksFilterChange={setTasksFilter}
+          task={backingTask}
+          taskActions={taskActions}
+          onTaskDeleted={handleTaskDeleted}
         />
 
         {/* Messages + Input via shared ChatThread */}
@@ -425,6 +434,9 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
+          headerSlot={
+            !isNewChat ? <ThreadParentChip chatId={chat.id} /> : null
+          }
           innerClassName={`transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-8 pb-16 space-y-3`}
           messageClassName={message => {
             if (message.content.type !== 'artifactRef') return CHAT_COLUMN_CLASS
@@ -527,6 +539,10 @@ export function ChatView({
                         pinPaths.length > 0 ? pinPaths : undefined,
                       )
                     } else {
+                      // For kind='task' the server posts the anchor here
+                      // and auto-creates a thread chat — task_runs and
+                      // follow-up replies land in that thread, not in this
+                      // chat. The user stays put.
                       postMessageMutation({
                         chatId: chat.id,
                         content: msg,
@@ -598,8 +614,6 @@ export function ChatView({
             chatId={chat.id}
             workspaceId={chat.workspaceId}
             files={visibleChatFiles}
-            searchQuery={panelSearchQuery}
-            tasksFilter={tasksFilter}
             onFileClick={(file) => {
               if (isAppArtifactFile(file)) {
                 onAttachmentClick?.({

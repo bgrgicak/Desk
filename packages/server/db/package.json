@@ -10,10 +10,12 @@
       "@agent-desk/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "migrations",
     "package.json",
     "README.md"
   ],
@@ -22,7 +24,7 @@
     "tag": "alpha"
   },
   "engines": {
-    "node": ">=23.4.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc",

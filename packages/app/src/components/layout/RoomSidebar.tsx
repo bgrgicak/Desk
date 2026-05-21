@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { format, isToday, isYesterday } from 'date-fns'
 import {
@@ -32,8 +32,6 @@ import { SectionBody, SectionHeader } from '@/components/shared/SectionHeader'
 import { SectionEmptyState } from '@/components/shared/SectionEmptyState'
 import { ChatFilterPopover, type ChatFilterValues } from './ChatFilterPopover'
 import { DRAG_TYPE_CHAT, DRAG_TYPE_LIBRARY_ITEM, DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
-import { useAppSelector } from '@/store/hooks'
-import { selectFailedChatIds, selectRunningChatIds } from '@/store/slices/derivedSlice'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { buildPath, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getChatIcon } from '@/data/chat-icons'
@@ -84,26 +82,54 @@ export interface PinnedSidebarEntry {
  *    DropdownMenuItem children (Pin/Delete in the chat list, Unpin in
  *    the pinned section).
  */
-function ChatSidebarRow({
+/**
+ * Visual chat row. Memoized so the sidebar's many rows don't all
+ * re-render when AppInner re-renders for unrelated reasons (the
+ * profile pinned this row at 52 renders / 514 commits). The row reads
+ * the running/failed signals from the store directly so the parent
+ * doesn't have to pass them — those slices update independently of the
+ * chats list. "Running" delegates to `selectIsChatRunning`, which
+ * mirrors the chat-view loader (latest agent_turn state in the
+ * messages cache) so the sidebar can't disagree with the open chat.
+ *
+ * The row's memo skips re-renders when `chat`, `href`, `isActive`,
+ * `dragType`, `dragValue`, and the kebab callbacks haven't changed —
+ * callers must pass *stable* callback identities (build them with
+ * useCallback) for the memo to be effective.
+ */
+const ChatSidebarRow = memo(function ChatSidebarRow({
   chat,
   href,
   isActive,
   dragType,
   dragValue,
-  kebab,
+  onUnpinOnly,
+  isPinned,
+  onPin,
+  onUnpin,
+  onDelete,
 }: {
   chat: Chat
   href: string
   isActive: boolean
   dragType: string | null
   dragValue: string
-  kebab: React.ReactNode
+  /** When true, the kebab shows only a single "Unpin" item bound to
+   *  {@link onUnpin}. When false, the kebab shows the full chat actions
+   *  menu (Pin/Unpin/Delete). */
+  onUnpinOnly: boolean
+  isPinned?: boolean
+  onPin?: (chatId: string) => void
+  onUnpin: (chatId: string) => void
+  onDelete?: (chatId: string) => void
 }) {
-  const runningChatIds = useAppSelector(selectRunningChatIds)
-  const failedChatIds = useAppSelector(selectFailedChatIds)
   const ChatIcon = getChatIcon(chat)
-  const isRunning = runningChatIds.includes(chat.id) || !!chat.running
-  const isFailed = !isRunning && (failedChatIds.includes(chat.id) || !!chat.failed)
+  // Server is the single source of truth for running/failed. Both
+  // flags are computed live from the latest agent_turn in
+  // queries/chats.ts and ride along on every chat.updated payload,
+  // so the cache value is always current.
+  const isRunning = !!chat.running
+  const isFailed = !isRunning && !!chat.failed
   const isDraggable = dragType !== null
   return (
     <SidebarMenuItem>
@@ -135,11 +161,24 @@ function ChatSidebarRow({
         </Link>
       </MobileDismissSidebarMenuButton>
       <RowKebab align="start" side="right" contentClassName="w-40" label="Chat options">
-        {kebab}
+        {onUnpinOnly ? (
+          <DropdownMenuItem onClick={() => onUnpin(chat.id)}>
+            <PinOff className="h-4 w-4 mr-2" />
+            Unpin
+          </DropdownMenuItem>
+        ) : (
+          <ChatMenuItems
+            chatId={chat.id}
+            isPinned={!!isPinned}
+            onPin={onPin}
+            onUnpin={onUnpin}
+            onDelete={onDelete ?? (() => undefined)}
+          />
+        )}
       </RowKebab>
     </SidebarMenuItem>
   )
-}
+})
 
 function sortedByUpdatedDesc(chats: Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
@@ -330,6 +369,39 @@ export function RoomSidebar({
     if (chatId) onPinChat?.(chatId)
   }
 
+  // Stable callbacks for ChatSidebarRow. Parent props may change
+  // identity on every AppShell render; the refs below decouple memoized
+  // rows from that churn.
+  const propsRef = useRef({ onDeleteChat, onPinChat, onUnpinEntry, chats, pinnedEntries })
+  propsRef.current = { onDeleteChat, onPinChat, onUnpinEntry, chats, pinnedEntries }
+  const stablePin = useCallback((chatId: string) => {
+    propsRef.current.onPinChat?.(chatId)
+  }, [])
+  const stableDelete = useCallback((chatId: string) => {
+    propsRef.current.onDeleteChat(chatId)
+  }, [])
+  // Looks up the live pinned entry for `chatId`; falls back to a
+  // synthetic one if the user clicks Unpin in the chat-list kebab on a
+  // chat that isn't currently pinned (no-op safety).
+  const stableUnpin = useCallback((chatId: string) => {
+    const { chats: liveChats, pinnedEntries: livePinned, onUnpinEntry: liveOnUnpin } = propsRef.current
+    const entry = livePinned.find(e => e.kind === 'chat' && e.ref === chatId)
+    if (entry) { liveOnUnpin?.(entry); return }
+    const chat = liveChats.find(c => c.id === chatId)
+    if (!chat) return
+    liveOnUnpin?.({
+      id: `chat:${chatId}`,
+      kind: 'chat',
+      ref: chatId,
+      name: chat.title,
+      icon: getChatIcon(chat),
+      href: '#',
+    })
+  }, [])
+  const stableUnpinPinnedEntry = useCallback((entry: PinnedSidebarEntry) => {
+    propsRef.current.onUnpinEntry?.(entry)
+  }, [])
+
   // Pinned chats render in the Pinned section above; hide them here so
   // the same chat isn't shown twice in the sidebar.
   const allChats = sortedByUpdatedDesc(chats).filter(c => !c.pinned)
@@ -433,12 +505,8 @@ export function RoomSidebar({
                         href={entry.href}
                         dragType={DRAG_TYPE_PINNED_ITEM}
                         dragValue={entry.id}
-                        kebab={
-                          <DropdownMenuItem onClick={() => onUnpinEntry?.(entry)}>
-                            <PinOff className="h-4 w-4 mr-2" />
-                            Unpin
-                          </DropdownMenuItem>
-                        }
+                        onUnpinOnly
+                        onUnpin={stableUnpin}
                       />
                     )
                   }
@@ -461,7 +529,7 @@ export function RoomSidebar({
                         </Link>
                       </MobileDismissSidebarMenuButton>
                       <RowKebab align="start" side="right" contentClassName="w-36" label="Item options">
-                        <DropdownMenuItem onClick={() => onUnpinEntry?.(entry)}>
+                        <DropdownMenuItem onClick={() => stableUnpinPinnedEntry(entry)}>
                           <PinOff className="h-4 w-4 mr-2" />
                           Unpin
                         </DropdownMenuItem>
@@ -573,25 +641,11 @@ export function RoomSidebar({
                           href={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}
                           dragType={onPinChat ? DRAG_TYPE_CHAT : null}
                           dragValue={chat.id}
-                          kebab={
-                            <ChatMenuItems
-                              chatId={chat.id}
-                              isPinned={chat.pinned}
-                              onPin={onPinChat}
-                              onUnpin={(chatId) => {
-                                const entry = pinnedEntries.find(e => e.kind === 'chat' && e.ref === chatId)
-                                onUnpinEntry?.(entry ?? {
-                                  id: `chat:${chatId}`,
-                                  kind: 'chat',
-                                  ref: chatId,
-                                  name: chat.title,
-                                  icon: getChatIcon(chat),
-                                  href: '#',
-                                })
-                              }}
-                              onDelete={onDeleteChat}
-                            />
-                          }
+                          onUnpinOnly={false}
+                          isPinned={chat.pinned}
+                          onPin={stablePin}
+                          onUnpin={stableUnpin}
+                          onDelete={stableDelete}
                         />
                       ))}
                     </SidebarMenu>

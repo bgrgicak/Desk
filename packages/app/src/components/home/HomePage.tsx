@@ -29,7 +29,7 @@ import { taskMessageKindsForDeveloperMode } from '@/store/selectors/tasks'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
-import { buildPath } from '@/router/nav'
+import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
 import { DeskWordmark } from './DeskWordmark'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
@@ -194,6 +194,7 @@ export function HomePage() {
   const navigate = useNavigate()
   const { data: workspaces } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
+  const { defaultView } = usePrefs()
   const userAvatarUrl = useAvatarUrl(me?.id)
   const [createOpen, setCreateOpen] = useState(false)
   const [myAccountOpen, setMyAccountOpen] = useState(false)
@@ -210,7 +211,7 @@ export function HomePage() {
 
   const openRoom = (ws: ServerWorkspace) => {
     setLeaving(true)
-    window.setTimeout(() => navigate(buildPath(ws.id, 'tasks')), 200)
+    window.setTimeout(() => navigate(buildDefaultViewPath(ws.id, defaultView)), 200)
   }
 
   const slideClass =

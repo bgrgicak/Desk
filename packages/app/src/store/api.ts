@@ -7,9 +7,11 @@ import { getSessionToken } from "@/auth/session";
 import type {
   AttachmentRef,
   ConnectorConnection,
+  ListLibraryFoldersResponse,
   ListLibraryResponse,
   ListMessagesResponse,
   MessagesFilter,
+  SearchLibraryResponse,
   ServerAgent,
   ServerChat,
   ServerFile,
@@ -50,6 +52,7 @@ function isInternalMessageForChatActivity(msg: ServerMessage): boolean {
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
     contentType === "summary" ||
+    contentType === "feedback" ||
     kind === "summary"
   );
 }
@@ -820,6 +823,24 @@ export const api = createApi({
         { type: "Message", id: `CHAT_${chatId}` },
       ],
     }),
+    /**
+     * Records a 👍 / 👎 reaction on an agent reply. Server inserts a
+     * `role: 'system'` message with `feedback` content so the workspace's
+     * daily reflection can read the reaction alongside the surrounding
+     * chat. WS `message.appended` keeps the message cache up to date —
+     * we don't optimistically insert here.
+     */
+    postMessageFeedback: build.mutation<
+      ServerMessage,
+      { chatId: string; messageId: string; rating: "up" | "down" }
+    >({
+      query: ({ chatId, messageId, rating }) => ({
+        url: `/chats/${chatId}/messages/${messageId}/feedback`,
+        method: "POST",
+        body: { rating },
+      }),
+      invalidatesTags: [],
+    }),
     runMessage: build.mutation<
       ServerMessage,
       { chatId: string; messageId: string }
@@ -829,9 +850,9 @@ export const api = createApi({
         method: "POST",
       }),
       async onQueryStarted({ chatId, messageId }, { dispatch, queryFulfilled, getState }) {
-        // Task runs are represented by task_run children. The server response
-        // is authoritative for whether POST /run was also an explicit
-        // user-owned move to Active on the parent task.
+        // Task runs are represented by task_run children. POST /run does not
+        // mutate the parent task row — the task_run child carries the
+        // run's lifecycle, and selectors derive the Active column from it.
         const undos: Array<{ undo: () => void }> = [];
 
         try {
@@ -878,15 +899,17 @@ export const api = createApi({
     }),
 
     // ── Library ───────────────────────────────────────────────────────
+    // Folder-scoped listing: returns only the immediate children of `path`
+    // (default = workspace root). Use `useSearchLibraryQuery` for recursive
+    // matching and `useGetLibraryFoldersQuery` for the full folder tree.
     getLibrary: build.query<
       ListLibraryResponse,
-      { workspaceId?: string; cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean } | void
+      { workspaceId?: string; path?: string; showHidden?: boolean; pinned?: boolean } | void
     >({
       query: (arg) => {
         const p = new URLSearchParams();
         if (arg?.workspaceId) p.set("workspaceId", arg.workspaceId);
-        if (arg?.cursor) p.set("cursor", arg.cursor);
-        if (arg?.limit !== undefined) p.set("limit", String(arg.limit));
+        if (arg?.path) p.set("path", arg.path);
         if (arg?.showHidden) p.set("showHidden", "true");
         if (arg?.pinned) p.set("pinned", "true");
         const qs = p.toString();
@@ -894,6 +917,36 @@ export const api = createApi({
       },
       keepUnusedDataFor: 30 * 60,
       providesTags: [{ type: "LibraryFile", id: "LIST" }],
+    }),
+    getLibraryFolders: build.query<
+      ListLibraryFoldersResponse,
+      { workspaceId?: string; showHidden?: boolean } | void
+    >({
+      query: (arg) => {
+        const p = new URLSearchParams();
+        if (arg?.workspaceId) p.set("workspaceId", arg.workspaceId);
+        if (arg?.showHidden) p.set("showHidden", "true");
+        const qs = p.toString();
+        return qs ? `/library/folders?${qs}` : "/library/folders";
+      },
+      keepUnusedDataFor: 30 * 60,
+      providesTags: [{ type: "LibraryFile", id: "FOLDERS" }],
+    }),
+    searchLibrary: build.query<
+      SearchLibraryResponse,
+      { workspaceId: string; q: string; showHidden?: boolean; limit?: number }
+    >({
+      query: ({ workspaceId, q, showHidden, limit }) => {
+        const p = new URLSearchParams();
+        p.set("workspaceId", workspaceId);
+        p.set("q", q);
+        if (showHidden) p.set("showHidden", "true");
+        if (limit !== undefined) p.set("limit", String(limit));
+        return `/library/search?${p.toString()}`;
+      },
+      // Search is cheap-ish but still recursive; keep the cache around so
+      // typing-then-retyping the same query doesn't refire the walk.
+      keepUnusedDataFor: 5 * 60,
     }),
     getLibraryFile: build.query<
       ServerFile,
@@ -911,7 +964,10 @@ export const api = createApi({
         url: `/library?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
         method: "DELETE",
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     uploadLibraryFile: build.mutation<
       ServerFile,
@@ -926,7 +982,10 @@ export const api = createApi({
           : "/library";
         return { url, method: "POST", body: fd };
       },
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     saveLibraryContent: build.mutation<
       ServerFile,
@@ -938,7 +997,10 @@ export const api = createApi({
         headers: { "Content-Type": contentType ?? "application/octet-stream" },
         body: content,
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     createLibraryFolder: build.mutation<
       { path: string; name: string; createdAt: string },
@@ -949,7 +1011,10 @@ export const api = createApi({
         method: "POST",
         body: { path },
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     createLibraryLink: build.mutation<
       ServerFile,
@@ -960,7 +1025,10 @@ export const api = createApi({
         method: "POST",
         body: { url, name, subpath },
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     moveLibraryEntry: build.mutation<
       { kind: "file" | "folder"; path: string },
@@ -971,7 +1039,10 @@ export const api = createApi({
         method: "PATCH",
         body: { from, to },
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
 
     // ── Chat attachments ──────────────────────────────────────────────
@@ -1029,6 +1100,7 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { chatId }) => [
         { type: "ChatArtifact", id: `CHAT_${chatId}` },
         { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
       ],
     }),
     // Removes a single entry from `.chats/{chatId}/attachments/`.
@@ -1059,7 +1131,10 @@ export const api = createApi({
         method: "POST",
         body: { path },
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
     unpinLibraryItem: build.mutation<
       { ok: true },
@@ -1070,7 +1145,10 @@ export const api = createApi({
         method: "DELETE",
         body: { path },
       }),
-      invalidatesTags: [{ type: "LibraryFile", id: "LIST" }],
+      invalidatesTags: [
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ],
     }),
 
     // ── Chat pins ────────────────────────────────────────────────────
@@ -1165,10 +1243,15 @@ export const {
   usePatchMessageMutation,
   useDeleteMessageMutation,
   useRunMessageMutation,
+  usePostMessageFeedbackMutation,
   useCreateThreadMutation,
   useGetSummaryHistoryQuery,
   useGetMessagesQuery,
   useGetLibraryQuery,
+  useLazyGetLibraryQuery,
+  useGetLibraryFoldersQuery,
+  useSearchLibraryQuery,
+  useLazySearchLibraryQuery,
   useGetLibraryFileQuery,
   useDeleteLibraryFileMutation,
   useUploadLibraryFileMutation,

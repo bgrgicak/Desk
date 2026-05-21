@@ -47,5 +47,7 @@ export function toUiChat(c: ServerChat): UiChat {
     goal: narrowChatGoal(c.goal),
     kind: c.kind,
     pinned: c.pinned ?? false,
+    parentChatId: c.parentChatId,
+    anchorMessageId: c.anchorMessageId,
   };
 }

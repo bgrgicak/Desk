@@ -3,6 +3,9 @@ import { queries } from "@agent-desk/db";
 import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@agent-desk/shared";
 import {
   listLibrary,
+  listLibraryFolders,
+  searchLibrary,
+  statPinnedEntries,
   createLibraryFolder,
   createLibraryLink,
   moveLibraryEntry,
@@ -68,33 +71,107 @@ async function connectedLocalFilesystemMounts(
     .flatMap((connection) => localFilesystemVirtualMounts(connection.metadata));
 }
 
+/**
+ * Lists the immediate children (files + folders) of one library
+ * directory. `path` is workspace-root-relative; omit / empty string =
+ * workspace root. Virtual mounts surface as top-level folder entries on
+ * the root listing and resolve transparently when the caller drills into
+ * them. Pinned entries are decorated with `pinned: true`.
+ */
 export async function list(
   ctx: StorageContext,
   userId: string,
   workspaceId: string,
-  opts?: { cursor?: string; limit?: number; showHidden?: boolean; pinned?: boolean },
+  opts?: { path?: string; showHidden?: boolean },
 ) {
   const slug = await resolveSlug(ctx, workspaceId);
-  const [virtualMounts, authors, pinnedPaths] = await Promise.all([
+  const [virtualMounts, pinnedPaths] = await Promise.all([
     connectedLocalFilesystemMounts(ctx, userId, workspaceId),
-    queries.libraryFileAuthors.listByWorkspace(ctx.pool, workspaceId),
     queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
   ]);
-  const result = await listLibrary(ctx, slug, { ...opts, virtualMounts });
+  const result = await listLibrary(ctx, slug, {
+    path: opts?.path,
+    showHidden: opts?.showHidden,
+    virtualMounts,
+  });
   for (const item of result.items) {
-    const author = authors.get(item.path);
-    if (author) {
-      item.agentId = author.agentId;
-      if (author.creatorAgentId) item.creatorAgentId = author.creatorAgentId;
-    }
     if (pinnedPaths.has(item.path)) item.pinned = true;
   }
   for (const folder of result.folders) {
     if (pinnedPaths.has(folder.path)) folder.pinned = true;
   }
-  if (opts?.pinned) {
-    result.items = result.items.filter((item) => item.pinned);
-    result.folders = result.folders.filter((folder) => folder.pinned);
+  return result;
+}
+
+/**
+ * Returns every pinned entry in the workspace as a flat `{ items, folders }`
+ * shape. Pinned paths can sit anywhere in the tree — the sidebar needs
+ * them in one shot rather than walking the whole library.
+ */
+export async function listPinned(
+  ctx: StorageContext,
+  userId: string,
+  workspaceId: string,
+) {
+  const slug = await resolveSlug(ctx, workspaceId);
+  const [virtualMounts, pinnedPaths] = await Promise.all([
+    connectedLocalFilesystemMounts(ctx, userId, workspaceId),
+    queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
+  ]);
+  return statPinnedEntries(ctx, slug, [...pinnedPaths], virtualMounts);
+}
+
+/**
+ * Returns every folder in the workspace tree (no file metadata). Powers
+ * the move-to-folder picker, breadcrumb labels, and folder-pin lookups.
+ */
+export async function listFolders(
+  ctx: StorageContext,
+  userId: string,
+  workspaceId: string,
+  opts?: { showHidden?: boolean },
+) {
+  const slug = await resolveSlug(ctx, workspaceId);
+  const [virtualMounts, pinnedPaths] = await Promise.all([
+    connectedLocalFilesystemMounts(ctx, userId, workspaceId),
+    queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
+  ]);
+  const result = await listLibraryFolders(ctx, slug, {
+    showHidden: opts?.showHidden,
+    virtualMounts,
+  });
+  for (const folder of result.folders) {
+    if (pinnedPaths.has(folder.path)) folder.pinned = true;
+  }
+  return result;
+}
+
+/**
+ * Capped recursive name-match across the workspace. Replaces the legacy
+ * "fetch the full tree and filter client-side" pattern.
+ */
+export async function search(
+  ctx: StorageContext,
+  userId: string,
+  workspaceId: string,
+  opts: { q: string; showHidden?: boolean; limit?: number },
+) {
+  const slug = await resolveSlug(ctx, workspaceId);
+  const [virtualMounts, pinnedPaths] = await Promise.all([
+    connectedLocalFilesystemMounts(ctx, userId, workspaceId),
+    queries.libraryPins.listPinnedPaths(ctx.pool, workspaceId),
+  ]);
+  const result = await searchLibrary(ctx, slug, {
+    q: opts.q,
+    showHidden: opts.showHidden,
+    virtualMounts,
+    limit: opts.limit,
+  });
+  for (const item of result.items) {
+    if (pinnedPaths.has(item.path)) item.pinned = true;
+  }
+  for (const folder of result.folders) {
+    if (pinnedPaths.has(folder.path)) folder.pinned = true;
   }
   return result;
 }

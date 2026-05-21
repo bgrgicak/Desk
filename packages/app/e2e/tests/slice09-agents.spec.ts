@@ -17,7 +17,7 @@ import { test, expect } from "../fixtures";
 
 async function openAgentsTab(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Settings/i }).click();
-  await page.getByRole("button", { name: /^Agents$/i }).click();
+  await page.getByRole("button", { name: /^Models$/i }).click();
   // Wait for /tools/models to populate. The Add form snapshots flatModels
   // via useState(initialModel) on mount — open it before models resolve and
   // the Add agent button stays disabled with no way to pick one. The Desk
@@ -60,7 +60,7 @@ test("toggling an agent on/off in a workspace round-trips through the membership
   // the current workspace via addWorkspaceAgent, so the row starts checked.
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   await dialog.getByPlaceholder("e.g. Copywriter").fill(candidateName);
-  await dialog.getByRole("button", { name: /^Add agent$/i }).click();
+  await dialog.getByRole("button", { name: /^Add model$/i }).click();
   await expect(dialog.getByText(candidateName)).toBeVisible({ timeout: 5_000 });
 
   const candidateRow = dialog.locator("div.group", { hasText: candidateName }).first();
@@ -171,7 +171,7 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
   // Editor uses the default model; no need to touch the picker (which is
   // empty in the e2e lane anyway).
   await dialog.getByPlaceholder("e.g. Copywriter").fill(initialName);
-  await dialog.getByRole("button", { name: /^Add agent$/i }).click();
+  await dialog.getByRole("button", { name: /^Add model$/i }).click();
 
   // New agent row is rendered from the invalidated GET /agents list.
   await expect(dialog.getByText(initialName)).toBeVisible({ timeout: 5_000 });

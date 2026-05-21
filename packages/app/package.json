@@ -13,13 +13,14 @@
     "tag": "alpha"
   },
   "engines": {
-    "node": ">=23.4.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "typecheck": "tsc -b",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed"
   },

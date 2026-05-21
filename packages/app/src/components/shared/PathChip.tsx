@@ -2,8 +2,7 @@ import { File, Folder } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { SANDBOX_HOME } from '@/lib/remark-sandbox-paths'
 import { buildPath } from '@/router/nav'
-import { useGetLibraryQuery } from '@/store/api'
-import type { ListLibraryResponse } from '@/store/types'
+import { useGetLibraryFileQuery } from '@/store/api'
 
 interface PathChipProps {
   /** Original sandbox-absolute path, e.g. /home/agent/report.md */
@@ -30,18 +29,6 @@ export function displayBasename(displayPath: string): string {
   return basename || displayPath
 }
 
-export function isDirectoryPath(sandboxPath: string, library?: ListLibraryResponse): boolean {
-  if (sandboxPath.endsWith('/')) return true
-
-  const rel = normalizeLibraryPath(workspaceRelativePath(sandboxPath))
-  if (!rel) return true
-
-  return Boolean(
-    library?.folders?.some((folder) => normalizeLibraryPath(folder.path) === rel) ||
-      library?.items?.some((item) => item.isDir && normalizeLibraryPath(item.path) === rel),
-  )
-}
-
 export function pathChipHref(workspaceId: string | undefined, sandboxPath: string, isDir: boolean): string | undefined {
   if (!workspaceId) return undefined
   const rel = workspaceRelativePath(sandboxPath)
@@ -51,11 +38,17 @@ export function pathChipHref(workspaceId: string | undefined, sandboxPath: strin
 }
 
 export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProps) {
-  const { currentData: library } = useGetLibraryQuery(
-    workspaceId ? { workspaceId } : undefined,
-    { skip: !workspaceId },
+  // Per-path metadata lookup. Replaced the previous workspace-wide
+  // listing scan because that endpoint no longer returns the full tree —
+  // and PathChip is rendered many times in a long chat, making the
+  // dedicated /library/meta call far cheaper than re-walking the library.
+  const rel = normalizeLibraryPath(workspaceRelativePath(sandboxPath))
+  const skipMeta = !workspaceId || !rel || sandboxPath.endsWith('/')
+  const { currentData: meta } = useGetLibraryFileQuery(
+    { workspaceId: workspaceId ?? '', path: rel },
+    { skip: skipMeta },
   )
-  const isDir = isDirectoryPath(sandboxPath, library)
+  const isDir = sandboxPath.endsWith('/') || !rel || !!meta?.isDir
   const Icon = isDir ? Folder : File
   const href = pathChipHref(workspaceId, sandboxPath, isDir)
   const className = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono bg-muted hover:bg-muted/80 text-foreground border border-border/50 transition-colors cursor-pointer align-baseline no-underline"

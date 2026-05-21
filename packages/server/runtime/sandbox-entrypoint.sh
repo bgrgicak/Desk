@@ -41,8 +41,13 @@ fi
 link_skills='skills_target=$1; skills_link=$2; mkdir -p "$(dirname "$skills_link")"; if [ -L "$skills_link" ]; then ln -sfn "$skills_target" "$skills_link"; elif [ ! -e "$skills_link" ]; then ln -s "$skills_target" "$skills_link"; elif [ -d "$skills_link" ] && rmdir "$skills_link" 2>/dev/null; then ln -s "$skills_target" "$skills_link"; fi'
 if [ "$(id -u)" = "0" ] && [ "${DESK_SANDBOX_AGENT_USER:-}" != "0:0" ]; then
   runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.agents/skills" || true
+  # Mirror Desk-shipped global apps into every workspace at $HOME/.apps so
+  # the agent can `ls ~/.apps/` to browse them. Discovery still goes through
+  # `desk-agent find library` — the symlink is just an ergonomic affordance.
+  runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-apps "${HOME:-/home/agent}/.apps" || true
 else
   sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.agents/skills" || true
+  sh -c "$link_skills" sh /opt/desk-apps "${HOME:-/home/agent}/.apps" || true
 fi
 
 if [ -f "${HOME:-/home/agent}/.deskrc" ]; then

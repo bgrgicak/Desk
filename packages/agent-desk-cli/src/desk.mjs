@@ -63,12 +63,18 @@ export function detectMonorepo(pkgRoot = PKG_ROOT) {
 
 /**
  * Resolves the published API entry. Returns the absolute path or null
- * if the package isn't installed (monorepo dev) or the dist hasn't been
- * built yet.
+ * if the package isn't installed or the dist hasn't been built yet.
+ *
+ * Resolves via package.json (which is always reachable through the
+ * exports field by Node's spec) and walks to dist/main.js — the api
+ * package's `exports` only exposes the root entry, so a direct
+ * `require.resolve("@agent-desk/api/dist/main.js")` would throw
+ * ERR_PACKAGE_PATH_NOT_EXPORTED in a real install.
  */
 export function resolvePublishedApiEntry() {
   try {
-    const entry = require.resolve("@agent-desk/api/dist/main.js");
+    const pkgJson = require.resolve("@agent-desk/api/package.json");
+    const entry = path.join(path.dirname(pkgJson), "dist", "main.js");
     return fs.existsSync(entry) ? entry : null;
   } catch {
     return null;
@@ -90,21 +96,29 @@ export function resolveAppDist() {
   }
 }
 
-async function ensureDeskHome() {
-  const home = process.env.DESK_HOME ?? os.homedir();
-  await fsp.mkdir(path.join(home, "Desk"), { recursive: true });
+/**
+ * Resolves the Desk data root and ensures it exists. Mirrors the storage
+ * layer's `resolveDeskHome`: an explicit `DESK_HOME` env var is treated as
+ * the data root verbatim; otherwise we default to `$HOME/Desk`. Returning
+ * the same path we just created — earlier this function returned the
+ * parent ($HOME) which silently scattered db/backups/memory/skills across
+ * the home directory.
+ */
+export async function ensureDeskHome() {
+  const home = process.env.DESK_HOME ?? path.join(os.homedir(), "Desk");
+  await fsp.mkdir(home, { recursive: true });
   return home;
 }
 
 /**
  * Where the auto-unlock vault password lives.
  *   - Monorepo dev: repo-root .env (dev.sh shares it).
- *   - Published install: ~/Desk/.env.
+ *   - Published install: $DESK_HOME/.env.
  *
  * Returns the password. Generates one on first call.
  */
 async function ensureVaultPassword({ monorepoRoot, deskHome }) {
-  const envFile = monorepoRoot ? path.join(monorepoRoot, ".env") : path.join(deskHome, "Desk", ".env");
+  const envFile = monorepoRoot ? path.join(monorepoRoot, ".env") : path.join(deskHome, ".env");
   let existing = "";
   if (fs.existsSync(envFile)) {
     existing = await fsp.readFile(envFile, "utf-8");
@@ -147,7 +161,7 @@ async function cmdInit() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureDeskHome();
   await ensureVaultPassword({ monorepoRoot, deskHome: home });
-  log(`Desk home: ${path.join(home, "Desk")}`);
+  log(`Desk home: ${home}`);
   log("Init complete. Run `desk start` to launch the server.");
 }
 
@@ -216,7 +230,11 @@ async function cmdStartPublished({ home, vaultPassword }) {
   log(`desk-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);
   log(`app dist    → ${appDist}`);
 
-  const server = spawnInherit("node", [apiEntry], { env, cwd: home });
+  // Spawn the same Node binary that's running us, not bare "node". Under
+  // launchd / systemd / sandboxed shells, PATH may not include the Node
+  // we were launched with (e.g. nvm-managed), and `spawn("node", ...)`
+  // hits ENOENT.
+  const server = spawnInherit(process.execPath, [apiEntry], { env, cwd: home });
   attachStopHandlers(server);
 }
 
@@ -239,7 +257,6 @@ const SYSTEMD_UNIT_PATH = path.join(SYSTEMD_UNIT_DIR, SYSTEMD_UNIT_NAME);
 const WIN_TASK_NAME = "AgentDeskServer";
 
 function launchdPlist(nodeBin, deskBin, home) {
-  const deskHome = path.join(home, "Desk");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -255,8 +272,8 @@ function launchdPlist(nodeBin, deskBin, home) {
     <dict><key>DESK_HOME</key><string>${home}</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>${path.join(deskHome, "logs", "desk.log")}</string>
-    <key>StandardErrorPath</key><string>${path.join(deskHome, "logs", "desk.error.log")}</string>
+    <key>StandardOutPath</key><string>${path.join(home, "logs", "desk.log")}</string>
+    <key>StandardErrorPath</key><string>${path.join(home, "logs", "desk.error.log")}</string>
     <key>ThrottleInterval</key><integer>10</integer>
 </dict>
 </plist>
@@ -284,7 +301,7 @@ async function installService() {
   const home = await ensureDeskHome();
   const nodeBin = process.execPath;
   const deskBin = path.resolve(__dirname, "desk.mjs");
-  await fsp.mkdir(path.join(home, "Desk", "logs"), { recursive: true });
+  await fsp.mkdir(path.join(home, "logs"), { recursive: true });
 
   if (process.platform === "darwin") {
     await fsp.mkdir(path.dirname(LAUNCHD_PLIST_PATH), { recursive: true });
@@ -339,37 +356,125 @@ async function uninstallService() {
 }
 
 function serviceControl(action) {
+  let cmds;
   if (process.platform === "darwin") {
-    const cmds = {
+    cmds = {
       start: ["launchctl", ["load", "-w", LAUNCHD_PLIST_PATH]],
       stop: ["launchctl", ["unload", LAUNCHD_PLIST_PATH]],
       status: ["launchctl", ["list", LAUNCHD_LABEL]],
     };
-    const c = cmds[action];
-    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
-    spawnSync(c[0], c[1], { stdio: "inherit" });
   } else if (process.platform === "linux") {
-    const cmds = {
+    cmds = {
       start: ["systemctl", ["--user", "start", SYSTEMD_UNIT_NAME]],
       stop: ["systemctl", ["--user", "stop", SYSTEMD_UNIT_NAME]],
       status: ["systemctl", ["--user", "status", SYSTEMD_UNIT_NAME]],
     };
-    const c = cmds[action];
-    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
-    spawnSync(c[0], c[1], { stdio: "inherit" });
   } else if (process.platform === "win32") {
-    const cmds = {
+    cmds = {
       start: ["schtasks", ["/Run", "/TN", WIN_TASK_NAME]],
       stop: ["schtasks", ["/End", "/TN", WIN_TASK_NAME]],
       status: ["schtasks", ["/Query", "/TN", WIN_TASK_NAME]],
     };
-    const c = cmds[action];
-    if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
-    spawnSync(c[0], c[1], { stdio: "inherit" });
   } else {
     process.stderr.write(`desk service: unsupported platform ${process.platform}\n`);
     process.exit(1);
   }
+  const c = cmds[action];
+  if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
+  const { status } = spawnSync(c[0], c[1], { stdio: "inherit" });
+  if (status !== 0) process.exit(status ?? 1);
+  // start/stop succeed silently on every platform's underlying tool; print
+  // a friendly confirmation so the user doesn't have to re-check with
+  // `service status` to know it worked. The status command's own output
+  // is the answer, so we skip the extra line there.
+  if (action === "start") log("Service started.");
+  else if (action === "stop") log("Service stopped.");
+}
+
+/**
+ * True when the OS-level service is currently registered. The
+ * uninstallService() helpers tolerate "not installed" silently, but the
+ * uninstall summary reads better when we report it accurately.
+ */
+function isServiceInstalled() {
+  if (process.platform === "darwin") return fs.existsSync(LAUNCHD_PLIST_PATH);
+  if (process.platform === "linux") return fs.existsSync(SYSTEMD_UNIT_PATH);
+  if (process.platform === "win32") {
+    const { status } = spawnSync(
+      "schtasks", ["/Query", "/TN", WIN_TASK_NAME],
+      { stdio: "ignore" },
+    );
+    return status === 0;
+  }
+  return false;
+}
+
+/**
+ * Remove every `desk/*` container image. Best-effort: a missing docker
+ * CLI, a stopped daemon, or simply no Desk images all exit silently.
+ *
+ * Also tries nerdctl on Linux for parity with the runtime's engine
+ * autodetect. Either one being absent is fine — we just want the user
+ * to land at zero Desk images after `desk uninstall`, whichever runtime
+ * built them.
+ */
+function removeDeskImages() {
+  const tools = ["docker", "nerdctl"];
+  let removed = 0;
+  for (const tool of tools) {
+    const list = spawnSync(
+      tool,
+      ["images", "--format", "{{.Repository}}:{{.Tag}}"],
+      { encoding: "utf-8" },
+    );
+    if (list.status !== 0) continue; // tool missing or daemon down
+    const tags = list.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("desk/"));
+    for (const tag of tags) {
+      const { status } = spawnSync(tool, ["rmi", "-f", tag], { stdio: "inherit" });
+      if (status === 0) removed += 1;
+    }
+  }
+  return removed;
+}
+
+async function cmdUninstall(args) {
+  const removeFiles = args.includes("--remove-desk-files");
+  const summary = { service: false, images: 0, files: null, npmHint: null };
+
+  if (isServiceInstalled()) {
+    log("Stopping and unregistering the background service…");
+    await uninstallService();
+    summary.service = true;
+  } else {
+    log("Background service: not installed.");
+  }
+
+  const removed = removeDeskImages();
+  summary.images = removed;
+  if (removed > 0) log(`Removed ${removed} desk/* container image(s).`);
+  else log("Container images: nothing to remove.");
+
+  if (removeFiles) {
+    const home = process.env.DESK_HOME ?? path.join(os.homedir(), "Desk");
+    if (fs.existsSync(home)) {
+      log(`Removing ${home}…`);
+      await fsp.rm(home, { recursive: true, force: true });
+      summary.files = home;
+    } else {
+      log(`No data directory at ${home}.`);
+    }
+  } else {
+    log("Data files preserved. Re-run with --remove-desk-files to delete ~/Desk.");
+  }
+
+  log("");
+  log("Desk has been uninstalled from this machine.");
+  log("To finish removing the CLI itself:");
+  log("  • If installed globally:  npm uninstall -g @agent-desk/cli");
+  log("  • If used via npx:        npx clear-npx-cache  (or just stop calling it)");
 }
 
 async function cmdService(action) {
@@ -384,15 +489,17 @@ async function cmdService(action) {
   process.exit(2);
 }
 
+const MIN_NODE_MAJOR = 22;
+
 function ensureNodeVersion() {
   const major = parseInt(process.versions.node.split(".")[0], 10);
-  if (major === 23) return;
+  if (major >= MIN_NODE_MAJOR) return;
   process.stderr.write(
-    `desk: Node 23 is required (found ${process.versions.node}).\n` +
+    `desk: Node ${MIN_NODE_MAJOR}+ is required (found ${process.versions.node}).\n` +
       "  Install via:\n" +
-      "    volta install node@23\n" +
-      "    fnm install 23 && fnm use 23\n" +
-      "    nvm install 23 && nvm use 23\n",
+      `    volta install node@${MIN_NODE_MAJOR}\n` +
+      `    fnm install ${MIN_NODE_MAJOR} && fnm use ${MIN_NODE_MAJOR}\n` +
+      `    nvm install ${MIN_NODE_MAJOR} && nvm use ${MIN_NODE_MAJOR}\n`,
   );
   process.exit(1);
 }
@@ -404,6 +511,7 @@ async function main() {
     case "start": return cmdStart();
     case "init": return cmdInit();
     case "service": return cmdService(process.argv[3]);
+    case "uninstall": return cmdUninstall(process.argv.slice(3));
     case "version":
     case "--version":
     case "-v":
@@ -412,12 +520,14 @@ async function main() {
     case "--help":
     case "-h":
       process.stdout.write(
-        "Usage: desk [start|init|service|version]\n" +
-        "  start                          boot desk-server (default)\n" +
-        "  init                           create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
-        "  service install|uninstall      register/unregister Desk as a system service\n" +
-        "  service start|stop|status      control the installed system service\n" +
-        "  version                        print version\n",
+        "Usage: desk [start|init|service|uninstall|version]\n" +
+        "  start                              boot desk-server (default)\n" +
+        "  init                               create ~/Desk + DESK_VAULT_PASSWORD without starting\n" +
+        "  service install|uninstall          register/unregister Desk as a system service\n" +
+        "  service start|stop|status          control the installed system service\n" +
+        "  uninstall [--remove-desk-files]    remove the service + desk/* docker images;\n" +
+        "                                     pass --remove-desk-files to also delete ~/Desk\n" +
+        "  version                            print version\n",
       );
       return;
     default:
@@ -426,8 +536,23 @@ async function main() {
   }
 }
 
-// Don't auto-run when this module is imported (e.g. by tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Don't auto-run when this module is imported (e.g. by tests). We compare
+// realpath()s so the check survives:
+//   - the .bin/desk symlink npm drops into node_modules/.bin/
+//   - macOS resolving /tmp -> /private/tmp on one side but not the other
+//   - the user invoking via a direct symlink anywhere on $PATH
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    const self = fs.realpathSync(fileURLToPath(import.meta.url));
+    const entry = fs.realpathSync(process.argv[1]);
+    return self === entry;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main().catch((err) => {
     process.stderr.write(`desk: ${err?.stack ?? err}\n`);
     process.exit(1);

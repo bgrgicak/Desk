@@ -5,7 +5,7 @@ import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { queries } from "@agent-desk/db";
-import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, messageTextPreview, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
 import { z } from "zod";
 import {
   listSummaryHistory,
@@ -41,9 +41,63 @@ export {
 } from "./chats-attachments.js";
 export type { ChatFileRef } from "./chats-attachments.js";
 
+
 const IsoUtcDateTimeSchema = z.string().datetime({ offset: true }).refine((value) => value.endsWith("Z"), {
   message: "datetime must be UTC and end with Z",
 });
+
+const THREAD_TITLE_MAX = 60;
+
+/**
+ * Strips the markdown decorations that commonly bleed into a sidebar
+ * title when the source is an agent reply: heading markers, blockquote
+ * arrows, list bullets, link syntax (keeping the visible text), and
+ * paired emphasis / inline-code markers. Not a full markdown parser —
+ * just enough to keep the rendered title clean.
+ */
+function stripMarkdownForTitle(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s*[#>]+\s*/, "")
+    .replace(/^\s*[-*+]\s+/, "")
+    .replace(/^\s*\d+\.\s+/, "")
+    .replace(/\*+/g, "")
+    .replace(/`+/g, "")
+    .replace(/_+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Pulls a sidebar-friendly title from a chunk of message text: first
+ * non-blank line, markdown stripped, trimmed, truncated to
+ * THREAD_TITLE_MAX with an ellipsis. Returns `fallback` when the text has
+ * no usable content.
+ */
+function deriveTitleFromText(text: string, fallback: string): string {
+  const firstLine = text.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
+  if (!firstLine) return fallback;
+  const cleaned = stripMarkdownForTitle(firstLine);
+  if (!cleaned) return fallback;
+  if (cleaned.length <= THREAD_TITLE_MAX) return cleaned;
+  return cleaned.slice(0, THREAD_TITLE_MAX - 1).trimEnd() + "…";
+}
+
+/**
+ * Title for a thread anchored at a given message. Prefers the anchor's
+ * task title (set on kind='task' rows), then a derived snippet of the
+ * anchor's text preview (works for user `text` content, agent `events`
+ * streams, summaries, etc.), then the parent chat's title as a last
+ * resort. Threads conceptually start at the anchor, so the anchor — not
+ * the parent chat — is the right title source.
+ */
+function deriveTitleFromAnchor(anchor: Message, fallback: string): string {
+  const taskTitle = anchor.title?.trim();
+  if (taskTitle) return taskTitle;
+  const preview = messageTextPreview(anchor);
+  if (preview) return deriveTitleFromText(preview, fallback);
+  return fallback;
+}
 
 /**
  * Subset of the run manager the patch-message route needs to drive
@@ -70,6 +124,14 @@ export async function listChats(pool: Pool, workspaceId: string) {
 export async function getChat(pool: Pool, id: string) {
   const chat = await queries.chats.findById(pool, id);
   if (!chat) throw new NotFoundError(`Chat not found: ${id}`);
+  // Derive thread-anchor metadata so the client can render a "back to
+  // parent chat" affordance without scanning every message page. The
+  // anchor lives in the parent chat — querying by thread_chat_id is the
+  // canonical link, and it's a single indexed lookup.
+  const anchor = await queries.messages.findAnchorForThreadChat(pool, id);
+  if (anchor) {
+    return { ...chat, parentChatId: anchor.chatId, anchorMessageId: anchor.id };
+  }
   return chat;
 }
 
@@ -321,6 +383,12 @@ export async function sendMessage(
     agentId: chat.agentId,
   });
   emit({ type: "message.appended", payload: trigger, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
+  // The new agent_turn flips the chat's live `running` flag (computed
+  // from the latest agent_turn state in queries/chats.ts). Ship a fresh
+  // chat.updated so the sidebar can render the spinner without
+  // inferring state from message events.
+  const chatAfterTrigger = await queries.chats.findById(pool, chatId);
+  if (chatAfterTrigger) emit({ type: "chat.updated", payload: chatAfterTrigger });
 
   return { userMessage, triggerId };
 }
@@ -361,6 +429,91 @@ export interface CreateThreadResult {
  *   `agent_turn` trigger. Caller is expected to fire the trigger and
  *   schedule a summary, mirroring the regular send-message path.
  */
+/**
+ * Inserts a thread chat anchored at `anchorMessage` (which must live in
+ * `parentChatId`) and atomically claims the anchor via
+ * `thread_chat_id`. Emits `chat.updated` for the new chat and
+ * `message.updated` for the anchor (so parent-chat subscribers can
+ * render the "open thread" affordance).
+ *
+ * Unlike `createThread`, this helper does NOT insert a thread-start
+ * message or an agent_turn trigger — the caller decides what (if
+ * anything) lands in the new chat first. Used by the sandbox task path
+ * where the kind='task' anchor itself is conceptually the thread's
+ * starting message; task_runs land in the thread chat when the
+ * scheduler fires.
+ */
+/**
+ * Posts a short `role='system'` notification next to the task anchor when
+ * the user marks the task done. The message lives in the same (parent)
+ * chat as the anchor so the completion surfaces as a conversation event
+ * rather than a silent state flip on the task row. The notification is
+ * a plain chat-kind text message — it doesn't itself anchor a thread.
+ */
+async function postTaskDoneNotification(
+  pool: Pool,
+  taskAnchor: Message,
+  emit: (event: WsEvent) => void,
+): Promise<void> {
+  const title = taskAnchor.title?.trim() || "Task";
+  const body = `Task "${title}" marked as done.`;
+  const note = await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId: taskAnchor.chatId,
+    role: "system",
+    content: { type: "text", text: body },
+    parentId: taskAnchor.id,
+  });
+  const { rows } = await pool.query<{ workspace_id: string; title: string | null }>(
+    `SELECT workspace_id, title FROM chats WHERE id = ?`,
+    [taskAnchor.chatId],
+  );
+  emit({
+    type: "message.appended",
+    payload: note,
+    workspaceId: rows[0]?.workspace_id,
+    chatTitle: rows[0]?.title ?? undefined,
+  });
+}
+
+export async function createThreadShell(
+  pool: Pool,
+  parentChatId: string,
+  anchorMessage: Message,
+  emit: (event: WsEvent) => void,
+): Promise<Chat> {
+  if (anchorMessage.chatId !== parentChatId) {
+    throw new NotFoundError(`Message not found in chat: ${anchorMessage.id}`);
+  }
+  if (anchorMessage.threadChatId) {
+    throw new ConflictError(`Message already has a thread: ${anchorMessage.id}`);
+  }
+  const parentChat = await queries.chats.findById(pool, parentChatId);
+  if (!parentChat) throw new NotFoundError(`Chat not found: ${parentChatId}`);
+
+  const threadChat = await queries.chats.insert(pool, {
+    id: generateId("chat"),
+    workspaceId: parentChat.workspaceId,
+    agentId: parentChat.agentId,
+    title: deriveTitleFromAnchor(anchorMessage, parentChat.title),
+  });
+
+  const claimedAnchor = await queries.messages.setThreadChatId(
+    pool,
+    anchorMessage.id,
+    threadChat.id,
+  );
+  if (!claimedAnchor) {
+    await pool.query("DELETE FROM chats WHERE id = ?", [threadChat.id]);
+    throw new ConflictError(`Message already has a thread: ${anchorMessage.id}`);
+  }
+
+  emit({ type: "chat.updated", payload: threadChat });
+  emit({ type: "message.updated", payload: claimedAnchor });
+
+  return threadChat;
+}
+
 export async function createThread(
   pool: Pool,
   parentChatId: string,
@@ -436,13 +589,17 @@ export async function createThread(
     agentId = enabledAgents[0].agentId;
   }
 
-  // Create the thread chat. Title borrows from the parent chat so the
-  // sidebar entry is recognisable; the UI can rename later.
+  // Create the thread chat. Title is derived from the anchor message —
+  // the anchor is mounted as the first row in the thread transcript and
+  // is what makes the thread a thread, so it's the right title source
+  // regardless of whether the anchor came from the user or the agent.
+  // The UI can rename later; falls back to the parent chat's title only
+  // when the anchor has no usable text.
   const threadChat = await queries.chats.insert(pool, {
     id: generateId("chat"),
     workspaceId: targetWorkspaceId,
     agentId,
-    title: parentChat.title ? `Thread: ${parentChat.title}` : "Thread",
+    title: deriveTitleFromAnchor(anchorMessage, parentChat.title),
   });
 
   // Atomically claim the anchor as the parent of this thread. If a
@@ -500,6 +657,10 @@ export async function createThread(
     chatTitle: threadChat.title,
     actorUserId: opts?.actorUserId,
   });
+  // Thread chat now has a pending agent_turn — flip its `running`
+  // flag in every client's getChats cache via a fresh chat.updated.
+  const threadAfterTrigger = await queries.chats.findById(pool, threadChat.id);
+  if (threadAfterTrigger) emit({ type: "chat.updated", payload: threadAfterTrigger });
 
   // Notify subscribers that the anchor now has a threadChatId so the
   // parent chat's transcript can render the "open thread" affordance.
@@ -614,13 +775,14 @@ export async function patchMessage(
   // A no-op state patch (e.g. `state: 'pending'` on an already-pending row)
   // is allowed and falls through to the field-only path below — the kanban
   // board sends the column's target state on every drop without inspecting
-  // the row's current state.
+  // the row's current state. `state='running'` is already rejected at the
+  // input layer above, for every kind: parent task rows must not be flipped
+  // to running directly — only POST /chats/{id}/messages/{id}/run fires a
+  // task, and the resulting child task_run carries the real "running" state
+  // (see scheduler/runs.ts startTaskRun).
   const stateTransition = data.state !== undefined && data.state !== current.state;
   // For non-task messages the running state is claimed atomically by
-  // fireMessage — a manual flip would race with the executor. Task messages
-  // (kind='task') are different: the executor claims the task_run child, so
-  // the parent's running state is only a kanban-position signal and can be
-  // patched freely.
+  // fireMessage — a manual flip would race with the executor.
   if (stateTransition && current.state === "running" && current.kind !== "task") {
     throw new ValidationError(
       `cannot patch state of a running message; cancel or wait for it to finish`,
@@ -668,6 +830,13 @@ export async function patchMessage(
     else if (data.state === "pending") updated = await lifecycleOps.resumeMessage(messageId);
     else if (data.state === "cancelled") updated = await lifecycleOps.cancelScheduledMessage(messageId);
     if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
+    // When the user marks a task done (state=cancelled on a kind='task'
+    // anchor), post a short system note in the same (parent) chat so the
+    // completion shows up as a conversation event next to the anchor —
+    // not just a silent state flip.
+    if (data.state === "cancelled" && updated.kind === "task") {
+      await postTaskDoneNotification(pool, updated, emit);
+    }
     return updated;
   }
 
@@ -690,6 +859,85 @@ export async function patchMessage(
  * drop is the user's "do it again, now" intent. Idempotent if the row
  * is already running: returns the current row without firing twice.
  */
+const RecordFeedbackSchema = z.object({
+  rating: z.enum(["up", "down"]),
+});
+
+/**
+ * Persists a thumbs-up / thumbs-down reaction on an agent reply as a
+ * `role: 'system'` chat message with `feedback` content. The reaction
+ * shows up in the activity stream so the workspace's daily reflection
+ * can read it as a signal about which replies the user actually liked
+ * (or didn't), without us having to invent a parallel reactions table.
+ *
+ * The route is idempotent at the rating granularity: re-posting the
+ * same rating on the same target is rejected with 409 so the timeline
+ * doesn't fill up with duplicate signals on accidental double-clicks.
+ * Flipping (`up` ↔ `down`) is allowed and appends a new signal.
+ */
+export async function recordFeedback(
+  pool: Pool,
+  chatId: string,
+  messageId: string,
+  rawData: unknown,
+  emit: (event: WsEvent) => void,
+  opts?: { actorUserId?: string },
+): Promise<Message> {
+  const parsed = RecordFeedbackSchema.safeParse(rawData);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid feedback body: ${parsed.error.message}`);
+  }
+  const target = await queries.messages.findById(pool, messageId);
+  if (!target || target.chatId !== chatId) {
+    throw new NotFoundError(`Message not found in chat: ${messageId}`);
+  }
+  const chat = await queries.chats.findById(pool, chatId);
+  if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
+
+  const { rows: existing } = await pool.query<{ id: string; content: string }>(
+    `SELECT id, content
+     FROM messages
+     WHERE chat_id = ?
+       AND role = 'system'
+       AND json_valid(content)
+       AND json_extract(content, '$.type') = 'feedback'
+       AND json_extract(content, '$.targetMessageId') = ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [chatId, messageId],
+  );
+  if (existing[0]) {
+    try {
+      const prev = JSON.parse(existing[0].content) as { rating?: string };
+      if (prev?.rating === parsed.data.rating) {
+        throw new ConflictError(`Feedback already recorded for message: ${messageId}`);
+      }
+    } catch (err) {
+      if (err instanceof ConflictError) throw err;
+      // Malformed prior row — fall through and append a fresh signal.
+    }
+  }
+
+  const message = await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId,
+    role: "system",
+    content: {
+      type: "feedback",
+      rating: parsed.data.rating,
+      targetMessageId: messageId,
+    },
+  });
+  emit({
+    type: "message.appended",
+    payload: message,
+    workspaceId: chat.workspaceId,
+    chatTitle: chat.title,
+    actorUserId: opts?.actorUserId,
+  });
+  return message;
+}
+
 export async function runMessage(
   pool: Pool,
   chatId: string,
@@ -705,16 +953,14 @@ export async function runMessage(
 
   // Non-task messages are claimed in-place by fireMessage and must be reset
   // to pending before a manual re-fire. Task executions happen on a fresh
-  // task_run child. For unscheduled tasks, POST /run is also the kanban
-  // "move to Active" gesture, so persist that explicit user-owned status and
-  // let the scheduler record completion/failure only on the task_run child.
+  // task_run child, which carries the run's lifecycle. The parent task row
+  // is not mutated — selectors derive the Active column from a running
+  // task_run, so scheduled and unscheduled "Run now" follow the same path.
   const rowToReturn = current.kind === "task"
-    ? (!current.executeAt && !current.cron
-      ? await queries.messages.updateMessage(pool, messageId, { state: "running" })
-      : current)
+    ? current
     : await queries.messages.updateMessage(pool, messageId, { state: "pending" });
   if (!rowToReturn) throw new NotFoundError(`Message not found: ${messageId}`);
-  if (current.kind !== "task" || rowToReturn !== current) emit({ type: "message.updated", payload: rowToReturn });
+  if (current.kind !== "task") emit({ type: "message.updated", payload: rowToReturn });
 
   // Fire-and-forget. The full agent run continues on the message itself for
   // non-task rows and on a task_run child for task rows.

@@ -1,0 +1,15 @@
+{
+  "name": "rating",
+  "description": "Renders a question with a 1..max star rating selector. Agents attach with --param question=\"...\" to ask the user for a 1..N rating via UI.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "max": {
+      "type": "number",
+      "description": "Top of the rating scale. Defaults to 5."
+    }
+  }
+}

@@ -57,6 +57,9 @@ export type {
 } from "./files.js";
 export {
   listLibrary,
+  listLibraryFolders,
+  searchLibrary,
+  statPinnedEntries,
   createLibraryFolder,
   createLibraryLink,
   moveLibraryEntry,

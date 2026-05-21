@@ -193,10 +193,20 @@ describe("library virtual-mount reads", () => {
       },
     ]);
 
-    // The library listing must surface the mounted file.
-    const listRes = await request(
+    // The library listing must surface the mounted directory at the
+    // workspace root, and drilling into it must yield the file.
+    const rootRes = await request(
       "GET",
       `/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      token,
+    );
+    expect(rootRes.status).toBe(200);
+    const rootFolders = (rootRes.body as { folders: Array<{ path: string }> }).folders;
+    expect(rootFolders.some((f) => f.path === "Downloads")).toBe(true);
+
+    const listRes = await request(
+      "GET",
+      `/library?workspaceId=${encodeURIComponent(workspaceId)}&path=Downloads`,
       token,
     );
     expect(listRes.status).toBe(200);

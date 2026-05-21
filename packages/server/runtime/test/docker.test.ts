@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import {
+  bindsSatisfy,
   classifyResourceError,
   killOpencodeDaemonsForOrphans,
   providerKeyEnv,
@@ -71,6 +72,59 @@ describe("classifyResourceError", () => {
     expect(
       classifyResourceError(1, "setsid: child 12345 did not exit normally: Success\n"),
     ).toBe("memory");
+  });
+});
+
+describe("bindsSatisfy — subset semantics for mount drift", () => {
+  const workspace = "/home/bero/Desk/proj:/home/agent:rw";
+  const skills = "/home/bero/Desk/.skills:/opt/desk-skills:ro";
+  const projectsLocal = "/home/bero/Projects:/home/agent/Projects:rw";
+  const downloadsLocal = "/home/bero/Downloads:/home/agent/Downloads:ro";
+
+  it("accepts exact-match (same set on both sides)", () => {
+    expect(bindsSatisfy([workspace, skills], [workspace, skills])).toBe(true);
+  });
+
+  it("accepts extras in actual beyond what expected requires", () => {
+    // Container has more mounts than the caller asked about (the
+    // chaos-test failure mode: container created with local-fs mounts,
+    // then a utility caller without a mountPlan asks for just the
+    // defaults — must not be flagged as drift).
+    expect(
+      bindsSatisfy(
+        [workspace, skills, projectsLocal, downloadsLocal],
+        [workspace, skills],
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects when an expected mount is missing", () => {
+    // The caller's required workspace mount is absent → real drift.
+    expect(
+      bindsSatisfy([skills, projectsLocal], [workspace, skills]),
+    ).toBe(false);
+  });
+
+  it("rejects when an expected mount has a different host source", () => {
+    // Same target (/home/agent) but a different host path means the
+    // container is pointed at the wrong workspace dir on disk.
+    expect(
+      bindsSatisfy(
+        ["/home/bero/Desk/OTHER:/home/agent:rw", skills],
+        [workspace, skills],
+      ),
+    ).toBe(false);
+  });
+
+  it("treats undefined actual as no mounts (empty expected still satisfied)", () => {
+    expect(bindsSatisfy(undefined, [])).toBe(true);
+    expect(bindsSatisfy(undefined, [workspace])).toBe(false);
+  });
+
+  it("is order-insensitive — Docker reports binds in arbitrary order", () => {
+    expect(
+      bindsSatisfy([skills, projectsLocal, workspace], [workspace, skills]),
+    ).toBe(true);
   });
 });
 

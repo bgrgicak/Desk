@@ -34,10 +34,22 @@ export const SANDBOX_HOME = "/home/agent";
 // and symlinked here by the sandbox entrypoint.
 export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.agents/skills`;
 export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
+export const APPS_SANDBOX_MOUNT_DIR = "/opt/desk-apps";
 
 /** Host-side global skills directory. Mounted read-only into each sandbox. */
 export function skillsHostDir(home: string): string {
   return path.join(home, ".skills");
+}
+
+/**
+ * Host-side built-in apps directory. Populated on server start by
+ * `writeBuiltinApps` from the bundled `@agent-desk/desk-apps` source.
+ * Mounted read-only into every sandbox at `APPS_SANDBOX_MOUNT_DIR` so
+ * agents can `desk-agent chat attach-artifact` a built-in fragment using
+ * its in-sandbox path (e.g. `/opt/desk-apps/chat-forms.app/dist/fragments/yes_no`).
+ */
+export function appsHostDir(home: string): string {
+  return path.join(home, ".apps");
 }
 
 const activeMounts = new Map<string, Map<string, MountSet>>();
@@ -162,6 +174,12 @@ export function buildDefaultMountPlan(
     {
       sourcePath: skillsHostDir(home),
       targetPath: SKILLS_SANDBOX_MOUNT_DIR,
+      mode: "ro",
+      category: "external",
+    },
+    {
+      sourcePath: appsHostDir(home),
+      targetPath: APPS_SANDBOX_MOUNT_DIR,
       mode: "ro",
       category: "external",
     },

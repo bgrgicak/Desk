@@ -4,6 +4,7 @@ import {
   parseChatAppDirPath,
   parseChatAppFragmentPath,
   parseChatAppManifestPath,
+  parseGlobalAppPath,
   parseLibraryAppDirPath,
   parseLibraryAppFragmentPath,
   parseLibraryAppManifestPath,
@@ -95,6 +96,50 @@ describe('appAttachmentToPreview', () => {
   it('returns null for non-app paths', () => {
     expect(appAttachmentToPreview('notes.md')).toBeNull()
     expect(appAttachmentToPreview('.chats/cht_a/attachments/photo.png')).toBeNull()
+  })
+
+  it('routes /opt/desk-apps/<name>.app/dist/fragments/<frag> to the global scope', () => {
+    expect(
+      appAttachmentToPreview('/opt/desk-apps/chat-forms.app/dist/fragments/yes-no'),
+    ).toEqual({ scope: 'global', appName: 'chat-forms', fragment: 'yes-no' })
+  })
+
+  it('routes /opt/desk-apps/<name>.app (app-only) to the global scope without a fragment', () => {
+    expect(
+      appAttachmentToPreview('/opt/desk-apps/chat-forms.app'),
+    ).toEqual({ scope: 'global', appName: 'chat-forms' })
+  })
+})
+
+describe('parseGlobalAppPath', () => {
+  it('extracts fragment from /opt/desk-apps/<name>.app/dist/fragments/<frag>', () => {
+    expect(
+      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/fragments/yes-no'),
+    ).toEqual({ appName: 'chat-forms', fragment: 'yes-no' })
+  })
+
+  it('extracts app from /opt/desk-apps/<name>.app even without dist/fragments tail', () => {
+    expect(
+      parseGlobalAppPath('/opt/desk-apps/chat-forms.app'),
+    ).toEqual({ appName: 'chat-forms' })
+    expect(
+      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist'),
+    ).toEqual({ appName: 'chat-forms' })
+    expect(
+      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/index.html'),
+    ).toEqual({ appName: 'chat-forms' })
+  })
+
+  it('rejects paths outside the /opt/desk-apps/ prefix', () => {
+    expect(parseGlobalAppPath('chat-forms.app/dist/fragments/yes-no')).toBeNull()
+    expect(parseGlobalAppPath('/opt/desk-apps/notes/file.md')).toBeNull()
+    expect(parseGlobalAppPath('.chats/cht_a/artifacts/chat-forms.app')).toBeNull()
+  })
+
+  it('rejects snake_case fragment names (URL matcher requires kebab-case)', () => {
+    expect(
+      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/fragments/yes_no'),
+    ).toBeNull()
   })
 })
 

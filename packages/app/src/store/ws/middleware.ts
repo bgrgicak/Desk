@@ -1,7 +1,7 @@
 import type { Middleware } from "@reduxjs/toolkit";
 import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
-import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed, clearChatFailed, clearWsKnownChatIds, selectCurrentUserId } from "../slices/derivedSlice";
+import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
 import { getSessionToken } from "@/auth/session";
 import type { AgentEvent, AgentLogEntry, ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
@@ -103,13 +103,7 @@ function flushBatchedEvents(
   if (pendingStreamingByMessageId.size > 0) {
     const streaming = Array.from(pendingStreamingByMessageId.entries());
     pendingStreamingByMessageId.clear();
-    const seenChats = new Set<string>();
     for (const [messageId, { chatId, delta }] of streaming) {
-      if (!seenChats.has(chatId)) {
-        seenChats.add(chatId);
-        dispatch(markChatRunning(chatId));
-        patchChatFailedInCache(dispatch, chatId, false, getState);
-      }
       patchPerChatMessageCaches(dispatch, chatId, (draft) => {
         const m = draft.items.find((x) => x.id === messageId);
         if (m && m.content.type === "text") {
@@ -339,39 +333,6 @@ function patchChatActivityInCache(
     if (!chat) continue;
     dispatch(
       api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patch),
-    );
-  }
-}
-
-function patchChatFailedInCache(
-  dispatch: (a: unknown) => unknown,
-  chatId: string,
-  failed: boolean,
-  getState?: () => unknown,
-): void {
-  const patchList = (draft: ServerChat[]) => {
-    const chat = draft.find((c) => c.id === chatId);
-    if (chat) chat.failed = failed;
-  };
-  const patchSingle = (draft: ServerChat) => {
-    if (draft.id === chatId) draft.failed = failed;
-  };
-
-  dispatch(api.util.updateQueryData("getChats", undefined, patchList));
-  dispatch(api.util.updateQueryData("getChat", chatId, patchSingle));
-
-  if (!getState) return;
-  const state = getState() as Record<string, unknown>;
-  const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
-  if (!apiState?.queries) return;
-  for (const [key, entry] of Object.entries(apiState.queries)) {
-    if (!key.startsWith("getChats(")) continue;
-    const chats = entry?.data;
-    if (!Array.isArray(chats)) continue;
-    const chat = chats.find((c: ServerChat) => c.id === chatId);
-    if (!chat) continue;
-    dispatch(
-      api.util.updateQueryData("getChats", { workspaceId: chat.workspaceId }, patchList),
     );
   }
 }
@@ -610,11 +571,6 @@ export const wsMiddleware: Middleware = (storeApi) => {
 
     ws.addEventListener("open", () => {
       reconnectDelay = RECONNECT_MIN_MS;
-      // Clear the WS-known guard so the upcoming getChats refetch is
-      // fully authoritative. On reconnect, any WS events missed during
-      // the disconnect gap can't be corrected from wsKnownChatIds —
-      // only a fresh server snapshot can fix stale running state.
-      storeApi.dispatch(clearWsKnownChatIds());
       // On reconnect (not the initial connect), refetch the chat list so
       // the `running` boolean reflects post-recovery state. Orphaned runs
       // that completed during the disconnect gap are corrected here.
@@ -773,18 +729,17 @@ export function applyEventToCache(
           (draft) => {
             const idx = draft.findIndex((c) => c.id === chatForCache.id);
             if (idx >= 0) {
-              // `chat.updated` carries the base chat row from GET/PATCH
-              // /chats/:id. Preserve list-only fields that are hydrated by
-              // GET /chats so a metadata/unread patch does not drop the
-              // sidebar icon or running spinner until the next list refetch.
+              // `running` / `failed` now ride along on every chat.updated
+              // payload (findById computes them live from the latest
+              // agent_turn), so the payload is authoritative — no
+              // preservation. `kind` is sidebar-list-only meta the base
+              // chat row doesn't carry, so keep the cached value.
               draft[idx] = {
                 ...chatForCache,
                 kind: draft[idx].kind,
-                running: draft[idx].running,
-                failed: draft[idx].failed,
               };
             } else {
-              draft.unshift({ ...chatForCache, kind: "chat", running: false, failed: false });
+              draft.unshift({ ...chatForCache, kind: "chat" });
             }
           },
         ),
@@ -797,14 +752,25 @@ export function applyEventToCache(
             draft[idx] = {
               ...chatForCache,
               kind: draft[idx].kind,
-              running: draft[idx].running,
-              failed: draft[idx].failed,
             };
           }
         }),
       );
       dispatch(
-        api.util.updateQueryData("getChat", chatForCache.id, () => chatForCache),
+        api.util.updateQueryData("getChat", chatForCache.id, (draft) => {
+          // Preserve thread-anchor metadata that the WS payload from
+          // chat-level emits (patch/rename) does not carry — those
+          // fields are derived in GET /chats/:id from the anchor
+          // message and would otherwise blink off on every unrelated
+          // chat update. New values in `chatForCache` still win.
+          const preservedParentChatId = chatForCache.parentChatId ?? draft?.parentChatId;
+          const preservedAnchorMessageId = chatForCache.anchorMessageId ?? draft?.anchorMessageId;
+          return {
+            ...chatForCache,
+            parentChatId: preservedParentChatId,
+            anchorMessageId: preservedAnchorMessageId,
+          };
+        }),
       );
       break;
     }
@@ -822,9 +788,6 @@ export function applyEventToCache(
           draft.filter((c) => c.id !== chatId),
         ),
       );
-      // Clean up running-chat tracking so deleted chats don't leave
-      // orphaned spinner entries.
-      dispatch(markChatIdle(chatId));
       break;
     }
     case "message.appended":
@@ -868,20 +831,11 @@ export function applyEventToCache(
         );
       }
       dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }]));
-      // Track running chats for the sidebar spinner.
-      if (msg.content?.type === "agent_turn") {
-        if (msg.state === "pending" || msg.state === "running") {
-          dispatch(markChatRunning(msg.chatId));
-          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
-        } else if (msg.state === "failed") {
-          dispatch(markChatFailed(msg.chatId));
-          patchChatFailedInCache(dispatch, msg.chatId, true, getState);
-        } else {
-          dispatch(markChatIdle(msg.chatId));
-          dispatch(clearChatFailed(msg.chatId));
-          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
-        }
-      }
+      // Sidebar running/failed flags used to be inferred here from
+      // agent_turn message-state transitions. They're now carried by
+      // the server's `chat.updated` event (running/failed are part of
+      // the base Chat row and computed live in queries/chats.ts), so
+      // no client-side inference is needed.
       // Non-internal messages update chat.unread and chat.updated_at on
       // the server. Internal messages (summary, summary_request, agent_turn,
       // and any message with kind="summary") leave the chat row untouched, so
@@ -898,8 +852,6 @@ export function applyEventToCache(
       if (event.type === "message.appended") {
         const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {
-          dispatch(clearChatFailed(msg.chatId));
-          patchChatFailedInCache(dispatch, msg.chatId, false, getState);
           patchChatActivityInCache(dispatch, msg.chatId, msg.createdAt, getState);
           const isViewedChat = viewingChatId === msg.chatId;
           if (isViewedChat) {
@@ -966,7 +918,10 @@ export function applyEventToCache(
       break;
     }
     case "library.changed": {
-      dispatch(api.util.invalidateTags([{ type: "LibraryFile", id: "LIST" }]));
+      dispatch(api.util.invalidateTags([
+        { type: "LibraryFile", id: "LIST" },
+        { type: "LibraryFile", id: "FOLDERS" },
+      ]));
       dispatch(bumpFileChangeCounter(event.payload.path));
       // Renames retarget chat-attachment symlinks (Files panel) and
       // rewrite message-attachment paths (chat bubbles). The server
