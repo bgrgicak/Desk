@@ -3,7 +3,7 @@ import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   CalendarClock, CheckCircle2, ExternalLink, Loader2,
-  Paperclip, Plus, Trash2, Zap,
+  MessagesSquare, Paperclip, Plus, Trash2, Zap,
 } from 'lucide-react'
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   DropdownMenuItem,
+  cn,
 } from '@agent-desk/ui'
 import { iconForFile } from '@/data/file-kind'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
@@ -29,14 +30,17 @@ import {
   useDeleteMessageMutation,
   useGetAgentsQuery,
   useGetChatQuery,
+  useGetChatsQuery,
   useGetMessagesQuery,
   usePatchMessageMutation,
   usePostChatMessageMutation,
   useRunMessageMutation,
 } from '@/store/api'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
+import { toUiChat } from '@/store/selectors/chats'
+import { useChatHierarchy } from '@/store/selectors/threads'
 import type { ServerFile } from '@/store/types'
-import type { Task } from '@/data/ui-types'
+import type { Chat as UiChat, Task } from '@/data/ui-types'
 
 interface ChatRightPanelProps {
   chatId: string
@@ -81,13 +85,36 @@ export function ChatRightPanel({
       )
     : files
 
+  // Resolve thread relationships once for the whole panel: we need
+  // both the list of child threads (for the Threads section) and
+  // whether *this* chat is itself a thread (so we can hide Threads —
+  // threads inside threads aren't supported).
+  const { data: serverChats = [] } = useGetChatsQuery(workspaceId ? { workspaceId } : undefined, { skip: !workspaceId })
+  const uiChats = serverChats.map(toUiChat)
+  const hierarchy = useChatHierarchy(uiChats, workspaceId)
+  const isThreadChat = !!hierarchy.parentOf(chatId)
+  const childThreads: UiChat[] = isThreadChat
+    ? []
+    : hierarchy.childrenByParent.get(chatId) ?? []
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto pl-1.5 pr-6">
+        {!isThreadChat && (
+          <ThreadsSection
+            threads={childThreads}
+            workspaceId={workspaceId}
+            searchQuery={normalizedQuery}
+          />
+        )}
         <FilesSection
           files={filteredFiles}
           workspaceId={workspaceId}
           hasSearch={normalizedQuery.length > 0}
+          // When Threads is hidden (this chat *is* a thread), Files
+          // becomes the first section and claims the larger top-anchor
+          // gap normally reserved for Threads.
+          isFirst={isThreadChat}
           onFileClick={onFileClick}
           onFileStage={onFileStage}
           onRequestRemove={file => setRemovingFile(file)}
@@ -130,12 +157,105 @@ export function ChatRightPanel({
   )
 }
 
+// ── Threads ──────────────────────────────────────────────────────────────────
+
+function ThreadsSection({
+  threads,
+  workspaceId,
+  searchQuery,
+}: {
+  /** Threads anchored in the current chat (already resolved upstream
+   *  from the workspace's chat hierarchy). */
+  threads: UiChat[]
+  workspaceId?: string
+  /** Already lower-cased + trimmed by the parent. */
+  searchQuery: string
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  const filtered = searchQuery
+    ? threads.filter(t => t.title.toLowerCase().includes(searchQuery))
+    : threads
+  // Newest thread first — matches the recency sort used elsewhere.
+  const sorted = [...filtered].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+  return (
+    <section>
+      <SectionHeader
+        label="Threads"
+        collapsed={collapsed}
+        onToggle={() => setCollapsed(c => !c)}
+        topGap="first"
+      />
+      <SectionBody collapsed={collapsed}>
+        {sorted.length === 0 ? (
+          <SectionEmptyState>
+            {searchQuery
+              ? 'No threads match the search.'
+              : 'Threads spawned from this chat appear here.'}
+          </SectionEmptyState>
+        ) : (
+          <ul className="flex flex-col gap-0.5">
+            {sorted.map(thread => (
+              <ThreadRow
+                key={thread.id}
+                thread={thread}
+                workspaceId={workspaceId}
+              />
+            ))}
+          </ul>
+        )}
+      </SectionBody>
+    </section>
+  )
+}
+
+function ThreadRow({
+  thread,
+  workspaceId,
+}: {
+  thread: UiChat
+  workspaceId?: string
+}) {
+  const href = workspaceId
+    ? buildPath(workspaceId, 'tasks', { chat: thread.id })
+    : undefined
+  const body = (
+    <>
+      <div className="relative shrink-0">
+        <MessagesSquare className="h-4 w-4 text-muted-foreground" />
+        {/* Same unread dot as the chat sidebar row — keeps the visual
+            grammar consistent across surfaces. */}
+        {thread.unread && (
+          <span className="absolute -top-0.5 -right-0.5 w-1 h-1 rounded-full bg-blue-500" />
+        )}
+      </div>
+      <span className="flex-1 min-w-0 truncate text-sm">{thread.title}</span>
+    </>
+  )
+  if (!href) {
+    return (
+      <li>
+        <div className={ROW_CLASS}>{body}</div>
+      </li>
+    )
+  }
+  return (
+    <li>
+      <div className={ROW_CLASS}>
+        <RouterLink to={href} className="flex min-w-0 flex-1 items-center gap-3">
+          {body}
+        </RouterLink>
+      </div>
+    </li>
+  )
+}
+
 // ── Files ────────────────────────────────────────────────────────────────────
 
 function FilesSection({
   files,
   workspaceId,
   hasSearch,
+  isFirst = false,
   onFileClick,
   onFileStage,
   onRequestRemove,
@@ -143,18 +263,27 @@ function FilesSection({
   files: ServerFile[]
   workspaceId?: string
   hasSearch: boolean
+  /** When true, this section is the top of the panel (Threads is
+   *  hidden because the chat is itself a thread). Drops the
+   *  follow-on `mt-3` and claims the larger first-section top gap. */
+  isFirst?: boolean
   onFileClick?: (file: ServerFile) => void
   onFileStage?: (file: ServerFile) => void
   onRequestRemove?: (file: ServerFile) => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
   return (
-    <section>
+    // `mt-3` matches the gap `TasksSection` already adds before its
+    // own header, so every "follow-on" section in this column has the
+    // same vertical rhythm to the one above it. When this section is
+    // top-anchored (no Threads above), drop that margin — the
+    // SectionHeader's `topGap="first"` provides the 24 px anchor pad.
+    <section className={cn(!isFirst && 'mt-3')}>
       <SectionHeader
         label="Files"
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
-        topGap="first"
+        topGap={isFirst ? 'first' : 'normal'}
       />
       <SectionBody collapsed={collapsed}>
         {files.length === 0 ? (

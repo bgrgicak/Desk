@@ -90,6 +90,16 @@ export const ChatSchema = z.object({
    *  section (chat_pins table). Optional so WS payloads that omit the
    *  joined value still parse. */
   pinned: z.boolean().optional(),
+  /** The chat that owns this thread. Undefined for top-level chats.
+   *
+   *  TODO(backend): see `packages/server/docs/plans/threads-nesting.md`.
+   *  Until the migration lands, this field is undefined on the wire and
+   *  the client fills it in via `selectors/threads.ts` by reverse-
+   *  walking `message.threadChatId`. */
+  parentChatId: z.string().optional(),
+  /** The message in the parent chat that anchors this thread.
+   *  Undefined for top-level chats. See `parentChatId`. */
+  anchorMessageId: z.string().optional(),
 });
 export type Chat = z.infer<typeof ChatSchema>;
 

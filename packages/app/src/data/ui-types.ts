@@ -268,6 +268,16 @@ export interface Chat {
   /** True when the user has pinned this chat to the sidebar's Pinned
    *  section. Server-derived from the chat_pins table. */
   pinned?: boolean
+  /** The chat that owns this thread. Undefined for top-level chats.
+   *  The server will populate this directly once
+   *  `packages/server/docs/plans/threads-nesting.md` lands; until then
+   *  `selectors/threads.ts` reverse-derives it from the existing
+   *  `message.threadChatId` back-ref so the UI can be built against the
+   *  target shape today. */
+  parentChatId?: string
+  /** The message in the parent chat that anchors this thread.
+   *  Undefined for top-level chats. See `parentChatId`. */
+  anchorMessageId?: string
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────

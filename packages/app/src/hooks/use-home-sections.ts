@@ -12,7 +12,7 @@ export const HOME_SECTION_LABELS: Record<HomeSectionKey, string> = {
   summary: 'Summary',
   needsInput: 'Needs your input',
   nowHappening: 'Now happening',
-  done: 'Done when you were away',
+  done: 'Recently done',
 }
 
 const DEFAULT_ORDER: HomeSectionKey[] = ['summary', 'needsInput', 'nowHappening', 'done']

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { format, isToday, isYesterday } from 'date-fns'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
-  ChevronDown, FolderOpen, ListFilter,
-  Loader2, PinOff, Plus, SlidersHorizontal,
+  ArrowUpRight,
+  ChevronDown, ChevronRight, FolderOpen, ListFilter,
+  Loader2, MessagesSquare, PinOff, Plus, SlidersHorizontal,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
@@ -38,6 +40,7 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { buildPath, NEW_CHAT_ID, type RouteView } from '@/router/nav'
 import { getChatIcon } from '@/data/chat-icons'
 import type { Chat, PinnedEntryKind } from '@/data/ui-types'
+import { useChatHierarchy } from '@/store/selectors/threads'
 
 // Per-room sidebar: Pinned + Chats (date-grouped) at the top, followed by a
 // footer with Library / Tasks / Customize. Extracted from AppShell so the
@@ -91,6 +94,10 @@ function ChatSidebarRow({
   dragType,
   dragValue,
   kebab,
+  indent = false,
+  threadCount = 0,
+  expanded = false,
+  onToggleExpand,
 }: {
   chat: Chat
   href: string
@@ -98,19 +105,39 @@ function ChatSidebarRow({
   dragType: string | null
   dragValue: string
   kebab: React.ReactNode
+  /** Render as an indented child thread row. */
+  indent?: boolean
+  /** Number of thread chats anchored in this chat. When > 0, the row
+   *  shows a chevron+count toggle next to the kebab. */
+  threadCount?: number
+  /** Controlled expansion state for the thread toggle. */
+  expanded?: boolean
+  onToggleExpand?: () => void
 }) {
   const runningChatIds = useAppSelector(selectRunningChatIds)
   const failedChatIds = useAppSelector(selectFailedChatIds)
-  const ChatIcon = getChatIcon(chat)
   const isRunning = runningChatIds.includes(chat.id) || !!chat.running
   const isFailed = !isRunning && (failedChatIds.includes(chat.id) || !!chat.failed)
   const isDraggable = dragType !== null
+  const hasThreads = threadCount > 0
+  // Swap the chat-type icon for a thread glyph when this chat is itself
+  // a thread parent — the icon's job is to telegraph "there's a tree
+  // here", so the count badge can stay off the row.
+  const ChatIcon = hasThreads ? MessagesSquare : getChatIcon(chat)
   return (
     <SidebarMenuItem>
       <MobileDismissSidebarMenuButton
         asChild
         isActive={isActive}
-        className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-9 text-foreground')}
+        className={cn(
+          SIDEBAR_ROW_STATE_CLASS,
+          'text-foreground',
+          // Reserve room for the kebab; when the row carries threads,
+          // also reserve room for the hover-revealed chevron so the
+          // title doesn't reflow when the user mouses in.
+          hasThreads ? 'pr-16' : 'pr-9',
+          indent && 'pl-9',
+        )}
         draggable={isDraggable || undefined}
         onDragStart={isDraggable ? (e: React.DragEvent) => {
           e.dataTransfer.effectAllowed = 'move'
@@ -134,7 +161,28 @@ function ChatSidebarRow({
           <span className="flex-1 min-w-0 truncate">{chat.title}</span>
         </Link>
       </MobileDismissSidebarMenuButton>
-      <RowKebab align="start" side="right" contentClassName="w-40" label="Chat options">
+      {hasThreads && (
+        // Expand/collapse toggle. Sits to the left of the kebab, fades
+        // in on row hover the same way the kebab does, and stays pinned
+        // open once expanded so the user can collapse without hunting.
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleExpand?.() }}
+          aria-label={expanded ? 'Hide threads' : 'Show threads'}
+          aria-expanded={expanded}
+          className={cn(
+            'absolute right-9 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-[opacity,background-color,color] focus-visible:opacity-100',
+            expanded
+              ? 'opacity-100'
+              : 'opacity-0 group-hover/menu-item:opacity-100',
+          )}
+        >
+          {expanded
+            ? <ChevronDown className="h-3.5 w-3.5" />
+            : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+      )}
+      <RowKebab align="start" side="right" contentClassName="w-40" label="Chat options" forceVisible={expanded}>
         {kebab}
       </RowKebab>
     </SidebarMenuItem>
@@ -259,6 +307,11 @@ export function RoomSidebar({
   const [pinnedPage, setPinnedPage] = useState(1)
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
   const [chatsCollapsed, setChatsCollapsed] = useState(false)
+  // Per-chat thread-tree expansion. Component-local for the prototype —
+  // not persisted across reloads. Promote to a localStorage-backed
+  // hook (mirror `use-prefs` / `use-workspace-icon`) if we want
+  // expansion to stick.
+  const [expandedThreadParents, setExpandedThreadParents] = useState<Set<string>>(() => new Set())
   const [isDraggingPinnable, setIsDraggingPinnable] = useState(false)
   const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
   const pinnedDropCounter = useRef(0)
@@ -333,24 +386,42 @@ export function RoomSidebar({
   // Pinned chats render in the Pinned section above; hide them here so
   // the same chat isn't shown twice in the sidebar.
   const allChats = sortedByUpdatedDesc(chats).filter(c => !c.pinned)
+  // Resolve parent/child thread relationships across the workspace so
+  // thread chats can be hidden from the top-level list and rendered as
+  // indented children under their parents.
+  const chatHierarchy = useChatHierarchy(chats, activeWorkspaceId)
   const filteredChats = allChats.filter(chat => {
     if (appliedFilter.goal && chat.goal !== appliedFilter.goal) return false
     if (appliedFilter.updatesOnly && !chat.unread) return false
+    // Hide thread chats from the top-level list — they appear nested
+    // under their parent below. Orphans (parent missing from the list)
+    // fall through and stay visible at the top level so they aren't lost.
+    if (chatHierarchy.linkByChild.has(chat.id) && chatHierarchy.parentOf(chat.id)) return false
     return true
   })
   const visibleChats = filteredChats.slice(0, chatPage * CHATS_PER_PAGE)
   const hasMore = filteredChats.length > visibleChats.length
   const groups = groupChatsByDate(visibleChats)
 
+  const toggleThreadExpand = (chatId: string) => {
+    setExpandedThreadParents(prev => {
+      const next = new Set(prev)
+      if (next.has(chatId)) next.delete(chatId)
+      else next.add(chatId)
+      return next
+    })
+  }
+
   return (
     <Sidebar className="bg-transparent border-r-0 pl-4 pr-0 pt-0 pb-6">
       <SidebarHeader className="bg-transparent p-0">
         <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
 
-        {/* ── Top-level workspace nav: Tasks / Library / Settings.
+        {/* ── Top-level workspace nav: Tasks / Library.
             Sits above Pinned so the most-used workspace destinations
-            are reachable without scrolling past Pinned + Chats. The
-            profile dropdown stays pinned to the SidebarFooter. ── */}
+            are reachable without scrolling past Pinned + Chats.
+            Settings lives down by the profile dropdown (footer) so
+            account-adjacent controls cluster together. ── */}
         <SidebarMenu className="pt-6 pb-1">
           <SidebarMenuItem>
             <MobileDismissSidebarMenuButton
@@ -374,12 +445,6 @@ export function RoomSidebar({
                 <FolderOpen className="h-4 w-4 text-muted-foreground" />
                 <span>Library</span>
               </Link>
-            </MobileDismissSidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <MobileDismissSidebarMenuButton onClick={onOpenSettings} className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground')}>
-              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-              <span>Settings</span>
             </MobileDismissSidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -565,41 +630,110 @@ export function RoomSidebar({
                       {group.label}
                     </div>
                     <SidebarMenu>
-                      {group.chats.map(chat => (
-                        <ChatSidebarRow
-                          key={chat.id}
-                          chat={chat}
-                          isActive={chat.id === selectedChatId && !isDetailOpen}
-                          href={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}
-                          dragType={onPinChat ? DRAG_TYPE_CHAT : null}
-                          dragValue={chat.id}
-                          kebab={
-                            <ChatMenuItems
-                              chatId={chat.id}
-                              isPinned={chat.pinned}
-                              onPin={onPinChat}
-                              onUnpin={(chatId) => {
-                                const entry = pinnedEntries.find(e => e.kind === 'chat' && e.ref === chatId)
-                                onUnpinEntry?.(entry ?? {
-                                  id: `chat:${chatId}`,
-                                  kind: 'chat',
-                                  ref: chatId,
-                                  name: chat.title,
-                                  icon: getChatIcon(chat),
-                                  href: '#',
-                                })
-                              }}
-                              onDelete={onDeleteChat}
-                              homePin={{
-                                kind: 'chat',
-                                id: chat.id,
-                                workspaceId: activeWorkspaceId,
-                                label: chat.title,
-                              }}
-                            />
-                          }
-                        />
-                      ))}
+                      <AnimatePresence initial={false}>
+                        {group.chats.flatMap(chat => {
+                          const threadCount = chatHierarchy.threadCountOf(chat.id)
+                          const expanded = expandedThreadParents.has(chat.id)
+                          // Order child threads by recency so the newest
+                          // thread is closest to its parent — matches the
+                          // top-level list's sort.
+                          const sortedChildren = sortedByUpdatedDesc(
+                            chatHierarchy.childrenByParent.get(chat.id) ?? [],
+                          )
+                          return [
+                            <ChatSidebarRow
+                              key={chat.id}
+                              chat={chat}
+                              isActive={chat.id === selectedChatId && !isDetailOpen}
+                              href={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chat.id }) : '#'}
+                              dragType={onPinChat ? DRAG_TYPE_CHAT : null}
+                              dragValue={chat.id}
+                              threadCount={threadCount}
+                              expanded={expanded}
+                              onToggleExpand={threadCount > 0 ? () => toggleThreadExpand(chat.id) : undefined}
+                              kebab={
+                                <ChatMenuItems
+                                  chatId={chat.id}
+                                  isPinned={chat.pinned}
+                                  onPin={onPinChat}
+                                  onUnpin={(chatId) => {
+                                    const entry = pinnedEntries.find(e => e.kind === 'chat' && e.ref === chatId)
+                                    onUnpinEntry?.(entry ?? {
+                                      id: `chat:${chatId}`,
+                                      kind: 'chat',
+                                      ref: chatId,
+                                      name: chat.title,
+                                      icon: getChatIcon(chat),
+                                      href: '#',
+                                    })
+                                  }}
+                                  onDelete={onDeleteChat}
+                                  homePin={{
+                                    kind: 'chat',
+                                    id: chat.id,
+                                    workspaceId: activeWorkspaceId,
+                                    label: chat.title,
+                                  }}
+                                />
+                              }
+                            />,
+                            // Animated thread-children wrapper. Held in
+                            // its own <li> so the surrounding SidebarMenu
+                            // (<ul>) stays valid; the inner <ul> resets
+                            // padding so the indented child rows align
+                            // with their parent's icon column.
+                            expanded ? (
+                              <motion.li
+                                key={`${chat.id}-children`}
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.18, ease: 'easeOut' }}
+                                className="list-none overflow-hidden"
+                              >
+                                <ul className="flex flex-col gap-1 pt-1">
+                                  {sortedChildren.map(thread => (
+                                    <ChatSidebarRow
+                                      key={thread.id}
+                                      chat={thread}
+                                      isActive={thread.id === selectedChatId && !isDetailOpen}
+                                      href={activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: thread.id }) : '#'}
+                                      dragType={null}
+                                      dragValue={thread.id}
+                                      indent
+                                      kebab={
+                                        <ChatMenuItems
+                                          chatId={thread.id}
+                                          isPinned={thread.pinned}
+                                          onPin={onPinChat}
+                                          onUnpin={(chatId) => {
+                                            const entry = pinnedEntries.find(e => e.kind === 'chat' && e.ref === chatId)
+                                            onUnpinEntry?.(entry ?? {
+                                              id: `chat:${chatId}`,
+                                              kind: 'chat',
+                                              ref: chatId,
+                                              name: thread.title,
+                                              icon: getChatIcon(thread),
+                                              href: '#',
+                                            })
+                                          }}
+                                          onDelete={onDeleteChat}
+                                          homePin={{
+                                            kind: 'chat',
+                                            id: thread.id,
+                                            workspaceId: activeWorkspaceId,
+                                            label: thread.title,
+                                          }}
+                                        />
+                                      }
+                                    />
+                                  ))}
+                                </ul>
+                              </motion.li>
+                            ) : null,
+                          ]
+                        })}
+                      </AnimatePresence>
                     </SidebarMenu>
                   </div>
                 ))
@@ -619,7 +753,13 @@ export function RoomSidebar({
         </SectionBody>
       </SidebarContent>
 
-      {/* ── Footer: Profile only.
+      {/* ── Footer: Settings + Profile.
+          Settings sits just above the Profile dropdown so
+          account-adjacent controls cluster together at the bottom
+          of the rail (was previously up near Tasks/Library — moved
+          here to keep the top of the sidebar focused on workspace
+          destinations).
+
           The Profile row opens a DropdownMenu that floats just above
           its trigger (`side="top"` + small positive sideOffset). The
           menu's width is locked to the trigger width via Radix's
@@ -631,6 +771,15 @@ export function RoomSidebar({
           slice18-signout, et al.) — keep them in sync if you rename
           anything here. ── */}
       <SidebarFooter className={cn('bg-transparent p-0 border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
+        <SidebarMenu className="pb-1">
+          <SidebarMenuItem>
+            <MobileDismissSidebarMenuButton onClick={onOpenSettings} className={cn(SIDEBAR_ROW_STATE_CLASS, 'group/customize text-foreground')}>
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1">Customize</span>
+              <ArrowUpRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover/customize:opacity-100" />
+            </MobileDismissSidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <SidebarAccountMenu
           username={username}
           email={email}

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles } from 'lucide-react'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { StatusIndicator } from '@/components/compose/StatusIndicator'
+import { EmptyChatGreeting } from '@/components/compose/EmptyChatGreeting'
+import { SuggestionPills } from '@/components/compose/SuggestionPills'
 import {
   useGlobalChat,
   createGlobalChat,
@@ -11,6 +12,7 @@ import {
 } from '@/components/global-palette/globalChatStore'
 import { usePrefs } from '@/hooks/use-prefs'
 import type { ServerMessage } from '@/store/types'
+import type { GoalKey } from '@agent-desk/shared'
 
 // One persistent "Ask AI" thread on Home. Backed by the existing in-app
 // global chat store (mock streaming, localStorage) — the hub-workspace
@@ -60,12 +62,18 @@ export function AskAiView() {
   const [chatId, setChatId] = useState<string | null>(() => loadAskAiChatId())
   const chat = useGlobalChat(chatId)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Suggestion-pill state: prefill text + Tools goal pushed into the
+  // composer when the user clicks a pill. Cleared by the composer
+  // itself once submitted.
+  const [pillPrefill, setPillPrefill] = useState<string | undefined>(undefined)
+  const [pillGoal, setPillGoal] = useState<GoalKey | null>(null)
 
   const visibleMessages = useMemo(
     () => (chat ? chat.messages.filter(m => m.content.length > 0) : []),
     [chat],
   )
   const isTyping = !!chat?.messages.some(m => m.role === 'agent' && m.streaming)
+  const isEmpty = visibleMessages.length === 0 && !isTyping
 
   const lastTick = visibleMessages.map(m => `${m.id}:${m.content.length}`).join(',')
   useEffect(() => {
@@ -89,16 +97,8 @@ export function AskAiView() {
     <div className="flex h-full min-h-0 w-full flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-8 pb-4">
         <div className={`${COLUMN} space-y-4`}>
-          {visibleMessages.length === 0 && !isTyping ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-              <Sparkles className="h-10 w-10 text-muted-foreground/30" strokeWidth={1.5} />
-              <div>
-                <p className="text-base font-semibold text-foreground">Ask Desk AI</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Ask anything across your rooms — tasks, files, or what to do next.
-                </p>
-              </div>
-            </div>
+          {isEmpty ? (
+            <EmptyChatGreeting />
           ) : (
             <>
               {visibleMessages.map((m, i) => (
@@ -117,11 +117,28 @@ export function AskAiView() {
       </div>
 
       <div className="shrink-0 px-6 pb-6 pt-2">
-        <div className={COLUMN}>
+        <div className={`${COLUMN} flex flex-col gap-3`}>
+          {isEmpty && (
+            <SuggestionPills
+              onSelect={s => {
+                setPillPrefill(s.prompt)
+                if (s.goal !== undefined) setPillGoal(s.goal)
+              }}
+            />
+          )}
           <ChatInput
-            onSend={(msg) => handleSend(msg)}
+            onSend={(msg) => {
+              handleSend(msg)
+              setPillPrefill(undefined)
+              setPillGoal(null)
+            }}
             placeholder="Ask Desk AI anything…"
-            showGoalPicker={false}
+            // Pills can select a Tools goal (Task / App), so the
+            // picker must be visible — without it the goal wouldn't
+            // surface to the user.
+            showGoalPicker
+            goal={pillGoal}
+            prefillValue={pillPrefill}
             hideAgentPicker
             directUpload
           />

@@ -135,6 +135,9 @@ import { WorkspaceForm, type WorkspaceFormValues } from '@/components/workspace/
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
+import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
+import { initialsOf } from '@/lib/initials'
+import { roomColor } from '@/components/rooms/roomColor'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -1579,6 +1582,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
+  const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -2032,12 +2036,20 @@ export function SettingsModal({
           <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
             <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
-                <div
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
-                  style={{ backgroundColor: workspace.bg }}
-                >
-                  {workspace.emoji}
-                </div>
+                {workspaceIconUrl ? (
+                  <img
+                    src={workspaceIconUrl}
+                    alt={workspace.name}
+                    className="h-7 w-7 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <span
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white select-none"
+                    style={{ backgroundColor: roomColor(workspace) }}
+                  >
+                    {initialsOf(workspace.name)}
+                  </span>
+                )}
                 <span className="text-sm font-semibold truncate">{workspace.name}</span>
               </div>
             </div>

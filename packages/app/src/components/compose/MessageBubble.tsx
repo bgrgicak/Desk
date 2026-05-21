@@ -16,6 +16,7 @@ import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
 import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
+import { MessageThreadButton } from './MessageThreadButton'
 
 interface MessageBubbleProps {
   message: ServerMessage
@@ -73,6 +74,10 @@ export const MessageBubble = memo(function MessageBubble({
   const hasAttachments = !!message.attachments && message.attachments.length > 0
   const showThread = isRegularMessageVisible(message) && !!workspaceId
     && message.threadChatId !== currentChatId
+  // Surface the larger "X replies" affordance under the message when
+  // a thread already exists; the inline Reply icon in the actions row
+  // is reserved for *starting* a thread from a message that has none.
+  const showThreadButton = showThread && !!message.threadChatId && !!workspaceId
 
   // A task definition (the AI creating a task, or one surfaced in the
   // conversation) renders as an inline Task result card regardless of
@@ -154,12 +159,33 @@ export const MessageBubble = memo(function MessageBubble({
         onAttachmentClick={onAttachmentClick}
       />
       {isLastInGroup && (
-        <AgentMessageActions
-          message={message}
-          workspaceId={workspaceId}
-          timestamp={timestamp}
-          showThread={showThread}
-        />
+        // One row below the message holding the thread button (always
+        // visible, left) and the hover-revealed actions (12 px gap to
+        // the right of the button). When there's no thread button the
+        // actions push to the right of the row so they still read as
+        // belonging to the message above.
+        <div
+          className={cn(
+            'mt-3 flex items-center gap-3',
+            !showThreadButton && 'justify-end',
+          )}
+        >
+          {showThreadButton && (
+            <MessageThreadButton
+              threadChatId={message.threadChatId!}
+              workspaceId={workspaceId!}
+            />
+          )}
+          <AgentMessageActions
+            message={message}
+            workspaceId={workspaceId}
+            timestamp={timestamp}
+            // The inline Reply icon is for *starting* a thread; once
+            // one exists, the bigger button to its left carries the
+            // affordance.
+            showThread={showThread && !showThreadButton}
+          />
+        </div>
       )}
     </div>
   )
@@ -167,18 +193,18 @@ export const MessageBubble = memo(function MessageBubble({
 
 // ── Agent-message actions ──────────────────────────────────────────────────
 //
-// A row of mini icon buttons (copy / reply / 👍 / 👎) plus the message
-// timestamp, rendered as a 36 px slot below every agent message. The
-// row is hover-revealed (with a touch + focus-within fallback) so it
-// doesn't clutter the resting thread; the 36 px height is reserved
-// regardless so messages don't jump when actions appear.
+// Hover-revealed cluster that sits to the RIGHT of an agent message,
+// in the gutter freed up by the 80 % content cap. Carries the timestamp
+// followed by copy / 👍 / 👎, with an optional inline reply icon for
+// messages that don't yet have a thread.
 
 interface AgentMessageActionsProps {
   message: ServerMessage
   workspaceId?: string
   timestamp: Date
-  /** Whether to surface the reply/open-thread button. Mirrors the
-   * `showThread` gate that used to wrap the floating ThreadButton. */
+  /** Whether to surface the small inline reply/open-thread icon.
+   *  Suppressed when the message already has a bigger thread button
+   *  below — the two affordances would be redundant. */
   showThread: boolean
 }
 
@@ -214,11 +240,12 @@ function AgentMessageActions({
   return (
     <div
       className={cn(
-        'mt-2 h-5 flex items-center gap-0.5',
+        'h-5 flex items-center gap-0.5',
         'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-within:opacity-100',
         'transition-opacity',
       )}
     >
+      <span className="text-xs text-muted-foreground mr-1">{getRelativeTime(timestamp)}</span>
       <ActionIconButton title="Copy message" onClick={handleCopy}>
         <Copy className="h-3.5 w-3.5" />
       </ActionIconButton>
@@ -248,7 +275,6 @@ function AgentMessageActions({
       >
         <ThumbsDown className="h-3.5 w-3.5" />
       </ActionIconButton>
-      <span className="text-xs text-muted-foreground ml-2">{getRelativeTime(timestamp)}</span>
     </div>
   )
 }
@@ -285,10 +311,11 @@ function ActionIconButton({
 
 // ── User-message actions ───────────────────────────────────────────────────
 //
-// Mirror of the agent actions row, scoped to what the user can do with
+// Mirror of the agent actions, scoped to what the user can do with
 // their own message: copy + timestamp. There's no reply/thread
 // affordance — threading from your own message isn't a meaningful
-// action. The row is right-aligned to match the bubble's alignment.
+// action. The cluster sits in the freed-up gutter to the LEFT of the
+// bubble (parent flex row handles the gap).
 
 function UserMessageActions({
   message,

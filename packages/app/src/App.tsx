@@ -60,6 +60,7 @@ import {
   usePinChatMutation,
   useUnpinChatMutation,
   useCreateThreadMutation,
+  usePatchChatMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
@@ -75,6 +76,8 @@ import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
+import { roomColor } from '@/components/rooms/roomColor'
+import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem, toFolderList } from '@/store/selectors/library'
 import { iconForItem } from '@/data/file-kind'
@@ -86,6 +89,7 @@ import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { generateTaskTitle } from '@/lib/task-title'
+import { generateThreadTitle } from '@/lib/thread-title'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
 import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
@@ -252,6 +256,10 @@ function AppInner() {
   // and bookmarks survive. Unknown segments fall back to `tasks`.
   const activeView: RouteView = resolveRouteView(viewParam) ?? 'tasks'
   const activeWorkspaceId = wsId
+  // Active room icon URL (custom upload) — `useWorkspaceIconUrl`
+  // safely returns `null` for an empty workspace id, so this is
+  // unconditional and stable for hook-call ordering.
+  const activeWorkspaceIconUrl = useWorkspaceIconUrl(activeWorkspaceId)
 
   // `/w/<id>/settings` is a deep link to the Settings modal pre-opened
   // at the workspace section. The view itself behaves as `tasks` (the
@@ -368,6 +376,7 @@ function AppInner() {
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [createThreadMutation] = useCreateThreadMutation()
+  const [patchChatMutation] = usePatchChatMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
@@ -633,10 +642,21 @@ function AppInner() {
     try {
       const result = await createThreadMutation({ chatId: sourceChatId, messageId: anchorMessageId, content }).unwrap()
       goTo({ chat: result.chat.id, startThread: null })
+      // Auto-title the thread from its first message. The server creates
+      // every thread with the placeholder `"Thread: {parent title}"`;
+      // once the backend ships AI summarisation (see
+      // `packages/server/docs/plans/threads-nesting.md`),
+      // `generateThreadTitle` will round-trip to it. Until then it's a
+      // deterministic local derivation. Fire-and-forget — title is
+      // cosmetic and shouldn't block navigation.
+      void generateThreadTitle(content).then(title => {
+        if (!title || title === result.chat.title) return
+        patchChatMutation({ id: result.chat.id, patch: { title } })
+      })
     } catch (err) {
       toast.error('Failed to create thread', { description: extractApiError(err) })
     }
-  }, [startThreadParam, createThreadMutation, goTo])
+  }, [startThreadParam, createThreadMutation, patchChatMutation, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)
@@ -979,6 +999,13 @@ function AppInner() {
             isLoading={tasksListLoading}
             agents={workspaceServerAgents ?? serverAgents ?? []}
             roomName={serverWorkspaces?.find(w => w.id === activeWorkspaceId)?.name}
+            roomColor={
+              (() => {
+                const ws = serverWorkspaces?.find(w => w.id === activeWorkspaceId)
+                return ws ? roomColor({ bg: ws.color }) : undefined
+              })()
+            }
+            roomIconUrl={activeWorkspaceIconUrl}
             authorName={me?.username}
             authorAvatarUrl={userAvatarUrl}
             selectedTaskId={selectedTaskId}

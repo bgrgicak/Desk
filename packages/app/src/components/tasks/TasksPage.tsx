@@ -50,8 +50,14 @@ export interface TasksPageProps {
   /** Agents for the assignee filter. */
   agents: ServerAgent[]
   /** Active room (workspace) name — shown as the agent label in the
-   *  assignee filter. */
+   *  assignee filter and on each task card's bottom meta. */
   roomName?: string
+  /** Active room (workspace) accent color — drives the room-avatar
+   *  swatch on each task card when no custom icon is set. */
+  roomColor?: string
+  /** Active room (workspace) custom icon — when set, renders as the
+   *  small thumbnail next to the room name on each task card. */
+  roomIconUrl?: string | null
   /** Best-effort total message counts keyed by backing chat id —
    *  the "N replies" footer button. */
   repliesByChatId?: Record<string, number>
@@ -251,6 +257,8 @@ export function TasksPage({
   isLoading = false,
   agents,
   roomName,
+  roomColor,
+  roomIconUrl,
   repliesByChatId = {},
   authorName,
   authorAvatarUrl,
@@ -535,6 +543,9 @@ export function TasksPage({
                       task={task}
                       authorName={authorName}
                       authorAvatarUrl={authorAvatarUrl}
+                      roomName={roomName}
+                      roomColor={roomColor}
+                      roomIconUrl={roomIconUrl}
                       repliesCount={replies}
                       isActive={selectedTaskId === task.id}
                       href={hrefForTask(task.id)}
