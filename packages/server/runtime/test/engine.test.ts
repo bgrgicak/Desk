@@ -12,7 +12,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { detectEngine, _isRemovalAlreadyInProgressForTest, _resetEngineCache, _wrapExecChildForTest, type EngineName } from "../src/engine.js";
+import { detectEngine, _isRemovalAlreadyInProgressForTest, _resetEngineCache, _wrapExecChildForTest, formatEngineErrorMessage, type EngineName } from "../src/engine.js";
 import { DeskError } from "@agent-desk/shared";
 
 const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
@@ -126,6 +126,49 @@ exit 99
 
     const engine = await detectEngine();
     await expect(engine.remove("desk-sandbox-wks_x", true)).resolves.toBeUndefined();
+  });
+});
+
+describe("formatEngineErrorMessage — secret redaction", () => {
+  it("scrubs --env values but keeps keys visible", () => {
+    const args = [
+      "exec",
+      "-d",
+      "--user", "0:0",
+      "--env", "OPENCODE_SERVER_PASSWORD=abc123-very-secret",
+      "--env", "ANTHROPIC_API_KEY=sk-ant-real-key-xyz",
+      "--env", "GITHUB_TOKEN=ghp_definitelyAtoken",
+      "--env", "EMPTY_VAR=",
+      "container-id",
+      "sh", "-c", "echo hi",
+    ];
+    const msg = formatEngineErrorMessage("docker", args, "Error: container vanished", 1);
+    expect(msg).toContain("docker exec -d --user 0:0");
+    // Keys remain visible
+    expect(msg).toContain("OPENCODE_SERVER_PASSWORD=<REDACTED>");
+    expect(msg).toContain("ANTHROPIC_API_KEY=<REDACTED>");
+    expect(msg).toContain("GITHUB_TOKEN=<REDACTED>");
+    expect(msg).toContain("EMPTY_VAR=<REDACTED>");
+    // Values must not appear anywhere in the rendered message
+    expect(msg).not.toContain("abc123-very-secret");
+    expect(msg).not.toContain("sk-ant-real-key-xyz");
+    expect(msg).not.toContain("ghp_definitelyAtoken");
+    // Exit code + stderr preserved
+    expect(msg).toContain("(exit 1)");
+    expect(msg).toContain("Error: container vanished");
+  });
+
+  it("handles --env without a following value defensively", () => {
+    // Should not crash if the caller misuses the API.
+    const msg = formatEngineErrorMessage("docker", ["exec", "--env"], "boom", 2);
+    expect(msg).toContain("docker exec --env");
+    expect(msg).toContain("(exit 2)");
+    expect(msg).toContain("boom");
+  });
+
+  it("preserves messages with no env args unchanged", () => {
+    const msg = formatEngineErrorMessage("docker", ["inspect", "foo"], "no such object", 1);
+    expect(msg).toBe("docker inspect foo failed (exit 1)\nno such object");
   });
 });
 

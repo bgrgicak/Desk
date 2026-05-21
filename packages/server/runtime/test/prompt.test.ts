@@ -52,7 +52,7 @@ describe("renderPromptBody", () => {
     userName: "Desk",
   };
 
-  it("orders identity → mandate → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
+  it("orders identity → mandate → task routing → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -62,6 +62,7 @@ describe("renderPromptBody", () => {
 
     const idxIdentity = body.indexOf("## Identity");
     const idxMandate = body.indexOf("Your mandate is to help");
+    const idxTaskRouting = body.indexOf("## Focused task routing");
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxTaskContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling");
@@ -73,13 +74,47 @@ describe("renderPromptBody", () => {
     expect(idxIdentity).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThan(idxIdentity);
-    expect(idxArtifacts).toBeGreaterThan(idxMandate);
+    // Task routing sits immediately after mandate so the decision rule
+    // is read before any goal-specific or workspace-specific guidance.
+    expect(idxTaskRouting).toBeGreaterThan(idxMandate);
+    expect(idxArtifacts).toBeGreaterThan(idxTaskRouting);
     expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
     expect(idxScheduling).toBeGreaterThan(idxTaskContext);
     expect(idxPersistence).toBeGreaterThan(idxScheduling);
     expect(idxMemoryRules).toBeGreaterThan(idxPersistence);
     expect(idxGoal).toBeGreaterThan(idxMemoryRules);
     expect(idxSkills).toBeGreaterThan(idxGoal);
+  });
+
+  it("includes the focused-task-routing rule for plain chats (no goal set)", () => {
+    // This is the load-bearing case the rule exists for: a default chat
+    // with no goal. Without task-routing.md the agent has zero guidance
+    // on when to spawn a task instead of working inline.
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    expect(body).toContain("## Focused task routing");
+    // Hard-keyword rule must be quoted so the agent can pattern-match.
+    expect(body).toContain('"as a task"');
+    expect(body).toContain('"start a task"');
+    expect(body).toContain('"make this a task"');
+    // The body template is what makes the resulting task self-contained.
+    expect(body).toContain("Acceptance criteria:");
+    expect(body).toContain("Completion handoff:");
+    expect(body).toContain("desk-agent task complete");
+    // The "stay inline" exceptions must be present so the agent doesn't
+    // spawn tasks for quick answers / one-line edits.
+    expect(body).toContain("quick answer, explanation, or clarification");
+    expect(body).toContain("tiny edit clearly meant to be done inline");
+  });
+
+  it("omits task-routing from summary and reflection runs", () => {
+    // Summary and reflection runs have fixed shapes — they never spawn
+    // user-facing tasks, so the routing rule is noise there.
+    const summary = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "summary" });
+    expect(summary).not.toContain("## Focused task routing");
+
+    const reflection = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "reflection" });
+    expect(reflection).not.toContain("## Focused task routing");
   });
 
   it("nudges every assistant run to end with visible user-facing text", () => {
@@ -510,14 +545,19 @@ describe("memory injection", () => {
 });
 
 describe("Desk reference skills", () => {
-  it("publishes current-workspace artifact attachment guidance", () => {
+  it("publishes cross-chat artifact attachment guidance", () => {
+    // The skill was rewired to allow attaching from any chat in the
+    // same workspace (a task thread surfacing an artifact back into
+    // the source chat). Assert the new contract: --chat optional,
+    // cross-chat cross-workspace paths allowed within one workspace,
+    // failure surfaces inline.
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-attach-artifact");
     const body = skill?.body() ?? "";
 
     expect(skill).toBeTruthy();
-    expect(body).toContain("Only pass paths that exist in the current chat/workspace");
-    expect(body).toContain("library hit should already be scoped there");
-    expect(body).toContain("no attachable\ncurrent-workspace path exists");
+    expect(body).toContain("`--chat` is optional and defaults to the chat this run is in");
+    expect(body).toContain("the source chat must be in\n  the same workspace as the target chat");
+    expect(body).toContain("If the command fails or no attachable path exists, report the\nlimitation inline");
   });
 
   it("publishes a persistence playbook", () => {

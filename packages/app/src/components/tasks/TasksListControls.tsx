@@ -12,7 +12,6 @@ import {
   RadioGroupItem,
 } from '@agent-desk/ui'
 import type { Task } from '@/data/ui-types'
-import type { ServerAgent } from '@/store/types'
 import { STATUS_DOT } from './task-badges'
 
 // ── Status tabs ───────────────────────────────────────────────────────────
@@ -21,7 +20,7 @@ export type TaskTab = 'all' | Task['status']
 
 const TABS: { key: TaskTab; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'todo', label: 'Todo' },
+  { key: 'todo', label: 'Open' },
   { key: 'needs_input', label: 'Needs input' },
   { key: 'active', label: 'Active' },
   { key: 'scheduled', label: 'Scheduled' },
@@ -33,8 +32,6 @@ const TABS: { key: TaskTab; label: string }[] = [
 export type TaskSort = 'recent' | 'newest'
 
 export interface TaskListFilters {
-  /** null = all assignees; 'you' = tasks you created; else an agent id. */
-  assigneeId: string | null
   /** Hide `complete` tasks unless true. Default false. */
   showDone: boolean
   /** `recent` (default) = most recent activity first. `newest` =
@@ -43,14 +40,12 @@ export interface TaskListFilters {
 }
 
 export const DEFAULT_TASK_FILTERS: TaskListFilters = {
-  assigneeId: null,
   showDone: false,
   sort: 'recent',
 }
 
 export function isTaskFiltersActive(f: TaskListFilters): boolean {
   return (
-    f.assigneeId !== null ||
     f.showDone !== DEFAULT_TASK_FILTERS.showDone ||
     f.sort !== DEFAULT_TASK_FILTERS.sort
   )
@@ -65,7 +60,7 @@ interface TaskTabsProps {
 }
 
 /**
- * The status-tab pill row (All / Todo / Needs input / …). Lives in
+ * The status-tab pill row (All / Open / Needs input / …). Lives in
  * the global top bar (same row as the breadcrumb), pixel-aligned over
  * the task list column.
  */
@@ -151,9 +146,6 @@ export function TaskTabs({ tab, onTabChange, counts, className }: TaskTabsProps)
 interface TaskFilterSearchProps {
   filters: TaskListFilters
   onFiltersChange: (f: TaskListFilters) => void
-  agents: ServerAgent[]
-  /** Active room name — labels the agent assignee option. */
-  roomName?: string
   search: string
   onSearchChange: (q: string) => void
 }
@@ -166,8 +158,6 @@ interface TaskFilterSearchProps {
 export function TaskFilterSearch({
   filters,
   onFiltersChange,
-  agents,
-  roomName,
   search,
   onSearchChange,
 }: TaskFilterSearchProps) {
@@ -204,31 +194,6 @@ export function TaskFilterSearch({
         </PopoverTrigger>
         <PopoverContent align="end" className="w-64 p-3">
           <label className="mb-2 block text-xs font-medium text-muted-foreground">
-            Assignee
-          </label>
-          <RadioGroup
-            value={pending.assigneeId ?? '__all__'}
-            onValueChange={(v) =>
-              setPending({ ...pending, assigneeId: v === '__all__' ? null : v })
-            }
-            className="mb-4 flex flex-col gap-2"
-          >
-            {[
-              { id: '__all__', name: 'Everyone' },
-              { id: 'you', name: 'You' },
-              ...agents.map(a => ({ id: a.id, name: roomName ?? a.name })),
-            ].map(opt => (
-              <label
-                key={opt.id}
-                className="flex cursor-pointer items-center gap-2 text-sm"
-              >
-                <RadioGroupItem value={opt.id} />
-                {opt.name}
-              </label>
-            ))}
-          </RadioGroup>
-
-          <label className="mb-2 block text-xs font-medium text-muted-foreground">
             Sort
           </label>
           <RadioGroup
@@ -239,8 +204,8 @@ export function TaskFilterSearch({
             className="flex flex-col gap-2"
           >
             {([
-              ['recent', 'Recent first'],
-              ['newest', 'Newest first'],
+              ['recent', 'Recently updated'],
+              ['newest', 'Newest tasks'],
             ] as [TaskSort, string][]).map(([key, label]) => (
               <label
                 key={key}

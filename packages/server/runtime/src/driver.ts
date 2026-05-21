@@ -37,9 +37,17 @@ import { translateOpencodeSseEvent } from "./opencodeEvents.js";
 import {
   ensureOpencodeServer,
   invalidateOpencodeServerCache,
+  readDaemonLogTail,
   type OpencodeServerInstance,
 } from "./opencodeServer.js";
 import { withModule } from "@agent-desk/shared/logger";
+import {
+  synthesizeNonTextEvents,
+  type PartEmissionState,
+} from "./eventSynthesis.js";
+
+export { synthesizeNonTextEvents, type PartEmissionState } from "./eventSynthesis.js";
+
 const log = withModule("runtime/driver");
 
 export interface RunOptions {
@@ -253,6 +261,61 @@ export function hasActiveRunForContainer(containerId: string): boolean {
   return false;
 }
 
+/**
+ * Polling-as-truth (driver-internal contract):
+ *
+ * The driver polls `GET /session/:id/message` on a fixed cadence both to
+ * synthesize tool/reasoning/step events (opencode-serve doesn't broadcast
+ * them over SSE) AND to detect turn-terminal state authoritatively. The
+ * polled state is the source of truth for "this turn is done"; the in-
+ * flight `POST /session/:id/message` is a convenience that *may* resolve
+ * first on the happy path but is not required to.
+ *
+ * Why: a wedged-but-not-crashed daemon (cgroup OOM, deadlocked event
+ * loop, transport-level stall behind docker-proxy holding the host
+ * socket) leaves the HTTP POST hanging with no observable error. SSE
+ * silently stops emitting. Without an independent liveness signal, the
+ * run hangs to the per-message budget with zero user feedback — the
+ * worst observed chaos-test failure mode (see CHAOS_TESTING.md).
+ *
+ * Each poll request gets `POLL_HTTP_TIMEOUT_MS` to return. After
+ * `POLL_FAILURE_THRESHOLD` consecutive failures the loop raises
+ * `PollLivenessFailure` — treated by the catch block as daemon-gone,
+ * routed into the same silent-retry recovery used for ECONNREFUSED.
+ *
+ * `POLL_INTERVAL_MS × POLL_FAILURE_THRESHOLD + POLL_HTTP_TIMEOUT_MS`
+ * gives the worst-case detection budget — currently ~6.5s.
+ */
+const POLL_INTERVAL_MS = 500;
+const POLL_HTTP_TIMEOUT_MS = 3000;
+const POLL_FAILURE_THRESHOLD = 3;
+
+/**
+ * Raised by the run loop's polling task when consecutive HTTP failures
+ * against `GET /session/:id/message` cross `POLL_FAILURE_THRESHOLD`.
+ *
+ * Treated identically to a sendMessage-thrown daemon-gone error by the
+ * catch block — the existing recovery (invalidate cache, re-acquire
+ * via `acquireDaemonWithRecovery`, silent retry) handles it. The class
+ * exists so the catch block can distinguish "polling lost the daemon"
+ * from a sendMessage-side ECONNREFUSED, which is useful for the
+ * structured log line but not for the control flow.
+ */
+class PollLivenessFailure extends Error {
+  readonly cause: Error;
+  readonly consecutiveFailures: number;
+
+  constructor(cause: Error, consecutiveFailures: number) {
+    super(
+      `opencode-serve liveness polling failed ${consecutiveFailures}× consecutively: ` +
+        `${cause.message ?? String(cause)}`,
+    );
+    this.name = "PollLivenessFailure";
+    this.cause = cause;
+    this.consecutiveFailures = consecutiveFailures;
+  }
+}
+
 function createRealDriver(): SandboxDriver {
   return {
     async execRun(workspaceId, opts) {
@@ -270,12 +333,13 @@ function createRealDriver(): SandboxDriver {
           opts.extraEnv,
         );
 
-      // createOrReuse can throw with a container-gone error if the
-      // container is removed during its waitForEntrypointReady poll
-      // (reaper / drift recreate / parallel fire / rm -f). A single
-      // retry covers the race: the second pass sees the missing
-      // container and creates a fresh one. Persistent failures still
-      // bubble up.
+      // `createOrReuse` already has its own internal retry/self-heal
+      // loop (drift recreate, port-bind race, container-gone-mid-poll
+      // — see CREATE_OR_REUSE_MAX_ATTEMPTS in docker.ts). The thin
+      // catch here only covers the residual case where the container
+      // is removed in the millisecond gap between `createOrReuse`
+      // returning and the next operation taking a reference. A single
+      // retry is enough; a persistent failure bubbles up.
       let handle: Awaited<ReturnType<typeof acquireHandle>>;
       try {
         handle = await acquireHandle();
@@ -323,52 +387,58 @@ function createRealDriver(): SandboxDriver {
         agentFilesDigest,
       });
 
-      // The container can disappear between createOrReuse and
-      // ensureOpencodeServer — the scheduler also calls createOrReuse
-      // upstream with a different mountPlan, so a drift recheck here
-      // can race with a reaper or another fire that just removed the
-      // container. When we hit "not found" / "is not running", drop
-      // the stale cache entry, re-acquire the container, and try once
-      // more before giving up. A single retry covers the race window
-      // without masking persistent failures (those still bail).
+      // Daemon acquisition is the noisiest failure surface in the
+      // runtime — cgroup OOMs the daemon dead, RootlessKit fails to
+      // wire 9105 even though the container is "running", waitForReady
+      // times out under host load, the scheduler reaps a sibling
+      // container mid-spawn, etc. Each of these is recoverable by some
+      // combination of "grow the cgroup", "kill + restart the daemon"
+      // and "recreate the container". `acquireDaemonWithRecovery`
+      // owns the retry topology so the user-visible path here is just
+      // "we got a daemon" or "we exhausted every recovery — surface
+      // a single clean error". No intermediate failure reaches `onLog`.
       let server: OpencodeServerInstance;
       try {
-        server = await ensureOpencodeServer(engine, {
-          containerId: handle.containerId,
-          cwd: SANDBOX_HOME,
+        const acquired = await acquireDaemonWithRecovery({
+          engine,
+          workspaceId,
           user,
-          env: daemonEnv,
+          daemonEnv,
+          initialHandle: handle,
+          acquireHandle,
         });
+        handle = acquired.handle;
+        server = acquired.server;
       } catch (err) {
-        const msg = (err as Error).message ?? String(err);
-        if (isContainerGoneError(msg)) {
-          invalidateOpencodeServerCache(handle.containerId);
-          handle = await acquireHandle();
-          try {
-            server = await ensureOpencodeServer(engine, {
-              containerId: handle.containerId,
-              cwd: SANDBOX_HOME,
-              user,
-              env: daemonEnv,
-            });
-          } catch (retryErr) {
-            await opts.onLog({
-              runId: opts.runId,
-              seq: 0,
-              kind: "stderr",
-              payload: `opencode-serve failed to start (after container re-acquire): ${(retryErr as Error).message ?? String(retryErr)}`,
-            });
-            return { exitCode: 1 };
-          }
-        } else {
-          await opts.onLog({
-            runId: opts.runId,
-            seq: 0,
-            kind: "stderr",
-            payload: `opencode-serve failed to start: ${msg}`,
-          });
-          return { exitCode: 1 };
-        }
+        // Every recovery path exhausted. Surface the LAST recovery
+        // attempt's error so the user sees a coherent message instead
+        // of the cascade we just dampened. The structured `recovery`
+        // metadata goes to server-side logs only.
+        const finalErr = err as DaemonAcquireFailure;
+        const tail = await readDaemonLogTail(engine, handle.containerId).catch(() => "");
+        log.error(
+          {
+            workspaceId,
+            attempts: finalErr.attempts,
+            recoveryEvents: finalErr.recoveryEvents,
+            finalKind: finalErr.kind,
+            finalMessage: finalErr.cause?.message ?? String(finalErr.cause),
+          },
+          "sandbox: exhausted daemon-acquire retries; surfacing failure to user",
+        );
+        await opts.onLog({
+          runId: opts.runId,
+          seq: 0,
+          kind: "stderr",
+          payload: `opencode-serve failed to start after ${finalErr.attempts} attempts: ${
+            finalErr.cause?.message ?? String(finalErr.cause)
+          }${tail ? `\nopencode-serve.log tail:\n${tail}` : ""}${
+            finalErr.kind === "oom"
+              ? formatStartupOomMarker(finalErr.lastOomKillCount)
+              : ""
+          }`,
+        });
+        return { exitCode: 1 };
       }
 
       let client = new OpencodeClient(server.url, server.password);
@@ -405,7 +475,7 @@ function createRealDriver(): SandboxDriver {
         sessionResolution = await resolveSessionId(client, opts.opencodeSessionId ?? null);
       } catch (err) {
         if (!isServerGoneError(err)) throw err;
-        invalidateOpencodeServerCache(handle.containerId);
+        invalidateOpencodeServerCache(handle.containerId, server);
         handle = await acquireHandle();
         try {
           server = await ensureOpencodeServer(engine, {
@@ -444,8 +514,10 @@ function createRealDriver(): SandboxDriver {
         });
       }
 
-      // Wire SSE subscription before sending the message so we don't miss
-      // early events. The multiplexer dedups its own connection.
+      // Shared across all message-send attempts. `seq` accumulates so
+      // we can detect "no events emitted yet" as the safe-to-silently-
+      // retry condition; `pendingLogs` carries onLog promises through
+      // the whole run.
       let seq = 0;
       const pendingLogs: Promise<unknown>[] = [];
       const emitLog = (kind: LogEvent["kind"], payload: string) => {
@@ -455,33 +527,6 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      const unsubscribe = client.subscribeSessionEvents(sessionId, (sseEvent) => {
-        const line = translateOpencodeSseEvent(sseEvent, { sessionID: sessionId });
-        if (line !== null) emitLog("event", line);
-      });
-
-      // Wait until the SSE stream has acknowledged our subscription
-      // before dispatching the message — otherwise the per-message
-      // events emitted in the first ~ms can race past a still-
-      // handshaking SSE socket and never reach `onLog`.
-      try {
-        await client.sseReady();
-      } catch (err) {
-        emitLog("stderr", `opencode-serve event stream failed to open: ${(err as Error).message ?? String(err)}`);
-        unsubscribe();
-        activeRuns.delete(opts.runId);
-        return { exitCode: 1, opencodeSessionId: sessionId };
-      }
-
-      const tracked: ActiveRun = {
-        containerId: handle.containerId,
-        sessionId,
-        client,
-        unsubscribeSse: unsubscribe,
-        abortRequested: false,
-      };
-      activeRuns.set(opts.runId, tracked);
-
       const model = opts.model ?? "opencode/big-pickle";
       const { providerID, modelID } = parseModelSpec(model);
       const parts = buildMessageParts({
@@ -489,177 +534,496 @@ function createRealDriver(): SandboxDriver {
         attachments: opts.attachments,
       });
 
-      // opencode-serve 1.14.50 only broadcasts text/reasoning deltas
-      // over SSE. Tool calls, step-start, step-finish parts are
-      // written to its SQLite during the turn and only readable via
-      // `GET /session/:id/message`. To make tool cards appear as they
-      // happen rather than only after sendMessage returns, we poll
-      // listSessionMessages every ~500ms during the turn and emit any
-      // non-text part not yet seen. The same `partState` set is
-      // reused by the post-turn backstop loop so nothing double-emits.
-      const partState: PartEmissionState = new Map();
-      // Snapshot the existing assistant-message IDs so the polling
-      // loop can ignore prior turns that share this session. Cap the
-      // call at 3s — when the daemon is unresponsive (just spawned,
-      // mid-restart), an unbounded await here parks the entire run
-      // before sendMessage ever fires. An empty baseline only causes
-      // the polling loop to briefly re-emit prior parts, which is
-      // harmless (the next part-state-key check filters them).
-      const baselineMessageIds = new Set<string>();
-      try {
-        const messages = await Promise.race([
-          client.listSessionMessages(sessionId),
-          new Promise<unknown[]>((_, rej) =>
-            setTimeout(() => rej(new Error("baseline-timeout")), 3000),
-          ),
-        ]);
-        for (const m of messages) {
-          const info = (m as { info?: { id?: unknown; role?: unknown } }).info;
-          const id = info && (info as { id?: unknown }).id;
-          if (typeof id === "string") baselineMessageIds.add(id);
-        }
-      } catch {
-        // best-effort — empty baseline means we may briefly emit a
-        // prior turn's tool parts on the first poll, which is
-        // harmless (they're already in the chat log).
-      }
-
+      // Mid-message recovery loop. If the daemon dies before any
+      // events reach the user (the common case: cgroup OOM during
+      // model init, before the first text delta), we silently
+      // recover (grow + re-spawn via `acquireDaemonWithRecovery`) and
+      // re-POST the message. Once any user-visible event has been
+      // emitted (`seq > 0`), the user's chat has already shown
+      // partial output — a silent retry would produce a confusing
+      // duplicate. In that case we fall through to the existing
+      // error-emit path so the scheduler's outer retry + log truncate
+      // handles the recovery (with partial-output flicker, which is
+      // the WS-protocol gap noted in the design).
+      let unsubscribe: (() => void) = () => {};
+      let tracked: ActiveRun | undefined;
       let pollingDone = false;
-      const pollInterval = 500;
-      const pollTask = (async () => {
-        while (!pollingDone) {
-          await new Promise((r) => setTimeout(r, pollInterval));
-          if (pollingDone) break;
-          try {
-            const messages = await client.listSessionMessages(sessionId);
-            for (const m of messages) {
-              if (!m || typeof m !== "object") continue;
-              const info = (m as { info?: { id?: unknown; role?: unknown } }).info;
-              const id = info && typeof info === "object" ? (info as { id?: unknown }).id : undefined;
-              const role = info && typeof info === "object" ? (info as { role?: unknown }).role : undefined;
-              if (typeof id !== "string" || baselineMessageIds.has(id)) continue;
-              if (role !== "assistant") continue;
-              for (const line of synthesizeNonTextEvents(m, sessionId, partState)) {
-                emitLog("event", line);
-              }
-            }
-          } catch {
-            // Transient daemon hiccup; next tick will retry.
-          }
+      let pollTask: Promise<void> = Promise.resolve();
+      let cleanupDone = false;
+      const teardownAttempt = async () => {
+        pollingDone = true;
+        await pollTask.catch(() => {});
+        pollTask = Promise.resolve();
+        pollingDone = false;
+        unsubscribe();
+        unsubscribe = () => {};
+        if (tracked) {
+          activeRuns.delete(opts.runId);
+          tracked = undefined;
         }
-      })();
+      };
+      const teardownFinal = async () => {
+        if (cleanupDone) return;
+        cleanupDone = true;
+        await teardownAttempt();
+      };
 
+      const MESSAGE_SEND_MAX_ATTEMPTS = 3;
       try {
-        const response = (await client.sendMessage(sessionId, {
-          providerID,
-          modelID,
-          parts,
-          ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
-        })) as { info?: { id?: string; error?: unknown } };
+        for (let messageAttempt = 0; messageAttempt < MESSAGE_SEND_MAX_ATTEMPTS; messageAttempt++) {
+          // Wire SSE subscription before sending the message so we
+          // don't miss early events. The multiplexer dedups its own
+          // connection. Each retry needs a fresh subscription against
+          // the (possibly new) daemon URL captured in `client`.
+          unsubscribe = client.subscribeSessionEvents(sessionId, (sseEvent) => {
+            const line = translateOpencodeSseEvent(sseEvent, { sessionID: sessionId });
+            if (line !== null) emitLog("event", line);
+          });
 
-        // opencode-serve does NOT throw on upstream model errors. It
-        // resolves the HTTP call with an `info.error` field populated
-        // (e.g. `Model big-pickle not supported for format anthropic`
-        // when the zen endpoint deprecates a model, or per-provider
-        // 401/429). Without this check, the run "succeeds" with exit 0
-        // and zero text — the UI flags it as failed via the diagnostic
-        // banner heuristic, but the user gets no useful information
-        // about what went wrong. Surface the upstream error verbatim
-        // so retry / settings actions are actionable.
-        const upstreamError = describeDaemonError(response.info?.error);
-        if (upstreamError) {
-          emitLog("stderr", `opencode-serve model error (${modelID}): ${upstreamError}`);
-          await Promise.all(pendingLogs);
-          return { exitCode: 1, opencodeSessionId: sessionId };
-        }
-        // After sendMessage settles, do one final synchronous pass to
-        // capture parts the daemon committed in the last poll
-        // interval. `partState` keeps it from re-emitting anything
-        // the live loop already surfaced.
-        const finalAssistantInfo = response.info as { id?: string; parentID?: string } | undefined;
-        const finalAssistantId = finalAssistantInfo?.id;
-        const userMessageId = finalAssistantInfo?.parentID;
-        if (userMessageId && finalAssistantId) {
+          // Wait until the SSE stream has acknowledged our subscription
+          // before dispatching the message — otherwise the per-message
+          // events emitted in the first ~ms can race past a still-
+          // handshaking SSE socket and never reach `onLog`. A timeout
+          // here (60s default, set in opencodeClient) fires only when
+          // the daemon is wedged at handshake; that's a daemon-gone
+          // signal as far as recovery is concerned, so let the catch
+          // below treat it identically — the silent retry will tear
+          // down + re-spawn + re-subscribe.
           try {
-            // opencode emits ONE assistant message per "step" in a
-            // multi-step turn — tool calls force a step boundary, so
-            // a single user prompt that triggers a Read tool produces
-            // two assistant messages: the first containing
-            // step-start/reasoning/tool/step-finish, the second
-            // containing step-start/reasoning/text/step-finish.
-            // `sendMessage` returns the LAST message (the answer); the
-            // tool part lives in the first one. Synth from EVERY
-            // assistant message in this turn — anything newer than the
-            // user message we just dispatched.
-            for (const msg of await collectTurnAssistantMessages(
-              client,
-              sessionId,
-              userMessageId,
-              finalAssistantId,
-            )) {
-              for (const line of synthesizeNonTextEvents(msg, sessionId, partState)) {
-                emitLog("event", line);
+            await client.sseReady();
+          } catch (err) {
+            const haveRetries = messageAttempt < MESSAGE_SEND_MAX_ATTEMPTS - 1;
+            if (isServerGoneError(err) && haveRetries) {
+              log.warn(
+                {
+                  workspaceId,
+                  runId: opts.runId,
+                  containerId: handle.containerId,
+                  attempt: messageAttempt,
+                  message: (err as Error).message ?? String(err),
+                },
+                "sandbox: SSE handshake failed (wedged daemon); recovering invisibly",
+              );
+              await teardownAttempt();
+              // CAS-protected: if a sibling chat's recovery already
+              // populated a fresh daemon, leave it alone (the next
+              // acquireDaemonWithRecovery call will see it via cache
+              // and return it without spawning).
+              invalidateOpencodeServerCache(handle.containerId, server);
+              try {
+                const acquired = await acquireDaemonWithRecovery({
+                  engine,
+                  workspaceId,
+                  user,
+                  daemonEnv,
+                  initialHandle: handle,
+                  acquireHandle,
+                });
+                handle = acquired.handle;
+                server = acquired.server;
+                client = new OpencodeClient(server.url, server.password);
+                await writeSandboxToken();
+                continue;
+              } catch (recoveryErr) {
+                const finalErr = recoveryErr as DaemonAcquireFailure;
+                emitLog(
+                  "stderr",
+                  `opencode-serve SSE handshake wedged and recovery exhausted after ${finalErr.attempts} attempts: ` +
+                    `${finalErr.cause?.message ?? String(finalErr.cause)}`,
+                );
+                await Promise.all(pendingLogs);
+                return { exitCode: 1, opencodeSessionId: sessionId };
               }
             }
-          } catch (err) {
-            // Best-effort — losing tool-card synthesis shouldn't fail
-            // the run.
-            log.warn(
-              { runId: opts.runId, err: (err as Error)?.message ?? String(err) },
-              "runtime: listSessionMessages failed",
-            );
-          }
-        }
-        await Promise.all(pendingLogs);
-        return {
-          exitCode: tracked.abortRequested ? 130 : 0,
-          opencodeSessionId: sessionId,
-        };
-      } catch (err) {
-        if (tracked.abortRequested) {
-          // The abort path already surfaced a log line. Treat the
-          // resulting HTTP error as expected.
-          await Promise.all(pendingLogs);
-          return { exitCode: 130, opencodeSessionId: sessionId };
-        }
-        const message = (err as Error).message ?? String(err);
-        emitLog("stderr", `opencode-serve message failed: ${message}`);
-        if (isServerGoneError(err)) {
-          // Cached URL points at a dead daemon; clear it so the next call
-          // re-spawns. We don't retry inside this call because the model
-          // may have moved on (e.g. message accepted, response failed).
-          invalidateOpencodeServerCache(handle.containerId);
-          // If the cgroup OOM-killed the daemon, surface the canonical
-          // ENOMEM line so `classifyResourceError` returns "memory" and
-          // the scheduler's auto-scale + retry path kicks in. Without
-          // this, a memory-bound daemon crash looks like a transient
-          // network blip and the user sees a one-shot failure with no
-          // grow.
-          const oomBytes = await readCgroupOomKillCount(engine, handle.containerId).catch(() => 0);
-          if (oomBytes > 0) {
             emitLog(
               "stderr",
-              `opencode-serve was OOM-killed by the cgroup (memory.events oom_kill=${oomBytes}); ` +
-                `flagging as ENOMEM so the sandbox grows on retry.`,
+              `opencode-serve event stream failed to open: ${(err as Error).message ?? String(err)}`,
             );
+            return { exitCode: 1, opencodeSessionId: sessionId };
           }
-        } else if (err instanceof OpencodeServerError && err.status === 404) {
-          // Session id stale (e.g. server's SQLite was wiped). Forget the
-          // session so the next turn creates a fresh one.
-          await client.deleteSession(sessionId).catch(() => {});
-          await Promise.all(pendingLogs);
-          return { exitCode: 1 };
+
+          tracked = {
+            containerId: handle.containerId,
+            sessionId,
+            client,
+            unsubscribeSse: unsubscribe,
+            abortRequested: false,
+          };
+          activeRuns.set(opts.runId, tracked);
+
+          // opencode-serve 1.14.50 only broadcasts text/reasoning
+          // deltas over SSE. Tool calls, step-start, step-finish
+          // parts are written to its SQLite during the turn and only
+          // readable via `GET /session/:id/message`. To make tool
+          // cards appear as they happen rather than only after
+          // sendMessage returns, we poll listSessionMessages every
+          // ~500ms during the turn and emit any non-text part not
+          // yet seen. The same `partState` set is reused by the
+          // post-turn backstop loop so nothing double-emits.
+          const partState: PartEmissionState = new Map();
+          // Snapshot existing assistant-message IDs so the polling
+          // loop ignores prior turns that share this session. Cap
+          // the call at 3s — when the daemon is unresponsive (just
+          // spawned, mid-restart), an unbounded await here parks
+          // the entire run before sendMessage ever fires.
+          const baselineMessageIds = new Set<string>();
+          try {
+            const messages = await Promise.race([
+              client.listSessionMessages(sessionId),
+              new Promise<unknown[]>((_, rej) =>
+                setTimeout(() => rej(new Error("baseline-timeout")), 3000),
+              ),
+            ]);
+            for (const m of messages) {
+              const info = (m as { info?: { id?: unknown; role?: unknown } }).info;
+              const id = info && (info as { id?: unknown }).id;
+              if (typeof id === "string") baselineMessageIds.add(id);
+            }
+          } catch {
+            // best-effort
+          }
+
+          pollingDone = false;
+          // Capture `client` in a stable local so the polling loop
+          // talks to the daemon URL valid for this attempt; on a
+          // silent retry the outer `client` is reassigned but this
+          // attempt's pollTask is torn down first.
+          const pollClient = client;
+
+          // Polling-as-truth: this loop both emits synth events AND
+          // signals the run-completion outcome. `pollOutcome` resolves
+          // when the assistant turn reaches terminal state (or the
+          // daemon surfaces an upstream model error in `info.error`),
+          // rejects when consecutive HTTP failures cross
+          // POLL_FAILURE_THRESHOLD. The send-message block races this
+          // promise against the in-flight `sendMessage` call.
+          type PollOutcome =
+            | {
+                kind: "terminal";
+                finalAssistantId: string;
+                userMessageId: string;
+              }
+            | { kind: "upstream-error"; message: string };
+          let pollOutcomeResolve: (v: PollOutcome) => void = () => {};
+          let pollOutcomeReject: (err: Error) => void = () => {};
+          const pollOutcome = new Promise<PollOutcome>((res, rej) => {
+            pollOutcomeResolve = res;
+            pollOutcomeReject = rej;
+          });
+          // Suppress unhandled-rejection if the catch block decides
+          // it doesn't need to inspect the rejection (e.g. sendMessage
+          // resolved first on the happy path).
+          pollOutcome.catch(() => {});
+
+          let consecutivePollFailures = 0;
+          pollTask = (async () => {
+            while (!pollingDone) {
+              await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+              if (pollingDone) break;
+              try {
+                const messages = await pollClient.listSessionMessages(
+                  sessionId,
+                  AbortSignal.timeout(POLL_HTTP_TIMEOUT_MS),
+                );
+                consecutivePollFailures = 0;
+
+                // Walk new (non-baseline) assistant messages: emit
+                // synthesized events for every one, and track the
+                // latest as the candidate for terminal detection.
+                let latestAssistant:
+                  | { info: { id: string; parentID?: string; error?: unknown }; parts?: unknown[] }
+                  | null = null;
+                for (const m of messages) {
+                  if (!m || typeof m !== "object") continue;
+                  const info = (m as { info?: { id?: unknown; role?: unknown; parentID?: unknown; error?: unknown } }).info;
+                  if (!info || typeof info !== "object") continue;
+                  const id = (info as { id?: unknown }).id;
+                  const role = (info as { role?: unknown }).role;
+                  if (typeof id !== "string" || baselineMessageIds.has(id)) continue;
+                  if (role !== "assistant") continue;
+                  for (const line of synthesizeNonTextEvents(m, sessionId, partState)) {
+                    emitLog("event", line);
+                  }
+                  const parentID = (info as { parentID?: unknown }).parentID;
+                  latestAssistant = {
+                    info: {
+                      id,
+                      parentID: typeof parentID === "string" ? parentID : undefined,
+                      error: (info as { error?: unknown }).error,
+                    },
+                    parts: (m as { parts?: unknown[] }).parts,
+                  };
+                }
+
+                if (latestAssistant) {
+                  // opencode-serve encodes upstream model failures
+                  // (rate limit, deprecated model, provider 401) as
+                  // `info.error` on the assistant message. Treat as a
+                  // user-visible terminal error — same shape as the
+                  // legacy sendMessage-response path used to.
+                  const upstreamError = describeDaemonError(latestAssistant.info.error);
+                  if (upstreamError) {
+                    pollOutcomeResolve({ kind: "upstream-error", message: upstreamError });
+                    return;
+                  }
+                  // Terminal completion: the final part is `step-finish`
+                  // with a terminal reason. opencode-serve commits this
+                  // to its SQLite atomically with the rest of the turn,
+                  // so once it's visible the turn is fully durable.
+                  if (
+                    isAssistantTurnComplete(latestAssistant) &&
+                    latestAssistant.info.parentID
+                  ) {
+                    pollOutcomeResolve({
+                      kind: "terminal",
+                      finalAssistantId: latestAssistant.info.id,
+                      userMessageId: latestAssistant.info.parentID,
+                    });
+                    return;
+                  }
+                }
+              } catch (err) {
+                // AbortError (per-call timeout) or HTTP/network error.
+                // Bounded retry: a brief daemon hiccup mustn't kill an
+                // otherwise-healthy run. After POLL_FAILURE_THRESHOLD
+                // consecutive failures, declare daemon-gone and route
+                // into the catch block's silent-retry recovery.
+                consecutivePollFailures++;
+                if (consecutivePollFailures >= POLL_FAILURE_THRESHOLD) {
+                  pollOutcomeReject(
+                    new PollLivenessFailure(err as Error, consecutivePollFailures),
+                  );
+                  return;
+                }
+              }
+            }
+          })();
+
+          // Snapshot `seq` BEFORE sendMessage so we can tell whether
+          // any user-visible events were emitted during this attempt.
+          // Silent retry only safe when nothing has reached the user.
+          const seqAtAttemptStart = seq;
+          // AbortController for the in-flight sendMessage POST. We
+          // fire-and-forget the request; the polling loop above is
+          // authoritative for "turn done." The POST is just a write
+          // (kicks off the turn server-side) — its HTTP resolution
+          // tells us nothing reliable because a dying daemon's
+          // docker-proxy can return a stub-200 with an empty body
+          // before the daemon's actually processed anything. The
+          // signal lets us tear it down cleanly when polling has
+          // returned its verdict.
+          const sendAbort = new AbortController();
+          try {
+            // Kickoff sendMessage. We never await its resolution as
+            // proof of completion. Its rejection (UND_ERR_SOCKET,
+            // ECONNRESET, etc.) IS meaningful — that's a daemon-gone
+            // signal the catch block routes into recovery.
+            const sendPromise = client.sendMessage(
+              sessionId,
+              {
+                providerID,
+                modelID,
+                parts,
+                ...(opts.agentFileId ? { agent: opts.agentFileId } : {}),
+              },
+              sendAbort.signal,
+            );
+            // Translate sendMessage rejection into a thenable that
+            // ONLY rejects, never resolves — so the race below can
+            // route a daemon-gone signal into the same catch path as
+            // a polling-detected liveness failure, while sendMessage
+            // *resolving* is treated as a no-op (we don't trust the
+            // response body — see the kickoff comment above).
+            const sendRejection = new Promise<never>((_, rej) => {
+              sendPromise.then(
+                () => {
+                  // Resolved with a body we don't trust. Do nothing —
+                  // polling will provide the authoritative outcome.
+                },
+                (err) => rej(err),
+              );
+            });
+            sendRejection.catch(() => {});
+
+            // Race polling-detected outcome against sendMessage's
+            // rejection. The poll loop will either resolve with terminal
+            // state (the assistant turn reached `step-finish` durably on
+            // disk) or with an upstream model error captured on the
+            // assistant message; or reject with PollLivenessFailure
+            // after consecutive HTTP failures crossed the threshold.
+            // sendMessage's rejection (if it ever happens) is treated
+            // as another daemon-gone signal, same recovery routing.
+            const outcome = await Promise.race([pollOutcome, sendRejection]);
+            // Polling won the race with a useful verdict. Tear down
+            // sendMessage's in-flight POST (which may still be holding
+            // a socket open) before we proceed.
+            sendAbort.abort();
+
+            if (outcome.kind === "upstream-error") {
+              emitLog(
+                "stderr",
+                `opencode-serve model error (${modelID}): ${outcome.message}`,
+              );
+              const tail = await readDaemonLogTail(engine, handle.containerId).catch(() => "");
+              if (tail) emitLog("stderr", `opencode-serve.log tail:\n${tail}`);
+              await Promise.all(pendingLogs);
+              return { exitCode: 1, opencodeSessionId: sessionId };
+            }
+
+            // Terminal seen via polling. Final synchronous pass to
+            // capture parts the daemon committed in the last poll
+            // interval. `partState` keeps it from re-emitting anything
+            // the live loop already surfaced.
+            const { finalAssistantId, userMessageId } = outcome;
+            try {
+              for (const msg of await collectTurnAssistantMessages(
+                client,
+                sessionId,
+                userMessageId,
+                finalAssistantId,
+              )) {
+                for (const line of synthesizeNonTextEvents(msg, sessionId, partState)) {
+                  emitLog("event", line);
+                }
+              }
+            } catch (err) {
+              log.warn(
+                { runId: opts.runId, err: (err as Error)?.message ?? String(err) },
+                "runtime: listSessionMessages failed (post-poll backstop)",
+              );
+            }
+            if (messageAttempt > 0) {
+              log.info(
+                { workspaceId, runId: opts.runId, attempts: messageAttempt + 1 },
+                "sandbox: recovered mid-message daemon crash invisibly",
+              );
+            }
+            await Promise.all(pendingLogs);
+            return {
+              exitCode: tracked.abortRequested ? 130 : 0,
+              opencodeSessionId: sessionId,
+            };
+          } catch (err) {
+            // Make sure no hanging fetch survives past return.
+            sendAbort.abort();
+            if (tracked.abortRequested) {
+              // The abort path already surfaced a log line. Treat the
+              // resulting HTTP error as expected.
+              await Promise.all(pendingLogs);
+              return { exitCode: 130, opencodeSessionId: sessionId };
+            }
+
+            // Silent-retry preconditions: nothing reached the user
+            // during this attempt, the failure looks like daemon-gone,
+            // and we have retries left. If any of these is false, fall
+            // through to the user-visible error path (existing logic).
+            //
+            // `PollLivenessFailure` is the polling-as-truth layer's
+            // way of saying "the daemon stopped answering"; route it
+            // through the same silent-retry as a sendMessage-raised
+            // ECONNREFUSED/etc. The distinction is preserved in the
+            // log line below so triage knows which detector fired.
+            const noEventsThisAttempt = seq === seqAtAttemptStart;
+            const isPollFailure = err instanceof PollLivenessFailure;
+            const isDaemonGone = isPollFailure || isServerGoneError(err);
+            const haveRetries = messageAttempt < MESSAGE_SEND_MAX_ATTEMPTS - 1;
+            if (noEventsThisAttempt && isDaemonGone && haveRetries) {
+              const message = (err as Error).message ?? String(err);
+              log.warn(
+                {
+                  workspaceId,
+                  runId: opts.runId,
+                  containerId: handle.containerId,
+                  attempt: messageAttempt,
+                  detector: isPollFailure ? "poll-liveness" : "send-error",
+                  message,
+                },
+                "sandbox: daemon died before emitting any event; recovering and retrying invisibly",
+              );
+              await teardownAttempt();
+              // CAS: only invalidate if our (now-dead) instance is
+              // still the cached one. Concurrent sibling chats sharing
+              // this daemon all detect the same death and reach this
+              // block at once — without the CAS guard, each one wipes
+              // the previous one's fresh respawn, locking the workspace
+              // in a spawn-kill-spawn loop (see chaos-test report).
+              invalidateOpencodeServerCache(handle.containerId, server);
+              try {
+                const acquired = await acquireDaemonWithRecovery({
+                  engine,
+                  workspaceId,
+                  user,
+                  daemonEnv,
+                  initialHandle: handle,
+                  acquireHandle,
+                });
+                handle = acquired.handle;
+                server = acquired.server;
+                client = new OpencodeClient(server.url, server.password);
+                await writeSandboxToken();
+              } catch (recoveryErr) {
+                // Recovery exhausted. Emit a single clean stderr (the
+                // user sees one error, not the cascade we just
+                // dampened) and bail.
+                const finalErr = recoveryErr as DaemonAcquireFailure;
+                log.error(
+                  {
+                    workspaceId,
+                    runId: opts.runId,
+                    midMessageAttempt: messageAttempt,
+                    recoveryAttempts: finalErr.attempts,
+                    finalKind: finalErr.kind,
+                  },
+                  "sandbox: mid-message daemon recovery exhausted; surfacing to user",
+                );
+                emitLog(
+                  "stderr",
+                  `opencode-serve crashed mid-message and failed to recover after ${finalErr.attempts} attempts: ` +
+                    `${finalErr.cause?.message ?? String(finalErr.cause)}` +
+                    (finalErr.kind === "oom"
+                      ? formatStartupOomMarker(finalErr.lastOomKillCount)
+                      : ""),
+                );
+                await Promise.all(pendingLogs);
+                return { exitCode: 1, opencodeSessionId: sessionId };
+              }
+              // Loop continues — next iteration re-subscribes SSE and
+              // re-POSTs the message against the fresh daemon.
+              continue;
+            }
+
+            // User-visible failure path (same shape as before the
+            // recovery loop existed — preserves the OOM marker so
+            // the scheduler's outer retry can still classify).
+            const message = (err as Error).message ?? String(err);
+            emitLog("stderr", `opencode-serve message failed: ${message}`);
+            const tail = await readDaemonLogTail(engine, handle.containerId).catch(() => "");
+            if (tail) emitLog("stderr", `opencode-serve.log tail:\n${tail}`);
+            if (isDaemonGone) {
+              invalidateOpencodeServerCache(handle.containerId, server);
+              const oomBytes = await readCgroupOomKillCount(engine, handle.containerId).catch(() => 0);
+              if (oomBytes > 0) {
+                emitLog(
+                  "stderr",
+                  `opencode-serve was OOM-killed by the cgroup (memory.events oom_kill=${oomBytes}); ` +
+                    `flagging as ENOMEM so the sandbox grows on retry.`,
+                );
+              }
+            } else if (err instanceof OpencodeServerError && err.status === 404) {
+              await client.deleteSession(sessionId).catch(() => {});
+              await Promise.all(pendingLogs);
+              return { exitCode: 1 };
+            }
+            await Promise.all(pendingLogs);
+            return { exitCode: 1, opencodeSessionId: sessionId };
+          }
         }
-        await Promise.all(pendingLogs);
+        // Loop fell through (unreachable in practice: every iteration
+        // either returns or continues). Defensive return.
+        emitLog("stderr", `opencode-serve message send: retry budget exhausted without classification`);
         return { exitCode: 1, opencodeSessionId: sessionId };
       } finally {
-        // Stop the live-poll loop in every exit path (success, error,
-        // abort) so it doesn't keep running and emit phantom events
-        // for the next turn.
-        pollingDone = true;
-        await pollTask;
-        activeRuns.delete(opts.runId);
-        unsubscribe();
+        await teardownFinal();
       }
     },
 
@@ -676,116 +1040,9 @@ function createRealDriver(): SandboxDriver {
   };
 }
 
-/**
- * Walk a `sendMessage` response and emit synthetic run-format events
- * for every non-text part the daemon's SSE stream didn't already
- * broadcast. opencode-serve 1.14.50 only streams `message.part.delta`
- * events with `field: "text"` — tool, step-start, step-finish, and
- * reasoning parts never appear on the wire, only in the final
- * message envelope. Without this synthesis the UI never sees tool
- * cards or step boundaries.
- *
- * Returns an iterator of JSON-string events ready for the `kind:
- * "event"` log channel. Same shape as the SSE translator's output:
- * `{type, part, sessionID}` with the part.type hyphens normalized to
- * underscores so consumers see `step_start` / `step_finish` etc.
- */
-/**
- * Per-part state tracked across polling iterations so we can emit
- * meaningful updates without double-rendering. Replaces the older
- * Set-of-ids dedup so we can emit reasoning-text deltas (the daemon
- * doesn't broadcast them over SSE) and tool state transitions while
- * still collapsing static parts to a single emission.
- */
-export type PartEmissionState = Map<
-  string,
-  { reasoningTextEmitted?: number; toolStatus?: string; emitted?: boolean }
->;
-
-export function* synthesizeNonTextEvents(
-  messageOrEnvelope: unknown,
-  sessionID: string,
-  state?: PartEmissionState,
-): Iterable<string> {
-  if (!messageOrEnvelope || typeof messageOrEnvelope !== "object") return;
-  // Accept either the raw assistant-message envelope `{info, parts}`
-  // or just the inner message shape with a top-level `parts`.
-  const env = messageOrEnvelope as { parts?: unknown; info?: unknown };
-  if (!Array.isArray(env.parts)) return;
-  // Pull the providerID/modelID/agent/mode the daemon actually used for
-  // this assistant message. Surfacing it on every synthesized event
-  // makes "what model produced this step?" answerable from the chat
-  // log alone — invaluable when a session was bound to one model and
-  // an upstream switch didn't propagate.
-  const meta = extractAssistantInfoMeta(env.info);
-  for (const partRaw of env.parts) {
-    if (!partRaw || typeof partRaw !== "object") continue;
-    const part = partRaw as { type?: unknown; id?: unknown; text?: unknown; state?: unknown };
-    if (typeof part.type !== "string") continue;
-    // Text parts already streamed via SSE deltas; re-emitting them
-    // would duplicate the message body when `deriveTextFromLog`
-    // concatenates `text` events.
-    if (part.type === "text") continue;
-
-    const partId = typeof part.id === "string" ? part.id : "";
-    const prior = state && partId ? state.get(partId) ?? {} : {};
-
-    // Reasoning: opencode-serve doesn't reliably broadcast reasoning
-    // deltas over SSE for multi-step turns, so the polling loop is
-    // the only path that sees reasoning growing. Mimic the SSE
-    // delta shape — emit just the suffix added since the last
-    // observation — so the UI streams reasoning text the same way
-    // it streams the final answer.
-    if (part.type === "reasoning") {
-      const fullText = typeof part.text === "string" ? part.text : "";
-      const previouslyEmitted = prior.reasoningTextEmitted ?? 0;
-      if (fullText.length <= previouslyEmitted) {
-        // Same text we already emitted (or shorter — daemon shouldn't
-        // ever shorten). Nothing to do.
-        if (state && partId) state.set(partId, prior);
-        continue;
-      }
-      const delta = fullText.slice(previouslyEmitted);
-      const deltaPart: Record<string, unknown> = {
-        type: "reasoning",
-        text: delta,
-        id: partId,
-      };
-      const messageID = (part as { messageID?: unknown }).messageID;
-      if (typeof messageID === "string") deltaPart.messageID = messageID;
-      const event: Record<string, unknown> = { type: "reasoning", part: deltaPart, sessionID };
-      if (meta) event.model = meta;
-      if (state && partId) state.set(partId, { ...prior, reasoningTextEmitted: fullText.length });
-      yield JSON.stringify(event);
-      continue;
-    }
-
-    // Tool parts mutate as the call moves through pending → running
-    // → completed/error. Emit on every status transition so the UI
-    // sees the tool card update; collapse repeated observations of
-    // the same status.
-    if (part.type === "tool") {
-      const status = (part.state as { status?: unknown } | undefined)?.status;
-      const statusStr = typeof status === "string" ? status : "";
-      if (state && partId && prior.toolStatus === statusStr) continue;
-      const event: Record<string, unknown> = { type: "tool", part, sessionID };
-      if (meta) event.model = meta;
-      if (state && partId) state.set(partId, { ...prior, toolStatus: statusStr });
-      yield JSON.stringify(event);
-      continue;
-    }
-
-    // Static parts (step-start, step-finish, …) — emit exactly once.
-    if (state && partId) {
-      if (prior.emitted) continue;
-      state.set(partId, { ...prior, emitted: true });
-    }
-    const runFormatType = part.type.replace(/-/g, "_");
-    const event: Record<string, unknown> = { type: runFormatType, part, sessionID };
-    if (meta) event.model = meta;
-    yield JSON.stringify(event);
-  }
-}
+// `PartEmissionState` / `synthesizeNonTextEvents` live in
+// `./eventSynthesis.ts` to keep this file under the max-lines cap;
+// re-exported from the top-of-file import block for back-compat.
 
 /**
  * Pulls a one-line human-readable description out of opencode-serve's
@@ -830,30 +1087,7 @@ export function describeDaemonError(error: unknown): string | null {
   }
 }
 
-/**
- * Extract the `{providerID, modelID, agent?, mode?}` debug summary from an
- * assistant-message `info` envelope returned by opencode-serve's
- * `GET /session/:id/message`. Returns null when the envelope is missing
- * the fields — better to omit the model annotation than to write
- * misleading partial data.
- */
-function extractAssistantInfoMeta(info: unknown): {
-  providerID: string;
-  modelID: string;
-  agent?: string;
-  mode?: string;
-} | null {
-  if (!info || typeof info !== "object") return null;
-  const i = info as { providerID?: unknown; modelID?: unknown; agent?: unknown; mode?: unknown };
-  if (typeof i.providerID !== "string" || typeof i.modelID !== "string") return null;
-  const out: { providerID: string; modelID: string; agent?: string; mode?: string } = {
-    providerID: i.providerID,
-    modelID: i.modelID,
-  };
-  if (typeof i.agent === "string") out.agent = i.agent;
-  if (typeof i.mode === "string") out.mode = i.mode;
-  return out;
-}
+// `extractAssistantInfoMeta` moved to `./eventSynthesis.ts`.
 
 /**
  * Locate the assistant message we just generated in a `GET
@@ -1006,6 +1240,209 @@ export function isContainerGoneError(message: string): boolean {
  * exit-code 137 separately for the cases where opencode wrappers
  * relay the SIGKILL exit.
  */
+/**
+ * Canonical stderr marker for an OOM-on-startup. Must contain the
+ * lowercase substring `classifyResourceError` matches
+ * (`opencode-serve was oom-killed`) so the scheduler's auto-scale path
+ * fires on the next retry. Returns `""` when no OOM was observed so the
+ * caller can interpolate unconditionally.
+ */
+function formatStartupOomMarker(oomBytes: number): string {
+  if (oomBytes <= 0) return "";
+  return (
+    `\nopencode-serve was OOM-killed by the cgroup (memory.events oom_kill=${oomBytes}); ` +
+    `flagging as ENOMEM so the sandbox grows on retry.`
+  );
+}
+
+/**
+ * Self-healing wrapper around `ensureOpencodeServer`. Catches every
+ * recoverable daemon-start failure mode and retries, growing the
+ * cgroup on OOM and re-acquiring the container on container-gone.
+ *
+ * Goal: chats succeed regardless of background sandbox churn. The
+ * caller never sees intermediate failures via `onLog` — they only
+ * reach server-side `log.warn(...)`. Only the final, exhausted-budget
+ * failure becomes user-visible (the caller emits one clean stderr).
+ *
+ * Recovery topology per attempt:
+ *   1. OOM (cgroup `memory.events.oom_kill` advanced) → call
+ *      `growSandboxForResourceError("memory")` to double the limit
+ *      in-place (no container recreate, so opencode-serve's
+ *      persistent session state survives), invalidate the cached
+ *      instance, retry.
+ *   2. Container gone (inspect-not-found / not-running) → drop the
+ *      cache entry, re-acquire via createOrReuse (which itself
+ *      handles drift / port-bind races), retry.
+ *   3. Anything else recoverable (ensure-timeout, waitForReady
+ *      timeout, port not yet wired) → invalidate cache, retry. The
+ *      RUNTIME's createOrReuse will see the container is healthy and
+ *      reuse it; ensureOpencodeServer will spawn a fresh daemon.
+ *
+ * After DAEMON_ACQUIRE_MAX_ATTEMPTS the helper throws
+ * `DaemonAcquireFailure`. The caller emits the user-visible stderr.
+ */
+const DAEMON_ACQUIRE_MAX_ATTEMPTS = 4;
+
+interface AcquireDaemonOpts {
+  engine: import("./engine.js").Engine;
+  workspaceId: string;
+  user: string;
+  daemonEnv: Record<string, string>;
+  initialHandle: { containerId: string; workspaceId: string };
+  acquireHandle: () => Promise<{ containerId: string; workspaceId: string }>;
+}
+
+interface AcquireDaemonResult {
+  handle: { containerId: string; workspaceId: string };
+  server: OpencodeServerInstance;
+}
+
+/**
+ * Structured failure thrown by `acquireDaemonWithRecovery` after every
+ * recovery path is exhausted. Carries enough context for the caller's
+ * single user-facing emit + server-log line.
+ */
+class DaemonAcquireFailure extends Error {
+  readonly cause: Error;
+  readonly kind: "oom" | "container-gone" | "ensure-timeout" | "unknown";
+  readonly attempts: number;
+  readonly recoveryEvents: Array<{
+    attempt: number;
+    action: string;
+    detail?: string;
+  }>;
+  readonly lastOomKillCount: number;
+
+  constructor(
+    cause: Error,
+    kind: DaemonAcquireFailure["kind"],
+    attempts: number,
+    recoveryEvents: DaemonAcquireFailure["recoveryEvents"],
+    lastOomKillCount: number,
+  ) {
+    super(`daemon acquire failed after ${attempts} attempts: ${cause.message}`);
+    this.name = "DaemonAcquireFailure";
+    this.cause = cause;
+    this.kind = kind;
+    this.attempts = attempts;
+    this.recoveryEvents = recoveryEvents;
+    this.lastOomKillCount = lastOomKillCount;
+  }
+}
+
+async function acquireDaemonWithRecovery(
+  opts: AcquireDaemonOpts,
+): Promise<AcquireDaemonResult> {
+  const { engine, workspaceId, user, daemonEnv } = opts;
+  let handle = opts.initialHandle;
+  const recoveryEvents: DaemonAcquireFailure["recoveryEvents"] = [];
+  let lastErr: Error = new Error("acquireDaemonWithRecovery: no attempts ran");
+  let lastKind: DaemonAcquireFailure["kind"] = "unknown";
+  let lastOomKillCount = 0;
+
+  // Baseline OOM count at the start of this run. Each iteration
+  // compares against this so we only react to *new* OOMs caused by
+  // the daemon we just spawned, not stale counter values left from
+  // an earlier turn on the same container.
+  let oomBaseline = await readCgroupOomKillCount(engine, handle.containerId).catch(() => 0);
+
+  for (let attempt = 0; attempt < DAEMON_ACQUIRE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const server = await ensureOpencodeServer(engine, {
+        containerId: handle.containerId,
+        cwd: SANDBOX_HOME,
+        user,
+        env: daemonEnv,
+      });
+      if (attempt > 0) {
+        log.info(
+          { workspaceId, attempts: attempt + 1, recoveryEvents },
+          "sandbox: recovered daemon after retries (invisible to user)",
+        );
+      }
+      return { handle, server };
+    } catch (err) {
+      lastErr = err as Error;
+      const msg = lastErr.message ?? String(lastErr);
+
+      // Order matters: check OOM first (daemon was SIGKILL'd before
+      // it could bind 9105, so the failure looks like "timeout"
+      // /"no host-side binding" but the real fix is more memory).
+      const currentOom = await readCgroupOomKillCount(engine, handle.containerId).catch(() => 0);
+      if (currentOom > oomBaseline) {
+        lastKind = "oom";
+        lastOomKillCount = currentOom;
+        const newKills = currentOom - oomBaseline;
+        oomBaseline = currentOom;
+        const { growSandboxForResourceError } = await import("./docker.js");
+        const growth = await growSandboxForResourceError(workspaceId, "memory");
+        const detail = growth.grew
+          ? `grew memory to ${growth.memoryBytes} bytes`
+          : growth.atMax
+          ? `already at memory max (${growth.memoryBytes} bytes); will retry once more`
+          : `growth refused (engine.update returned false)`;
+        recoveryEvents.push({ attempt, action: "oom-grow", detail });
+        log.warn(
+          { workspaceId, containerId: handle.containerId, attempt, newKills, growth },
+          "sandbox: opencode-serve OOM-killed during start; grew cgroup memory, retrying invisibly",
+        );
+        // The container survives `docker update`, but the daemon's
+        // process is dead. Drop the cached URL so the next attempt
+        // spawns a fresh one. opencode-serve persists session state
+        // to HOME on disk, so session ids carry across the restart.
+        invalidateOpencodeServerCache(handle.containerId);
+        // If we couldn't grow (already at max) AND OOMs keep coming,
+        // one more attempt won't help; bail to surface a real error.
+        if (!growth.grew && growth.atMax) {
+          throw new DaemonAcquireFailure(
+            lastErr,
+            "oom",
+            attempt + 1,
+            recoveryEvents,
+            currentOom,
+          );
+        }
+        continue;
+      }
+
+      if (isContainerGoneError(msg)) {
+        lastKind = "container-gone";
+        recoveryEvents.push({ attempt, action: "container-gone-reacquire", detail: msg });
+        log.warn(
+          { workspaceId, attempt, message: msg },
+          "sandbox: container vanished mid-daemon-start; re-acquiring invisibly",
+        );
+        invalidateOpencodeServerCache(handle.containerId);
+        handle = await opts.acquireHandle();
+        // New container → new OOM baseline (the counter is per-cgroup).
+        oomBaseline = await readCgroupOomKillCount(engine, handle.containerId).catch(() => 0);
+        continue;
+      }
+
+      // Generic recoverable: an `ensure timed out`, a waitForReady
+      // timeout, a port-not-yet-wired transient. The container is
+      // (probably) fine; the daemon attempt isn't. Drop the cache
+      // and let the next iteration spawn a fresh daemon.
+      lastKind = "ensure-timeout";
+      recoveryEvents.push({ attempt, action: "daemon-restart", detail: msg });
+      log.warn(
+        { workspaceId, containerId: handle.containerId, attempt, message: msg },
+        "sandbox: opencode-serve start failed; restarting daemon invisibly",
+      );
+      invalidateOpencodeServerCache(handle.containerId);
+    }
+  }
+
+  throw new DaemonAcquireFailure(
+    lastErr,
+    lastKind,
+    DAEMON_ACQUIRE_MAX_ATTEMPTS,
+    recoveryEvents,
+    lastOomKillCount,
+  );
+}
+
 async function readCgroupOomKillCount(
   engine: import("./engine.js").Engine,
   containerId: string,

@@ -140,6 +140,28 @@ export async function dispatchChats(
     // Self-firing kinds (task / summary): execute_at is computed at insert
     // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
     if (userMessage.kind && userMessage.kind !== "chat") {
+      // Task messages created from inside an existing conversation
+      // anchor a dedicated thread chat so the tasks list opens that
+      // thread (with task_runs + replies) instead of the source chat's
+      // full history. We skip the thread when the task is the chat's
+      // only message — that's the TasksPage composer path which already
+      // spun up a fresh chat to hold the task; adding a thread shell on
+      // top would leave an empty placeholder parent the user never
+      // sees. Summary kinds keep firing in place.
+      if (userMessage.kind === "task" && !userMessage.threadChatId) {
+        const { rows: priorCountRows } = await pool.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND id <> ?`,
+          [segments[1], userMessage.id],
+        );
+        const hasPriorMessages = (priorCountRows[0]?.n ?? 0) > 0;
+        if (hasPriorMessages) {
+          const threadChat = await chatRoutes.createThreadShell(
+            pool, segments[1], userMessage, emit,
+          );
+          sendJson(res, 201, { ...userMessage, threadChatId: threadChat.id, threadChat });
+          return true;
+        }
+      }
       sendJson(res, 201, userMessage);
       return true;
     }
@@ -182,6 +204,13 @@ export async function dispatchChats(
     await requireOwnedMessage(pool, segments[1], segments[3], userId);
     const result = await chatRoutes.runMessage(pool, segments[1], segments[3], runManager, emit);
     sendJson(res, 200, result);
+    return true;
+  }
+  if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "feedback" && segments.length === 5 && method === "POST") {
+    await requireOwnedMessage(pool, segments[1], segments[3], userId);
+    const body = await parseBody(req);
+    const result = await chatRoutes.recordFeedback(pool, segments[1], segments[3], body, emit, { actorUserId: userId });
+    sendJson(res, 201, result);
     return true;
   }
   if (segments[0] === "chats" && segments[2] === "messages" && segments[4] === "summary-history" && segments.length === 5 && method === "GET") {

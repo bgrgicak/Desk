@@ -4,7 +4,7 @@ import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
-import { firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
+import { findActiveAgentTurn, firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
 import { useGetChatMessagesQuery, useGetWorkspacesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
@@ -47,15 +47,10 @@ export function findFailedOrDiagnosticAgentTurn(items: ServerMessage[]): ServerM
   return null
 }
 
-export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const m = items[i]
-    if (m.content.type === 'agent_turn') {
-      return m.state === 'pending' || m.state === 'running' ? m : null
-    }
-  }
-  return null
-}
+// `findActiveAgentTurn` moved to ./messageVisibility so non-component
+// callers (store selectors) can reuse it without dragging TSX into
+// the store layer. Re-exported for existing importers and tests.
+export { findActiveAgentTurn }
 
 export function failureDetailForAgentTurn(items: ServerMessage[], failedTurn: ServerMessage | null): string | null {
   if (!failedTurn) return null
@@ -713,12 +708,6 @@ export function ChatThread({
             <div className="flex justify-center py-2">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
-          )}
-          {/* "Beginning of conversation" marker */}
-          {!prevCursor && messages.length > 0 && !isInitialLoading && (
-            <p className="text-xs text-muted-foreground text-center pt-1 pb-2">
-              Beginning of conversation
-            </p>
           )}
           {isError && (
             <p className="text-xs text-destructive text-center pt-4">

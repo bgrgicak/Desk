@@ -1,8 +1,7 @@
-import { type ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import {
-  Bot,
   MessageSquarePlus,
   MoreHorizontal,
 } from 'lucide-react'
@@ -57,7 +56,7 @@ interface LibraryCardProps {
  * rendered here — callers handle folder rows separately because their
  * navigation semantics differ from leaf items.
  */
-export function LibraryCard({
+export const LibraryCard = memo(function LibraryCard({
   item,
   layout,
   index = 0,
@@ -78,8 +77,6 @@ export function LibraryCard({
   isDraggable,
 }: LibraryCardProps) {
   const Icon = iconForItem(item)
-  const showAgent = item.uploadedBy === 'ai'
-  const agentLabel = item.agentName ?? 'AI'
 
   const handleDragStart = (e: unknown) => {
     const dragEvent = e as React.DragEvent<HTMLElement>
@@ -133,12 +130,6 @@ export function LibraryCard({
         <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
-          {showAgent && (
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Bot className="h-3 w-3 shrink-0" />
-              <span className="truncate">{agentLabel}</span>
-            </p>
-          )}
           {item.usedBy.length > 0 && (
             <p className="text-xs text-muted-foreground">
               Used by {item.usedBy.join(', ')}
@@ -218,13 +209,6 @@ export function LibraryCard({
       <div className="p-4 pt-3">
         <p className="text-sm font-medium text-foreground truncate mb-1">{item.name}</p>
         <p className="flex items-center gap-1 text-xs text-muted-foreground">
-          {showAgent && (
-            <>
-              <Bot className="h-3 w-3 shrink-0" />
-              <span className="truncate max-w-[8rem]">{agentLabel}</span>
-              <span aria-hidden>·</span>
-            </>
-          )}
           {getRelativeTime(item.addedAt)}
         </p>
       </div>
@@ -236,13 +220,6 @@ export function LibraryCard({
         {item.name}
       </p>
       <p className="text-xs text-muted-foreground flex items-center gap-1">
-        {showAgent && (
-          <>
-            <Bot className="h-3 w-3 shrink-0" />
-            <span className="truncate max-w-[8rem]">{agentLabel}</span>
-            <span aria-hidden>·</span>
-          </>
-        )}
         {getRelativeTime(item.addedAt)}
       </p>
     </div>
@@ -305,4 +282,4 @@ export function LibraryCard({
       )}
     </motion.div>
   )
-}
+})
