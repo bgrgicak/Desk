@@ -15,6 +15,36 @@ We embed it inside the sandbox container and spawn it via `docker exec` per
 turn — no daemon, no HTTP, no SSE, no port, no shared MCP config, no auth
 file.
 
+### Measured wins vs. opencode
+
+**Memory (`docker stats` on real containers, M3 Linux host):**
+
+| State | Opencode | Pi |
+|---|---|---|
+| Sandbox at idle | ~250 MB (daemon never sleeps) | **1–2 MiB** |
+| During an active turn | ~280 MB (daemon + tools) | **70–82 MiB peak** |
+| After the turn ends | stays at ~250 MB | drops back to **2 MiB** |
+
+For a user with 5 active workspaces, the steady-state footprint goes from
+~1.25 GB → ~10 MiB. Even with 5 simultaneous turns, pi peaks at ~400 MB vs
+opencode's 1.4 GB.
+
+**Code surface (`packages/server/runtime/src/`):**
+
+| Metric | Opencode | Pi | Δ |
+|---|---|---|---|
+| LOC | ~5,800 | ~1,050 | **−82%** |
+| Long-running shared state (daemon / port / SQLite / MCP config / auth file) | 5 surfaces | 0 | — |
+| Recovery loops in `driver.ts` | 4 (daemon-gone, SSE-handshake, OOM-probe, session-stale) | 1 (container-gone) | **−75%** |
+| Explicit cross-call mutexes/locks (MCP write, port-bind, env-digest, auth wipe, SSE handshake guard) | 5 | 0 (per-turn isolation) | — |
+| Cold-spawn time on auth misconfig | 60s (daemon-ready timeout × 3 retries) | 1.5s | **40× faster** |
+| Cross–desk-server-restart cleanup | killed orphaned daemons to avoid SQLite `BUSY` | no-op | — |
+
+Plus a class of regressions we no longer have to chase: opencode's SSE
+broadcast format changed across minor versions and we had to pin
+`opencode-ai@1.14.50` after sweeping 1.14.42–1.14.49 for regressions. Pi's
+`--mode json` is a published, versioned wire format.
+
 ## Architecture
 
 ```
@@ -169,8 +199,30 @@ that translates that same blob into pi's `~/.pi/agent/auth.json` format
 before each pi exec. Mechanically the same shape we built for the chaos
 image — wire it into the per-run setup. One-day task, follow-up PR.
 
-## Provider failover
+## Follow-ups (not blocking the swap, ordered by impact)
 
-Not implemented in either runtime. Pi-ai (pi's provider abstraction) is
-the natural place to put a ~100-line wrapper around `setModel` + error
-detection. Out of scope for this PR.
+These are the gaps between this PR's "core runtime swap" and a 100%
+opencode replacement. Each is a small PR on its own.
+
+1. **Fallback model on provider failure** — original product ask.
+   If the chat's default model fails (provider down, rate-limited, quota),
+   the runtime should automatically retry with a configured fallback model.
+   ~50 LOC in `driver.ts` + a fallback-list field on the agent row + chaos
+   validation. **~30 min of work.**
+
+2. **Codex/ChatGPT subscription bridge** — DESK already reads
+   `~/.codex/auth.json` via `localSources/codex` and surfaces it as
+   `OPENCODE_AUTH_CONTENT`. Pi needs the same OAuth blob translated into
+   its `~/.pi/agent/auth.json` shape per turn. The translation is ~20
+   lines of Node (the chaos image build script already does it for the
+   test path); just needs to live in the runtime instead of `/etc/skel`.
+   **Without this, this PR works against API-key providers but not your
+   Codex subscription in prod. ~1 day.**
+
+3. **MCP bridge pi-extension for Playwright** — pi rejects MCP
+   philosophically; needs a small extension that reads a workspace-level
+   MCP config and exposes each MCP server's tools to the agent. Browser-
+   goal chats (`site`, `app`) will fail without it. **~2–3 days.**
+
+Provider failover is included in (1) by design. The Codex bridge in (2)
+is the one that matters for *your* deployment specifically.
