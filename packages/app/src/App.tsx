@@ -30,7 +30,7 @@ import { wsConnect } from '@/store/ws/middleware'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
-import { TasksPage } from '@/components/tasks/TasksPage'
+import { TasksRoute } from '@/components/tasks/TasksRoute'
 import { HomePage } from '@/components/home/HomePage'
 import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
@@ -52,9 +52,6 @@ import {
   usePinChatLibraryRefMutation,
   useSaveChatAttachmentToLibraryMutation,
   usePostChatMessageMutation,
-  usePatchMessageMutation,
-  useRunMessageMutation,
-  useDeleteMessageMutation,
   usePinLibraryItemMutation,
   useUnpinLibraryItemMutation,
   usePinChatMutation,
@@ -67,7 +64,6 @@ import {
   setArtifactBackLabel,
   setTodaySheetOpen,
   markArtifactSaved,
-  markArtifactsSaved,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
 } from '@/store/slices/uiSlice'
@@ -75,21 +71,16 @@ import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
 import { toUiChat } from '@/store/selectors/chats'
-import { isTaskListMessageForDeveloperMode, summaryRequestMessageKindsForDeveloperMode, taskMessageKindsForDeveloperMode, taskRunMessageKinds, toUiTask } from '@/store/selectors/tasks'
 import { toContextItem, toFolderList } from '@/store/selectors/library'
 import { iconForItem } from '@/data/file-kind'
 import { getChatIcon } from '@/data/chat-icons'
 import type { PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
-import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { buildPath, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useAvatarUrl } from '@/hooks/use-avatar'
-import { generateTaskTitle } from '@/lib/task-title'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
-import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
-import type { TaskComposerSubmit } from '@/components/tasks/TaskComposer'
 import {
   acceptBrowserNotificationPermissionOffer,
   markBrowserNotificationPermissionOffered,
@@ -300,9 +291,21 @@ function AppInner() {
     navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
   }, [serverWorkspaces, wsFetching, activeWorkspaceId, activeView, navigate])
 
+  // Persisted "last URL per workspace" — written on navigation so the
+  // workspace tab can resume on revisit. Debounced + guarded against
+  // no-op writes so a noisy in-app navigation flurry (route → modal →
+  // back; the profile shows ~6 BrowserRouter commits/sec during heavy
+  // use) doesn't pay a localStorage write per step.
+  const lastSavedUrlRef = useRef<string>('')
   useEffect(() => {
     if (!activeWorkspaceId) return
-    saveLastWorkspaceUrl(activeWorkspaceId, `${location.pathname}${location.search}${location.hash}`)
+    const url = `${location.pathname}${location.search}${location.hash}`
+    if (url === lastSavedUrlRef.current) return
+    lastSavedUrlRef.current = url
+    const handle = window.setTimeout(() => {
+      saveLastWorkspaceUrl(activeWorkspaceId, url)
+    }, 250)
+    return () => window.clearTimeout(handle)
   }, [activeWorkspaceId, location.pathname, location.search, location.hash])
 
   useEffect(() => {
@@ -371,76 +374,9 @@ function AppInner() {
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
-  const { currentData: tasksResp, isFetching: tasksFetching, isLoading: tasksLoading } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, kind: taskMessageKindsForDeveloperMode(developerMode) },
-    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
-  )
-  const { currentData: summaryRequestTasksResp } = useGetMessagesQuery(
-    {
-      workspaceId: activeWorkspaceId,
-      kind: summaryRequestMessageKindsForDeveloperMode(developerMode),
-      contentKind: ['summary_request'],
-    },
-    { skip: !activeWorkspaceId || !developerMode || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
-  )
-  const { currentData: taskRunsResp } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), limit: 500 },
-    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
-  )
-  const { currentData: activeTaskRunsResp } = useGetMessagesQuery(
-    { workspaceId: activeWorkspaceId, kind: taskRunMessageKinds(), state: ['running'], limit: 200 },
-    { skip: !activeWorkspaceId || !shouldLoadTasksView, refetchOnMountOrArgChange: true },
-  )
-  const taskRunsByParent = useMemo(() => {
-    const byParent = new Map<string, ServerMessage[]>()
-    const byId = new Map<string, ServerMessage>()
-    for (const run of taskRunsResp?.items ?? []) byId.set(run.id, run)
-    for (const run of activeTaskRunsResp?.items ?? []) byId.set(run.id, run)
-    for (const run of byId.values()) {
-      if (!run.parentId) continue
-      const runs = byParent.get(run.parentId) ?? []
-      runs.push(run)
-      byParent.set(run.parentId, runs)
-    }
-    return byParent
-  }, [taskRunsResp?.items, activeTaskRunsResp?.items])
-  const tasks = useMemo(() => (
-    [...(tasksResp?.items ?? []), ...(summaryRequestTasksResp?.items ?? [])]
-      .filter(m => isTaskListMessageForDeveloperMode(m, developerMode))
-      .map(m => toUiTask(
-        m,
-        workspaceServerAgents ?? serverAgents ?? [],
-        serverChats ?? [],
-        serverWorkspaces ?? [],
-        taskRunsByParent.get(m.id) ?? [],
-      ))
-  ), [
-    tasksResp?.items,
-    summaryRequestTasksResp?.items,
-    developerMode,
-    workspaceServerAgents,
-    serverAgents,
-    serverChats,
-    serverWorkspaces,
-    taskRunsByParent,
-  ])
-  const tasksListLoading = !!activeWorkspaceId && !tasksResp && (tasksLoading || tasksFetching)
-
-  // Opening a task's detail panel counts as engagement: clear the backing
-  // chat's unread flag so the task drops out of "Needs input" without
-  // requiring the user to navigate into the chat view. Drive this off
-  // `selectedTaskId` (the URL param) rather than the card click handler —
-  // the card itself navigates via <Link to={href}>, which never fires
-  // onSelect.
-  useEffect(() => {
-    if (!selectedTaskId) return
-    const chatId = tasks.find(t => t.id === selectedTaskId)?.chatId
-    if (!chatId) return
-    markChatReadQuietly(chatId, dispatch, appStore.getState)
-  }, [selectedTaskId, tasks, dispatch, appStore])
-  const [patchMessageMutation] = usePatchMessageMutation()
-  const [runMessageMutation] = useRunMessageMutation()
-  const [deleteMessageMutation] = useDeleteMessageMutation()
+  // Tasks queries (4 useGetMessagesQuery calls + derived `tasks` memo)
+  // were lifted into TasksRoute so a WS-driven task refresh re-renders
+  // only the tasks subtree instead of the entire AppInner shell.
   const [pinLibraryItem] = usePinLibraryItemMutation()
   const [unpinLibraryItem] = useUnpinLibraryItemMutation()
   const [pinChat] = usePinChatMutation()
@@ -455,6 +391,7 @@ function AppInner() {
     kind?: 'task'
     taskTitle?: string
     executeAt?: string
+    cron?: string
     goal?: string | null
     pinPaths?: string[]
   }): Promise<{ chatId: string; messageId: string }> => {
@@ -472,6 +409,7 @@ function AppInner() {
       kind: opts.kind,
       title: opts.taskTitle,
       executeAt: opts.executeAt,
+      cron: opts.cron,
       goal: opts.goal,
     }).unwrap()
     for (const path of opts.pinPaths ?? []) {
@@ -530,6 +468,23 @@ function AppInner() {
     dispatch(setArtifactBackLabel(backLabel ?? null))
     goTo({ artifact: artifact.id })
   }, [dispatch, goTo])
+
+  // Stable callback fed into ChatView → MessageBubble (memoized).  AppInner
+  // re-renders frequently (the profile pinned ~155 commits over an 85 s
+  // session); without useCallback every MessageBubble in the visible
+  // window would re-render alongside, defeating the memo.
+  const handleAttachmentClick = useCallback((att: AttachmentRef) => {
+    if (att.kind === 'directory' && !appAttachmentToPreview(att.path)) {
+      goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
+      return
+    }
+    goTo({
+      wsId: att.workspaceId,
+      view: 'context',
+      item: att.path,
+      artifactParams: att.params ? JSON.stringify(att.params) : null,
+    })
+  }, [goTo])
 
   // Promotes a chat-scoped attachment to the primary workspace library.
   // The `artifactId` is the artifact's workspace-relative path; for chat
@@ -615,6 +570,7 @@ function AppInner() {
         kind: options?.kind,
         taskTitle: options?.title,
         executeAt: options?.executeAt,
+        cron: options?.cron,
         goal: options && 'goal' in options ? options.goal : undefined,
         pinPaths: pinPaths ?? [],
       })
@@ -665,52 +621,30 @@ function AppInner() {
     }
   }, [activeWorkspaceId, workspaceServerAgents, serverAgents, doCreateAndPost, goTo])
 
-  // Inbox badge count = server-reported awaiting-user messages.
-  // Don't filter by workspace — the inbox is global.
-  const { data: awaitingResp } = useGetMessagesQuery({ unread: true })
-  const unreadCount = awaitingResp?.items.length ?? 0
-
+  // Pinned-sidebar listing. The server returns only entries the user
+  // has explicitly pinned (files + folders, anywhere in the tree), so
+  // the previous "fetch the whole library and filter for pinned" pattern
+  // is gone — that was the call producing 300+ MB JSON on home-dir-sized
+  // workspaces.
   const {
-    currentData: libraryResp,
-    isLoading: libraryLoading,
-    isUninitialized: libraryUninitialized,
-    isFetching: libraryFetching,
+    currentData: pinnedResp,
+    isLoading: pinnedLoading,
+    isUninitialized: pinnedUninitialized,
+    isFetching: pinnedFetching,
   } = useGetLibraryQuery(
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, pinned: true } : undefined,
     { skip: !activeWorkspaceId, refetchOnMountOrArgChange: true },
   )
-  const libraryAgents = useMemo(
-    () => workspaceServerAgents ?? serverAgents ?? [],
-    [workspaceServerAgents, serverAgents],
-  )
-  const libraryItems: ContextItem[] = useMemo(() => (
+  const pinnedItems: ContextItem[] = useMemo(() => (
     activeWorkspaceId
-      ? (libraryResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId, libraryAgents))
+      ? (pinnedResp?.items ?? []).map((f) => toContextItem(f, activeWorkspaceId))
       : []
-  ), [activeWorkspaceId, libraryResp?.items, libraryAgents])
-  const libraryFolders = useMemo(() => (
+  ), [activeWorkspaceId, pinnedResp?.items])
+  const pinnedFolders = useMemo(() => (
     activeWorkspaceId
-      ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+      ? toFolderList(pinnedResp?.folders ?? [], activeWorkspaceId)
       : []
-  ), [activeWorkspaceId, libraryResp?.folders])
-  const artifacts: Artifact[] = useMemo(
-    () => (libraryResp?.items ?? []).map((f) => toArtifactFromFile(f)),
-    [libraryResp?.items],
-  )
-
-  // Files already in `/library` are by definition in the user's library —
-  // mark them as saved so any inline "Save to Library" affordance is
-  // correctly disabled. Newly-promoted chat attachments are marked by the
-  // mutation handler in `handleSaveArtifact`.
-  //
-  // One batched dispatch instead of N. The previous per-item loop fanned
-  // out into N Redux round-trips × the SerializableStateInvariantMiddleware
-  // pass (~100ms per action on a sizeable state), freezing the UI long
-  // enough to trip Firefox's SlowScript dialog on large libraries.
-  useEffect(() => {
-    if (!libraryResp?.items?.length) return
-    dispatch(markArtifactsSaved(libraryResp.items.map((f) => f.path)))
-  }, [libraryResp, dispatch])
+  ), [activeWorkspaceId, pinnedResp?.folders])
 
   const isNewChat = selectedChatId === NEW_CHAT_ID
   const selectedChat = (!isNewChat && selectedChatId) ? selectedChatFromList ?? selectedChatById : null
@@ -734,41 +668,37 @@ function AppInner() {
   const activeChat = isNewChat
     ? { ...NEW_CHAT_STUB, workspaceId: activeWorkspaceId || undefined }
     : selectedChat
-  const chatArtifacts = useMemo(() => (
-    (selectedChat?.artifactIds ?? [])
-      .map(id => artifacts.find(a => a.id === id))
-      .filter(Boolean) as Artifact[]
-  ), [selectedChat?.artifactIds, artifacts])
+  // `chat.artifactIds` is currently a stub (always []) — populated by a
+  // server-side slice that doesn't ship yet — so the lookup against the
+  // root listing was already returning nothing in practice. Keep the
+  // shape so ChatView's contract is preserved; population can move to a
+  // chat-scoped query (`useGetChatArtifactsQuery`) when artifact-pinning
+  // ships.
+  const chatArtifacts: Artifact[] = useMemo(() => [], [])
   const chatShowNewBadge = !!selectedChat?.unread
 
   // Both `?artifact=<path>` and `?item=<path>` route to the same unified
   // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
   // the Desk → Library consolidation removes it.
+  //
+  // Selected-item metadata always comes from `getLibraryFile?path=` — the
+  // workspace-wide recursive listing that previously short-circuited this
+  // lookup is gone, so the per-path query is the only source.
   const effectiveItemPath = selectedContextPath ?? selectedArtifactPath
-  const libraryItem = useMemo(() => (
-    effectiveItemPath
-      ? libraryItems.find(c => c.id === effectiveItemPath) ?? null
-      : null
-  ), [effectiveItemPath, libraryItems])
-  // Fallback path: chat attachments live under `.chats/{id}/attachments/`
-  // and don't appear in the default library listing. Fetch their metadata
-  // by path so we can render the same ContextDetail view for them.
-  const needsMetaFallback =
-    !!effectiveItemPath && !libraryItem && !!activeWorkspaceId
+  const needsMetaFallback = !!effectiveItemPath && !!activeWorkspaceId
   const { currentData: fallbackFile, isFetching: fallbackFileFetching } = useGetLibraryFileQuery(
     { workspaceId: activeWorkspaceId ?? '', path: effectiveItemPath ?? '' },
     { skip: !needsMetaFallback },
   )
   const selectedContextItem: ContextItem | null =
-    libraryItem ??
-    (needsMetaFallback && fallbackFile && activeWorkspaceId
-      ? toContextItem(fallbackFile, activeWorkspaceId, workspaceServerAgents ?? serverAgents ?? [])
-      : null)
+    needsMetaFallback && fallbackFile && activeWorkspaceId
+      ? toContextItem(fallbackFile, activeWorkspaceId)
+      : null
   const isResolvingSelectedContextItem =
     !!effectiveItemPath &&
     !!activeWorkspaceId &&
     !selectedContextItem &&
-    (!libraryResp || libraryLoading || libraryFetching || fallbackFileFetching)
+    fallbackFileFetching
 
   // ── Unified sidebar pinned list ─────────────────────────────────────
   // Files, directories, and chats land in one ordered list. Library
@@ -778,8 +708,7 @@ function AppInner() {
   const pinnedEntries: PinnedSidebarEntry[] = useMemo(() => {
     if (!activeWorkspaceId) return []
     const entries: PinnedSidebarEntry[] = []
-    for (const item of libraryItems) {
-      if (!item.pinned) continue
+    for (const item of pinnedItems) {
       entries.push({
         id: `library:${item.id}`,
         kind: 'library',
@@ -790,8 +719,7 @@ function AppInner() {
         isActive: item.id === effectiveItemPath,
       })
     }
-    for (const folder of libraryFolders) {
-      if (!folder.pinned) continue
+    for (const folder of pinnedFolders) {
       entries.push({
         id: `folder:${folder.id}`,
         kind: 'folder',
@@ -820,7 +748,7 @@ function AppInner() {
       })
     }
     return entries
-  }, [activeWorkspaceId, activeView, libraryItems, libraryFolders, chats, effectiveItemPath, selectedChatId])
+  }, [activeWorkspaceId, activeView, pinnedItems, pinnedFolders, chats, effectiveItemPath, selectedChatId])
 
 
 
@@ -869,11 +797,10 @@ function AppInner() {
         activeView={activeView}
         chats={chats}
         isChatsLoading={chatsListLoading}
-        artifacts={artifacts}
+        artifacts={[]}
         selectedChatId={selectedChatId}
         onChatClick={handleSidebarChatClick}
         onDeleteChat={handleDeleteChat}
-        unreadCount={unreadCount}
         isDetailOpen={!!selectedContextItem}
         onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
@@ -885,7 +812,7 @@ function AppInner() {
         onSignOut={() => void logout()}
         onChatWithAgent={handleChatWithAgent}
         pinnedEntries={pinnedEntries}
-        isPinnedLoading={!!activeWorkspaceId && !libraryResp && (libraryLoading || libraryFetching || libraryUninitialized)}
+        isPinnedLoading={!!activeWorkspaceId && !pinnedResp && (pinnedLoading || pinnedFetching || pinnedUninitialized)}
         selectedItemId={effectiveItemPath}
         libraryFileName={selectedContextItem?.name ?? null}
         onPinItem={(path) => {
@@ -947,16 +874,7 @@ function AppInner() {
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
             highlightMessageId={selectedMessageId ?? undefined}
-            onAttachmentClick={(att) =>
-              att.kind === 'directory' && !appAttachmentToPreview(att.path)
-                ? goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
-                : goTo({
-                    wsId: att.workspaceId,
-                    view: 'context',
-                    item: att.path,
-                    artifactParams: att.params ? JSON.stringify(att.params) : null,
-                  })
-            }
+            onAttachmentClick={handleAttachmentClick}
             initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />
         )}
@@ -974,105 +892,14 @@ function AppInner() {
           <Navigate to={buildPath(activeWorkspaceId, 'context')} replace />
         )}
         {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'tasks' && (
-          <TasksPage
-            tasks={tasks}
-            isLoading={tasksListLoading}
-            agents={workspaceServerAgents ?? serverAgents ?? []}
-            roomName={serverWorkspaces?.find(w => w.id === activeWorkspaceId)?.name}
-            authorName={me?.username}
-            authorAvatarUrl={userAvatarUrl}
+          <TasksRoute
+            workspaceId={activeWorkspaceId}
             selectedTaskId={selectedTaskId}
-            hrefForTask={(id) => buildPath(activeWorkspaceId, 'tasks', { task: id })}
             onSelectTask={(id) => goTo({ task: id })}
-            onCreateTask={async (input: TaskComposerSubmit) => {
-              if (!activeWorkspaceId) return
-              const pickedAgentId = workspaceServerAgents?.[0]?.id ?? serverAgents?.[0]?.id
-              if (!pickedAgentId) {
-                toast.error('No agent enabled in this workspace', {
-                  description: 'Open Settings → Agents to enable one.',
-                })
-                return
-              }
-              try {
-                // AI-style title from the user's message (stub now;
-                // backend later — see lib/task-title.ts). The full
-                // message stays the task body.
-                const generatedTitle = await generateTaskTitle(input.content)
-                const newChat = await createChatMutation({
-                  workspaceId: activeWorkspaceId,
-                  agentId: pickedAgentId,
-                  title: generatedTitle,
-                }).unwrap()
-                // No run — composer-created tasks land idle in "To do"
-                // (or "Scheduled" when an executeAt was picked).
-                await postMessageMutation({
-                  chatId: newChat.id,
-                  content: input.content,
-                  kind: 'task',
-                  title: generatedTitle,
-                  executeAt: input.executeAt,
-                  attachments: input.attachments.length ? input.attachments : undefined,
-                }).unwrap()
-              } catch (err) {
-                toast.error('Failed to create task', { description: extractApiError(err) })
-              }
-            }}
-            onMarkDone={async (task) => {
-              if (!task.chatId || !task.messageId) return
-              const move = buildTaskStatusMove(task, 'complete', 'user')
-              if (move.kind !== 'patch') return
-              try {
-                await patchMessageMutation({
-                  chatId: task.chatId,
-                  messageId: task.messageId,
-                  patch: move.patch,
-                }).unwrap()
-              } catch (err) {
-                toast.error('Failed to mark done', { description: extractApiError(err) })
-              }
-            }}
-            onRunNow={async (task) => {
-              if (!task.chatId || !task.messageId) return
-              try {
-                await runMessageMutation({
-                  chatId: task.chatId,
-                  messageId: task.messageId,
-                }).unwrap()
-              } catch (err) {
-                toast.error('Run failed', { description: extractApiError(err) })
-              }
-            }}
-            onPause={async (task) => {
-              if (!task.chatId || !task.messageId) return
-              const move = buildTaskLifecycleMove(task, 'pause', 'user')
-              if (move.kind !== 'patch') return
-              try {
-                await patchMessageMutation({
-                  chatId: task.chatId,
-                  messageId: task.messageId,
-                  patch: move.patch,
-                }).unwrap()
-              } catch (err) {
-                toast.error('Pause failed', { description: extractApiError(err) })
-              }
-            }}
-            onDelete={async (task) => {
-              if (!task.chatId || !task.messageId) return
-              try {
-                await deleteMessageMutation({
-                  chatId: task.chatId,
-                  messageId: task.messageId,
-                }).unwrap()
-              } catch (err) {
-                toast.error('Delete failed', { description: extractApiError(err) })
-              }
-            }}
           />
         )}
         {!selectedContextItem && !activeChat && !isResolvingSelectedChat && activeView === 'context' && !effectiveItemPath && (
           <ContextList
-            items={libraryItems}
-            isLoading={libraryLoading || libraryUninitialized || !libraryResp || (libraryFetching && libraryItems.length === 0)}
             onItemClick={(item) => goTo({ item: item.id })}
             onCompose={handleComposeWithContext}
             onPinItem={(item) => {

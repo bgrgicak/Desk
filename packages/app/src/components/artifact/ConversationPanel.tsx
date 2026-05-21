@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { PanelRightClose, ChevronDown, ChevronRight, Bot, User } from 'lucide-react'
+import { PanelRightClose, ChevronDown, ChevronRight, User } from 'lucide-react'
 import { Button } from '@agent-desk/ui'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -192,17 +192,8 @@ export function ConversationPanel({
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">Created by</span>
                       <div className="flex items-center gap-1.5">
-                        {item.uploadedBy === 'user' ? (
-                          <>
-                            <User className="h-3 w-3 text-muted-foreground" />
-                            <span className="text-xs text-foreground">You</span>
-                          </>
-                        ) : (
-                          <>
-                            <Bot className="h-3 w-3 text-muted-foreground" />
-                            <span className="text-xs text-foreground">{item.agentName ?? 'Claude'}</span>
-                          </>
-                        )}
+                        <User className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-xs text-foreground">You</span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">

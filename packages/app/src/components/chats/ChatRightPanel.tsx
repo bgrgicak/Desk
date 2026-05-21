@@ -24,7 +24,6 @@ import { SectionBody, SectionHeader } from '@/components/shared/SectionHeader'
 import { SectionEmptyState } from '@/components/shared/SectionEmptyState'
 import { StatusBadge } from '@/components/tasks/task-badges'
 import { TaskSheet, type TaskCreateInput } from '@/components/tasks/TaskSheet'
-import { isTasksFilterActive, type TasksFilterValues } from '@/components/chats/TasksFilterPopover'
 import {
   useDeleteMessageMutation,
   useGetAgentsQuery,
@@ -42,12 +41,6 @@ interface ChatRightPanelProps {
   chatId: string
   workspaceId?: string
   files: ServerFile[]
-  /** Free-text query (from the chat TopBar's search icon-popover). Empty string =
-   *  no filtering. Filters both files (by name) and tasks (by name). */
-  searchQuery: string
-  /** Status filter (from the chat TopBar's filter icon-popover). Applied to the
-   *  Tasks section only. */
-  tasksFilter: TasksFilterValues
   /** Double-click: open the file in detail view. */
   onFileClick?: (file: ServerFile) => void
   /** Single-click (or kebab "Use in chat"): stage the file for the next outgoing message. */
@@ -66,28 +59,18 @@ export function ChatRightPanel({
   chatId,
   workspaceId,
   files,
-  searchQuery,
-  tasksFilter,
   onFileClick,
   onFileStage,
   onFileRemove,
 }: ChatRightPanelProps) {
   const [removingFile, setRemovingFile] = useState<ServerFile | null>(null)
-  const normalizedQuery = searchQuery.trim().toLowerCase()
-  const filteredFiles = normalizedQuery
-    ? files.filter(f =>
-        f.name.toLowerCase().includes(normalizedQuery)
-        || (f.label?.toLowerCase().includes(normalizedQuery) ?? false),
-      )
-    : files
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto pl-1.5 pr-6">
         <FilesSection
-          files={filteredFiles}
+          files={files}
           workspaceId={workspaceId}
-          hasSearch={normalizedQuery.length > 0}
           onFileClick={onFileClick}
           onFileStage={onFileStage}
           onRequestRemove={file => setRemovingFile(file)}
@@ -95,8 +78,6 @@ export function ChatRightPanel({
         <TasksSection
           chatId={chatId}
           workspaceId={workspaceId}
-          searchQuery={normalizedQuery}
-          filter={tasksFilter}
         />
       </div>
 
@@ -135,14 +116,12 @@ export function ChatRightPanel({
 function FilesSection({
   files,
   workspaceId,
-  hasSearch,
   onFileClick,
   onFileStage,
   onRequestRemove,
 }: {
   files: ServerFile[]
   workspaceId?: string
-  hasSearch: boolean
   onFileClick?: (file: ServerFile) => void
   onFileStage?: (file: ServerFile) => void
   onRequestRemove?: (file: ServerFile) => void
@@ -159,9 +138,7 @@ function FilesSection({
       <SectionBody collapsed={collapsed}>
         {files.length === 0 ? (
           <SectionEmptyState>
-            {hasSearch
-              ? 'No files match the search.'
-              : 'Files shared in this chat appear here.'}
+            Files shared in this chat appear here.
           </SectionEmptyState>
         ) : (
           <ul className="flex flex-col gap-0.5">
@@ -275,14 +252,9 @@ function FileRow({
 function TasksSection({
   chatId,
   workspaceId,
-  searchQuery,
-  filter,
 }: {
   chatId: string
   workspaceId?: string
-  /** Already lower-cased + trimmed by the parent. */
-  searchQuery: string
-  filter: TasksFilterValues
 }) {
   const navigate = useNavigate()
   const hasRealId = !!chatId && chatId !== NEW_CHAT_ID
@@ -299,21 +271,13 @@ function TasksSection({
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null)
   const [collapsed, setCollapsed] = useState(false)
 
-  const hasActiveFilter = isTasksFilterActive(filter)
-  const hasSearch = searchQuery.length > 0
-
   // New-task sheet — pre-fills `chatId` so the created task lands here.
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const allTasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents, chat ? [chat] : []))
-  const tasks = allTasks.filter(t => {
-    if (!filter.statuses.includes(t.status)) return false
-    if (hasSearch && !t.name.toLowerCase().includes(searchQuery)) return false
-    return true
-  })
+  const tasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents, chat ? [chat] : []))
 
-  const goToTasks = () => {
-    if (workspaceId) navigate(buildPath(workspaceId, 'tasks'))
+  const goToTask = (task: Task) => {
+    if (workspaceId) navigate(buildPath(workspaceId, 'tasks', { task: task.id }))
   }
 
   const onMarkAsDone = (task: Task) => {
@@ -336,6 +300,9 @@ function TasksSection({
   const onCreateTask = async (input: TaskCreateInput) => {
     if (!hasRealId) return
     try {
+      // Task anchor goes into the current chat (kind='task'); the server
+      // auto-spawns a thread chat anchored to it so task_runs land in
+      // their own thread, not in this chat's history.
       const newMessage = await postMessage({
         chatId,
         content: input.description?.trim()
@@ -390,11 +357,7 @@ function TasksSection({
           </div>
         ) : tasks.length === 0 ? (
           <SectionEmptyState>
-            {hasSearch
-              ? 'No tasks match the search.'
-              : hasActiveFilter
-                ? 'No tasks match the current filter.'
-                : 'Tasks created in this chat appear here.'}
+            Tasks created in this chat appear here.
           </SectionEmptyState>
         ) : (
           <ul className="flex flex-col gap-0.5">
@@ -402,7 +365,7 @@ function TasksSection({
               <TaskRow
                 key={task.id}
                 task={task}
-                onView={goToTasks}
+                onView={() => goToTask(task)}
                 onMarkAsDone={() => onMarkAsDone(task)}
                 onSchedule={() => onSchedule(task)}
                 onRequestDelete={() => setPendingDelete(task)}

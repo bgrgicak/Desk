@@ -9,7 +9,7 @@ import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview, UnsupportedFileCard } from '@/components/shared/InlineArtifactPreview'
 import { TaskResultCard } from './TaskResultCard'
-import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery } from '@/store/api'
+import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery, usePostMessageFeedbackMutation } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPanelSlice'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
@@ -76,8 +76,14 @@ export const MessageBubble = memo(function MessageBubble({
 
   // A task definition (the AI creating a task, or one surfaced in the
   // conversation) renders as an inline Task result card regardless of
-  // author.
+  // author — except when we're already inside that task's own thread,
+  // where the same anchor message renders as the thread's header
+  // (title + full description, no status badge or View button) so it
+  // doesn't visually duplicate the "you are in this task" affordance.
   if (message.kind === 'task') {
+    if (message.threadChatId && message.threadChatId === currentChatId) {
+      return <TaskAnchorHeader message={message} />
+    }
     return <TaskResultCard message={message} workspaceId={workspaceId} />
   }
 
@@ -189,16 +195,28 @@ function AgentMessageActions({
   showThread,
 }: AgentMessageActionsProps) {
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
+  const [postFeedback] = usePostMessageFeedbackMutation()
 
   const handleCopy = () => copyMessageToClipboard(message)
 
   const handleFeedback = (kind: 'up' | 'down') => {
+    if (feedback === kind) return
+    const previous = feedback
     setFeedback(kind)
     toast.success(
       kind === 'up'
         ? 'Thanks for the positive feedback'
         : "Thanks for the feedback — we'll do better",
     )
+    // The reaction is persisted as a system message so the workspace's
+    // daily reflection can see which replies the user marked helpful
+    // or unhelpful. Roll back the local active state if the request
+    // fails so the icons match server truth.
+    postFeedback({ chatId: message.chatId, messageId: message.id, rating: kind })
+      .unwrap()
+      .catch(() => {
+        setFeedback(previous)
+      })
   }
 
   const hasThread = !!message.threadChatId
@@ -679,6 +697,39 @@ type AttachmentAlignment = 'left' | 'right'
 
 export function attachmentAlignmentClass(align: AttachmentAlignment) {
   return align === 'right' ? 'self-end ml-auto' : 'self-start mr-auto'
+}
+
+/** The task anchor rendered as the first item of its own thread —
+ *  a quiet bordered block with the task title and full description.
+ *  No status badge, no View button, no kebab: the user is already
+ *  inside the task's thread so the action surface lives on the
+ *  Tasks page card and the right-panel header above the messages. */
+function TaskAnchorHeader({ message }: { message: ServerMessage }) {
+  const title = message.title?.trim()
+    || (message.content.type === 'text' ? message.content.text.split('\n')[0].trim() : '')
+    || 'Task'
+  let body: string | undefined
+  if (message.content.type === 'text') {
+    const text = message.content.text.trim()
+    if (message.title && text === message.title.trim()) {
+      body = undefined
+    } else if (message.title && text.startsWith(`${message.title.trim()}\n`)) {
+      body = text.slice(message.title.trim().length).trim()
+    } else if (message.title) {
+      body = text
+    } else {
+      const [, ...rest] = text.split('\n')
+      body = rest.join('\n').trim() || undefined
+    }
+  }
+  return (
+    <div className="rounded-lg border border-foreground/10 bg-foreground/5 px-4 py-3">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      {body ? (
+        <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{body}</div>
+      ) : null}
+    </div>
+  )
 }
 
 function TaskRunChip({ prompt }: { prompt: string }) {
