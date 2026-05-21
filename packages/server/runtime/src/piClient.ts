@@ -114,18 +114,41 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     ...opts.env,
   };
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  // Compose the seed-then-pi command inline as a shell script so we get
-  // one `docker exec` per turn instead of two. The seed copies auth.json
-  // + models.json from the workspace's ~/.pi/agent (where the entrypoint
-  // already placed them from /etc/skel) into the per-invocation dir.
-  // Pi then runs against the isolated dir.
+  // Compose the seed-then-pi command inline as a shell script so we
+  // get one `docker exec` per turn instead of two.
+  //
+  // Two seed sources, in priority order:
+  //
+  // 1. `PI_AUTH_JSON_BASE64` in env — base64-encoded auth.json
+  //    written by the host-side local-source bridge (see
+  //    `localSources/codex.ts` for the Codex/ChatGPT subscription path).
+  //    This is the authoritative auth for OAuth providers; it gets
+  //    refreshed per turn so a refresh on the host (or pi-side) is
+  //    picked up immediately.
+  //
+  // 2. Workspace-side `~/.pi/agent/auth.json` + `models.json` — files
+  //    a user / a skill may have written into their workspace (e.g.
+  //    a hand-crafted models.json defining custom Ollama or vLLM
+  //    providers). These get copied into the per-invocation dir so
+  //    pi can use them alongside the env-injected OAuth blob.
+  //
+  // The base64 decode happens last so the env auth always wins over
+  // a stale workspace-side file.
   const piCmd = argv.map(shSingleQuote).join(" ");
   const sourceDir = `${opts.cwd}/.pi/agent`;
-  const shellScript = [
+  const seedSteps: string[] = [
     `mkdir -p ${shSingleQuote(agentDir)}`,
     `cp ${shSingleQuote(`${sourceDir}/auth.json`)} ${shSingleQuote(`${sourceDir}/models.json`)} ${shSingleQuote(agentDir)}/ 2>/dev/null || true`,
-    `exec ${piCmd}`,
-  ].join(" && ");
+  ];
+  // Only emit the env-auth seed step when the env var is non-empty; an
+  // empty value just clears the workspace-side file.
+  if (opts.env.PI_AUTH_JSON_BASE64) {
+    seedSteps.push(
+      `printf '%s' "$PI_AUTH_JSON_BASE64" | base64 -d > ${shSingleQuote(`${agentDir}/auth.json`)} && chmod 600 ${shSingleQuote(`${agentDir}/auth.json`)}`,
+    );
+  }
+  seedSteps.push(`exec ${piCmd}`);
+  const shellScript = seedSteps.join(" && ");
   const dockerArgv = [
     "exec",
     "-i",

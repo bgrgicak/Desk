@@ -130,7 +130,8 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
   const expSec = accessClaims?.exp ?? 0;
   const expiresAt = expSec ? expSec * 1000 : Date.now() + 60 * 60 * 1000;
 
-  const blob = {
+  // OpenCode-shape blob (used by the old opencode-serve daemon path).
+  const opencodeBlob = {
     openai: {
       type: "oauth",
       refresh: tokens.refresh_token,
@@ -139,7 +140,30 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
       accountId,
     },
   };
-  return { OPENCODE_AUTH_CONTENT: JSON.stringify(blob) };
+
+  // Pi-shape blob (used by piClient.ts to seed the per-pi-invocation
+  // auth.json under PI_CODING_AGENT_DIR). Pi looks up the OAuth
+  // provider by id `openai-codex` and expects `{type: "oauth", access,
+  // refresh, accountId, expires}`. The two blobs differ in:
+  //   - provider id key: `openai` vs `openai-codex`
+  //   - pi has no `id_token` field; the access_token alone is enough
+  // Base64-encoded so the env-var transport doesn't trip on embedded
+  // newlines/quotes — piClient.ts decodes before writing auth.json.
+  const piBlob = {
+    "openai-codex": {
+      type: "oauth",
+      access: tokens.access_token,
+      refresh: tokens.refresh_token,
+      accountId,
+      expires: expiresAt,
+    },
+  };
+  const piBlobB64 = Buffer.from(JSON.stringify(piBlob), "utf8").toString("base64");
+
+  return {
+    OPENCODE_AUTH_CONTENT: JSON.stringify(opencodeBlob),
+    PI_AUTH_JSON_BASE64: piBlobB64,
+  };
 }
 
 export const codexLocalSource: LocalSource = {
