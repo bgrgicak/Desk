@@ -29,6 +29,7 @@ const MAX_INLINE_PREVIEW_BYTES = 5 * 1024 * 1024
 
 interface InlineArtifactPreviewProps {
   workspaceId?: string
+  chatId?: string
   path: string
   name: string
   mime?: string | null
@@ -91,6 +92,11 @@ function canRenderInPanel(kind: FileKind, _isFragment: boolean): boolean {
 
 interface ArtifactPreviewInput {
   workspaceId?: string
+  /** Required for global-scope built-in apps: the chat id is what the
+   *  iframe session is keyed against, since global apps don't carry a
+   *  chatId in their path the way library apps do. Without it, a global
+   *  app falls through to the compact attachment row. */
+  chatId?: string
   path: string
   name: string
   mime?: string | null
@@ -107,18 +113,32 @@ interface ArtifactPreviewResult {
   appPreviewRef: Parameters<typeof AppPreview>[0] | null
 }
 
-export function useArtifactPreview({ workspaceId, path, name, mime, params, mode = 'inline' }: ArtifactPreviewInput): ArtifactPreviewResult {
+export function useArtifactPreview({ workspaceId, chatId, path, name, mime, params, mode = 'inline' }: ArtifactPreviewInput): ArtifactPreviewResult {
   const canRender = mode === 'panel' ? canRenderInPanel : canRenderInline
   const [state, setState] = useState<PreviewState>({ status: 'loading' })
-  const appPreviewRef = useMemo(() => {
+  const appPreviewRef = useMemo((): Parameters<typeof AppPreview>[0] | null => {
     const base = inlineAppPreviewFor(path, name, mime)
     if (!base) return null
+    if (base.scope === 'global') {
+      // Global apps don't carry chatId in the path — it comes from the
+      // chat we're rendering inside. Without it the iframe can't issue a
+      // session, so fall back to the compact attachment row.
+      if (!chatId) return null
+      return {
+        scope: 'global' as const,
+        chatId,
+        appName: base.appName,
+        ...(base.fragment ? { fragment: base.fragment } : {}),
+        ...(params ? { params } : {}),
+        variant: 'inline',
+      }
+    }
     return {
       ...base,
       ...(base.scope === 'library' ? { workspaceId } : {}),
       ...(params ? { params } : {}),
     }
-  }, [path, name, mime, params, workspaceId])
+  }, [path, name, mime, params, workspaceId, chatId])
   // Fragment = piece of an app meant to embed in chat. Detected via
   // `appAttachmentToPreview` which already returns `fragment` for paths
   // shaped like `*.app/dist/fragments/<name>/`.
@@ -260,14 +280,14 @@ export function inlineAppPreviewFor(
   path: string,
   name: string,
   mime?: string | null,
-): Parameters<typeof AppPreview>[0] | null {
+): ReturnType<typeof appAttachmentToPreview> {
   void name
   void mime
   return appAttachmentToPreview(path)
 }
 
-export function InlineArtifactPreview({ workspaceId, path, name, mime, params, onOpen, openHref, actions, fallback, onSave, initiallySaved = false, onDelete }: InlineArtifactPreviewProps) {
-  const { state, appPreviewRef } = useArtifactPreview({ workspaceId, path, name, mime, params })
+export function InlineArtifactPreview({ workspaceId, chatId, path, name, mime, params, onOpen, openHref, actions, fallback, onSave, initiallySaved = false, onDelete }: InlineArtifactPreviewProps) {
+  const { state, appPreviewRef } = useArtifactPreview({ workspaceId, chatId, path, name, mime, params })
 
   // Caller props that are no longer surfaced inline (apps and images
   // now route through the card → panel pattern, so the shell's Save /

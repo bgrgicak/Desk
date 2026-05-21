@@ -33,8 +33,13 @@ export {
   buildWorkspaceMountPlan,
   bindsFromPlan,
   SANDBOX_HOME,
+  SKILLS_SANDBOX_MOUNT_DIR,
+  APPS_SANDBOX_MOUNT_DIR,
+  skillsHostDir,
+  appsHostDir,
 } from "./mounts.js";
 export type { MountSet, MountPlan, MountPlanEntry } from "./mounts.js";
+export { writeBuiltinApps, BUILTIN_APPS_MANIFEST_FILE } from "./builtinApps.js";
 export { execRun, cancelRun } from "./opencode.js";
 export type { ExecRunOptions } from "./opencode.js";
 export { renderAgentFile, writeAgentFile } from "./agentFile.js";

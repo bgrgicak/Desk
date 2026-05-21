@@ -1,0 +1,11 @@
+{
+  "name": "multi-step",
+  "description": "Renders a multi-step form (wizard) from a JSON array of steps. Each step is one question of any supported type (yes-no, single-choice, multi-select, short-text, long-text, number, date, rating). The user walks Back/Next through the steps and the final Submit sends a single consolidated chat message with all answers.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "steps": {
+      "type": "string",
+      "description": "JSON-encoded array of step objects. Each step needs `type` and `question`; per-type extra fields match the corresponding single-question fragment (e.g. `options` for single-choice / multi-select, `min`/`max` for number, etc.). Optional `id` field — auto-generated when omitted."
+    }
+  }
+}
