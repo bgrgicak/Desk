@@ -28,7 +28,7 @@ import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
 import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
-import { runPi, type PiHandle, type PiRunResult } from "./piClient.js";
+import { runPi, type PiHandle } from "./piClient.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/driver");
 
