@@ -39,6 +39,83 @@ export function isNonEmpty(v: string | undefined): boolean {
   return typeof v === "string" && v.length > 0;
 }
 
+/**
+ * Free `opencode/big-pickle` is the unauthenticated default. Every run
+ * path falls back to it when the requested provider has no available
+ * auth — keeping reflection / chat / summary alive instead of leaving a
+ * run in a broken "no auth at all" state. Lives in helpers (not runs.ts)
+ * so reflection can use the same resolver without creating a runs ↔
+ * reflection import cycle.
+ */
+export const FALLBACK_MODEL = "opencode/big-pickle";
+
+export type ModelResolutionReason =
+  | null
+  | "codex-oauth"
+  | "codex-fallback-api-key"
+  | "no-auth-fallback";
+
+/**
+ * Pick the model that should actually run, and the provider key map to
+ * forward into the daemon.
+ *
+ *  1. Codex translation: `codex/X` is a Desk-only relabel — opencode-
+ *     serve only knows the `openai` provider. With Codex OAuth available
+ *     we route through it AND strip `OPENAI_API_KEY` so opencode picks
+ *     the OAuth path. When Codex is disabled but `OPENAI_API_KEY` is
+ *     present, we still unwrap the prefix and let the API key handle it.
+ *  2. Hard fallback: when the requested model's provider has no auth at
+ *     all, substitute `FALLBACK_MODEL`. The run keeps going on the free
+ *     `opencode/*` model rather than dying with a
+ *     `ProviderModelNotFoundError` or silently riding a stale auth blob
+ *     the daemon cached from a previous spawn.
+ *  3. No change for free models: `opencode/*` always runs as-is.
+ *
+ * Callers should forward `runtimeModel` to BOTH the agent file (so the
+ * daemon's startup cache picks the fallback up) AND the driver's
+ * per-message `providerID/modelID`, and forward `providerKeys` into the
+ * sandbox env. The daemon ignores per-message overrides for agent-bound
+ * sessions, so feeding the resolved model into the agent file is what
+ * actually makes the daemon use it.
+ */
+export function resolveModelForRun(
+  model: string,
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): {
+  runtimeModel: string;
+  providerKeys: Record<string, string>;
+  reason: ModelResolutionReason;
+} {
+  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
+  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
+  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
+
+  if (model.startsWith("codex/")) {
+    const bare = `openai/${model.slice("codex/".length)}`;
+    if (oauthAvailable) {
+      const { OPENAI_API_KEY: _strip, ...withoutOpenAiApiKey } = providerKeys;
+      return { runtimeModel: bare, providerKeys: withoutOpenAiApiKey, reason: "codex-oauth" };
+    }
+    if (hasOpenAiKey) {
+      return { runtimeModel: bare, providerKeys, reason: "codex-fallback-api-key" };
+    }
+    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
+  }
+
+  if (model.startsWith("openai/")) {
+    if (hasOpenAiKey || oauthAvailable) return { runtimeModel: model, providerKeys, reason: null };
+    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
+  }
+
+  if (model.startsWith("anthropic/")) {
+    if (hasAnthropicKey) return { runtimeModel: model, providerKeys, reason: null };
+    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
+  }
+
+  return { runtimeModel: model, providerKeys, reason: null };
+}
+
 export function computeNextRun(cronExpr: string): string {
   const next = new Cron(cronExpr).nextRun();
   if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
@@ -144,6 +221,10 @@ export function messageTextForPrompt(message: Message): string | null {
       return content.body;
     case "events":
       return deriveTextFromLog(content.log) || null;
+    case "feedback": {
+      const rating = content.rating === "down" ? "👎 not helpful" : "👍 helpful";
+      return `User reacted ${rating} on a prior agent reply (message ${content.targetMessageId}).`;
+    }
     default:
       return null;
   }
@@ -183,6 +264,11 @@ export function shouldIncludeInPromptContext(message: Message, taskRunParentIds:
   // row, so exclude those children too.
   if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
   if (message.state === "pending" || message.state === "running") return false;
+  // Feedback rows are `role: 'system'` 👍/👎 reactions. Surface them in
+  // the transcript context so an agent picking up the chat — including
+  // the daily workspace reflection — can read the user's verdict on
+  // earlier replies.
+  if (type === "feedback") return true;
   return message.role === "user" || message.role === "agent" || type === "summary";
 }
 

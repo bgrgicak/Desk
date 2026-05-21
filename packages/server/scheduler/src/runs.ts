@@ -44,6 +44,7 @@ import {
   outputContentTypeFor,
   readLogEntries,
   reflectionOutcomeText,
+  resolveModelForRun,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
 import { withModule } from "@agent-desk/shared/logger";
@@ -78,94 +79,14 @@ export interface RunManagerOptions {
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
 }
 
-/**
- * Always-available default the runtime falls back to when the agent's
- * configured model has no live auth in the current run env. `opencode/*`
- * models are free and require zero provider keys, so this never lands a
- * chat in a broken "no auth at all" state.
- */
-export const FALLBACK_MODEL = "opencode/big-pickle";
-
-/**
- * Reasons `resolveModelForRun` returned a model other than the requested
- * one. `null` means "the requested model was used as-is".
- */
-export type ModelResolutionReason =
-  | null
-  | "codex-oauth"            // codex/* → openai/* via OAuth path (Codex enabled)
-  | "codex-fallback-api-key" // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
-  | "no-auth-fallback";      // requested provider has no available auth → free default
-
-/**
- * Pick the model that should actually run, and the provider key map to
- * forward into the daemon. Handles three concerns at once:
- *
- *  1. Codex translation: `codex/X` is a Desk-only relabel — opencode-
- *     serve only knows the `openai` provider. When Codex (OAuth) is
- *     available we route through it AND strip `OPENAI_API_KEY` so
- *     opencode picks the OAuth path instead of the cloud key. When
- *     Codex is disabled but `OPENAI_API_KEY` is present, we still
- *     unwrap the prefix and let the API key handle the call — so the
- *     user doesn't lose their chat to a toggle.
- *
- *  2. Hard fallback: when the requested model's provider has no auth
- *     at all (Codex disabled AND no `OPENAI_API_KEY`; or `anthropic/X`
- *     with no `ANTHROPIC_API_KEY`; or any future cloud provider whose
- *     key got disabled in Settings), substitute `FALLBACK_MODEL`. The
- *     run keeps going on the free `opencode/*` model instead of dying
- *     with a `ProviderModelNotFoundError` or — worse — silently using
- *     a stale auth blob the daemon still has cached.
- *
- *  3. No change for free models: `opencode/*` always runs as-is.
- *
- * Callers should forward the returned `runtimeModel` to BOTH the agent
- * file (so the daemon's startup cache picks the fallback up) AND the
- * driver's per-message `providerID/modelID`, and forward
- * `providerKeys` into the sandbox env. `reason` is for logging.
- */
-export function resolveModelForRun(
-  model: string,
-  providerKeys: Record<string, string>,
-  extraEnv?: Record<string, string>,
-): {
-  runtimeModel: string;
-  providerKeys: Record<string, string>;
-  reason: ModelResolutionReason;
-} {
-  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
-  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
-
-  if (model.startsWith("codex/")) {
-    const bare = `openai/${model.slice("codex/".length)}`;
-    if (oauthAvailable) {
-      // Codex enabled: OAuth path. Strip the cloud key so opencode
-      // doesn't accidentally pick the API-key path on a tie-break.
-      const { OPENAI_API_KEY: _strip, ...withoutOpenAiApiKey } = providerKeys;
-      return { runtimeModel: bare, providerKeys: withoutOpenAiApiKey, reason: "codex-oauth" };
-    }
-    if (hasOpenAiKey) {
-      return { runtimeModel: bare, providerKeys, reason: "codex-fallback-api-key" };
-    }
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  if (model.startsWith("openai/")) {
-    if (hasOpenAiKey || oauthAvailable) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  if (model.startsWith("anthropic/")) {
-    if (hasAnthropicKey) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  // Free `opencode/*` and any other provider Desk doesn't gatekeep
-  // explicitly pass through. opencode-serve still applies its own
-  // validation against the model registry — a typo there will surface
-  // as a daemon-side error rather than as a silent fallback.
-  return { runtimeModel: model, providerKeys, reason: null };
-}
+// Re-export the model resolver from runs-helpers so existing callers
+// keep working. The implementation moved out of runs.ts so reflection.ts
+// can use it without creating a runs ↔ reflection import cycle.
+export {
+  FALLBACK_MODEL,
+  resolveModelForRun,
+  type ModelResolutionReason,
+} from "./runs-helpers.js";
 
 /**
  * @deprecated Kept for backwards-compatibility with existing tests
@@ -210,6 +131,26 @@ export function createRunManager(opts: RunManagerOptions) {
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
+
+  /**
+   * Emit a `message.updated` for the row we just wrote, and — when the
+   * row is an `agent_turn` — also emit `chat.updated` for its chat.
+   *
+   * The chat's `running`/`failed` flags are computed live from the
+   * latest agent_turn (see queries/chats.ts), so every agent_turn
+   * state transition can shift them. Shipping a fresh `chat.updated`
+   * means the client never has to infer those flags from message
+   * events — it just applies the payload.
+   *
+   * The chat fetch is one extra query per state write; we accept that
+   * cost as the price of a single source of truth.
+   */
+  async function emitMessageAndMaybeChat(msg: Message): Promise<void> {
+    emit({ type: "message.updated", payload: msg });
+    if (msg.content?.type !== "agent_turn") return;
+    const chat = await queries.chats.findById(pool, msg.chatId);
+    if (chat) emit({ type: "chat.updated", payload: chat });
+  }
 
   async function getDefaultAgentId(): Promise<string> {
     const agents = await queries.agents.list(pool);
@@ -317,7 +258,7 @@ export function createRunManager(opts: RunManagerOptions) {
       try {
         await queries.messages.finalizeExecution(pool, messageId, "failed");
         const failed = await queries.messages.findById(pool, messageId);
-        if (failed) emit({ type: "message.updated", payload: failed });
+        if (failed) await emitMessageAndMaybeChat(failed);
       } catch (fallbackErr) {
         log.error({ messageId, fallbackErr }, "fireMessage failure-finalize also threw");
       }
@@ -328,9 +269,18 @@ export function createRunManager(opts: RunManagerOptions) {
   async function fireMessageImpl(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
+    // Task model: a task anchor lives in the source chat (kind='task',
+    // carries the schedule). Its run output — task_runs, agent child
+    // replies, opencode session, logs — lands in the anchor's thread
+    // chat so the source chat stays clean and the task list opens an
+    // isolated transcript. Legacy task anchors without a thread fall
+    // back to the source chat (no behaviour change). All other kinds
+    // (chat, summary) keep firing in their own chat.
+    const executionChatId =
+      msg.kind === "task" && msg.threadChatId ? msg.threadChatId : msg.chatId;
     const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
       `SELECT workspace_id FROM chats WHERE id = ?`,
-      [msg.chatId],
+      [executionChatId],
     );
     const eventWorkspaceId = fireChatRows[0]?.workspace_id;
 
@@ -343,7 +293,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const run = await queries.messages.startTaskRun(pool, {
         runId: newRunId,
         taskId: messageId,
-        chatId: msg.chatId,
+        chatId: executionChatId,
         role: msg.role,
         content: msg.content,
         agentId: msg.agentId ?? null,
@@ -358,10 +308,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
       runId = messageId;
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, messageId))!,
-      });
+      await emitMessageAndMaybeChat((await queries.messages.findById(pool, messageId))!);
     }
 
     // All post-claim work is wrapped in a single try/catch so any failure
@@ -415,7 +362,7 @@ export function createRunManager(opts: RunManagerOptions) {
          JOIN workspaces w ON w.id = c.workspace_id
          LEFT JOIN users u ON u.id = w.user_id
          WHERE c.id = ?`,
-        [msg.chatId],
+        [executionChatId],
       );
       const ctxRow = ctxRows[0];
       const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
@@ -437,7 +384,7 @@ export function createRunManager(opts: RunManagerOptions) {
           ? (rawGoal as GoalKey)
           : null;
 
-      const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
+      const logDir = await ensureLogDir(workspaceSlug, executionChatId);
       logFile = path.join(logDir, `${runId}.log`);
       // `flags: "w"` so a manual re-fire of a previously-failed
       // chat/summary message starts with a clean log instead of
@@ -479,7 +426,7 @@ export function createRunManager(opts: RunManagerOptions) {
         model: agent?.model ?? "opencode/big-pickle",
         userName,
         userTimezone,
-        chatId: msg.chatId,
+        chatId: executionChatId,
         goal: chatGoal,
         runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" && (msg.executeAt || msg.cron) ? "scheduled-task" : "chat"),
         workspaceKind,
@@ -544,7 +491,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // pass it into the runtime; the runtime returns the session that
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
-        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
+        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
         // `resolveModelForRun` settles three concerns at once: it
         // translates `codex/<name>` to opencode-serve's `openai/<name>`
         // and strips `OPENAI_API_KEY` when the OAuth path is the
@@ -618,7 +565,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 workspaceId,
                 workspaceSlug,
                 workspaceKind,
-                chatId: msg.chatId,
+                chatId: executionChatId,
                 agent: runtimeAgentInput,
                 attachments,
                 providerKeys: billing.providerKeys,
@@ -653,7 +600,7 @@ export function createRunManager(opts: RunManagerOptions) {
             // so the model's context across attempts stays consistent.
             const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
             if (nextSessionId && nextSessionId !== opencodeSessionId) {
-              await queries.chats.setOpencodeSessionId(pool, msg.chatId, nextSessionId);
+              await queries.chats.setOpencodeSessionId(pool, executionChatId, nextSessionId);
               opencodeSessionId = nextSessionId;
             }
           }
@@ -705,16 +652,10 @@ export function createRunManager(opts: RunManagerOptions) {
       // producing one duplicate reply per preempted send when the user
       // types faster than the model.
       if (await isAlreadyCancelled(pool, runId)) {
-        emit({
-          type: "message.updated",
-          payload: (await queries.messages.findById(pool, runId))!,
-        });
+        await emitMessageAndMaybeChat((await queries.messages.findById(pool, runId))!);
         return { fired: true, childIds: [] };
       }
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, runId))!,
-      });
+      await emitMessageAndMaybeChat((await queries.messages.findById(pool, runId))!);
       await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
@@ -728,14 +669,14 @@ export function createRunManager(opts: RunManagerOptions) {
             `SELECT id, content FROM messages
              WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
              ORDER BY created_at DESC LIMIT 1`,
-            [msg.chatId],
+            [executionChatId],
           );
           if (prev.rows[0]) {
             // SQLite returns JSON columns as TEXT; parse before reading.
             const prevRow = prev.rows[0] as { id: string; content: string };
             const parsed = JSON.parse(prevRow.content) as { body?: string };
             if (typeof parsed.body === "string") {
-              await snapshotSummary(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
+              await snapshotSummary(home, workspaceSlug, executionChatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }
@@ -745,7 +686,7 @@ export function createRunManager(opts: RunManagerOptions) {
         const childKind = outputKind === "summary" ? "summary" : undefined;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
-          chatId: msg.chatId,
+          chatId: executionChatId,
           role: "agent",
           content,
           parentId: runId,
@@ -759,7 +700,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // source of truth.
         if (content.type === "summary") {
           const { materializeSummary } = await import("@agent-desk/storage");
-          await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+          await materializeSummary(home, workspaceSlug, executionChatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child, workspaceId });
         emit({ type: "workspace.synced", payload: { workspaceId } });
@@ -803,7 +744,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       await queries.messages.finalizeExecution(pool, runId, "failed");
       const failedMsg = await queries.messages.findById(pool, runId);
-      if (failedMsg) emit({ type: "message.updated", payload: failedMsg });
+      if (failedMsg) await emitMessageAndMaybeChat(failedMsg);
       await afterTaskRun(msg, "failed", fireOptions);
       if (!logFile) return { fired: true, childIds: [] };
       const entries = await readLogEntries(logFile);
@@ -816,7 +757,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const errorChildKind = outputContentTypeFor(msg) === "summary" ? "summary" : undefined;
       const child = await queries.messages.insert(pool, {
         id: generateId("message"),
-        chatId: msg.chatId,
+        chatId: executionChatId,
         role: "agent",
         content,
         parentId: runId,
@@ -962,7 +903,7 @@ export function createRunManager(opts: RunManagerOptions) {
     await runtimeCancelRun(messageId);
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
     const msg = await queries.messages.findById(pool, messageId);
-    if (msg) emit({ type: "message.updated", payload: msg });
+    if (msg) await emitMessageAndMaybeChat(msg);
   }
 
   /**
