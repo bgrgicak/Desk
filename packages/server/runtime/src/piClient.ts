@@ -156,11 +156,24 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
 }
 
 function buildPiArgv(opts: PiRunOptions): string[] {
+  // pi treats `--session <id>` as "resume existing session by id" — it
+  // errors out with "No session found" when the id is unknown, so we
+  // can't use it to seed a chat's id on the first turn. Instead give
+  // each chat its own session-dir under the workspace and use
+  // `--continue` to resume; on the very first turn the dir is empty
+  // and pi auto-creates a fresh session there, then every subsequent
+  // turn continues it.
+  //
+  // The session dir sits inside SANDBOX_HOME (the workspace bind
+  // mount) so chat history survives container reaping for free.
   const argv: string[] = ["pi", "-p", "--mode", "json"];
-  if (opts.sessionId) argv.push(`--session=${opts.sessionId}`);
+  if (opts.sessionId) {
+    argv.push("--session-dir", `/home/agent/.pi/agent/sessions/${opts.sessionId}`);
+    argv.push("--continue");
+  }
   if (opts.provider) argv.push("--provider", opts.provider);
   if (opts.model) argv.push("--model", opts.model);
-  argv.push("--", opts.prompt);
+  argv.push(opts.prompt);
   return argv;
 }
 
