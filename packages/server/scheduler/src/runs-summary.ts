@@ -83,7 +83,7 @@ export function createSummaryScheduler(deps: SummarySchedulerDeps): SummarySched
     );
     const agentId = rows[0]?.chat_agent_id ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId as string);
-    return agent?.model ?? "opencode/big-pickle";
+    return agent?.model ?? "anthropic/claude-haiku-4-5";
   }
 
   async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {

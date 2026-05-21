@@ -84,7 +84,7 @@ export interface RunManagerOptions {
  * models are free and require zero provider keys, so this never lands a
  * chat in a broken "no auth at all" state.
  */
-export const FALLBACK_MODEL = "opencode/big-pickle";
+export const FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
 
 /**
  * Reasons `resolveModelForRun` returned a model other than the requested
@@ -476,7 +476,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
-        model: agent?.model ?? "opencode/big-pickle",
+        model: agent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
         chatId: msg.chatId,

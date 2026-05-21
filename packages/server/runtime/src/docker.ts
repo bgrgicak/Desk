@@ -27,7 +27,6 @@ import {
   type MountPlan,
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
-import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/docker");
 
@@ -104,7 +103,7 @@ const SANDBOX_READY_TIMEOUT_MS = 300_000;
  * decision; growing an existing sandbox is a follow-up (see
  * `packages/server/docs/plans/sandbox-autoscaling.md`).
  */
-const SANDBOX_RUNTIME_TAG = "opencode-serve-v1";
+const SANDBOX_RUNTIME_TAG = "pi-runtime-v1";
 
 function resourceProfileString(): string {
   return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
@@ -155,14 +154,6 @@ export function classifyResourceError(
   // a non-OOM signal kill that hits this path will at worst grow the
   // sandbox once before the user-visible failure surfaces.
   if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
-  // opencode-serve daemon mid-run failure: HTTP calls to a dead daemon
-  // surface as `fetch failed` / `ECONNREFUSED` in stderr, not as a
-  // child-process exit code. The driver probes the container's cgroup
-  // `memory.events.oom_kill` after a daemon-gone error and emits a
-  // marker line when the kernel actually OOM-killed it. That's the
-  // signal the auto-scaler needs to grow memory before retry instead
-  // of failing the user with no recovery.
-  if (s.includes("opencode-serve was oom-killed")) return "memory";
   return null;
 }
 
@@ -474,13 +465,6 @@ async function createOrReuseImpl(
       memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
       tmpfs: SANDBOX_TMPFS,
       binds: expectedBinds,
-      // Publish the in-container `opencode serve` port to a host-auto-
-      // assigned port on 127.0.0.1. The driver reads the assigned port
-      // back via `engine.port()` and uses it to reach the per-sandbox
-      // opencode daemon over HTTP/SSE. Bumping SANDBOX_RUNTIME_TAG ensures
-      // pre-existing containers without this publish fail the drift check
-      // and get recreated once on first use.
-      ports: [{ containerPort: OPENCODE_SERVE_CONTAINER_PORT, hostIp: "127.0.0.1" }],
       // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
       // children. The sandbox CMD is `sleep infinity`, which never reaps,
       // so without this every npx/esbuild/playwright child that exits
@@ -896,64 +880,17 @@ export async function reapIdleSandboxes(
 }
 
 /**
- * Soft idle tier: kill the `opencode serve` daemon inside sandbox
- * containers whose workspace has been quiet for `minAgeMs`, but leave
- * the container itself running. Saves ~400 MB of warm-daemon RSS per
- * sandbox without paying the full container cold-start on the next
- * message — the next `ensureOpencodeServer` re-spawns the daemon in
- * ~2-5 s against a still-warm container.
+ * No-op under the pi runtime — there is no long-lived per-container
+ * daemon to reap. Kept as an exported function so the scheduler's
+ * existing periodic call site doesn't need to know the runtime changed.
  *
- * Same `recentlyActiveWorkspaceIds` shape as `reapIdleSandboxes` so
- * the scheduler can reuse the existing active-workspace query.
- * Default 10 min — quiet enough to avoid killing daemons between
- * back-to-back chats but tight enough that long-idle workspaces
- * release the daemon's memory promptly.
- *
- * Returns the names of containers whose daemon was killed.
+ * Returns an empty list (no containers were touched).
  */
 export async function softReapIdleDaemons(
-  recentlyActiveWorkspaceIds: ReadonlySet<string>,
-  minAgeMs: number = 10 * 60 * 1000,
+  _recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  _minAgeMs: number = 10 * 60 * 1000,
 ): Promise<string[]> {
-  const killed: string[] = [];
-  let engine: Engine;
-  try {
-    engine = await detectEngine();
-  } catch {
-    return killed;
-  }
-  let containers: Array<{ id: string; name: string }>;
-  try {
-    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
-  } catch {
-    return killed;
-  }
-  const { killAnyOpencodeServeInContainer, invalidateOpencodeServerCache } = await import(
-    "./opencodeServer.js"
-  );
-  const now = Date.now();
-  for (const c of containers) {
-    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
-    const workspaceId = c.name.slice("desk-sandbox-".length);
-    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
-    if (growthInFlight.has(c.name)) continue;
-    // Don't touch a brand-new container whose first message hasn't
-    // bumped any DB row yet — same race window as the hard reap.
-    try {
-      const info = await engine.inspect(c.name);
-      if (!info) continue;
-      if (info.createdAt) {
-        const age = now - new Date(info.createdAt).getTime();
-        if (Number.isFinite(age) && age < minAgeMs) continue;
-      }
-      await killAnyOpencodeServeInContainer(engine, info.id);
-      invalidateOpencodeServerCache(info.id);
-      killed.push(c.name);
-    } catch (err) {
-      log.warn({ container: c.name, err: (err as Error).message }, "soft-reap failed");
-    }
-  }
-  return killed;
+  return [];
 }
 
 /** Stops a sandbox container. Idempotent. */
@@ -992,52 +929,17 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
 }
 
 /**
- * Kill `opencode serve` daemons left running in workspace sandboxes by a
- * prior desk-server. Called once at startup, before `recoverOrphanedRuns`
- * requeues the rows that owned those processes.
+ * No-op under the pi runtime — there is no long-lived per-container
+ * daemon to clean up after a desk-server restart. Pi sessions are
+ * file-backed under the workspace bind-mount, so a desk-server restart
+ * naturally finds them on the next turn without any cross-boot reset.
  *
- * Why this matters: when a desk-server dies (tsx-watch reload, hard
- * crash), the in-container opencode daemon survives because nothing
- * inside the container knows the host process is gone. Its open SQLite
- * file (`~/.local/share/opencode/opencode.db`) is exclusive — the next
- * desk-server's first `opencode serve` spawn would fail to open it
- * (`SQLITE_BUSY`) and the chat would error out. Killing the orphaned
- * daemon ensures the new server starts fresh.
- *
- * Per-workspace, best-effort. Engine errors degrade to "didn't kill" —
- * a re-fire will surface the SQLite contention if anything actually
- * leaked through.
+ * Kept as an exported function so api/db boot paths can keep calling it
+ * without conditionals; returns "didn't kill" for every workspace.
  */
 export async function killOpencodeDaemonsForOrphans(
   workspaceIds: ReadonlyArray<string>,
-  engineOverride?: Engine,
+  _engineOverride?: Engine,
 ): Promise<{ workspaceId: string; killed: boolean }[]> {
-  const results: { workspaceId: string; killed: boolean }[] = [];
-  if (workspaceIds.length === 0) return results;
-  let engine: Engine;
-  if (engineOverride) {
-    engine = engineOverride;
-  } else {
-    try {
-      engine = await detectEngine();
-    } catch {
-      return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
-    }
-  }
-  const { stopOpencodeServer } = await import("./opencodeServer.js");
-  const perWorkspace = workspaceIds.map((workspaceId) =>
-    (async () => {
-      const containerName = `desk-sandbox-${workspaceId}`;
-      try {
-        const info = await engine.inspect(containerName);
-        if (!info) return { workspaceId, killed: false };
-        await stopOpencodeServer(engine, info.id);
-        return { workspaceId, killed: true };
-      } catch {
-        return { workspaceId, killed: false };
-      }
-    })(),
-  );
-  for (const r of await Promise.all(perWorkspace)) results.push(r);
-  return results;
+  return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
 }

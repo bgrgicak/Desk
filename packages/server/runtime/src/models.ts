@@ -1,34 +1,36 @@
 /**
- * Queries the list of AI models available inside an agent's sandbox by running
- * `opencode models` there. The sandbox is the source of truth for what models
- * are reachable, because the provider config (API keys, registered providers)
- * lives with the in-sandbox OpenCode installation.
+ * Queries the list of AI models available inside an agent's sandbox by
+ * running `pi --list-models` there. The sandbox is the source of truth
+ * because the provider config (API keys, registered providers) is what
+ * pi inside the container can see.
+ *
+ * Pi prints one `<provider>/<model>` id per line. We parse those into
+ * `ModelRef`s; verbose context-window metadata is omitted (pi has no
+ * --verbose equivalent yet, and Desk's UI only requires the id + provider).
  */
 
 import { execInSandbox } from "./sandboxExec.js";
 
 export interface ModelRef {
-  /** Opencode's canonical model id, e.g. "opencode/big-pickle". Pass this to `opencode run --model`. */
+  /** Canonical model id, e.g. "anthropic/claude-haiku-4-5". */
   id: string;
   /** Provider portion of `id`, denormalised so UIs can group/filter without parsing. */
   provider: string;
-  /** Maximum context window reported by `opencode models --verbose`, when available. */
+  /** Maximum context window when known. Not surfaced by pi today. */
   contextWindow?: number;
-  /** Maximum input tokens reported by `opencode models --verbose`, when available. */
   inputLimit?: number;
-  /** Maximum output tokens reported by `opencode models --verbose`, when available. */
   outputLimit?: number;
 }
 
 export interface ListModelsOptions {
-  /** Restrict to a single provider, e.g. "opencode". */
+  /** Restrict to a single provider, e.g. "anthropic". */
   provider?: string;
   timeoutMs?: number;
   /** Provider API keys to inject when the sandbox is first created. */
   providerKeys?: Record<string, string>;
   /**
-   * Extra env vars (typically from local sources — Codex, LM Studio, Ollama)
-   * forwarded into the `opencode models` exec so those providers light up.
+   * Extra env vars (typically from local sources) forwarded into the
+   * `pi --list-models` exec so those providers light up.
    */
   env?: Record<string, string>;
 }
@@ -45,7 +47,7 @@ export class SandboxExecError extends Error {
 }
 
 const FAKE_DRIVER_MODELS: ModelRef[] = [
-  { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
+  { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
 ];
 
 export async function listModels(
@@ -59,8 +61,8 @@ export async function listModels(
       : FAKE_DRIVER_MODELS;
   }
 
-  const argv = ["opencode", "models", "--verbose"];
-  if (opts.provider) argv.push(opts.provider);
+  const argv = ["pi", "--list-models"];
+  if (opts.provider) argv.push("--provider", opts.provider);
 
   const result = await execInSandbox(workspaceId, workspaceSlug, {
     argv,
@@ -71,7 +73,7 @@ export async function listModels(
 
   if (result.exitCode !== 0) {
     throw new SandboxExecError(
-      `opencode models failed (exit ${result.exitCode})`,
+      `pi --list-models failed (exit ${result.exitCode})`,
       result.exitCode,
       result.stderr,
     );
@@ -80,70 +82,20 @@ export async function listModels(
   return parseModelsOutput(result.stdout);
 }
 
-/** Parses `opencode models` output, including verbose JSON metadata when present. */
+/**
+ * Parses pi's `--list-models` output. Each non-empty line is one
+ * `<provider>/<model>` id; lines without a slash are skipped.
+ */
 export function parseModelsOutput(stdout: string): ModelRef[] {
   const models: ModelRef[] = [];
-  const lines = stdout.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
+  for (const raw of stdout.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     const slash = line.indexOf("/");
     if (slash <= 0) continue;
     const provider = line.slice(0, slash);
-    const rest = line.slice(slash + 1);
-    if (!rest) continue;
-
-    // Brace-counted block scan. Naive: doesn't account for braces inside
-    // strings, but `opencode models --verbose` doesn't currently emit
-    // any string values containing `{` or `}`. JSON.parse below catches
-    // mis-extracted blocks and falls back to no-metadata.
-    const jsonLines: string[] = [];
-    let depth = 0;
-    let sawJson = false;
-    for (let j = i + 1; j < lines.length; j++) {
-      const next = lines[j];
-      const trimmed = next.trim();
-      if (!sawJson && trimmed === "") continue;
-      if (!sawJson && !trimmed.startsWith("{")) break;
-      sawJson = true;
-      jsonLines.push(next);
-      for (const ch of next) {
-        if (ch === "{") depth++;
-        if (ch === "}") depth--;
-      }
-      if (sawJson && depth <= 0) {
-        i = j;
-        break;
-      }
-    }
-
-    if (!sawJson) {
-      models.push({ id: line, provider });
-      continue;
-    }
-
-    try {
-      const meta = JSON.parse(jsonLines.join("\n")) as {
-        limit?: { context?: unknown; input?: unknown; output?: unknown };
-      };
-      const contextWindow = positiveNumber(meta.limit?.context);
-      const inputLimit = positiveNumber(meta.limit?.input);
-      const outputLimit = positiveNumber(meta.limit?.output);
-      models.push({
-        id: line,
-        provider,
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(inputLimit !== undefined ? { inputLimit } : {}),
-        ...(outputLimit !== undefined ? { outputLimit } : {}),
-      });
-    } catch {
-      models.push({ id: line, provider });
-    }
+    if (!line.slice(slash + 1)) continue;
+    models.push({ id: line, provider });
   }
   return models;
-}
-
-function positiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }

@@ -38,7 +38,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
         agentId,
         userId,
         "Desk",
-        "opencode/big-pickle",
+        "anthropic/claude-haiku-4-5",
       ],
     );
 

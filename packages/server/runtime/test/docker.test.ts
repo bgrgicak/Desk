@@ -139,10 +139,11 @@ describe("providerKeyExecEnv", () => {
 
 
 describe("killOpencodeDaemonsForOrphans", () => {
-  // The new orphan-kill is one-per-workspace: it ensures any previous
-  // `opencode serve` daemon left over from a prior desk-server lifetime
-  // is dead before the new server tries to spawn its own (which would
-  // otherwise fail on the SQLite exclusive lock).
+  // Under the pi runtime there is no long-lived per-container daemon
+  // to clean up after a desk-server restart — pi sessions are
+  // file-backed under the workspace bind-mount. The helper is kept as
+  // an exported no-op so api/db boot paths don't need conditionals;
+  // every workspace reports `killed: false` and no execs are issued.
   function fakeEngine(opts: {
     knownContainers?: ReadonlySet<string>;
     onExec?: (containerId: string, cmd: string[]) => number;
@@ -208,19 +209,16 @@ describe("killOpencodeDaemonsForOrphans", () => {
     expect(execCalls.length).toBe(0);
   });
 
-  it("issues a daemon-kill exec against existing containers", async () => {
+  it("is a no-op even for existing containers (no daemon under pi)", async () => {
     const { engine, execCalls } = fakeEngine({
       knownContainers: new Set(["desk-sandbox-wks_alive"]),
     });
     const out = await killOpencodeDaemonsForOrphans(["wks_alive"], engine);
-    expect(out).toEqual([{ workspaceId: "wks_alive", killed: true }]);
-    // The exec script kills any `opencode serve` process and cleans up
-    // the pidfile — we don't pin to the exact shell, just that both
-    // pieces appear.
-    expect(execCalls.length).toBeGreaterThanOrEqual(1);
-    const allScripts = execCalls.map((c) => c.cmd.join(" ")).join("\n");
-    expect(allScripts).toContain("opencode serve");
-    expect(allScripts).toContain("opencode-serve.pid");
+    expect(out).toEqual([{ workspaceId: "wks_alive", killed: false }]);
+    // Pi spawns one process per turn via `docker exec` with the
+    // current env — there is no lingering daemon for the helper to
+    // reach into the container and kill, so no execs are issued.
+    expect(execCalls.length).toBe(0);
   });
 });
 
