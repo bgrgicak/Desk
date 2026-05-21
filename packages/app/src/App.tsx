@@ -25,6 +25,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { SignupScreen } from '@/components/auth/SignupScreen'
 import { ForcedPasswordChangeScreen } from '@/components/auth/ForcedPasswordChangeScreen'
+import { VaultGate } from '@/components/vault/VaultGate'
 import { useDispatch } from 'react-redux'
 import { wsConnect } from '@/store/ws/middleware'
 import { ContextList } from '@/components/context/ContextList'
@@ -154,8 +155,8 @@ export default function App() {
   }
   return (
     <Routes>
-      <Route path="/w/:wsId/:view" element={<MustChangeGate><AppInner /></MustChangeGate>} />
-      <Route path="*" element={<MustChangeGate><AppBoot /></MustChangeGate>} />
+      <Route path="/w/:wsId/:view" element={<MustChangeGate><VaultGate><AppInner /></VaultGate></MustChangeGate>} />
+      <Route path="*" element={<MustChangeGate><VaultGate><AppBoot /></VaultGate></MustChangeGate>} />
     </Routes>
   )
 }

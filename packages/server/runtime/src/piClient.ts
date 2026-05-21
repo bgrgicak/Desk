@@ -139,6 +139,20 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   const seedSteps: string[] = [
     `mkdir -p ${shSingleQuote(agentDir)}`,
     `cp ${shSingleQuote(`${sourceDir}/auth.json`)} ${shSingleQuote(`${sourceDir}/models.json`)} ${shSingleQuote(agentDir)}/ 2>/dev/null || true`,
+    // Pi auto-discovers extensions in $PI_CODING_AGENT_DIR/extensions/<name>/
+    // index.ts. Because we override PI_CODING_AGENT_DIR to a fresh tmpfs
+    // dir per invocation (for lockfile-contention reasons above), we need
+    // to seed the bundled extensions too — otherwise the desk-mcp-bridge
+    // (and any future bundled extension) is invisible to pi, MCP servers
+    // never spawn, and tools like playwright never reach the agent.
+    //
+    // /etc/skel is the image-side source of truth. The workspace-side
+    // copy at $sourceDir/extensions is also a valid place for users to
+    // drop their own extensions; we overlay it on top so user extensions
+    // can coexist with the bundled ones (user copy wins for same name).
+    `mkdir -p ${shSingleQuote(`${agentDir}/extensions`)}`,
+    `cp -r /etc/skel/.pi/agent/extensions/. ${shSingleQuote(`${agentDir}/extensions`)}/ 2>/dev/null || true`,
+    `cp -r ${shSingleQuote(`${sourceDir}/extensions`)}/. ${shSingleQuote(`${agentDir}/extensions`)}/ 2>/dev/null || true`,
   ];
   // Only emit the env-auth seed step when the env var is non-empty; an
   // empty value just clears the workspace-side file.

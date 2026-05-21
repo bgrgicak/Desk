@@ -129,10 +129,19 @@ class McpClient {
       // identifiable in pi's stderr stream.
       process.stderr.write(`[desk-mcp-bridge:${this.serverName}] ${chunk.toString().trimEnd()}\n`);
     });
-    this.child.on("exit", (code, signal) => {
-      const err = new Error(`MCP server '${this.serverName}' exited (code=${code} signal=${signal})`);
+    const failPending = (err: Error) => {
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
+    };
+    // Without these handlers, a child that exits before initialize
+    // completes (e.g. a bad command in user-supplied mcp.json) emits an
+    // unhandled 'error' on stdin (EPIPE) or on the child itself
+    // (ENOENT) and crashes pi — taking the entire chat turn down.
+    // Forward both into the same pending-reject path as exit.
+    this.child.on("error", failPending);
+    this.child.stdin.on("error", failPending);
+    this.child.on("exit", (code, signal) => {
+      failPending(new Error(`MCP server '${this.serverName}' exited (code=${code} signal=${signal})`));
     });
 
     // MCP handshake
@@ -153,10 +162,23 @@ class McpClient {
     return this.request("tools/call", { name, arguments: args });
   }
 
+  /**
+   * Synchronously terminate the spawned MCP server. Used both on
+   * session_end and on connect/listTools failure (the spawned child
+   * stays alive after a failed initialize handshake, and would
+   * otherwise keep pi's event loop blocked forever — pi can't exit
+   * while a child process holds open pipes to stdio).
+   *
+   * Uses SIGKILL directly rather than SIGTERM-then-SIGKILL: by the
+   * time we're closing we want the child gone *now*, not in two
+   * seconds; pi's session_end callback doesn't await unref'd timeouts.
+   */
   close(): void {
     if (!this.child) return;
-    try { this.child.kill("SIGTERM"); } catch {/* noop */}
-    setTimeout(() => { try { this.child?.kill("SIGKILL"); } catch {/* noop */} }, 2000).unref();
+    try { this.child.kill("SIGKILL"); } catch {/* noop */}
+    try { this.child.stdin.destroy(); } catch {/* noop */}
+    try { this.child.stdout.destroy(); } catch {/* noop */}
+    try { this.child.stderr.destroy(); } catch {/* noop */}
     this.child = null;
   }
 
@@ -225,6 +247,12 @@ class McpClient {
 // ──────────────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  // Tracks every spawned MCP-server child, including ones whose
+  // initialize handshake failed. The `clients` map below only holds
+  // *successfully registered* servers — but pi keeps its event loop
+  // alive as long as any spawned child has pipes open, so we need to
+  // kill even the failed ones on session_end to let pi exit cleanly.
+  const allSpawned = new Set<McpClient>();
   const clients = new Map<string, McpClient>();
 
   pi.on("session_start", async (_event, ctx) => {
@@ -235,11 +263,17 @@ export default function (pi: ExtensionAPI) {
     for (const [name, server] of Object.entries(servers)) {
       if (server.enabled === false) continue;
       const client = new McpClient(name);
+      allSpawned.add(client);
       try {
         await client.connect(server.command, server.args ?? [], server.env ?? {});
         clients.set(name, client);
       } catch (err) {
         process.stderr.write(`[desk-mcp-bridge] failed to start '${name}': ${(err as Error).message}\n`);
+        // Kill the child even though connect() didn't finish — the
+        // spawn happened before initialize, and the child's stdio pipes
+        // would otherwise wedge pi's event loop on exit.
+        client.close();
+        allSpawned.delete(client);
         continue;
       }
 
@@ -250,6 +284,7 @@ export default function (pi: ExtensionAPI) {
         process.stderr.write(`[desk-mcp-bridge] tools/list failed for '${name}': ${(err as Error).message}\n`);
         client.close();
         clients.delete(name);
+        allSpawned.delete(client);
         continue;
       }
 
@@ -297,7 +332,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_end", async () => {
-    for (const client of clients.values()) client.close();
+    // Iterate the full spawn set, not just `clients`, so children whose
+    // initialize handshake never completed get killed too.
+    for (const client of allSpawned) client.close();
+    allSpawned.clear();
     clients.clear();
   });
 }

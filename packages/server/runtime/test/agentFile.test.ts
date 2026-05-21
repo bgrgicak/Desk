@@ -251,16 +251,157 @@ describe("writeWorkspaceMcpConfig", () => {
   });
 
   it("returns changed=false when the file already has the desired content (the per-workspace lock dedupes)", async () => {
+    // Start with no file → first call writes managed config (changed=true).
+    // Second call with the same goal-gate is a no-op.
+    // Third call with the goal-gate FLIPPED off has no effect because the
+    // second call left enabled=true, which is the user-override sentinel —
+    // Desk doesn't overwrite it. (This sticky-on behavior is intentional
+    // under the user-override-beats-managed rule.)
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
     try {
       await ensureLayout(home);
       await ensureWorkspaceLayout(home, "ws");
-      const first = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const first = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
       expect(first.changed).toBe(true);
-      const second = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const second = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
       expect(second.changed).toBe(false);
-      const third = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      // Toggling on writes enabled=true → changed.
+      const third = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
       expect(third.changed).toBe(true);
+      // Now sticky: enabled=true wins, fourth call (off) is a no-op.
+      const fourth = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      expect(fourth.changed).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves user-added MCP servers across writes (merge, don't overwrite)", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            filesystem: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/agent"],
+              enabled: true,
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      // Goal-off run still preserves the user's `filesystem` server
+      // and writes a managed playwright with enabled=false.
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      let cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.filesystem.command).toBe("npx");
+      expect(cfg.mcpServers.filesystem.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.enabled).toBe(false);
+
+      // Goal-on run flips playwright to true; the user's entry is still
+      // here. (The merge is the load-bearing claim of this test — once
+      // playwright is enabled=true the user-override rule kicks in, so
+      // we stop here rather than testing the toggle back off.)
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.filesystem.command).toBe("npx");
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("user-owned playwright entry (enabled=true in mcp.json) wins over the goal-gated managed config", async () => {
+    // The opt-in escape hatch: a user who hand-edits mcp.json to set
+    // playwright.enabled=true is telling Desk "I want browser tools
+    // in every chat, regardless of goal". Desk respects that and
+    // stops managing the entry — including keeping a non-standard
+    // command/args/env the user might have set (e.g. chromium
+    // instead of firefox).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            playwright: {
+              command: "playwright-mcp",
+              args: ["--browser", "chromium"],
+              enabled: true,
+              env: { DISPLAY: ":42" },
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      // Goal-gate says disable, but user explicit opt-in beats it.
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "chromium"]);
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":42");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("resets a user's enabled=false playwright entry to managed (no opt-in signal → goal-gate applies)", async () => {
+    // Only enabled=true is an opt-in. Other values (false, missing,
+    // garbage) leave Desk in charge — otherwise a stale Desk-written
+    // enabled=false would prevent the goal-gate from ever re-enabling
+    // playwright for a site/app chat in that workspace.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            playwright: { command: "broken", args: [], enabled: false, env: {} },
+          },
+        }),
+        "utf-8",
+      );
+
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.command).toBe("playwright-mcp");
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "firefox"]);
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":99");
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers from a malformed mcp.json by resetting to the managed config", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, "{ this is not json", "utf-8");
+
+      const res = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      expect(res.changed).toBe(true);
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

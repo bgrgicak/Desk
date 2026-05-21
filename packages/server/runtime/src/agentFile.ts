@@ -96,17 +96,16 @@ export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
 
 /**
  * Writes the per-workspace `.agents/mcp.json` consumed by the
- * desk-mcp-bridge pi extension. Always overwrites rather than merging
- * so the chat-goal heuristic stays the source of truth — if a previous
- * run enabled playwright for a `site` chat and the workspace's primary
- * goal has since become `document`, the next write turns it off again.
+ * desk-mcp-bridge pi extension. Merges with any existing file so users
+ * (or future Desk surfaces) can add their own MCP servers without
+ * getting wiped on the next chat boot — Desk owns the `playwright`
+ * entry, everything else is preserved as-is.
  *
  * The shape mirrors the standard MCP `mcpServers` map (Claude Desktop /
- * opencode compatible) so future MCP servers slot in without bespoke
+ * opencode compatible) so user-added servers slot in without bespoke
  * config. `enabled: false` is emitted explicitly when playwright isn't
  * needed so the extension can DELETE its tools on the next session
- * boot, rather than relying on absence (which the user might shadow
- * with their own hand-written entry).
+ * boot, rather than relying on absence.
  *
  * Returns `{ changed: true }` when the file content actually changed
  * since the previous write — callers use this to skip the lazy-Xvfb
@@ -117,26 +116,63 @@ export async function writeWorkspaceMcpConfig(
   workspaceSlug: string,
   opts: { enablePlaywright: boolean },
 ): Promise<{ changed: boolean }> {
-  const config = {
-    mcpServers: {
-      playwright: {
-        command: "playwright-mcp",
-        args: ["--browser", "firefox"],
-        enabled: opts.enablePlaywright,
-        env: { DISPLAY: ":99" },
-      },
-    },
-  };
   const dir = path.join(workspaceRootPath(home, workspaceSlug), ".agents");
   await fs.mkdir(dir, { recursive: true });
   const target = path.join(dir, "mcp.json");
-  const next = JSON.stringify(config, null, 2) + "\n";
+
   let prev: string | null = null;
+  let existing: Record<string, unknown> = {};
   try {
     prev = await fs.readFile(target, "utf-8");
-  } catch {
-    prev = null;
+    const parsed: unknown = JSON.parse(prev);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Malformed JSON — the bridge would refuse to load it anyway, so
+      // overwriting is the only recovery. The user's entries are lost,
+      // but the alternative is a permanently-stuck chat boot.
+      console.warn(`[mcp] ${target} is unreadable, resetting to managed config:`, err);
+    }
   }
+
+  const prevServers =
+    existing.mcpServers && typeof existing.mcpServers === "object" && !Array.isArray(existing.mcpServers)
+      ? (existing.mcpServers as Record<string, unknown>)
+      : {};
+
+  // User override: if the user has hand-edited a playwright entry with
+  // `enabled: true`, Desk steps out of the way — keep whatever they
+  // wrote and skip the goal-gated managed write. The bridge respects
+  // their argv/env. This is the "Lets you opt-in per workspace by
+  // hand-editing" path. Side-effect: once playwright has ever been
+  // enabled in a workspace (e.g. for a `site`-goal chat that wrote
+  // enabled=true), it stays on until the user explicitly disables it.
+  const existingPlaywright = prevServers.playwright;
+  const userOwnsPlaywright =
+    existingPlaywright !== undefined &&
+    existingPlaywright !== null &&
+    typeof existingPlaywright === "object" &&
+    !Array.isArray(existingPlaywright) &&
+    (existingPlaywright as { enabled?: unknown }).enabled === true;
+
+  const managedPlaywright = {
+    command: "playwright-mcp",
+    args: ["--browser", "firefox"],
+    enabled: opts.enablePlaywright,
+    env: { DISPLAY: ":99" },
+  };
+
+  const config = {
+    ...existing,
+    mcpServers: {
+      ...prevServers,
+      playwright: userOwnsPlaywright ? existingPlaywright : managedPlaywright,
+    },
+  };
+
+  const next = JSON.stringify(config, null, 2) + "\n";
   if (prev === next) return { changed: false };
   await fs.writeFile(target, next, "utf-8");
   return { changed: true };

@@ -10,12 +10,15 @@ import { createRunManager } from "@agent-desk/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearRateLimits } from "../src/auth/rateLimit.js";
+import { VaultStore } from "../src/vault/store.js";
 
 let pool: Pool;
 let home: string;
 let dbPath: string;
 let server: http.Server;
+let vault: VaultStore;
 let prevSignupEnv: string | undefined;
+let prevVaultPasswordEnv: string | undefined;
 
 function appOpts(): AppOptions {
   return {
@@ -25,6 +28,7 @@ function appOpts(): AppOptions {
       pool,
       execRunFn: async () => ({ exitCode: 0 }),
     }),
+    vault,
   };
 }
 
@@ -62,6 +66,7 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
+  vault = new VaultStore(path.join(home, "vaults"));
 
   server = createApp(appOpts());
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -72,11 +77,14 @@ beforeEach(async () => {
   await clearSessions(pool);
   clearRateLimits();
   prevSignupEnv = process.env.DESK_ENABLE_SIGNUP;
+  prevVaultPasswordEnv = process.env.DESK_VAULT_PASSWORD;
 });
 
 afterAll(async () => {
   if (prevSignupEnv === undefined) delete process.env.DESK_ENABLE_SIGNUP;
   else process.env.DESK_ENABLE_SIGNUP = prevSignupEnv;
+  if (prevVaultPasswordEnv === undefined) delete process.env.DESK_VAULT_PASSWORD;
+  else process.env.DESK_VAULT_PASSWORD = prevVaultPasswordEnv;
   server.close();
   server.closeAllConnections?.();
   if (pool) await pool.end();
@@ -134,6 +142,23 @@ describe("POST /auth/signup", () => {
     const user = await queries.users.findByUsername(pool, "alice");
     expect(user).toBeTruthy();
     expect(user?.email).toBe("alice@example.com");
+  });
+
+  it("does NOT auto-create a vault at signup, even with DESK_VAULT_PASSWORD set", async () => {
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.DESK_VAULT_PASSWORD = "would-have-been-auto-applied";
+    const res = await request("POST", "/auth/signup", {
+      username: "vaultless",
+      email: "vaultless@example.com",
+      password: "correct-horse-battery",
+    });
+    expect(res.status).toBe(200);
+    const user = await queries.users.findByUsername(pool, "vaultless");
+    expect(user).toBeTruthy();
+    // The vault file should not exist — the user is expected to set a
+    // password through the VaultDialog on first credential save.
+    const status = await vault.status(user!.id);
+    expect(status).toEqual({ exists: false, locked: true });
   });
 
   it("rejects usernames that fail the pattern", async () => {

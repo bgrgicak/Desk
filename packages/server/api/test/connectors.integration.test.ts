@@ -178,7 +178,7 @@ describe("connector connection routes", () => {
     ]));
   });
 
-  it("rejects credential writes when the vault is locked", async () => {
+  it("rejects credential writes with 423 when the vault is locked", async () => {
     vault.lock(userId);
     try {
       const blocked = await request("POST", "/me/connections", token, {
@@ -186,9 +186,26 @@ describe("connector connection routes", () => {
         displayName: "Notion",
         credentials: { value: "secret" },
       });
-      expect(blocked.status).toBe(400);
+      expect(blocked.status).toBe(423);
+      expect((blocked.body as { code: string }).code).toBe("VAULT_LOCKED");
       // No row should have been created.
       const listed = await request("GET", "/me/connections?providerId=notion", token);
+      expect(listed.body.connections).toHaveLength(0);
+    } finally {
+      await vault.unlock(userId, "connector-test-vault");
+    }
+  });
+
+  it("PUT /me/providers returns 423 when the vault is locked", async () => {
+    vault.lock(userId);
+    try {
+      const blocked = await request("PUT", "/me/providers", token, {
+        providers: { OPENAI_API_KEY: "sk-test-123" },
+      });
+      expect(blocked.status).toBe(423);
+      expect((blocked.body as { code: string }).code).toBe("VAULT_LOCKED");
+      // Nothing should have been persisted while locked.
+      const listed = await request("GET", "/me/connections?providerId=OPENAI_API_KEY", token);
       expect(listed.body.connections).toHaveLength(0);
     } finally {
       await vault.unlock(userId, "connector-test-vault");
