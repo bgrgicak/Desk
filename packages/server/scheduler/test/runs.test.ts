@@ -197,9 +197,14 @@ emit: (evt) => events.push(evt),
       log: Array<{ kind: string; event?: { type: string }; line?: string }>;
     };
     expect(content.type).toBe("events");
-    expect(content.log.map((e) => e.kind)).toEqual(["event", "event", "stderr", "event"]);
-    expect(content.log[0].event?.type).toBe("step_start");
-    expect(content.log[2].line).toBe("diagnostic noise");
+    // No provider keys are configured in the test fixture, so the run-time
+    // billing resolver downgrades to the free fallback and prepends a
+    // stderr banner. See resolveModelForRun / "no-auth-fallback" in
+    // scheduler/src/runs.ts.
+    expect(content.log.map((e) => e.kind)).toEqual(["stderr", "event", "event", "stderr", "event"]);
+    expect(content.log[0].line).toContain("falling back to the free");
+    expect(content.log[1].event?.type).toBe("step_start");
+    expect(content.log[3].line).toBe("diagnostic noise");
 
     const updated = events.filter((e) => e.type === "message.updated");
     expect(updated.length).toBeGreaterThanOrEqual(2);
@@ -415,7 +420,11 @@ execRunFn: async () => ({ exitCode: 1 }),
       log: Array<{ kind: string; line?: string }>;
     };
     expect(content.type).toBe("events");
-    expect(content.log).toEqual([
+    // First entry is the no-auth-fallback banner emitted before execRunFn
+    // is invoked (see resolveModelForRun in scheduler/src/runs.ts).
+    expect(content.log[0].kind).toBe("stderr");
+    expect(content.log[0].line).toContain("falling back to the free");
+    expect(content.log.slice(1)).toEqual([
       { kind: "stderr", line: "Agent run failed before it could complete." },
       { kind: "stderr", line: "No container runtime available. Tried: docker info failed, nerdctl info failed." },
     ]);

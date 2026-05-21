@@ -870,8 +870,8 @@ describe("Routes coverage (real Postgres)", () => {
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
-    // Fake sandbox driver always returns free opencode models (no key required).
-    expect(body.some((m) => m.provider === "opencode")).toBe(true);
+    // Fake pi driver returns a built-in anthropic catalog (no key required).
+    expect(body.some((m) => m.provider === "anthropic")).toBe(true);
     for (const m of body) {
       expect(m.id.startsWith(`${m.provider}/`)).toBe(true);
       // No leftover fields from the old response shape.
@@ -881,13 +881,13 @@ describe("Routes coverage (real Postgres)", () => {
     }
   });
 
-  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models?provider=opencode — filters to provider", async () => {
-    const res = await request("GET", "/tools/models?provider=opencode", token);
+  it.skipIf(!SANDBOX_AVAILABLE)("GET /tools/models?provider=anthropic — filters to provider", async () => {
+    const res = await request("GET", "/tools/models?provider=anthropic", token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
     expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "opencode")).toBe(true);
+    expect(body.every((m) => m.provider === "anthropic")).toBe(true);
   });
 
   it("GET /tools/models?provider=bad..id — rejects malformed provider", async () => {
