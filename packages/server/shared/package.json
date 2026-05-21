@@ -15,7 +15,8 @@
       "@agent-desk/dev": "./src/logger.ts",
       "types": "./dist/logger.d.ts",
       "import": "./dist/logger.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -27,7 +28,7 @@
     "tag": "alpha"
   },
   "engines": {
-    "node": ">=23.4.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc",
