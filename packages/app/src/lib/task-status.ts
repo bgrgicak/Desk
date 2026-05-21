@@ -35,16 +35,24 @@ export function taskStatusFromMessage(input: {
 /**
  * Parent task rows are user-owned: only an explicit user gesture should move
  * the stored task definition between To do / Scheduled / Complete. Live
- * conversation signals (the chat's in-flight agent_turn, the chat's
- * `unread` flag) are layered on as display-only overlays — they shift
- * the card between Active / Needs input / Todo / Scheduled without rewriting
- * the durable task state, so the same row can move through the chat
- * lifecycle multiple times. Order: terminal task state wins, then "anyone is
- * working" (parent running, task_run running, chat agent_turn running), then
- * schedule (a scheduled task with stale agent chatter is still primarily a
- * scheduled task — the user set a time and expects the badge to reflect it),
- * then "ball is in user's court" (chat.unread — agent has activity the user
- * hasn't opened yet; only agent messages flip this flag), then idle.
+ * conversation signals (the chat's in-flight agent_turn, a child task_run in
+ * flight) are layered on as display-only overlays — they shift the card
+ * between Active / Needs input / Todo / Scheduled without rewriting the
+ * durable task state, so the same row can move through the chat lifecycle
+ * multiple times.
+ *
+ * "Active" means *something is really running right now* — a child task_run
+ * in `running` state, or the chat actively in an agent_turn. The parent
+ * task's own `state='running'` is deliberately NOT a source of truth here:
+ * the server treats it as a free-to-patch kanban label decoupled from
+ * execution (see routes/chats.ts and scheduler/runs.ts startTaskRun), so
+ * trusting it would surface "Active" cards with no loader and no tool
+ * calls. Order: terminal task state wins, then real execution signals,
+ * then schedule (a scheduled task with stale agent chatter is still
+ * primarily a scheduled task — the user set a time and expects the badge
+ * to reflect it), then "ball is in user's court" (chat.unread — agent has
+ * activity the user hasn't opened yet; only agent messages flip this flag),
+ * then idle.
  */
 export function taskStatusFromTaskAndRuns(
   task: { state: MessageState; executeAt?: string | null; cron?: string | null },
@@ -52,7 +60,6 @@ export function taskStatusFromTaskAndRuns(
   chat?: { unread?: boolean; running?: boolean },
 ): Task['status'] {
   if (task.state === 'succeeded' || task.state === 'cancelled') return 'complete'
-  if (task.state === 'running') return 'active'
   if (runs.some(run => run.state === 'running')) return 'active'
   if (chat?.running) return 'active'
   if (task.executeAt || task.cron) return 'scheduled'

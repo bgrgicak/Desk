@@ -90,8 +90,17 @@ function statusFor(
   );
 }
 
-function statusTextFor(m: ServerMessage, chat?: ServerChat): string {
-  if (m.state === "running") return "Running";
+function statusTextFor(
+  m: ServerMessage,
+  chat?: ServerChat,
+  runs: ServerMessage[] = [],
+): string {
+  // Real execution signals first — match the badge in task-status.ts so the
+  // helper text never says "Running" on a card that isn't actually running.
+  // A parent task's own state='running' is a kanban label, not execution,
+  // so it does not flip the text on its own.
+  if (runs.some(run => run.state === "running")) return "Running";
+  if (chat?.running) return "Agent working…";
   if (m.state === "succeeded") return "Completed";
   if (m.state === "failed") return "Failed";
   if (m.state === "cancelled") return "Cancelled";
@@ -100,10 +109,6 @@ function statusTextFor(m: ServerMessage, chat?: ServerChat): string {
     if (m.executeAt) return `Paused — was scheduled for ${new Date(m.executeAt).toLocaleString()}`;
     return "Paused";
   }
-  // Active chat work beats the schedule label, but a scheduled task with
-  // stale unread chatter stays "Scheduled" so the text matches the badge
-  // (see taskStatusFromTaskAndRuns).
-  if (chat?.running) return "Agent working…";
   if (m.executeAt) {
     const when = new Date(m.executeAt);
     const label = when.toLocaleString();
@@ -184,7 +189,7 @@ export function toUiTask(
     description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,
-    statusText: statusTextFor(m, chat),
+    statusText: statusTextFor(m, chat, runs),
     // The server has no `assigneeId` field — task assignment is just
     // `agentId`.  Drop the dead alias (PATCH bodies that included it
     // were silently no-op on the server) and use the row's agentId.
@@ -197,6 +202,7 @@ export function toUiTask(
     messageRole: m.role,
     messageState: m.state ?? "pending",
     chatId: m.chatId,
+    threadChatId: m.threadChatId,
     messageId: m.id,
     artifactIds: [],
     scheduledFor: m.executeAt ? new Date(m.executeAt) : undefined,
