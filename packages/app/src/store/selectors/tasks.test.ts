@@ -229,6 +229,54 @@ describe('task selectors', () => {
     expect(task.statusText).toBe('Waiting for your reply')
   })
 
+  it('shows a sub-task as needs_input when the thread chat is unread after the run finished', () => {
+    // Sub-task: anchor lives in the parent chat but the agent runs in
+    // the dedicated thread chat, which is where unread=1 lands when the
+    // agent posts. The selector has to look the chat up by threadChatId,
+    // not chatId, or the task would stay silent until the user opened
+    // the thread.
+    //
+    // The sticky-Active contract means parent state='running' wins over
+    // chat.unread while the run is in flight (the agent is still
+    // working). needs_input is the post-run handoff state: parent has
+    // settled back to pending and the thread carries an unread agent
+    // reply waiting for the user.
+    const task = toUiTask(message({
+      id: 'msg_subtask_anchor',
+      role: 'agent',
+      kind: 'task',
+      chatId: 'cht_parent',
+      threadChatId: 'cht_thread',
+      title: 'Investigate the leak',
+      content: { type: 'text', text: 'Investigate the leak' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'pending',
+    }), [], [
+      {
+        id: 'cht_parent',
+        workspaceId: 'wks_test',
+        agentId: 'agent_test',
+        title: 'Parent chat',
+        createdAt: '2099-05-07T10:00:00.000Z',
+        updatedAt: '2099-05-07T10:00:00.000Z',
+        unread: false,
+      },
+      {
+        id: 'cht_thread',
+        workspaceId: 'wks_test',
+        agentId: 'agent_test',
+        title: 'Investigate the leak',
+        createdAt: '2099-05-07T10:00:00.000Z',
+        updatedAt: '2099-05-07T10:05:00.000Z',
+        unread: true,
+      },
+    ])
+
+    expect(task.status).toBe('needs_input')
+    expect(task.statusText).toBe('Waiting for your reply')
+  })
+
   it('keeps a scheduled task labeled scheduled even when the chat is unread', () => {
     const task = toUiTask(message({
       id: 'msg_scheduled_and_unread',
@@ -351,7 +399,11 @@ describe('task selectors', () => {
     expect(task.status).toBe('todo')
   })
 
-  it('does not show errored parent tasks as complete', () => {
+  it('folds errored parent tasks into Open so failure is internal-only', () => {
+    // `state='failed'` deliberately does not promote to its own UI status
+    // — the user retries from the same column they created it in. The
+    // statusText still says "Failed" so the detail panel can surface
+    // the cause, but the kanban badge stays Open.
     const task = toUiTask(message({
       id: 'msg_parent_failed',
       role: 'user',
@@ -365,6 +417,27 @@ describe('task selectors', () => {
 
     expect(task.status).toBe('todo')
     expect(task.statusText).toBe('Failed')
+  })
+
+  it("marks an agent-authored unscheduled task Active while its parent state='running'", () => {
+    // The sandbox auto-fire path promotes the parent to `running` so the
+    // kanban Active badge sticks past the moment the task_run terminates.
+    // The selector has to read parent state='running' as Active even when
+    // no child task_run is currently in-flight; without that, the card
+    // would drop back to Open the instant the run finished and before
+    // afterTaskRun propagated a terminal state.
+    const task = toUiTask(message({
+      id: 'msg_agent_unscheduled_active',
+      role: 'agent',
+      kind: 'task',
+      title: 'Build a small app',
+      content: { type: 'text', text: 'Scaffold a hello-world page.' },
+      executeAt: undefined,
+      cron: undefined,
+      state: 'running',
+    }), [])
+
+    expect(task.status).toBe('active')
   })
 
   it('falls back to a generic summary task name when the chat title is unavailable', () => {

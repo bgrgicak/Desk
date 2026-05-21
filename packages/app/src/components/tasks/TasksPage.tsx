@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { UIEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X, Clock, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
@@ -13,7 +13,6 @@ import {
 } from '@agent-desk/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
-import type { ServerAgent } from '@/store/types'
 import { TopBarActions, TopBarContentActions, TopBarCenter } from '@/components/layout/TopBar'
 import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
 import { useSplitResize, useContentAreaInsets } from '@/components/shared/splitPane'
@@ -31,6 +30,8 @@ import {
 import { TaskComposer, type TaskComposerSubmit } from './TaskComposer'
 import { TaskCard } from './TaskCard'
 import { TaskChatPanel } from './TaskChatPanel'
+import { TaskPanelActionsMenu } from './TaskPanelActionsMenu'
+import type { SchedulePickerValue } from './SchedulePicker'
 import {
   TaskTabs,
   TaskFilterSearch,
@@ -47,11 +48,6 @@ const ROOM_SIDEBAR_WIDTH = '290px'
 export interface TasksPageProps {
   tasks: Task[]
   isLoading?: boolean
-  /** Agents for the assignee filter. */
-  agents: ServerAgent[]
-  /** Active room (workspace) name — shown as the agent label in the
-   *  assignee filter. */
-  roomName?: string
   /** Best-effort total message counts keyed by backing chat id —
    *  the "N replies" footer button. */
   repliesByChatId?: Record<string, number>
@@ -73,6 +69,8 @@ export interface TasksPageProps {
   onRunNow: (task: Task) => void | Promise<void>
   onPause: (task: Task) => void | Promise<void>
   onDelete: (task: Task) => void | Promise<void>
+  /** Apply (or clear with `null`) a schedule on an existing task. */
+  onSchedule: (task: Task, schedule: SchedulePickerValue | null) => void | Promise<void>
 }
 
 // Exact mirror of the chat view's conversation column: a responsive
@@ -102,6 +100,7 @@ const EMPTY_COPY: Record<TaskTab, { title: string; body: string }> = {
   needs_input: { title: 'Nothing needs your input', body: 'When an agent has a question for you, it shows up here.' },
   active:      { title: 'Nothing in progress',      body: 'Tasks an agent is actively working on appear here.' },
   scheduled:   { title: 'Nothing scheduled',        body: 'Give a task a schedule when you create it to see it here.' },
+  failed:      { title: 'Nothing failed',           body: "Tasks whose run errored out appear here so you can retry or close them." },
   complete:    { title: 'Nothing done yet',         body: 'Completed tasks are kept here for reference.' },
 }
 
@@ -243,8 +242,6 @@ function useIsSmallRightPanelScreen() {
 export function TasksPage({
   tasks,
   isLoading = false,
-  agents,
-  roomName,
   repliesByChatId = {},
   authorName,
   authorAvatarUrl,
@@ -256,6 +253,7 @@ export function TasksPage({
   onRunNow,
   onPause,
   onDelete,
+  onSchedule,
 }: TasksPageProps) {
   // The top fade only kicks in once the list is scrolled — at rest
   // (scrollTop 0) the composer must stay crisp, not faded. The fade
@@ -270,10 +268,41 @@ export function TasksPage({
   const [filters, setFilters] = useState<TaskListFilters>(DEFAULT_TASK_FILTERS)
   const [search, setSearch] = useState('')
 
+  // Stable action dispatcher passed to every memoized TaskCardRow.
+  // AppInner re-creates these handlers on every render; without
+  // indirection through a ref every visible TaskCard would re-render
+  // alongside any AppInner state change (the profile shows 201 such
+  // renders across an 85s session). The ref keeps the latest closure
+  // values available without changing identity.
+  const actionsRef = useRef({
+    onSelectTask,
+    onMarkDone,
+    onRunNow,
+    onPause,
+    onDelete,
+    onSchedule,
+  })
+  actionsRef.current = {
+    onSelectTask,
+    onMarkDone,
+    onRunNow,
+    onPause,
+    onDelete,
+    onSchedule,
+  }
+  const cardActions = useMemo<TaskCardActions>(() => ({
+    selectTask: (id) => actionsRef.current.onSelectTask(id),
+    markDone:   (task) => { void actionsRef.current.onMarkDone(task) },
+    runNow:     (task) => { void actionsRef.current.onRunNow(task) },
+    pause:      (task) => { void actionsRef.current.onPause(task) },
+    delete:     (task) => { void actionsRef.current.onDelete(task) },
+    schedule:   (task, next) => { void actionsRef.current.onSchedule(task, next) },
+  }), [])
+
   const allTasks = tasks
 
   // Per-tab counts shown inline in the tabs. Computed off the full
-  // task list (independent of search / assignee) so the numbers stay
+  // task list (independent of search) so the numbers stay
   // a stable "how many in each state" readout.
   const counts = useMemo<Record<TaskTab, number>>(() => {
     const c: Record<TaskTab, number> = {
@@ -282,6 +311,7 @@ export function TasksPage({
       needs_input: 0,
       active: 0,
       scheduled: 0,
+      failed: 0,
       complete: 0,
     }
     for (const t of allTasks) {
@@ -384,14 +414,6 @@ export function TasksPage({
       ) {
         return false
       }
-      if (filters.assigneeId === 'you' && t.messageRole === 'agent') return false
-      if (
-        filters.assigneeId &&
-        filters.assigneeId !== 'you' &&
-        t.assigneeId !== filters.assigneeId
-      ) {
-        return false
-      }
       if (q && !t.name.toLowerCase().includes(q)) return false
       return true
     })
@@ -425,8 +447,6 @@ export function TasksPage({
             <TaskFilterSearch
               filters={filters}
               onFiltersChange={setFilters}
-              agents={agents}
-              roomName={roomName}
               search={search}
               onSearchChange={setSearch}
             />
@@ -519,32 +539,18 @@ export function TasksPage({
                   {visible.length} {visible.length === 1 ? 'task' : 'tasks'}
                 </h3>
                 <div className="flex flex-col gap-3">
-                {visible.map(task => {
-                  const replies = task.chatId ? repliesByChatId[task.chatId] ?? 0 : 0
-                  return (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      authorName={authorName}
-                      authorAvatarUrl={authorAvatarUrl}
-                      repliesCount={replies}
-                      isActive={selectedTaskId === task.id}
-                      href={hrefForTask(task.id)}
-                      onSelect={() => onSelectTask(task.id)}
-                      onMarkDone={() => void onMarkDone(task)}
-                      onRunNow={
-                        task.status === 'scheduled' ? () => void onRunNow(task) : undefined
-                      }
-                      onPause={
-                        (task.status === 'active' || task.status === 'scheduled') &&
-                        task.messageState !== 'paused'
-                          ? () => void onPause(task)
-                          : undefined
-                      }
-                      onDelete={() => void onDelete(task)}
-                    />
-                  )
-                })}
+                {visible.map(task => (
+                  <TaskCardRow
+                    key={task.id}
+                    task={task}
+                    authorName={authorName}
+                    authorAvatarUrl={authorAvatarUrl}
+                    repliesCount={task.chatId ? repliesByChatId[task.chatId] ?? 0 : 0}
+                    isActive={selectedTaskId === task.id}
+                    href={hrefForTask(task.id)}
+                    actions={cardActions}
+                  />
+                ))}
                 </div>
               </div>
             )}
@@ -656,6 +662,26 @@ export function TasksPage({
           {selectedTask.status === 'scheduled' && (
             <RecentRunsPopover task={selectedTask} />
           )}
+          <TaskPanelActionsMenu
+            task={selectedTask}
+            onMarkDone={() => void onMarkDone(selectedTask)}
+            onRunNow={
+              selectedTask.status === 'scheduled' ||
+              selectedTask.status === 'todo' ||
+              selectedTask.status === 'complete' ||
+              selectedTask.status === 'failed'
+                ? () => void onRunNow(selectedTask)
+                : undefined
+            }
+            onPause={
+              (selectedTask.status === 'active' || selectedTask.status === 'scheduled') &&
+              selectedTask.messageState !== 'paused'
+                ? () => void onPause(selectedTask)
+                : undefined
+            }
+            onSchedule={(next) => void onSchedule(selectedTask, next)}
+            onDelete={() => void onDelete(selectedTask)}
+          />
           <Button
             variant="ghost"
             size="icon"
@@ -670,3 +696,76 @@ export function TasksPage({
     </div>
   )
 }
+
+// Stable action dispatcher passed into every row. Constructed once in
+// TasksPage and proxied through a ref so AppInner's per-render closures
+// don't break TaskCardRow's memo.
+interface TaskCardActions {
+  selectTask: (id: string) => void
+  markDone:   (task: Task) => void
+  runNow:     (task: Task) => void
+  pause:      (task: Task) => void
+  delete:     (task: Task) => void
+  schedule:   (task: Task, next: SchedulePickerValue | null) => void
+}
+
+interface TaskCardRowProps {
+  task: Task
+  authorName?: string
+  authorAvatarUrl?: string | null
+  repliesCount: number
+  isActive: boolean
+  href: string
+  actions: TaskCardActions
+}
+
+const TaskCardRow = memo(function TaskCardRow({
+  task,
+  authorName,
+  authorAvatarUrl,
+  repliesCount,
+  isActive,
+  href,
+  actions,
+}: TaskCardRowProps) {
+  // Stable per-row closures: bound to `task` (the only thing that
+  // changes here) and the stable `actions` dispatcher. Row-level
+  // useCallback is sound because each row is its own keyed instance.
+  const onSelect   = useCallback(() => actions.selectTask(task.id), [actions, task.id])
+  const onMarkDone = useCallback(() => actions.markDone(task),       [actions, task])
+  const onSchedule = useCallback((next: SchedulePickerValue | null) => actions.schedule(task, next), [actions, task])
+  const onDelete   = useCallback(() => actions.delete(task),         [actions, task])
+  // Run/Pause visibility tracks status — keep the prop-level "menu item
+  // hidden" affordance by returning undefined when not applicable.
+  // Run now is for activating a task that isn't already running, so it
+  // doesn't apply to status === 'active'. On 'complete' / 'failed' it
+  // re-runs the task and moves it back out of its terminal column (see
+  // useTaskActions.onRunNow, which resets the parent state first).
+  const onRunNow =
+    task.status === 'scheduled' ||
+    task.status === 'todo' ||
+    task.status === 'complete' ||
+    task.status === 'failed'
+      ? () => actions.runNow(task)
+      : undefined
+  const onPause = (task.status === 'active' || task.status === 'scheduled') &&
+    task.messageState !== 'paused'
+      ? () => actions.pause(task)
+      : undefined
+  return (
+    <TaskCard
+      task={task}
+      authorName={authorName}
+      authorAvatarUrl={authorAvatarUrl}
+      repliesCount={repliesCount}
+      isActive={isActive}
+      href={href}
+      onSelect={onSelect}
+      onMarkDone={onMarkDone}
+      onRunNow={onRunNow}
+      onPause={onPause}
+      onSchedule={onSchedule}
+      onDelete={onDelete}
+    />
+  )
+})

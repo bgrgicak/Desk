@@ -10,18 +10,20 @@ import {
   type ComposerPickersHandle,
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
+import type { SchedulePickerValue } from '@/components/tasks/SchedulePicker'
 import { replaceTextareaRangePreservingUndo } from './textareaUndo'
 
 type GoalKey = SharedGoalKey | null
 
 /**
- * Derive the `kind`/`title`/`executeAt`/`goal` fields the `postChatMessage`
- * mutation accepts from the composer's two pieces of state:
+ * Derive the `kind`/`title`/`executeAt`/`cron`/`goal` fields the
+ * `postChatMessage` mutation accepts from the composer's two pieces of
+ * state:
  *
  *   - `goalOverride` — what the Tools popover currently shows
- *   - `executeAtOverride` — ISO timestamp picked in the Schedule popover
+ *   - `scheduleOverride` — schedule picked in the Schedule popover
  *
- * Schedule wins: a picked date implicitly flips the message into a
+ * Schedule wins: any picked schedule implicitly flips the message into a
  * scheduled task regardless of what Tools shows. When no Schedule is set
  * but Tools = `task`, we still send `kind: 'task'` so it lands on the
  * tasks board. Plain goals (`app`, `document`, …) flow as ordinary chat
@@ -31,15 +33,21 @@ export function buildSendOptions(
   _persistedGoalKey: GoalKey,
   goalOverride: GoalKey | undefined,
   message: string,
-  executeAtOverride?: string | null,
+  scheduleOverride?: SchedulePickerValue | null,
 ): SendOptions | undefined {
   const firstLine = message.split('\n')[0].trim()
   const title = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine || undefined
 
-  // A scheduled run is a task with executeAt — and forces the goal to
-  // 'scheduled' so the chat list groups it correctly.
-  if (executeAtOverride) {
-    return { kind: 'task', title, executeAt: executeAtOverride, goal: 'scheduled' }
+  // A scheduled run is a task with executeAt/cron — and forces the
+  // goal to 'scheduled' so the chat list groups it correctly.
+  if (scheduleOverride && (scheduleOverride.executeAt || scheduleOverride.cron)) {
+    return {
+      kind: 'task',
+      title,
+      executeAt: scheduleOverride.executeAt ?? undefined,
+      cron:      scheduleOverride.cron ?? undefined,
+      goal:      'scheduled',
+    }
   }
 
   if (goalOverride === undefined) return undefined
@@ -76,6 +84,8 @@ export interface SendOptions {
   kind?: 'task'
   title?: string
   executeAt?: string
+  /** Cron expression for recurring schedules. */
+  cron?: string
   /** Goal the user explicitly selected in the chat composer. */
   goal?: GoalKey
 }
@@ -410,7 +420,7 @@ export function ChatInput({
   }, [focusRef])
 
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
-  const [executeAtOverride, setExecuteAtOverride] = useState<string | null>(null)
+  const [scheduleOverride, setScheduleOverride] = useState<SchedulePickerValue | null>(null)
   const persistedGoalKey = goal ?? null
   /**
    * `userPickedGoal` is what the Tools button shows — the user's
@@ -423,7 +433,8 @@ export function ChatInput({
    * picked a date.
    */
   const userPickedGoal: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
-  const effectiveGoalKey: GoalKey = executeAtOverride ? 'scheduled' : userPickedGoal
+  const isScheduled = !!(scheduleOverride && (scheduleOverride.executeAt || scheduleOverride.cron))
+  const effectiveGoalKey: GoalKey = isScheduled ? 'scheduled' : userPickedGoal
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
@@ -558,11 +569,11 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed, executeAtOverride)
+    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed, scheduleOverride)
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     replaceValue('')
     setAttachedItems([])
-    setExecuteAtOverride(null)
+    setScheduleOverride(null)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -681,13 +692,13 @@ export function ChatInput({
             onGoalChange={(next) => {
               // Stepping away from `task` invalidates any pending
               // Schedule selection — the Schedule button is gated on
-              // `goalKey === 'task'`, so leaving an executeAt behind
+              // `goalKey === 'task'`, so leaving a schedule behind
               // would silently round-trip with the next send.
               setGoalOverride(next)
-              if (next !== 'task') setExecuteAtOverride(null)
+              if (next !== 'task') setScheduleOverride(null)
             }}
-            executeAt={hideSchedulePicker ? null : executeAtOverride}
-            onExecuteAtChange={hideSchedulePicker ? undefined : setExecuteAtOverride}
+            schedule={hideSchedulePicker ? null : scheduleOverride}
+            onScheduleChange={hideSchedulePicker ? undefined : setScheduleOverride}
           />
           <button
             type="button"

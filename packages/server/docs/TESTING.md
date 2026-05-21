@@ -18,6 +18,9 @@ npm run test:host
 
 # Playwright e2e (spawns desk-server + Vite preview)
 npm run test:e2e
+
+# Chaos / load test against a live desk-server (see CHAOS_TESTING.md)
+node scripts/chaos-test.mjs
 ```
 
 ## CI layout

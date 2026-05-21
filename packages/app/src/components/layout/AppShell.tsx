@@ -168,7 +168,6 @@ interface AppShellProps {
   selectedChatId?: string | null
   onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
-  unreadCount?: number
 
   isDetailOpen?: boolean
   onArtifactClick?: (artifact: Artifact) => void

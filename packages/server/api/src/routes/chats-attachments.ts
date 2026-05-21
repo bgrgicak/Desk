@@ -67,11 +67,23 @@ function normalizeWorkspaceRelativePath(raw: string): string {
   return segments.join("/");
 }
 
-function validateAttachableArtifactPath(relPath: string, chatId: string): void {
-  const chatPrefix = `.chats/${chatId}/artifacts/`;
-  if (relPath.startsWith(chatPrefix)) {
-    const artifactSegments = relPath.slice(chatPrefix.length).split("/");
-    for (const segment of artifactSegments) {
+function validateAttachableArtifactPath(relPath: string, _chatId: string): void {
+  // Accepts three shapes:
+  //   `.chats/<sourceChatId>/artifacts/<rest>` — any chat's artifact dir
+  //     in the same workspace. Cross-chat refs are intentional: an agent
+  //     running in chat A can surface a file from chat B's artifact dir
+  //     in chat C. The downstream fs-stat check enforces that the file
+  //     actually exists in the *target* chat's workspace tree, which
+  //     implicitly rejects cross-workspace references.
+  //   `<library/path>` — workspace-library files, the natural shared bucket.
+  //   anything else under `.chats/` (e.g. `.chats/X/logs/`) is rejected —
+  //     only the `artifacts/` subtree is attachable.
+  if (relPath.startsWith(".chats/")) {
+    const parts = relPath.split("/");
+    if (parts.length < 4 || parts[0] !== ".chats" || parts[2] !== "artifacts") {
+      throw new ValidationError("Artifact path under .chats/ must be in some chat's artifacts directory");
+    }
+    for (const segment of parts) {
       // Dot-prefixed segments are allowed — hidden files inside the
       // artifacts dir behave like regular files.
       if (segment === "" || segment === "." || segment === "..") {
@@ -79,10 +91,6 @@ function validateAttachableArtifactPath(relPath: string, chatId: string): void {
       }
     }
     return;
-  }
-
-  if (relPath.startsWith(".chats/")) {
-    throw new ValidationError("Artifact path must be in this chat's artifacts directory");
   }
 
   // Library files are also workspace-relative and may be surfaced when the

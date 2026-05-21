@@ -11,6 +11,8 @@ import {
 } from "../src/files.js";
 import {
   listLibrary,
+  listLibraryFolders,
+  searchLibrary,
   createLibraryFolder,
   moveLibraryEntry,
   deleteLibraryEntry,
@@ -59,7 +61,7 @@ describe("listLibrary", () => {
     expect(names).toContain("second.txt");
   });
 
-  it("recurses into subdirectories and returns folders alongside files", async () => {
+  it("lists immediate children only — drilling deeper requires the path arg", async () => {
     await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
       workspaceSlug: ctx.workspaceSlug,
@@ -77,37 +79,53 @@ describe("listLibrary", () => {
       subpath: "Work",
     });
 
-    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
-    const paths = items.map((i) => i.path);
-    expect(paths).toContain("Work/Plans/report.md");
-    expect(paths).toContain("Work/budget.csv");
+    // Root listing surfaces `Work` as a folder but does NOT include the
+    // nested file paths — the client navigates per directory.
+    const root = await listLibrary(ctx, ctx.workspaceSlug);
+    expect(root.folders.map((f) => f.path)).toContain("Work");
+    expect(root.items.map((i) => i.path)).not.toContain("Work/budget.csv");
+    expect(root.items.map((i) => i.path)).not.toContain("Work/Plans/report.md");
 
-    const folderPaths = folders.map((f) => f.path);
-    expect(folderPaths).toContain("Work");
-    expect(folderPaths).toContain("Work/Plans");
+    const work = await listLibrary(ctx, ctx.workspaceSlug, { path: "Work" });
+    expect(work.items.map((i) => i.path)).toContain("Work/budget.csv");
+    expect(work.folders.map((f) => f.path)).toContain("Work/Plans");
+    expect(work.items.map((i) => i.path)).not.toContain("Work/Plans/report.md");
+
+    const plans = await listLibrary(ctx, ctx.workspaceSlug, { path: "Work/Plans" });
+    expect(plans.items.map((i) => i.path)).toContain("Work/Plans/report.md");
   });
 
-  it("projects connected local filesystem directories into the library listing", async () => {
+  it("projects connected local filesystem mounts as a top-level entry; drilling in lists the mount", async () => {
     const source = path.join(ctx.home, ".tmp", "connected-projects-source");
     await fs.mkdir(path.join(source, "Desk", "packages"), { recursive: true });
     await fs.writeFile(path.join(source, "Desk", "package.json"), "{}");
 
-    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug, {
-      virtualMounts: [{ homeName: "Projects", sourcePath: source }],
-    });
+    const mounts = [{ homeName: "Projects", sourcePath: source }];
+    const root = await listLibrary(ctx, ctx.workspaceSlug, { virtualMounts: mounts });
+    expect(root.folders.map((f) => f.path)).toContain("Projects");
+    // Sub-paths under the mount aren't included at the root level — they
+    // load on navigation, same as on-disk subfolders.
+    expect(root.folders.map((f) => f.path)).not.toContain("Projects/Desk");
 
-    const itemPaths = items.map((i) => i.path);
-    const folderPaths = folders.map((f) => f.path);
-    expect(folderPaths).toContain("Projects");
-    expect(folderPaths).toContain("Projects/Desk");
-    expect(folderPaths).toContain("Projects/Desk/packages");
-    expect(itemPaths).toContain("Projects/Desk/package.json");
+    const inside = await listLibrary(ctx, ctx.workspaceSlug, {
+      path: "Projects",
+      virtualMounts: mounts,
+    });
+    expect(inside.folders.map((f) => f.path)).toContain("Projects/Desk");
+
+    const deep = await listLibrary(ctx, ctx.workspaceSlug, {
+      path: "Projects/Desk",
+      virtualMounts: mounts,
+    });
+    expect(deep.folders.map((f) => f.path)).toContain("Projects/Desk/packages");
+    expect(deep.items.map((i) => i.path)).toContain("Projects/Desk/package.json");
   });
 
-  it("returns the full tree when no limit is given, even if a subtree dominates mtime", async () => {
-    // Simulate the node_modules problem: a freshly-written subtree whose mtimes
-    // sort above an older root file. Without a limit, the older root file must
-    // still be present so the frontend's tree reconstruction stays accurate.
+  it("does not pull a node_modules-sized subtree into the root listing", async () => {
+    // Regression: the old recursive listing returned every file in the
+    // workspace, including freshly-written nested subtrees that bumped
+    // mtime. The bounded listing should keep root small regardless of
+    // nested activity.
     await uploadArtifact(ctx, {
       workspaceId: ctx.workspaceId,
       workspaceSlug: ctx.workspaceSlug,
@@ -127,9 +145,12 @@ describe("listLibrary", () => {
       });
     }
 
-    const { items, nextCursor } = await listLibrary(ctx, ctx.workspaceSlug);
-    expect(nextCursor).toBeUndefined();
+    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
     expect(items.map((i) => i.path)).toContain("older-root.txt");
+    // None of the 60 nested files appear at the root level.
+    expect(items.some((i) => i.path.startsWith("deps/"))).toBe(false);
+    expect(folders.map((f) => f.path)).toContain("deps");
+    expect(folders.some((f) => f.path.startsWith("deps/"))).toBe(false);
   });
 
   it("surfaces symlinks as their resolved kind without recursing through them", async () => {
@@ -144,16 +165,19 @@ describe("listLibrary", () => {
     await fs.writeFile(path.join(root, "loose-link-target.txt"), "leaf");
     await fs.symlink("../loose-link-target.txt", path.join(root, "node_modules/loose-link"));
 
-    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
-    const folderPaths = folders.map((f) => f.path);
-    const itemPaths = items.map((i) => i.path);
+    // Each level returns only direct children. Navigating into
+    // `node_modules/@scope` should surface the symlink as a folder
+    // without recursing into the linked target.
+    const scope = await listLibrary(ctx, ctx.workspaceSlug, { path: "node_modules/@scope" });
+    expect(scope.folders.map((f) => f.path)).toContain("node_modules/@scope/pkg");
 
-    expect(folderPaths).toContain("node_modules/@scope/pkg");
-    // No recursion through the symlinked directory.
-    expect(folderPaths).not.toContain("node_modules/@scope/pkg/inner");
-    expect(itemPaths).not.toContain("node_modules/@scope/pkg/inner/payload.txt");
+    // Listing the symlinked folder lists the link target's immediate
+    // children — that's the same as listing its real path.
+    const linked = await listLibrary(ctx, ctx.workspaceSlug, { path: "node_modules/@scope/pkg" });
+    expect(linked.folders.map((f) => f.path)).toContain("node_modules/@scope/pkg/inner");
 
-    expect(itemPaths).toContain("node_modules/loose-link");
+    const nodeModules = await listLibrary(ctx, ctx.workspaceSlug, { path: "node_modules" });
+    expect(nodeModules.items.map((i) => i.path)).toContain("node_modules/loose-link");
   });
 
   it("collapses each .app directory into a single library item", async () => {
@@ -189,33 +213,48 @@ describe("listLibrary", () => {
     expect(appItems[0].path).toBe("dedupe-target.app");
   });
 
-  it("paginates by mtime cursor", async () => {
-    for (let i = 0; i < 4; i++) {
-      await uploadArtifact(ctx, {
-        workspaceId: ctx.workspaceId,
+});
+
+describe("listLibraryFolders", () => {
+  it("returns every folder in the workspace as a flat list", async () => {
+    await createLibraryFolder(ctx, ctx.workspaceSlug, "FolderTree/A/B");
+    await createLibraryFolder(ctx, ctx.workspaceSlug, "FolderTree/C");
+
+    const { folders } = await listLibraryFolders(ctx, ctx.workspaceSlug);
+    const paths = folders.map((f) => f.path);
+    expect(paths).toContain("FolderTree");
+    expect(paths).toContain("FolderTree/A");
+    expect(paths).toContain("FolderTree/A/B");
+    expect(paths).toContain("FolderTree/C");
+  });
+});
+
+describe("searchLibrary", () => {
+  it("matches names recursively and caps results", async () => {
+    await uploadArtifact(ctx, {
+      workspaceId: ctx.workspaceId,
       workspaceSlug: ctx.workspaceSlug,
-        name: `page-${i}.txt`,
-        mime: "text/plain",
-        stream: makeStream(`content ${i}`),
-      });
-      // Ensure mtimes differ
-      await new Promise((r) => setTimeout(r, 10));
-    }
-
-    const page1 = await listLibrary(ctx, ctx.workspaceSlug, { limit: 2 });
-    expect(page1.items.length).toBe(2);
-    expect(page1.nextCursor).toBeDefined();
-
-    const page2 = await listLibrary(ctx, ctx.workspaceSlug, {
-      limit: 2,
-      cursor: page1.nextCursor,
+      name: "needle.md",
+      mime: "text/markdown",
+      stream: makeStream("x"),
+      subpath: "SearchTree/Inner",
     });
-    expect(page2.items.length).toBeGreaterThanOrEqual(1);
-    // Pages should not overlap.
-    const ids1 = new Set(page1.items.map((i) => i.path));
-    for (const item of page2.items) {
-      expect(ids1.has(item.path)).toBe(false);
-    }
+
+    const result = await searchLibrary(ctx, ctx.workspaceSlug, { q: "needle" });
+    expect(result.items.map((i) => i.path)).toContain("SearchTree/Inner/needle.md");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("returns empty results for empty queries", async () => {
+    const result = await searchLibrary(ctx, ctx.workspaceSlug, { q: "" });
+    expect(result.items).toEqual([]);
+    expect(result.folders).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("honours the limit option as a cap on combined matches", async () => {
+    const result = await searchLibrary(ctx, ctx.workspaceSlug, { q: "txt", limit: 2 });
+    expect(result.items.length + result.folders.length).toBeLessThanOrEqual(2);
   });
 });
 
@@ -233,14 +272,14 @@ describe("listLibrary gitignore", () => {
     await fs.writeFile(path.join(sub, "keep.txt"), "k");
     await fs.writeFile(path.join(sub, ".gitignore"), "build/\n");
 
-    const hidden = await listLibrary(ctx, ctx.workspaceSlug);
+    const hidden = await listLibrary(ctx, ctx.workspaceSlug, { path: "gi-basic" });
     expect(hidden.folders.map((f) => f.path)).not.toContain("gi-basic/build");
-    expect(hidden.items.map((i) => i.path)).not.toContain("gi-basic/build/output.bin");
     expect(hidden.items.map((i) => i.path)).toContain("gi-basic/keep.txt");
 
-    const shown = await listLibrary(ctx, ctx.workspaceSlug, { showHidden: true });
+    const shown = await listLibrary(ctx, ctx.workspaceSlug, { path: "gi-basic", showHidden: true });
     expect(shown.folders.map((f) => f.path)).toContain("gi-basic/build");
-    expect(shown.items.map((i) => i.path)).toContain("gi-basic/build/output.bin");
+    const insideBuild = await listLibrary(ctx, ctx.workspaceSlug, { path: "gi-basic/build", showHidden: true });
+    expect(insideBuild.items.map((i) => i.path)).toContain("gi-basic/build/output.bin");
   });
 
   it("composes nested .gitignore files with their ancestors", async () => {
@@ -258,14 +297,14 @@ describe("listLibrary gitignore", () => {
     await fs.writeFile(path.join(top, "child", "deep", "trace.log"), "x");
     await fs.writeFile(path.join(top, "child", "deep", "notes.md"), "ok");
 
-    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
-    const itemPaths = items.map((i) => i.path);
-    const folderPaths = folders.map((f) => f.path);
+    // Listing the deep folder respects the ancestor *.log rule.
+    const deep = await listLibrary(ctx, ctx.workspaceSlug, { path: "gi-nested/child/deep" });
+    expect(deep.items.map((i) => i.path)).not.toContain("gi-nested/child/deep/trace.log");
+    expect(deep.items.map((i) => i.path)).toContain("gi-nested/child/deep/notes.md");
 
-    expect(itemPaths).not.toContain("gi-nested/child/deep/trace.log");
-    expect(itemPaths).toContain("gi-nested/child/deep/notes.md");
-    expect(folderPaths).not.toContain("gi-nested/child/private");
-    expect(itemPaths).not.toContain("gi-nested/child/private/secret.md");
+    // The nested rule hides `private/` when listing its parent.
+    const child = await listLibrary(ctx, ctx.workspaceSlug, { path: "gi-nested/child" });
+    expect(child.folders.map((f) => f.path)).not.toContain("gi-nested/child/private");
   });
 });
 
@@ -304,10 +343,10 @@ describe("createLibraryFolder", () => {
     expect(folder.path).toBe("Empty/Nested");
     expect(folder.name).toBe("Nested");
 
-    const { folders } = await listLibrary(ctx, ctx.workspaceSlug);
-    const folderPaths = folders.map((f) => f.path);
-    expect(folderPaths).toContain("Empty");
-    expect(folderPaths).toContain("Empty/Nested");
+    const root = await listLibrary(ctx, ctx.workspaceSlug);
+    expect(root.folders.map((f) => f.path)).toContain("Empty");
+    const nested = await listLibrary(ctx, ctx.workspaceSlug, { path: "Empty" });
+    expect(nested.folders.map((f) => f.path)).toContain("Empty/Nested");
   });
 
   it("rejects empty and invalid paths", async () => {
@@ -352,9 +391,10 @@ describe("moveLibraryEntry", () => {
     const result = await moveLibraryEntry(ctx, ctx.workspaceSlug, "MoveDir", "MovedDir");
     expect(result.kind).toBe("folder");
 
-    const { items, folders } = await listLibrary(ctx, ctx.workspaceSlug);
-    expect(folders.map((f) => f.path)).toContain("MovedDir");
-    expect(items.map((i) => i.path)).toContain("MovedDir/Child/inside.txt");
+    const root = await listLibrary(ctx, ctx.workspaceSlug);
+    expect(root.folders.map((f) => f.path)).toContain("MovedDir");
+    const inside = await listLibrary(ctx, ctx.workspaceSlug, { path: "MovedDir/Child" });
+    expect(inside.items.map((i) => i.path)).toContain("MovedDir/Child/inside.txt");
   });
 
   it("refuses to move a folder into its own descendant", async () => {

@@ -38,6 +38,23 @@ interface PerformanceMemory {
   usedJSHeapSize: number;
 }
 
+function chatRunningFromCache(state: RootState, chatId: string): boolean | undefined {
+  // The chat's `running` flag now rides on every cached `ServerChat`
+  // row; scan any `getChats` cache entry for the chat id rather than
+  // wiring a dedicated selector through here.
+  const apiState = (state as unknown as Record<string, unknown>)["api"] as
+    | { queries?: Record<string, { data?: unknown }> }
+    | undefined;
+  if (!apiState?.queries) return undefined;
+  for (const entry of Object.values(apiState.queries)) {
+    const data = entry?.data as { id?: string; running?: boolean }[] | undefined;
+    if (!Array.isArray(data)) continue;
+    const chat = data.find((c) => c?.id === chatId);
+    if (chat) return Boolean(chat.running);
+  }
+  return undefined;
+}
+
 function currentHeapMb(): number | undefined {
   // performance.memory is Chromium-only and not in lib.dom.d.ts; soft-cast
   // and feature-detect so other browsers just omit the field.
@@ -101,9 +118,7 @@ export function installPerfReporter(store: Store<RootState>): () => void {
   const observer = new PerformanceObserver((list) => {
     const state = store.getState();
     const chatId = state.derived.viewingChatId ?? undefined;
-    const streaming = chatId
-      ? state.derived.runningChatIds.includes(chatId)
-      : undefined;
+    const streaming = chatId ? chatRunningFromCache(state, chatId) : undefined;
     const url = typeof window !== "undefined"
       ? `${window.location.pathname}${window.location.search}`
       : undefined;

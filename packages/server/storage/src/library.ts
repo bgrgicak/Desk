@@ -20,6 +20,19 @@ import {
   type FileRef,
   type StorageContext,
 } from "./files.js";
+import {
+  invalidateLibraryListCache,
+  type ListLibraryRaw,
+} from "./library-cache.js";
+
+/**
+ * Cap for `searchLibrary` — keeps the wire payload bounded even when a
+ * one-character query matches half the workspace. Tuned for the global
+ * palette + @-mention pickers, which only render the top N anyway.
+ */
+const SEARCH_RESULT_CAP = 200;
+
+export { invalidateLibraryListCache } from "./library-cache.js";
 
 export interface LibraryContext {
   pool: Pool;
@@ -45,6 +58,32 @@ export interface FolderRef {
 }
 
 export type { VirtualLibraryMount } from "./layout.js";
+
+/**
+ * Runs `fn` over `items` with at most `limit` calls in flight. Results
+ * are returned in input order. Used to parallelize fs.stat batches in
+ * listLibrary without unleashing thousands of concurrent syscalls.
+ */
+async function pMap<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+const STAT_CONCURRENCY = 64;
 
 function guessMime(name: string): string {
   const ext = path.extname(name).toLowerCase();
@@ -123,7 +162,7 @@ function isAppDirectoryName(name: string): boolean {
 
 async function walk(
   dir: string,
-  opts: { showHidden: boolean },
+  opts: { showHidden: boolean; recurse?: boolean; ancestorFrames?: IgnoreFrame[] },
 ): Promise<{ files: string[]; folders: string[]; appDirs: string[] }> {
   const files: string[] = [];
   const folders: string[] = [];
@@ -133,10 +172,15 @@ async function walk(
   // ever recursing into the dist/ + node_modules/ underneath.
   const appDirs: string[] = [];
   const respectGitignore = !opts.showHidden;
+  const recurse = opts.recurse !== false;
 
   const rootFrame = respectGitignore ? await loadGitignoreFrame(dir) : null;
+  const seedFrames: IgnoreFrame[] = [
+    ...(opts.ancestorFrames ?? []),
+    ...(rootFrame ? [rootFrame] : []),
+  ];
   const stack: Array<{ abs: string; frames: IgnoreFrame[] }> = [
-    { abs: dir, frames: rootFrame ? [rootFrame] : [] },
+    { abs: dir, frames: seedFrames },
   ];
 
   while (stack.length > 0) {
@@ -152,10 +196,10 @@ async function walk(
       const abs = path.join(current, e.name);
 
       let kind: "dir" | "file" | null = null;
-      let recurse = false;
+      let isRealDir = false;
       if (e.isDirectory()) {
         kind = "dir";
-        recurse = true;
+        isRealDir = true;
       } else if (e.isFile()) {
         kind = "file";
       } else if (e.isSymbolicLink()) {
@@ -177,7 +221,7 @@ async function walk(
           continue;
         }
         folders.push(abs);
-        if (recurse) {
+        if (recurse && isRealDir) {
           const childFrame = respectGitignore ? await loadGitignoreFrame(abs) : null;
           const childFrames = childFrame ? [...frames, childFrame] : frames;
           stack.push({ abs, frames: childFrames });
@@ -194,32 +238,412 @@ async function walk(
 const APP_DIR_MIME = "application/vnd.desk.app+directory";
 
 /**
- * Lists the workspace's library files and folders, recursing through
- * subdirectories.
+ * Resolves a workspace-root-relative path to the actual on-disk directory
+ * to walk. Empty path → the workspace root. A path whose first segment
+ * matches a virtual mount's `homeName` → the mount's source path (plus
+ * any deeper segments). Otherwise the path is resolved under the
+ * workspace root. Throws if the resolved target sits outside both the
+ * workspace root and any virtual mount source.
+ */
+function resolveListPath(
+  ctx: LibraryContext,
+  slug: string,
+  relPath: string,
+  virtualMounts: VirtualLibraryMount[],
+): { abs: string; relPrefix: string } {
+  const sub = validateLibrarySubpath(relPath);
+  if (sub === "") {
+    return { abs: workspaceRootPath(ctx.home, slug), relPrefix: "" };
+  }
+  const segments = sub.split("/");
+  const head = segments[0];
+  const mount = virtualMounts.find((m) => m.homeName === head);
+  if (mount) {
+    const rest = segments.slice(1).join("/");
+    const abs = rest
+      ? path.resolve(mount.sourcePath, rest)
+      : mount.sourcePath;
+    const withSep = mount.sourcePath.endsWith(path.sep) ? mount.sourcePath : mount.sourcePath + path.sep;
+    if (abs !== mount.sourcePath && !abs.startsWith(withSep)) {
+      throw new ValidationError(`Path traversal detected: ${relPath}`);
+    }
+    return { abs, relPrefix: sub };
+  }
+  const root = workspaceRootPath(ctx.home, slug);
+  return { abs: path.join(root, sub), relPrefix: sub };
+}
+
+/**
+ * Lists the workspace's library files and folders for a single directory
+ * level — does NOT recurse into subfolders. The folder to list is given
+ * by `path` (workspace-root-relative); the workspace root itself is the
+ * default. Use {@link listLibraryFolders} when you need the full folder
+ * tree and {@link searchLibrary} for recursive name matching.
  *
  * Hidden by default and surfaced together when `showHidden` is set:
  *   - dot-prefixed entries (agent infrastructure, OS/editor cruft);
- *   - entries matched by any `.gitignore` in the subtree, with nested
- *     gitignores composed onto their ancestors' rules — so root-level
- *     `node_modules/` hides the whole tree without polluting the listing.
+ *   - entries matched by `.gitignore` rules in the target directory and
+ *     any ancestor (frames composed in walk-order, mirroring git).
  *
- * `limit` is opt-in: passing it caps the file list and emits a `nextCursor`
- * for clients that want to page; omitting it returns everything. Cursor is
- * the serialized mtime of the last returned file (strict less-than).
- *
- * Under the workspace-as-home model the workspace root is the library —
- * there is no per-workspace subdirectory. The `workspaceId` argument is
- * retained for API compatibility but ignored in v1.
+ * Connected local-filesystem mounts surface as top-level entries when
+ * listing the root and resolve transparently when the caller drills into
+ * `~/{homeName}/...` paths.
  */
 export async function listLibrary(
   ctx: LibraryContext,
   slug: string,
-  opts?: { cursor?: string; limit?: number; showHidden?: boolean; virtualMounts?: VirtualLibraryMount[] },
-): Promise<{ items: FileRef[]; folders: FolderRef[]; nextCursor?: string }> {
+  opts?: {
+    path?: string;
+    showHidden?: boolean;
+    virtualMounts?: VirtualLibraryMount[];
+  },
+): Promise<{ items: FileRef[]; folders: FolderRef[] }> {
+  const showHidden = opts?.showHidden ?? false;
+  const virtualMounts = opts?.virtualMounts ?? [];
+  const targetRel = opts?.path ?? "";
+
   const root = workspaceRootPath(ctx.home, slug);
   await fs.mkdir(root, { recursive: true });
 
+  const { abs: targetAbs, relPrefix } = resolveListPath(ctx, slug, targetRel, virtualMounts);
+  // Only the workspace root is auto-created. Sub-paths that don't exist
+  // resolve to an empty listing — silently creating them on read would
+  // leave breadcrumbs from stale URLs and turn typos into real folders.
+
+  // Compose ancestor .gitignore frames so a sub-folder listing still
+  // honours rules anchored above it (root-level `*.log`, parent-level
+  // `private/`, etc.). Mounts root their gitignore composition at the
+  // mount source — workspace ancestors don't see the host filesystem.
+  const ancestorFrames: IgnoreFrame[] = [];
+  if (!showHidden && relPrefix) {
+    const segments = relPrefix.split("/");
+    const mount = virtualMounts.find((m) => segments[0] === m.homeName);
+    if (mount) {
+      const inside = segments.slice(1);
+      let dir = mount.sourcePath;
+      const fr = await loadGitignoreFrame(dir);
+      if (fr) ancestorFrames.push(fr);
+      for (let i = 0; i < inside.length - 1; i++) {
+        dir = path.join(dir, inside[i]);
+        const f = await loadGitignoreFrame(dir);
+        if (f) ancestorFrames.push(f);
+      }
+    } else {
+      let dir = root;
+      const fr = await loadGitignoreFrame(dir);
+      if (fr) ancestorFrames.push(fr);
+      for (let i = 0; i < segments.length - 1; i++) {
+        dir = path.join(dir, segments[i]);
+        const f = await loadGitignoreFrame(dir);
+        if (f) ancestorFrames.push(f);
+      }
+    }
+  }
+
+  const raw = await walkAndStatLevel(targetAbs, relPrefix, showHidden, ancestorFrames);
+
+  // Project virtual mounts as top-level folder entries when listing the
+  // workspace root — they don't exist on disk under the workspace tree
+  // but the user expects to see `~/Downloads`, etc., alongside their
+  // workspace contents.
+  if (targetRel === "" && virtualMounts.length > 0) {
+    const existing = new Set(raw.folderItems.map((f) => f.path));
+    const mountEntries = await Promise.all(
+      virtualMounts.map(async (mount) => {
+        if (existing.has(mount.homeName)) return null;
+        const homeName = path.basename(mount.homeName);
+        if (!homeName || homeName === "." || homeName === "..") return null;
+        const stat = await fs.stat(mount.sourcePath).catch(() => null);
+        if (!stat?.isDirectory()) return null;
+        return {
+          path: mount.homeName,
+          name: homeName,
+          createdAt: stat.mtime.toISOString(),
+        } as FolderRef;
+      }),
+    );
+    for (const f of mountEntries) {
+      if (f) raw.folderItems.push(f);
+    }
+    raw.folderItems.sort((a, b) => (a.path < b.path ? -1 : 1));
+  }
+
+  return { items: raw.fileItems, folders: raw.folderItems };
+}
+
+/**
+ * Single-level (non-recursive) walk + stat for the directory at `targetAbs`.
+ * `relPrefix` is the workspace-root-relative path of the directory, used
+ * to compute child paths. Returns FileRef/FolderRef shapes ready to ship.
+ */
+async function walkAndStatLevel(
+  targetAbs: string,
+  relPrefix: string,
+  showHidden: boolean,
+  ancestorFrames: IgnoreFrame[] = [],
+): Promise<ListLibraryRaw> {
+  const { files, folders, appDirs } = await walk(targetAbs, {
+    showHidden,
+    recurse: false,
+    ancestorFrames,
+  });
+
+  const toRel = (abs: string): string => {
+    const child = path.basename(abs);
+    return relPrefix ? `${relPrefix}/${child}` : child;
+  };
+  const fileEntries = files.map((abs) => ({ abs, rel: toRel(abs) }));
+  const folderEntries = folders.map((abs) => ({ abs, rel: toRel(abs) }));
+  const appDirEntriesInput = appDirs.map((abs) => ({ abs, rel: toRel(abs) }));
+
+  const [fileStats, folderStats, appDirMeta] = await Promise.all([
+    pMap(fileEntries, STAT_CONCURRENCY, async (e) => ({ e, stat: await fs.stat(e.abs).catch(() => null) })),
+    pMap(folderEntries, STAT_CONCURRENCY, async (e) => ({ e, stat: await fs.stat(e.abs).catch(() => null) })),
+    pMap(appDirEntriesInput, STAT_CONCURRENCY, async (e) => ({
+      e,
+      isSymlink: (await fs.lstat(e.abs).catch(() => null))?.isSymbolicLink() ?? false,
+      realPath: await fs.realpath(e.abs).catch(() => e.abs),
+    })),
+  ]);
+
+  const fileItems: FileRef[] = [];
+  const seenFilePaths = new Set<string>();
+  for (const { e, stat } of fileStats) {
+    if (!stat) continue;
+    const name = path.basename(e.abs);
+    const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
+    if (!stat.isFile() && !isAppDir) continue;
+    if (seenFilePaths.has(e.rel)) continue;
+    seenFilePaths.add(e.rel);
+    fileItems.push({
+      path: e.rel,
+      name,
+      mime: isAppDir ? "inode/directory" : guessMime(e.abs),
+      size: isAppDir ? 0 : stat.size,
+      createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: isAppDir || undefined,
+    });
+  }
+
+  appDirMeta.sort((a, b) => Number(a.isSymlink) - Number(b.isSymlink));
+  const appDirStats = await pMap(appDirMeta, STAT_CONCURRENCY, async (m) => ({
+    ...m,
+    stat: await fs.stat(m.e.abs).catch(() => null),
+  }));
+  const seenAppRealPaths = new Set<string>();
+  for (const { e, realPath, stat } of appDirStats) {
+    if (seenAppRealPaths.has(realPath)) continue;
+    seenAppRealPaths.add(realPath);
+    if (!stat || !stat.isDirectory()) continue;
+    if (seenFilePaths.has(e.rel)) continue;
+    seenFilePaths.add(e.rel);
+    fileItems.push({
+      path: e.rel,
+      name: path.basename(e.abs),
+      mime: APP_DIR_MIME,
+      size: 0,
+      createdAt: stat.mtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+      isDir: true,
+    });
+  }
+  fileItems.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  const folderItems: FolderRef[] = [];
+  const seenFolderPaths = new Set<string>();
+  for (const { e, stat } of folderStats) {
+    if (!stat || !stat.isDirectory()) continue;
+    if (seenFolderPaths.has(e.rel)) continue;
+    seenFolderPaths.add(e.rel);
+    folderItems.push({
+      path: e.rel,
+      name: path.basename(e.abs),
+      createdAt: stat.mtime.toISOString(),
+    });
+  }
+  folderItems.sort((a, b) => (a.path < b.path ? -1 : 1));
+
+  return { fileItems, folderItems };
+}
+
+/**
+ * Returns every folder in the workspace tree as a flat FolderRef[].
+ * Cheap because it skips file stats entirely — used by the move-to-folder
+ * picker, breadcrumb resolver, and pinned-sidebar (folder-pin lookups).
+ *
+ * Honours the same hidden-entry + gitignore rules as {@link listLibrary}.
+ */
+export async function listLibraryFolders(
+  ctx: LibraryContext,
+  slug: string,
+  opts?: { showHidden?: boolean; virtualMounts?: VirtualLibraryMount[] },
+): Promise<{ folders: FolderRef[] }> {
   const showHidden = opts?.showHidden ?? false;
+  const virtualMounts = opts?.virtualMounts ?? [];
+
+  const root = workspaceRootPath(ctx.home, slug);
+  await fs.mkdir(root, { recursive: true });
+
+  const { folders } = await walk(root, { showHidden, recurse: true });
+  const folderEntries = folders.map((abs) => ({
+    abs,
+    rel: path.relative(root, abs).split(path.sep).join("/"),
+  }));
+
+  for (const mount of virtualMounts) {
+    const sourceStat = await fs.stat(mount.sourcePath).catch(() => null);
+    if (!sourceStat?.isDirectory()) continue;
+    const homeName = path.basename(mount.homeName);
+    if (!homeName || homeName === "." || homeName === "..") continue;
+    folderEntries.push({ abs: mount.sourcePath, rel: mount.homeName });
+    const mounted = await walk(mount.sourcePath, { showHidden, recurse: true });
+    for (const abs of mounted.folders) {
+      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
+      folderEntries.push({ abs, rel: `${mount.homeName}/${childRel}` });
+    }
+  }
+
+  const stats = await pMap(folderEntries, STAT_CONCURRENCY, async (e) => ({
+    e,
+    stat: await fs.stat(e.abs).catch(() => null),
+  }));
+  const seen = new Set<string>();
+  const items: FolderRef[] = [];
+  for (const { e, stat } of stats) {
+    if (!stat || !stat.isDirectory()) continue;
+    if (seen.has(e.rel)) continue;
+    seen.add(e.rel);
+    items.push({
+      path: e.rel,
+      name: path.basename(e.abs),
+      createdAt: stat.mtime.toISOString(),
+    });
+  }
+  items.sort((a, b) => (a.path < b.path ? -1 : 1));
+  return { folders: items };
+}
+
+/**
+ * Capped recursive name search across the workspace. Matches when the
+ * basename or any path segment contains `q` (case-insensitive). Cap is
+ * {@link SEARCH_RESULT_CAP} — `truncated: true` signals the caller's UI
+ * should prompt for a more specific query rather than silently dropping
+ * results.
+ */
+export async function searchLibrary(
+  ctx: LibraryContext,
+  slug: string,
+  opts: { q: string; showHidden?: boolean; virtualMounts?: VirtualLibraryMount[]; limit?: number },
+): Promise<{ items: FileRef[]; folders: FolderRef[]; truncated: boolean }> {
+  const query = opts.q.trim().toLowerCase();
+  if (!query) return { items: [], folders: [], truncated: false };
+  const cap = Math.max(1, Math.min(opts.limit ?? SEARCH_RESULT_CAP, SEARCH_RESULT_CAP));
+
+  // Reuse the recursive walk + stat pipeline. The result is filtered, not
+  // paginated — same cost as the legacy whole-tree listing but the wire
+  // payload stays bounded by `cap`.
+  const raw = await walkAndStat(ctx, slug, opts.showHidden ?? false, opts.virtualMounts ?? []);
+
+  const matches = (s: string): boolean => s.toLowerCase().includes(query);
+  const items: FileRef[] = [];
+  for (const f of raw.fileItems) {
+    if (matches(f.name) || matches(f.path)) items.push(f);
+    if (items.length >= cap) break;
+  }
+  const folders: FolderRef[] = [];
+  if (items.length < cap) {
+    for (const f of raw.folderItems) {
+      if (matches(f.name) || matches(f.path)) folders.push(f);
+      if (items.length + folders.length >= cap) break;
+    }
+  }
+  return {
+    items,
+    folders,
+    truncated: items.length + folders.length >= cap,
+  };
+}
+
+/**
+ * Stats each path in `paths` (workspace-root-relative) and bucketizes the
+ * results into FileRef / FolderRef. Missing entries are silently
+ * dropped — pins outliving their target are a known case (file moved or
+ * deleted out-of-band). The caller is responsible for filtering by
+ * caller-supplied workspace access.
+ */
+export async function statPinnedEntries(
+  ctx: LibraryContext,
+  slug: string,
+  paths: readonly string[],
+  virtualMounts: VirtualLibraryMount[] = [],
+): Promise<{ items: FileRef[]; folders: FolderRef[] }> {
+  if (paths.length === 0) return { items: [], folders: [] };
+  const resolved = paths.map((rel) => {
+    try {
+      const { abs } = resolveListPath(ctx, slug, rel, virtualMounts);
+      return { rel, abs };
+    } catch {
+      return null;
+    }
+  }).filter((x): x is { rel: string; abs: string } => x !== null);
+
+  const stats = await pMap(resolved, STAT_CONCURRENCY, async (e) => ({
+    ...e,
+    stat: await fs.stat(e.abs).catch(() => null),
+  }));
+
+  const items: FileRef[] = [];
+  const folders: FolderRef[] = [];
+  for (const { rel, abs, stat } of stats) {
+    if (!stat) continue;
+    const name = path.basename(abs) || rel;
+    if (stat.isDirectory()) {
+      const isApp = name.endsWith(".app") && name !== ".app";
+      if (isApp) {
+        items.push({
+          path: rel,
+          name,
+          mime: APP_DIR_MIME,
+          size: 0,
+          createdAt: stat.mtime.toISOString(),
+          updatedAtMs: String(stat.mtimeMs),
+          isDir: true,
+          pinned: true,
+        });
+      } else {
+        folders.push({
+          path: rel,
+          name,
+          createdAt: stat.mtime.toISOString(),
+          pinned: true,
+        });
+      }
+    } else if (stat.isFile()) {
+      items.push({
+        path: rel,
+        name,
+        mime: guessMime(name),
+        size: stat.size,
+        createdAt: stat.mtime.toISOString(),
+        updatedAtMs: String(stat.mtimeMs),
+        pinned: true,
+      });
+    }
+  }
+  items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  folders.sort((a, b) => (a.path < b.path ? -1 : 1));
+  return { items, folders };
+}
+
+async function walkAndStat(
+  ctx: LibraryContext,
+  slug: string,
+  showHidden: boolean,
+  virtualMounts: VirtualLibraryMount[],
+): Promise<ListLibraryRaw> {
+  const root = workspaceRootPath(ctx.home, slug);
+
   const { files, folders, appDirs } = await walk(root, { showHidden });
 
   const fileEntries = files.map((abs) => ({ abs, rel: path.relative(root, abs).split(path.sep).join("/") }));
@@ -232,67 +656,80 @@ export async function listLibrary(
   // host, not inside the sandbox, so it has to project those approved host
   // directories into the listing explicitly for the UI to match what agents see
   // at `~/{homeName}`.
-  for (const mount of opts?.virtualMounts ?? []) {
-    const sourceStat = await fs.stat(mount.sourcePath).catch(() => null);
-    if (!sourceStat?.isDirectory()) continue;
-    const homeName = path.basename(mount.homeName);
-    if (!homeName || homeName === "." || homeName === "..") continue;
-    folderEntries.push({ abs: mount.sourcePath, rel: homeName });
-    const mounted = await walk(mount.sourcePath, { showHidden });
-    for (const abs of mounted.files) {
-      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
-      fileEntries.push({ abs, rel: `${homeName}/${childRel}` });
+  const mountWalks = await Promise.all(
+    virtualMounts.map(async (mount) => {
+      const sourceStat = await fs.stat(mount.sourcePath).catch(() => null);
+      if (!sourceStat?.isDirectory()) return null;
+      const homeName = path.basename(mount.homeName);
+      if (!homeName || homeName === "." || homeName === "..") return null;
+      const mounted = await walk(mount.sourcePath, { showHidden });
+      return { mount, homeName, mounted };
+    }),
+  );
+  for (const m of mountWalks) {
+    if (!m) continue;
+    folderEntries.push({ abs: m.mount.sourcePath, rel: m.homeName });
+    for (const abs of m.mounted.files) {
+      const childRel = path.relative(m.mount.sourcePath, abs).split(path.sep).join("/");
+      fileEntries.push({ abs, rel: `${m.homeName}/${childRel}` });
     }
-    for (const abs of mounted.folders) {
-      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
-      folderEntries.push({ abs, rel: `${homeName}/${childRel}` });
+    for (const abs of m.mounted.folders) {
+      const childRel = path.relative(m.mount.sourcePath, abs).split(path.sep).join("/");
+      folderEntries.push({ abs, rel: `${m.homeName}/${childRel}` });
     }
-    for (const abs of mounted.appDirs) {
-      const childRel = path.relative(mount.sourcePath, abs).split(path.sep).join("/");
-      appDirEntriesInput.push({ abs, rel: `${homeName}/${childRel}` });
+    for (const abs of m.mounted.appDirs) {
+      const childRel = path.relative(m.mount.sourcePath, abs).split(path.sep).join("/");
+      appDirEntriesInput.push({ abs, rel: `${m.homeName}/${childRel}` });
     }
   }
 
+  // Stat all three entry kinds in parallel (bounded concurrency), then
+  // iterate the resolved results sequentially to preserve dedup order.
+  const [fileStats, folderStats, appDirMeta] = await Promise.all([
+    pMap(fileEntries, STAT_CONCURRENCY, async (e) => ({ e, stat: await fs.stat(e.abs).catch(() => null) })),
+    pMap(folderEntries, STAT_CONCURRENCY, async (e) => ({ e, stat: await fs.stat(e.abs).catch(() => null) })),
+    pMap(appDirEntriesInput, STAT_CONCURRENCY, async (e) => ({
+      e,
+      isSymlink: (await fs.lstat(e.abs).catch(() => null))?.isSymbolicLink() ?? false,
+      realPath: await fs.realpath(e.abs).catch(() => e.abs),
+    })),
+  ]);
+
   const fileItems: FileRef[] = [];
   const seenFilePaths = new Set<string>();
-  for (const { abs, rel } of fileEntries) {
-    const stat = await fs.stat(abs).catch(() => null);
+  for (const { e, stat } of fileStats) {
     if (!stat) continue;
-    const name = path.basename(abs);
+    const name = path.basename(e.abs);
     const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
     if (!stat.isFile() && !isAppDir) continue;
-    if (seenFilePaths.has(rel)) continue;
-    seenFilePaths.add(rel);
+    if (seenFilePaths.has(e.rel)) continue;
+    seenFilePaths.add(e.rel);
     fileItems.push({
-      path: rel,
+      path: e.rel,
       name,
-      mime: isAppDir ? "inode/directory" : guessMime(abs),
+      mime: isAppDir ? "inode/directory" : guessMime(e.abs),
       size: isAppDir ? 0 : stat.size,
       createdAt: stat.mtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
       isDir: isAppDir || undefined,
     });
   }
-  const appDirEntries = await Promise.all(
-    appDirEntriesInput.map(async ({ abs, rel }) => ({
-      abs,
-      rel,
-      isSymlink: (await fs.lstat(abs).catch(() => null))?.isSymbolicLink() ?? false,
-      realPath: await fs.realpath(abs).catch(() => abs),
-    })),
-  );
+
+  appDirMeta.sort((a, b) => Number(a.isSymlink) - Number(b.isSymlink));
+  const appDirStats = await pMap(appDirMeta, STAT_CONCURRENCY, async (m) => ({
+    ...m,
+    stat: await fs.stat(m.e.abs).catch(() => null),
+  }));
   const seenAppRealPaths = new Set<string>();
-  appDirEntries.sort((a, b) => Number(a.isSymlink) - Number(b.isSymlink));
-  for (const { abs, rel, realPath } of appDirEntries) {
+  for (const { e, realPath, stat } of appDirStats) {
     if (seenAppRealPaths.has(realPath)) continue;
     seenAppRealPaths.add(realPath);
-    const stat = await fs.stat(abs).catch(() => null);
     if (!stat || !stat.isDirectory()) continue;
-    if (seenFilePaths.has(rel)) continue;
-    seenFilePaths.add(rel);
+    if (seenFilePaths.has(e.rel)) continue;
+    seenFilePaths.add(e.rel);
     fileItems.push({
-      path: rel,
-      name: path.basename(abs),
+      path: e.rel,
+      name: path.basename(e.abs),
       mime: APP_DIR_MIME,
       // Size of a directory entry isn't meaningful — the user-facing
       // renderer should show a count of fragments or skip the size
@@ -307,31 +744,19 @@ export async function listLibrary(
 
   const folderItems: FolderRef[] = [];
   const seenFolderPaths = new Set<string>();
-  for (const { abs, rel } of folderEntries) {
-    const stat = await fs.stat(abs).catch(() => null);
+  for (const { e, stat } of folderStats) {
     if (!stat || !stat.isDirectory()) continue;
-    if (seenFolderPaths.has(rel)) continue;
-    seenFolderPaths.add(rel);
+    if (seenFolderPaths.has(e.rel)) continue;
+    seenFolderPaths.add(e.rel);
     folderItems.push({
-      path: rel,
-      name: path.basename(abs),
+      path: e.rel,
+      name: path.basename(e.abs),
       createdAt: stat.mtime.toISOString(),
     });
   }
   folderItems.sort((a, b) => (a.path < b.path ? -1 : 1));
 
-  const cursor = opts?.cursor;
-  const filtered = cursor
-    ? fileItems.filter((e) => e.createdAt < cursor)
-    : fileItems;
-  const limit = opts?.limit;
-  const items = limit !== undefined ? filtered.slice(0, limit) : filtered;
-  const nextCursor =
-    limit !== undefined && items.length === limit
-      ? items[items.length - 1].createdAt
-      : undefined;
-
-  return { items, folders: folderItems, nextCursor };
+  return { fileItems, folderItems };
 }
 
 /**
@@ -360,6 +785,7 @@ export async function createLibraryFolder(
     throw new ValidationError(`A file already exists at: ${sub}`);
   }
   await fs.mkdir(abs, { recursive: true });
+  invalidateLibraryListCache(slug);
 
   const stat = await fs.stat(abs);
   return {
@@ -414,6 +840,7 @@ export async function moveLibraryEntry(
 
   await fs.mkdir(path.dirname(toAbs), { recursive: true });
   await fs.rename(fromAbs, toAbs);
+  invalidateLibraryListCache(slug);
 
   // Re-point chat attachment symlinks (`.chats/{chatId}/attachments/`)
   // that targeted the moved entry. Chat pins (see pinLibraryFileToChat
@@ -638,6 +1065,7 @@ export async function deleteLibraryEntry(
   const stamp = Date.now();
   const trashName = `${stamp}-${path.basename(abs)}`;
   await fs.rename(abs, path.join(trash, trashName));
+  invalidateLibraryListCache(slug);
 
   return { kind: stat.isDirectory() ? "folder" : "file" };
 }

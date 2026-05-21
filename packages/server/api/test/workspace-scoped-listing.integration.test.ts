@@ -281,7 +281,7 @@ describe("GET /library?workspaceId=", () => {
     // removed when the hub workspace started sorting first.
     const res = await request("GET", "/library", alpha.token);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ items: [] });
+    expect(res.body).toEqual({ items: [], folders: [] });
   });
 
   it("returns 404 when asking for a peer's workspace", async () => {

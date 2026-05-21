@@ -125,6 +125,15 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       agentName: input.agentName,
       userName: input.userName,
     }),
+  // Always-loaded routing rule for chat turns. Tells the agent when
+  // "as a task" / substantial project work should become a Desk task
+  // (via `desk-agent task schedule`) instead of being implemented
+  // inline. Skipped for summary and reflection runs — those have their
+  // own fixed shape and never spawn user-facing tasks.
+  (input) =>
+    input.runMode === "summary" || input.runMode === "reflection"
+      ? null
+      : loadAndSub("task-routing.md", {}),
   (input) => {
     if (input.runMode === "summary") {
       const chatPaths = input.chatId

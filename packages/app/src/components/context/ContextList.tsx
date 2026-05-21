@@ -67,19 +67,15 @@ import {
 import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
 import { useContentAreaInsets } from '@/components/shared/splitPane'
 import type { ContextItem, Folder } from '@/data/ui-types'
-import {
-  getRelativeTime,
-  getFolderById,
-  getChildFolders,
-  getItemsInFolder,
-  countDirectChildren,
-} from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   useCreateLibraryFolderMutation,
   useCreateLibraryLinkMutation,
   useDeleteLibraryFileMutation,
+  useGetLibraryFoldersQuery,
   useGetLibraryQuery,
+  useLazyGetLibraryQuery,
   useMoveLibraryEntryMutation,
   useUploadLibraryFileMutation,
 } from '@/store/api'
@@ -94,8 +90,6 @@ import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
 
 interface ContextListProps {
-  items: ContextItem[]
-  isLoading?: boolean
   onItemClick: (item: ContextItem) => void
   onCompose: (attachedItems?: ContextItem[]) => void
   onPinItem?: (item: ContextItem) => void
@@ -135,7 +129,7 @@ const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
 const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', label: 'Hidden' }
 
 
-export function ContextList({ items, isLoading, onItemClick, onCompose, onPinItem, onUnpinItem, onPinFolder, onUnpinFolder, onCreateArtifact, onSkipToChat }: ContextListProps) {
+export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, onPinFolder, onUnpinFolder, onCreateArtifact, onSkipToChat }: ContextListProps) {
   // The Library list has no conversation, so the global avatar stack
   // shouldn't appear over its header (insets irrelevant while hidden).
   useContentAreaInsets('0px', '0px', { hidden: true })
@@ -180,27 +174,62 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
   const [createLibraryFolder] = useCreateLibraryFolderMutation()
   const [createLibraryLink] = useCreateLibraryLinkMutation()
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
-  // Hidden mode pulls the showHidden=true superset directly so hidden entries
-  // are included in addition to the normal visible library contents.
-  const { currentData: libraryResp, isLoading: internalLoading, isUninitialized: internalUninitialized } = useGetLibraryQuery(
+  // Folder-scoped listing. The previous workspace-wide recursive query
+  // (used both here and globally in App.tsx) shipped every file's
+  // metadata to the client on every navigation — fine for tens of items,
+  // catastrophic for a home-dir-sized workspace where it ballooned to
+  // 300+ MB. Now each folder is its own request; hidden mode still
+  // toggles the showHidden=true superset but scoped to this folder only.
+  const { currentData: libraryResp, isLoading: internalLoading, isFetching: internalFetching, isUninitialized: internalUninitialized } = useGetLibraryQuery(
     activeWorkspaceId
-      ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) }
+      ? {
+          workspaceId: activeWorkspaceId,
+          path: currentFolderId ?? undefined,
+          ...(isHiddenMode ? { showHidden: true } : {}),
+        }
       : undefined,
     { skip: !activeWorkspaceId },
   )
 
-  // Treat the list as loading until both the parent AND internal queries have
-  // settled with data.  This closes every gap where `isLoading` (prop) flips
-  // false one render before data has propagated — the empty "Nothing yet"
-  // screen never appears while data is still in flight.
-  const resolvedLoading = isLoading || internalLoading || internalUninitialized || !libraryResp
-
   const effectiveItems: ContextItem[] = useMemo(() => {
-    if (!isHiddenMode) return items
     if (!activeWorkspaceId) return []
-    return (libraryResp?.items ?? [])
-      .map(f => toContextItem(f, activeWorkspaceId))
-  }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
+    return (libraryResp?.items ?? []).map(f => toContextItem(f, activeWorkspaceId))
+  }, [libraryResp, activeWorkspaceId])
+
+  const resolvedLoading = internalLoading || internalUninitialized || !libraryResp || (internalFetching && effectiveItems.length === 0)
+
+  // Full folder tree for the move-to-folder dialog. Fetched lazily — only
+  // when the dialog is open — so the cheap (folder-paths-only) recursive
+  // walk on the server isn't run for every Library page view.
+  const [moveTargets, setMoveTargets] = useState<MoveTarget[] | null>(null)
+  const { currentData: foldersResp } = useGetLibraryFoldersQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) } : undefined,
+    { skip: !activeWorkspaceId || moveTargets === null },
+  )
+  const allFolders: Folder[] = useMemo(() => (
+    activeWorkspaceId ? toFolderList(foldersResp?.folders ?? [], activeWorkspaceId) : []
+  ), [foldersResp, activeWorkspaceId])
+
+  // "Use folder in chat" on a sub-folder row needs the items in that
+  // sub-folder, but the listing here is scoped to the current directory
+  // only. This trigger fetches a one-level listing on demand so the action
+  // doesn't disappear when navigating got moved server-side.
+  const [triggerFolderListing] = useLazyGetLibraryQuery()
+  const composeWithFolderContents = async (folderId: string) => {
+    if (!activeWorkspaceId) return
+    try {
+      const resp = await triggerFolderListing({
+        workspaceId: activeWorkspaceId,
+        path: folderId,
+        ...(isHiddenMode ? { showHidden: true } : {}),
+      }).unwrap()
+      onCompose(resp.items.map((f) => toContextItem(f, activeWorkspaceId)))
+    } catch (err) {
+      toast.error('Could not load folder', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
 
   /**
    * Delete dialog targets can be files/notes (ContextItem) or folders.
@@ -218,7 +247,6 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     | { kind: 'file'; id: string; name: string }
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [moveTargets, setMoveTargets] = useState<MoveTarget[] | null>(null)
 
   const handleDownload = async (item: ContextItem) => {
     if (!activeWorkspaceId) return
@@ -453,19 +481,32 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     }
   }
 
-  // Folders come from the server's recursive library listing; the
-  // selector maps each FolderRef to a UI Folder whose `id` is the
-  // workspace-relative path so navigation and filtering just work.
-  const folders = activeWorkspaceId
-    ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
-    : []
+  // Folder + file lists arrive scoped to `currentFolderId` from the
+  // server — no recursive walk needed. The current folder isn't itself
+  // in the response (it's the parent of the listing), so its display
+  // metadata is derived from the URL path: name = last segment, parentId
+  // = everything before the last slash.
+  const childFolders: Folder[] = useMemo(() => {
+    if (!activeWorkspaceId) return []
+    return toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+  }, [libraryResp, activeWorkspaceId])
 
-  const currentFolder = getFolderById(folders, currentFolderId)
+  const currentFolder: Folder | undefined = useMemo(() => {
+    if (!currentFolderId) return undefined
+    const slash = currentFolderId.lastIndexOf('/')
+    const name = slash === -1 ? currentFolderId : currentFolderId.slice(slash + 1)
+    const parentId = slash === -1 ? null : currentFolderId.slice(0, slash)
+    return {
+      id: currentFolderId,
+      name,
+      parentId,
+      createdAt: new Date(0),
+      pinned: false,
+    }
+  }, [currentFolderId])
   const isInsideFolder = currentFolder != null
 
-  // Get folders + items in current location
-  const childFolders = getChildFolders(folders, currentFolderId)
-  const folderItems = getItemsInFolder(currentFolderId, effectiveItems)
+  const folderItems = effectiveItems
 
   // Apply filters. Hidden mode shows the server's showHidden=true superset —
   // all normal entries plus dot-prefixed/gitignored entries — regardless of
@@ -511,11 +552,14 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
 
   const clearSelection = () => setSelectedIds(new Set())
 
-  const selectedItems = items.filter(i => selectedIds.has(i.id))
+  const selectedItems = effectiveItems.filter(i => selectedIds.has(i.id))
   // Bulk actions that funnel through /library (move, delete) apply to
   // folders too — build a flat target list from both folders and items.
+  // Only entries currently visible in the listing can be selected, so the
+  // pool is `childFolders` (this folder's direct subfolders), not the
+  // workspace-wide tree.
   const selectedTargets: Array<{ path: string; name: string; kind: 'item' | 'folder' }> = [
-    ...folders
+    ...childFolders
       .filter(f => selectedIds.has(f.id))
       .map(f => ({ path: f.id, name: f.name, kind: 'folder' as const })),
     ...selectedItems.map(i => ({ path: i.id, name: i.name, kind: 'item' as const })),
@@ -870,7 +914,11 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
+                // Sub-folder child counts were derived from the recursive
+                // listing; with folder-scoped fetching the client only
+                // knows this directory's contents. Showing "—" is the
+                // honest signal until per-folder counts are added server-side.
+                const itemCount = null as number | null
                 const folderDraggable = !!onPinFolder
                 const handleFolderDragStart = (e: React.DragEvent<HTMLElement>) => {
                   e.dataTransfer.effectAllowed = 'move'
@@ -910,7 +958,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">{folder.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                          {itemCount !== null && `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
                         </p>
                       </div>
                     </Link>
@@ -927,7 +975,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                           className="hidden h-7 text-xs opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                         onClick={(e) => {
                           e.stopPropagation()
-                          onCompose(getItemsInFolder(folder.id, items))
+                          void composeWithFolderContents(folder.id)
                         }}
                       >
                         Use in chat
@@ -939,7 +987,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40">
-                          <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
+                          <DropdownMenuItem onClick={() => void composeWithFolderContents(folder.id)}>
                             <MessageSquarePlus className="h-4 w-4 mr-2" />
                             Use in chat
                           </DropdownMenuItem>
@@ -1007,7 +1055,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
+              const itemCount = null as number | null
               const folderDraggable = !!onPinFolder
               const handleFolderDragStart = (e: React.DragEvent<HTMLElement>) => {
                 e.dataTransfer.effectAllowed = 'move'
@@ -1040,7 +1088,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       className="h-6 w-6 bg-background/80 backdrop-blur"
                       onClick={(e) => {
                         e.stopPropagation()
-                        onCompose(getItemsInFolder(folder.id, items))
+                        void composeWithFolderContents(folder.id)
                       }}
                     >
                       <MessageSquarePlus className="h-3 w-3" />
@@ -1052,7 +1100,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-40">
-                        <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
+                        <DropdownMenuItem onClick={() => void composeWithFolderContents(folder.id)}>
                           <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
                         </DropdownMenuItem>
                         {(onPinFolder || onUnpinFolder) && (
@@ -1099,7 +1147,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       <FolderIcon className="h-8 w-8 text-muted-foreground/40 mb-3 fill-muted-foreground/15" />
                       <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{folder.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                        {itemCount !== null && `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
                       </p>
                     </div>
                   </Link>
@@ -1216,222 +1264,233 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
       </ContextMenuContent>
       </ContextMenu>
 
-      {/* New folder dialog */}
-      <Dialog open={folderDialogOpen} onOpenChange={(open) => {
-        setFolderDialogOpen(open)
-        if (!open) setNewFolderName('')
-      }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>New folder</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Create a folder inside "${currentFolder.name}".`
-                : 'Create a folder to organize your library.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">Folder name</label>
-            <Input
-              placeholder="e.g., Q2 plans"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setFolderDialogOpen(false); setNewFolderName('') }}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!newFolderName.trim()}
-              onClick={handleCreateFolder}
-            >
-              Create folder
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* New folder dialog — gated so the Radix Dialog providers
+          (~5 fibers each) don't mount when the dialog is closed. */}
+      {folderDialogOpen && (
+        <Dialog open onOpenChange={(open) => {
+          setFolderDialogOpen(open)
+          if (!open) setNewFolderName('')
+        }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>New folder</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Create a folder inside "${currentFolder.name}".`
+                  : 'Create a folder to organize your library.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">Folder name</label>
+              <Input
+                placeholder="e.g., Q2 plans"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setFolderDialogOpen(false); setNewFolderName('') }}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!newFolderName.trim()}
+                onClick={handleCreateFolder}
+              >
+                Create folder
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Create blank file dialog */}
-      <Dialog
-        open={createFileDialogOpen}
-        onOpenChange={(open) => {
-          setCreateFileDialogOpen(open)
-          if (!open) setNewFileName('')
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create file</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
-                : 'Create a new blank file. Include the extension in the name.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">File name</label>
-            <Input
-              placeholder="e.g., notes.md"
-              value={newFileName}
-              onChange={(e) => setNewFileName(e.target.value)}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
-              }}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={!newFileName.trim()}
-              onClick={handleCreateFile}
-            >
-              Create file
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Paste link dialog */}
-      <Dialog
-        open={pasteLinkDialogOpen}
-        onOpenChange={(open) => {
-          setPasteLinkDialogOpen(open)
-          if (!open) { setLinkUrl(''); setLinkName('') }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Paste link</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Save a URL to "${currentFolder.name}".`
-                : 'Save a URL to your library.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">URL</label>
+      {createFileDialogOpen && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            setCreateFileDialogOpen(open)
+            if (!open) setNewFileName('')
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create file</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
+                  : 'Create a new blank file. Include the extension in the name.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">File name</label>
               <Input
-                placeholder="https://example.com"
-                value={linkUrl}
-                onChange={(e) => setLinkUrl(e.target.value)}
+                placeholder="e.g., notes.md"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
                 autoFocus
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
                 }}
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">
-                Name <span className="text-muted-foreground font-normal">(optional)</span>
-              </label>
-              <Input
-                placeholder="Defaults to the URL hostname"
-                value={linkName}
-                onChange={(e) => setLinkName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
-                }}
-              />
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={!newFileName.trim()}
+                onClick={handleCreateFile}
+              >
+                Create file
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Paste link dialog */}
+      {pasteLinkDialogOpen && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            setPasteLinkDialogOpen(open)
+            if (!open) { setLinkUrl(''); setLinkName('') }
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Paste link</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Save a URL to "${currentFolder.name}".`
+                  : 'Save a URL to your library.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">URL</label>
+                <Input
+                  placeholder="https://example.com"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">
+                  Name <span className="text-muted-foreground font-normal">(optional)</span>
+                </label>
+                <Input
+                  placeholder="Defaults to the URL hostname"
+                  value={linkName}
+                  onChange={(e) => setLinkName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  }}
+                />
+              </div>
             </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
-            >
-              Cancel
-            </Button>
-            <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
-              Save link
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
+              >
+                Cancel
+              </Button>
+              <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
+                Save link
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Rename dialog (file or folder) */}
-      <Dialog
-        open={renameTarget !== null}
-        onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {renameTarget?.kind === 'file' ? 'Rename file' : 'Rename folder'}
-            </DialogTitle>
-            <DialogDescription>
-              {renameTarget?.kind === 'file'
-                ? 'Give the file a new name. Include the extension.'
-                : 'Give the folder a new name.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">
-              {renameTarget?.kind === 'file' ? 'File name' : 'Folder name'}
-            </label>
-            <Input
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleRename()
-              }}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
-            <Button
-              disabled={!renameValue.trim() || renameValue.trim() === renameTarget?.name}
-              onClick={handleRename}
-            >
-              Rename
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {renameTarget !== null && (
+        <Dialog
+          open
+          onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {renameTarget.kind === 'file' ? 'Rename file' : 'Rename folder'}
+              </DialogTitle>
+              <DialogDescription>
+                {renameTarget.kind === 'file'
+                  ? 'Give the file a new name. Include the extension.'
+                  : 'Give the folder a new name.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">
+                {renameTarget.kind === 'file' ? 'File name' : 'Folder name'}
+              </label>
+              <Input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRename()
+                }}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
+              <Button
+                disabled={!renameValue.trim() || renameValue.trim() === renameTarget.name}
+                onClick={handleRename}
+              >
+                Rename
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Move-to-folder dialog (shared with the file-detail view) */}
       <MoveToFolderDialog
         targets={moveTargets}
-        folders={folders}
+        folders={allFolders}
         onClose={() => setMoveTargets(null)}
         onMove={handleMoveToFolder}
       />
 
-      <AlertDialog
-        open={deleteTargets !== null}
-        onOpenChange={(open) => { if (!open) setDeleteTargets(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {deleteTargets && deleteTargets.length === 1
-                ? `Delete "${deleteTargets[0].name}"?`
-                : `Delete ${deleteTargets?.length ?? 0} items?`}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently removes the selected items from your library.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={confirmDelete}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleteTargets !== null && (
+        <AlertDialog
+          open
+          onOpenChange={(open) => { if (!open) setDeleteTargets(null) }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {deleteTargets.length === 1
+                  ? `Delete "${deleteTargets[0].name}"?`
+                  : `Delete ${deleteTargets.length} items?`}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the selected items from your library.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={confirmDelete}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
           {onCreateArtifact && (
             <ArtifactCreationSheet
               open={createSheetOpen}

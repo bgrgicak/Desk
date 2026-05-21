@@ -296,7 +296,10 @@ describe("POST /sandbox/artifacts", () => {
       token,
     );
 
-    expect(res.status).toBe(400);
+    // 404 — the workspace-boundary check treats the target chat as not
+    // visible from this session, which is semantically a not-found
+    // rather than a validation error.
+    expect(res.status).toBe(404);
   });
 
   it("rejects artifact attachment from a workspace-scoped token without a run", async () => {
@@ -319,7 +322,11 @@ describe("POST /sandbox/artifacts", () => {
     ))).toBe(false);
   });
 
-  it("rejects artifact attachment from a run token to a different chat in the same workspace", async () => {
+  // Cross-chat artifact refs are intentional: an agent in chat A can
+  // surface a file in chat B (or point chat B at a file living under
+  // chat A's artifact dir), as long as both chats are in the same
+  // workspace as the session. The cross-workspace boundary stays.
+  it("attaches an artifact to a different chat in the same workspace as the run", async () => {
     const sourceRunId = generateId("message");
     await pool.query(
       `INSERT INTO messages (id, chat_id, role, content, state)
@@ -343,38 +350,53 @@ describe("POST /sandbox/artifacts", () => {
       token,
     );
 
-    expect(res.status).toBe(400);
-    const messages = await queries.messages.listByChat(pool, otherChatId);
-    expect(messages.items.some((message) => (
-      message.content.type === "artifactRef"
-      && message.content.path.endsWith("cross-chat.md")
-    ))).toBe(false);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      chatId: otherChatId,
+      role: "agent",
+      content: {
+        type: "artifactRef",
+        path: `.chats/${otherChatId}/artifacts/cross-chat.md`,
+      },
+    });
   });
 
-  it("rejects a different chat artifact path even when the request omits chatId", async () => {
-    const token = await createRunToken();
+  // The path can reference a *different* chat's artifact dir than the
+  // target chat — e.g. chat B is told to surface a file written by the
+  // run into chat A's artifact dir. Same-workspace requirement still
+  // holds, enforced by the filesystem (the file lookup happens inside
+  // the target chat's workspace tree).
+  it("attaches an artifact whose path references a different chat than the target chat", async () => {
+    const sourceArtifactsDir = chatArtifactsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(sourceArtifactsDir, { recursive: true });
+    await fs.writeFile(path.join(sourceArtifactsDir, "from-source.md"), "# From source\n", "utf8");
 
-    const otherChatId = generateId("chat");
+    const targetChatId = generateId("chat");
     await pool.query(
       `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
-      [otherChatId, workspaceId, agentId, "Same Workspace Other Chat Path"],
+      [targetChatId, workspaceId, agentId, "Cross-Chat Target"],
     );
-    const otherArtifactsDir = chatArtifactsDir(home, workspaceSlug, otherChatId);
-    await fs.mkdir(otherArtifactsDir, { recursive: true });
-    await fs.writeFile(path.join(otherArtifactsDir, "cross-chat-path.md"), "# Cross-chat path\n", "utf8");
 
+    const token = await createRunToken();
+    const relPath = `.chats/${chatId}/artifacts/from-source.md`;
     const res = await sandboxPost(
       "/sandbox/artifacts",
-      { path: `.chats/${otherChatId}/artifacts/cross-chat-path.md` },
+      { chatId: targetChatId, path: relPath },
       token,
     );
 
-    expect(res.status).toBe(400);
-    const messages = await queries.messages.listByChat(pool, otherChatId);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      chatId: targetChatId,
+      content: { type: "artifactRef", path: relPath },
+    });
+
+    const messages = await queries.messages.listByChat(pool, targetChatId);
     expect(messages.items.some((message) => (
-      message.content.type === "artifactRef"
-      && message.content.path.endsWith("cross-chat-path.md")
-    ))).toBe(false);
+      message.role === "agent"
+      && message.content.type === "artifactRef"
+      && message.content.path === relPath
+    ))).toBe(true);
   });
 
   it("rejects artifact attachment from a live summary run token", async () => {
