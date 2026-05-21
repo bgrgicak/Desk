@@ -90,29 +90,41 @@ export const ChatSchema = z.object({
    *  section (chat_pins table). Optional so WS payloads that omit the
    *  joined value still parse. */
   pinned: z.boolean().optional(),
+  /** True when the chat's most recent `agent_turn` is `pending` or
+   *  `running`. Computed live from the messages table by `findById` and
+   *  `listWithLatestMessage`, and carried by every `chat.updated` WS
+   *  payload — so the client can render the sidebar spinner from a
+   *  single authoritative signal instead of reconciling a denormalized
+   *  column, a derived running-id set, and the live message stream. */
+  running: z.boolean().optional(),
+  /** True when the chat's most recent `agent_turn` is in `failed`
+   *  terminal state. Same plumbing as `running`. */
+  failed: z.boolean().optional(),
+  /** Server-derived: the chat in which this thread's anchor message
+   *  lives. Set only when the chat is a thread (some other chat has a
+   *  message whose `thread_chat_id` points at this one). Lets the
+   *  client render a "back to parent" affordance without scanning
+   *  every message page. */
+  parentChatId: z.string().optional(),
+  /** Server-derived: the anchor message id in `parentChatId`. Lets
+   *  the client deep-link the back-affordance to the originating
+   *  message. */
+  anchorMessageId: z.string().optional(),
 });
 export type Chat = z.infer<typeof ChatSchema>;
 
 /**
  * Chat shape returned by the chat-list endpoint (`GET /chats`).
- * Wraps `Chat` with the denormalised sidebar fields the chats_list
- * cache maintains: the latest non-fallback message kind, whether the
- * latest agent_turn is in flight or failed, and a short preview of
- * the latest user/agent text message.
- *
- * WS `chat.updated` events ship the base `Chat` (without these list-
- * meta fields); the sidebar refetches on chat-list invalidation to
- * pick the new preview up.  The fields are therefore optional on the
- * shared type so the same shape covers both surfaces.
+ * Wraps `Chat` with the extra sidebar fields the list view needs:
+ * the latest non-fallback message kind and a short preview of the
+ * latest user/agent text message. `running` and `failed` are part of
+ * the base `Chat` so they ride along on every `chat.updated` event,
+ * not just chat-list responses.
  */
 export const ChatWithListMetaSchema = ChatSchema.extend({
   /** Newest user-action message kind (`task` / `task_run`).  `chat`
    *  and `summary` are fallbacks the sidebar treats specially. */
   kind: z.enum(["chat", "task", "task_run"]).optional(),
-  /** True when the chat's most recent `agent_turn` is pending/running. */
-  running: z.boolean().optional(),
-  /** True when the chat's most recent `agent_turn` failed. */
-  failed: z.boolean().optional(),
   /** Short preview of the chat's most recent visible text message. */
   lastMessage: z.string().optional(),
 });
@@ -220,6 +232,20 @@ export const MessageContentAgentTurnSchema = z.object({
   userMessageId: z.string(),
 });
 
+/**
+ * Thumbs-up / thumbs-down reaction the user left on an agent reply.
+ * Stored as a `role: 'system'` chat message so the reaction shows up in
+ * the same activity stream as the conversation it reacted to, and the
+ * workspace's daily reflection can read it as a signal alongside the
+ * surrounding chat.
+ */
+export const MessageContentFeedbackSchema = z.object({
+  type: z.literal("feedback"),
+  rating: z.enum(["up", "down"]),
+  /** Id of the agent message the reaction applies to. */
+  targetMessageId: z.string(),
+});
+
 export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentTextSchema,
   MessageContentToolCallSchema,
@@ -230,6 +256,7 @@ export const MessageContentSchema = z.discriminatedUnion("type", [
   MessageContentSummaryRequestSchema,
   MessageContentReflectionRequestSchema,
   MessageContentAgentTurnSchema,
+  MessageContentFeedbackSchema,
 ]);
 export type MessageContent = z.infer<typeof MessageContentSchema>;
 
@@ -306,6 +333,60 @@ export const MessageSchema = z.object({
   threadChatId: z.string().optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
+
+/**
+ * Plain-text preview of a message, regardless of content shape. Used by
+ * code that needs a human-readable snippet (thread titles, previews, log
+ * lines) without caring about the content discriminator. Returns an empty
+ * string when no human-readable text is available (tool calls, agent
+ * turns, feedback markers, empty event logs).
+ *
+ * For `events`, concatenates the text parts of stream events; falls back
+ * to `unparsed` stdout lines when there are no structured events.
+ */
+export function messageTextPreview(message: Message): string {
+  const content = message.content;
+  switch (content.type) {
+    case "text":
+      return content.text;
+    case "summary":
+      return content.body;
+    case "artifactRef":
+      return content.name ?? content.path;
+    case "events": {
+      // Text events that share a part id with a `reasoning` event are the
+      // model's chain-of-thought, not the user-facing reply. The UI hides
+      // them and so should any preview — otherwise the first line of the
+      // "preview" is internal monologue (e.g. "**Clarifying next steps**")
+      // instead of the actual reply.
+      const reasoningPartIds = new Set<string>();
+      for (const e of content.log) {
+        if (e.kind !== "event" || e.event.type !== "reasoning") continue;
+        const id = (e.event.part as { id?: unknown } | undefined)?.id;
+        if (typeof id === "string") reasoningPartIds.add(id);
+      }
+      const parts: string[] = [];
+      let sawEvent = false;
+      for (const e of content.log) {
+        if (e.kind !== "event") continue;
+        sawEvent = true;
+        if (e.event.type !== "text") continue;
+        const id = (e.event.part as { id?: unknown } | undefined)?.id;
+        if (typeof id === "string" && reasoningPartIds.has(id)) continue;
+        const t = (e.event.part as { text?: unknown } | undefined)?.text;
+        if (typeof t === "string") parts.push(t);
+      }
+      if (sawEvent) return parts.join("").trim();
+      return content.log
+        .filter((e) => e.kind === "unparsed")
+        .map((e) => (e as { line: string }).line)
+        .join("\n")
+        .trim();
+    }
+    default:
+      return "";
+  }
+}
 
 /**
  * Filesystem-backed reference to a file inside a workspace. Path is
