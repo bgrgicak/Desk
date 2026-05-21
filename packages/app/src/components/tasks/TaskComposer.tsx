@@ -8,6 +8,8 @@ export interface TaskComposerSubmit {
   title: string
   /** ISO time when the task should first run (Schedule picker). */
   executeAt?: string
+  /** Cron expression for recurring tasks (Schedule picker). */
+  cron?: string
   /** Library files referenced via the Files picker. */
   attachments: AttachmentRef[]
 }
@@ -60,6 +62,7 @@ export function TaskComposer({ onSubmit, disabled }: TaskComposerProps) {
       content: text,
       title: deriveTitle(text),
       executeAt: options?.executeAt,
+      cron: options?.cron,
       attachments,
     })
   }

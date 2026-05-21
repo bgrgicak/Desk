@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
+import { ThreadParentChip } from '@/components/chats/ThreadParentChip'
 import { usePostChatMessageMutation } from '@/store/api'
 import { usePrefs } from '@/hooks/use-prefs'
 import type { Task } from '@/data/ui-types'
@@ -28,7 +29,12 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
   const { developerMode } = usePrefs()
   const [isSending, setIsSending] = useState(false)
   const [postMessage] = usePostChatMessageMutation()
-  const chatId = task.chatId ?? ''
+  // Tasks created from inside a chat live as a thread of that chat: the
+  // anchor (kind='task') stays in the source chat; task_runs and any
+  // follow-up replies land in the dedicated thread chat. Open the thread
+  // when present; fall back to the anchor's chat for standalone tasks
+  // created from the TasksPage composer (no parent).
+  const chatId = task.threadChatId ?? task.chatId ?? ''
 
   const handleSend = useCallback(
     async (msg: string) => {
@@ -53,6 +59,7 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
         skipQuery={!chatId}
         developerMode={developerMode}
         isSending={isSending}
+        headerSlot={chatId ? <ThreadParentChip chatId={chatId} /> : null}
         innerClassName="px-6 pt-8 pb-16 space-y-3"
         messageClassName={() => CHAT_COLUMN_CLASS}
         statusClassName={CHAT_COLUMN_CLASS}

@@ -1,3 +1,4 @@
+import { memo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   MessageSquare,
@@ -6,6 +7,7 @@ import {
   Play,
   Pause,
   Trash2,
+  CalendarClock,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import {
@@ -18,12 +20,16 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Dialog,
+  DialogContent,
+  DialogTitle,
 } from '@agent-desk/ui'
 import type { Task } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { initialsOf } from '@/lib/initials'
 import { TaskPills, PRIORITY_LABELS } from './task-badges'
 import { describeCron } from './schedule-utils'
+import { SchedulePickerForm, type SchedulePickerValue } from './SchedulePicker'
 
 /** Fraction (0–1) of the way from the previous run (or the task's
  *  creation) to the next scheduled run. Kept out of the component so
@@ -86,6 +92,9 @@ export interface TaskCardProps {
   onRunNow?: () => void
   onPause?: () => void
   onDelete?: () => void
+  /** Edit the task's schedule (executeAt + cron). Receives the new
+   *  value, or `null` to clear the schedule entirely. */
+  onSchedule?: (next: SchedulePickerValue | null) => void
   className?: string
 }
 
@@ -98,7 +107,7 @@ export interface TaskCardProps {
  * sits in the header (Needs input subsumes "unread" — opening the task
  * clears both); an active card gets the chat-view item-card highlight.
  */
-export function TaskCard({
+export const TaskCard = memo(function TaskCard({
   task,
   repliesCount = 0,
   authorName = 'You',
@@ -110,8 +119,24 @@ export function TaskCard({
   onRunNow,
   onPause,
   onDelete,
+  onSchedule,
   className,
 }: TaskCardProps) {
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+
+  // Derive the picker's initial value from the task's current
+  // executeAt/cron. The Task UI type carries a free-form `schedule`
+  // string (the cron) plus `scheduledFor` (the next run / executeAt).
+  const initialSchedule: SchedulePickerValue | null =
+    task.schedule || task.scheduledFor
+      ? {
+          executeAt: task.scheduledFor ? task.scheduledFor.toISOString() : null,
+          cron:      task.schedule ?? null,
+          endDate:   task.scheduleEndDate
+            ? `${task.scheduleEndDate.getFullYear()}-${String(task.scheduleEndDate.getMonth() + 1).padStart(2, '0')}-${String(task.scheduleEndDate.getDate()).padStart(2, '0')}`
+            : null,
+        }
+      : null
   const isDone = task.status === 'complete'
   const isNeedsInput = task.status === 'needs_input'
   const isRunning = task.messageState === 'running'
@@ -138,7 +163,7 @@ export function TaskCard({
   const showNextRun = !!nextRunText && !isRunning
   const nextRunProgress = showNextRun ? nextRunProgressFor(task) : 0
 
-  const hasMenu = !!(onRunNow || onPause || onDelete)
+  const hasMenu = !!(onRunNow || onPause || onDelete || onSchedule)
   // Don't let footer controls trigger the card-level open.
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -210,7 +235,7 @@ export function TaskCard({
             {task.title}
           </h3>
         )}
-        <p className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words">
+        <p className="line-clamp-2 text-sm leading-6 text-foreground break-words">
           {task.description ?? task.name}
         </p>
       </div>
@@ -244,44 +269,98 @@ export function TaskCard({
             {isDone ? 'Done' : 'Mark as done'}
           </Button>
           {hasMenu && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="h-8 w-8 -ml-px rounded-l-none"
-                  aria-label="More task actions"
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="h-8 w-8 -ml-px rounded-l-none"
+                    aria-label="More task actions"
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid={`task-menu-${task.id}`}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="w-44"
                   onClick={(e) => e.stopPropagation()}
-                  data-testid={`task-menu-${task.id}`}
                 >
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                {onRunNow && (
-                  <DropdownMenuItem onClick={stop(onRunNow)}>
-                    <Play className="h-4 w-4 mr-2" />
-                    Run now
-                  </DropdownMenuItem>
-                )}
-                {onPause && (
-                  <DropdownMenuItem onClick={stop(onPause)}>
-                    <Pause className="h-4 w-4 mr-2" />
-                    Pause
-                  </DropdownMenuItem>
-                )}
-                {onDelete && (
-                  <DropdownMenuItem onClick={stop(onDelete)}>
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  {onRunNow && (
+                    <DropdownMenuItem onClick={stop(onRunNow)}>
+                      <Play className="h-4 w-4 mr-2" />
+                      Run now
+                    </DropdownMenuItem>
+                  )}
+                  {onPause && (
+                    <DropdownMenuItem onClick={stop(onPause)}>
+                      <Pause className="h-4 w-4 mr-2" />
+                      Pause
+                    </DropdownMenuItem>
+                  )}
+                  {onSchedule && (
+                    <DropdownMenuItem
+                      // Defer the dialog open by a tick so Radix can
+                      // tear down the dropdown's focus scope first.
+                      // Without the gap the menu's focus-return briefly
+                      // re-trips the dialog's "outside interaction"
+                      // detector and the dialog closes as fast as it
+                      // mounts.
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setTimeout(() => setScheduleOpen(true), 0)
+                      }}
+                      data-testid={`task-schedule-${task.id}`}
+                    >
+                      <CalendarClock className="h-4 w-4 mr-2" />
+                      {initialSchedule ? 'Edit schedule' : 'Schedule'}
+                    </DropdownMenuItem>
+                  )}
+                  {onDelete && (
+                    <DropdownMenuItem onClick={stop(onDelete)}>
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Schedule editor — Dialog (modal). Earlier iterations
+                  used a Popover anchored to the caret button, but the
+                  dropdown-menu → popover handoff lost the popover to
+                  focus competition: Radix DropdownMenu returns focus to
+                  its trigger as it unmounts, which fires immediately
+                  after the popover mounts and closes it. Dialog runs
+                  its own focus trap so the bounce no longer dismisses
+                  the editor. */}
+              {onSchedule && (
+                <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+                  <DialogContent
+                    className="sm:max-w-md p-4"
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid={`task-schedule-dialog-${task.id}`}
+                  >
+                    <DialogTitle className="text-sm font-semibold">
+                      {initialSchedule ? 'Edit schedule' : 'Schedule task'}
+                    </DialogTitle>
+                    <SchedulePickerForm
+                      initial={initialSchedule}
+                      onSave={(next) => {
+                        onSchedule?.(next)
+                        setScheduleOpen(false)
+                      }}
+                      onCancel={() => setScheduleOpen(false)}
+                    />
+                  </DialogContent>
+                </Dialog>
+              )}
+            </>
           )}
         </div>
       </div>
     </Link>
   )
-}
+})
