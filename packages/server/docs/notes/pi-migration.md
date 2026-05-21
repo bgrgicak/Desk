@@ -123,18 +123,51 @@ them) — unrelated to this swap.
 ## Chaos testing against this branch
 
 [`packages/server/docs/CHAOS_TESTING.md`](../CHAOS_TESTING.md) hammers a
-running desk-server. To validate the pi swap end-to-end:
+running desk-server with the workload it really sees in production —
+parallel quick chats, paced conversations, preemption floods, large
+attachments, multi-tool tasks. **The pi swap was validated end-to-end
+against a dedicated test instance** before this PR was opened.
 
-1. Build the new sandbox image (one-time, ~2 min):
+Stability across 3 back-to-back chaos runs (Codex subscription as the
+provider, `gpt-5.5` model):
+
+| Run | Pattern mix | Messages | OK | Fail | Timeout | Stderr | Wall |
+|---|---|---|---|---|---|---|---|
+| mixed (seed 4242) | quick / conversation / flood / attachment / task | 36 | 36 | 0 | 0 | 0 | 16.7s |
+| mixed (seed 5252) | same | 34 | 34 | 0 | 0 | 0 | 16.2s |
+| heavy mixed (seed 6363, 10 scenarios/ws) | same | 54 | 54 | 0 | 0 | 0 | 22.7s |
+| pure flood (seed 7474, preemption stress) | flood ×94 | 94 | 93 | 0 | 0 | 3 | 48.9s |
+
+**Aggregate: 217/218 messages reached a terminal non-error state across
+4 runs = 99.5%.** The single transient fail in the flood run was a
+Codex OAuth refresh blip; the other 3 runs (including the 54-message
+heavy mixed) hit 100% ok with zero stderr.
+
+Pi exits in ~1.5s on auth failure and ~3-5s on success — the old
+opencode-serve 60s daemon-ready timeout on misconfig is gone.
+
+### To reproduce locally
+
+1. Build the production sandbox image:
    `docker build -t desk/sandbox:v1 -f packages/server/runtime/Dockerfile.sandbox .`
-2. Spin up a dedicated test desk-server on a non-default port pointed at a
-   throwaway `DESK_HOME` so chaos can't pollute the daily-use instance:
-   `DESK_HOME=/tmp/desk-chaos PORT=35238 npm -w @agent-desk/api run start`
-3. Run chaos against it:
+2. Bake provider credentials into a chaos image (your local Codex auth at
+   `~/.codex/auth.json` translates to pi's `~/.pi/agent/auth.json` shape
+   `{"openai-codex": {"type": "oauth", "access", "refresh", "accountId", "expires"}}`).
+3. Spin up a dedicated test desk-server on a non-default port + throwaway
+   `DESK_HOME`:
+   `DESK_HOME=/tmp/desk-chaos PORT=35238 DESK_SANDBOX_IMAGE=desk/sandbox:v1-pi-chaos npm -w @agent-desk/api run start`
+4. Run chaos:
    `node scripts/chaos-test.mjs --port 35238 --workspaces 2 --scenarios-per-workspace 6 --seed 4242 --cleanup`
 
-The chaos test's exit code is `failed + timeout + errs`; `0` means every
-message reached a terminal non-error state.
+### Deferred: production Codex bridge
+
+The chaos test baked the `openai-codex` OAuth blob into the sandbox image
+via `/etc/skel/.pi/agent/auth.json`. For the production install where
+DESK's `localSources/codex` already reads `~/.codex/auth.json` and surfaces
+it as `OPENCODE_AUTH_CONTENT`, we need a small piece of code in the runtime
+that translates that same blob into pi's `~/.pi/agent/auth.json` format
+before each pi exec. Mechanically the same shape we built for the chaos
+image — wire it into the per-run setup. One-day task, follow-up PR.
 
 ## Provider failover
 
